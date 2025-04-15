@@ -87,11 +87,13 @@ public class QueryEndToEndTest {
         mockNerIndex.addTestData("PERSON" + DELIMITER + "marie curie", 6, 2, 20, 30);
         mockNerIndex.addTestData("PERSON" + DELIMITER + "isaac newton", 7, 1, 5, 17);
         mockNerIndex.addTestData("ORGANIZATION" + DELIMITER + "google", 7, 2, 40, 46);
+        mockNerIndex.addTestData("ORGANIZATION" + DELIMITER + "microsoft corporation", 11, 1, 0, 20); // Added longer org name
         mockNerIndex.addTestData("LOCATION" + DELIMITER + "london", 8, 1, 0, 6);
         mockNerIndex.addTestData("NUMBER" + DELIMITER + "42", 8, 2, 10, 12);
         mockNerIndex.addTestData("ORDINAL" + DELIMITER + "first", 9, 1, 0, 5);
         mockNerIndex.addTestData("DURATION" + DELIMITER + "3 years", 9, 2, 10, 17);
         mockNerIndex.addTestData("SET" + DELIMITER + "weekly", 10, 1, 0, 6);
+        mockNerIndex.addTestData("PERSON" + DELIMITER + "albrecht kossel", 12, 1, 5, 20); // Added for partial match test
 
         // Update the map of indexes
         mockIndexes = Map.of(
@@ -232,24 +234,25 @@ public class QueryEndToEndTest {
         QueryResult result = queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
-        assertEquals(3, result.getAllDetails().size(), "Expected 3 PERSON entities");
+        assertEquals(4, result.getAllDetails().size(), "Expected 4 PERSON entities");
         Set<Integer> docIds = result.getDetailsByDocId().keySet();
-        assertEquals(Set.of(6, 7), docIds, "Expected results in docs 6 and 7");
+        assertEquals(Set.of(6, 7, 12), docIds, "Expected results in docs 6, 7, and 12");
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
-        assertEquals(2, resultTable.rowCount()); // Grouped by document
+        assertEquals(3, resultTable.rowCount()); // Corrected: Grouped by document (3 unique docs)
     }
     
     @Test
     public void testNerTypeWithTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE NER(PERSON, 'Albert Einstein')"; // Case mismatch intentional
+        // Test exact match still works (case-insensitive)
+        String queryString = "SELECT TITLE FROM source WHERE NER(PERSON, 'albert einstein')"; // Use full name 
         Query query = queryParser.parse(queryString);
         QueryResult result = queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertEquals(1, result.getAllDetails().size(), "Expected 1 specific PERSON entity");
         assertEquals(6, result.getAllDetails().get(0).getDocumentId());
-        assertEquals("albert einstein", result.getAllDetails().get(0).value());
+        assertEquals("albert einstein", result.getAllDetails().get(0).value()); // Now expect the value
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount()); 
@@ -276,34 +279,36 @@ public class QueryEndToEndTest {
         QueryResult result = queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
-        assertEquals(3, result.getAllDetails().size(), "Expected 3 PERSON entities for binding");
+        assertEquals(4, result.getAllDetails().size(), "Expected 4 PERSON entities for binding");
         Set<Integer> docIds = result.getDetailsByDocId().keySet();
-        assertEquals(Set.of(6, 7), docIds);
+        assertEquals(Set.of(6, 7, 12), docIds);
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
-        assertEquals(2, resultTable.rowCount()); // Grouped by doc
+        assertEquals(3, resultTable.rowCount()); // Grouped by doc (3 unique docs)
         assertTrue(resultTable.columnNames().contains("?person"));
         // Values in the table will be one of the entities from the doc (grouping picks one)
-        Set<String> expectedValues = Set.of("albert einstein", "marie curie", "isaac newton");
+        Set<String> expectedValues = Set.of("albert einstein", "marie curie", "isaac newton", "albrecht kossel");
         assertTrue(expectedValues.contains(resultTable.stringColumn("?person").get(0).toLowerCase()));
         assertTrue(expectedValues.contains(resultTable.stringColumn("?person").get(1).toLowerCase()));
+        assertTrue(expectedValues.contains(resultTable.stringColumn("?person").get(2).toLowerCase())); // Added check for 3rd row
     }
     
     @Test
     public void testNerVariableBindingWithTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT ?org FROM source WHERE NER(ORGANIZATION, 'google') AS ?org";
+        // Test partial match with binding
+        String queryString = "SELECT ?org FROM source WHERE NER(ORGANIZATION, 'corp') AS ?org"; // Use partial name
         Query query = queryParser.parse(queryString);
         QueryResult result = queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
-        assertEquals(1, result.getAllDetails().size(), "Expected 1 specific ORG entity");
-        assertEquals(7, result.getAllDetails().get(0).getDocumentId());
-        assertEquals("google", result.getAllDetails().get(0).value());
+        assertEquals(1, result.getAllDetails().size(), "Expected 1 specific ORG entity via partial match");
+        assertEquals(11, result.getAllDetails().get(0).getDocumentId());
+        assertEquals("microsoft corporation", result.getAllDetails().get(0).value()); // Binding returns actual full value
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount()); 
-        assertEquals(7, resultTable.intColumn("document_id").get(0));
-        assertEquals("google", resultTable.stringColumn("?org").get(0));
+        assertEquals(11, resultTable.intColumn("document_id").get(0));
+        assertEquals("microsoft corporation", resultTable.stringColumn("?org").get(0));
     }
     
     @Test
@@ -358,5 +363,22 @@ public class QueryEndToEndTest {
              Query query = queryParser.parse(queryString);
              queryExecutor.execute(query, mockIndexes);
         }, "Wildcard NER(*) execution is not fully supported yet");
+    }
+
+    @Test
+    public void testNerPartialTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
+        // Test partial match (case-insensitive)
+        String queryString = "SELECT TITLE FROM source WHERE NER(PERSON, 'Albrecht')"; // Use partial name 
+        Query query = queryParser.parse(queryString);
+        QueryResult result = queryExecutor.execute(query, mockIndexes);
+
+        assertNotNull(result);
+        assertEquals(1, result.getAllDetails().size(), "Expected 1 partial PERSON match");
+        assertEquals(12, result.getAllDetails().get(0).getDocumentId());
+        assertEquals("albrecht kossel", result.getAllDetails().get(0).value()); // Expect full value
+        
+        Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
+        assertEquals(1, resultTable.rowCount()); 
+        assertEquals(12, resultTable.intColumn("document_id").get(0));
     }
 } 

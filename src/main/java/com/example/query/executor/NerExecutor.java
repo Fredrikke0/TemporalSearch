@@ -159,9 +159,9 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 // Extract value (entity text) from the key
                 String value = key.substring(prefix.length());
                 
-                // Filter by target value if provided (case-insensitive)
-                if (targetValueLower != null && !value.toLowerCase().equals(targetValueLower)) {
-                    continue; // Skip if value doesn't match the target
+                // Filter by target value if provided (case-insensitive substring match)
+                if (targetValueLower != null && !value.toLowerCase().contains(targetValueLower)) {
+                    continue; // Skip if value doesn't contain the target substring
                 }
                 
                 PositionList positionList = PositionList.deserialize(entry.getValue());
@@ -219,9 +219,9 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 // Extract value (entity text) from the key
                 String value = key.substring(prefix.length());
                 
-                // Filter by target value if provided (case-insensitive)
-                if (targetValueLower != null && !value.toLowerCase().equals(targetValueLower)) {
-                    continue; // Skip if value doesn't match the target
+                // Filter by target value if provided (case-insensitive substring match)
+                if (targetValueLower != null && !value.toLowerCase().contains(targetValueLower)) {
+                    continue; // Skip if value doesn't contain the target substring
                 }
 
                 // When searching for a type without binding, the specific value doesn't matter as much,

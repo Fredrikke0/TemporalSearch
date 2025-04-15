@@ -58,15 +58,21 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
         String variableName = condition.variableName();
         String conditionId = String.valueOf(condition.hashCode());
 
-        if (isVariable) {
-            // Handle variable binding (iterate through index)
-            details.addAll(executeVariableSearch(dependencyIndex, relation, isVariable, variableName, conditionId));
-        } else if (governor != null && dependent != null && relation != null) {
-            // Handle specific dependency triple
+        // Always use specific search if all parts are provided literals
+        // The 'isVariable' flag now only affects MatchDetail tagging.
+        // TODO: Consider logic for when governor/dependent are variable references (e.g., DEPENDS(?g, 'rel', 'dep'))
+        if (governor != null && !governor.startsWith("?") && 
+            dependent != null && !dependent.startsWith("?") && 
+            relation != null) {
             details.addAll(executeSpecificSearch(dependencyIndex, governor, dependent, relation, isVariable, variableName, conditionId));
-        } else {
-            logger.warn("Unsupported DEPENDENCY condition combination: {}", condition);
-            // Or throw exception? Return empty for now.
+        } 
+        // Placeholder for potential future logic if governor/dependent are variables to consume
+        // else if (isVariableReference(governor) || isVariableReference(dependent)) {
+        //     logger.warn("Variable consumption in DEPENDENCY not yet implemented: {}", condition);
+        // } 
+        else {
+            logger.warn("Unsupported or incomplete DEPENDENCY condition: {}. Governor, relation, and dependent must be specified literals for now.", condition);
+            // Consider throwing an exception for unsupported cases
         }
 
         return new QueryResult(granularity, granularitySize, details);
@@ -99,8 +105,8 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
             
             if (positionsOpt.isPresent()) {
                 PositionList positionList = positionsOpt.get();
-                // Use the searchKey (which includes delimiters) as the value, matching test expectations
-                String value = searchKey; 
+                // Explicitly format the value for MatchDetail with a visible delimiter
+                String value = String.join(":", normalizedGovernor, normalizedRelation, normalizedDependent);
                 return positionList.getPositions().stream()
                     .map(pos -> new MatchDetail(value, ValueType.DEPENDENCY, pos, conditionId, isVariable ? variableName : null))
                     .collect(Collectors.toList());

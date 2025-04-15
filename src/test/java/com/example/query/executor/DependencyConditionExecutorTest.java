@@ -56,8 +56,9 @@ class DependencyConditionExecutorTest {
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
         assertEquals(2, result.getAllDetails().size()); 
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.value().equals(expectedKey) && m.valueType() == ValueType.DEPENDENCY));
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 2 && m.value().equals(expectedKey) && m.valueType() == ValueType.DEPENDENCY));
+        String expectedValue = "nsubj:vb:nn";
+        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=1");
+        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 2 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=2");
         verify(dependencyIndex).get(eq(expectedKey.getBytes()));
     }
 
@@ -79,9 +80,10 @@ class DependencyConditionExecutorTest {
         assertNotNull(result);
         assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
         assertEquals(3, result.getAllDetails().size());
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 1 && m.value().equals(expectedKey) && m.valueType() == ValueType.DEPENDENCY));
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 2 && m.value().equals(expectedKey) && m.valueType() == ValueType.DEPENDENCY));
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 2 && m.getSentenceId() == 1 && m.value().equals(expectedKey) && m.valueType() == ValueType.DEPENDENCY));
+        String expectedValue = "dobj:vb:jj";
+        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 1 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=1, sentenceId=1");
+        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 2 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=1, sentenceId=2");
+        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 2 && m.getSentenceId() == 1 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=2, sentenceId=1");
         verify(dependencyIndex).get(eq(expectedKey.getBytes()));
     }
 

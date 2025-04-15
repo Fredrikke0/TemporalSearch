@@ -10,6 +10,62 @@ import com.example.query.binding.VariableType;
 /**
  * Represents a POS (Part-of-Speech) condition in the query language.
  * This condition checks for terms with a specific POS tag, optionally binding the term.
+ * 
+ * **Note:** POS tags are stored and queried in lowercase.
+ * 
+ * Available POS tags (based on CoreNLP annotations on the Wikipedia dataset):
+ * 
+ * - jj: Adjective
+ * - nn: Noun, singular or mass
+ * - vbz: Verb, 3rd person singular present
+ * - dt: Determiner
+ * - rbs: Adverb, superlative
+ * - hyph: Hyphen
+ * - vbn: Verb, past participle
+ * - in: Preposition or subordinating conjunction
+ * - nnp: Proper noun, singular
+ * - .: Punctuation mark, sentence closer
+ * - ,: Punctuation mark, comma
+ * - wdt: Wh-determiner
+ * - cc: Coordinating conjunction
+ * - vbd: Verb, past tense
+ * - nns: Noun, plural
+ * - vbg: Verb, gerund or present participle
+ * - prp: Personal pronoun
+ * - rb: Adverb
+ * - pdt: Predeterminer
+ * - prp$: Possessive pronoun
+ * - cd: Cardinal number
+ * - nnps: Proper noun, plural
+ * - vbp: Verb, non-3rd person singular present
+ * - ex: Existential there
+ * - md: Modal
+ * - vb: Verb, base form
+ * - wrb: Wh-adverb
+ * - pos: Possessive ending
+ * - -lrb-: Left round bracket
+ * - -rrb-: Right round bracket
+ * - wp: Wh-pronoun
+ * - :: Punctuation mark, colon
+ * - ``: Opening double quote
+ * - jjr: Adjective, comparative
+ * - to: to
+ * - '': Closing double quote
+ * - sym: Symbol
+ * - fw: Foreign word
+ * - rbr: Adverb, comparative
+ * - rp: Particle
+ * - jjs: Adjective, superlative
+ * - nfp: Numeral, fraction, percentage
+ * - add: Email/URL
+ * - x: Unknown
+ * - uh: Interjection
+ * - wp$: Possessive wh-pronoun
+ * - $: Dollar sign
+ * - ls: List item marker
+ * - gw: Go word (e.g., goin')
+ * - afx: Affix
+ * 
  */
 public record Pos(
     String posTag,
