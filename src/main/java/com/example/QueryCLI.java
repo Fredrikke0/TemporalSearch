@@ -32,18 +32,26 @@ public class QueryCLI {
     // Core components
     private final QueryParser parser;
     private final QuerySemanticValidator validator;
+    private final ConditionExecutorFactory executorFactory;
     private final QueryExecutor executor;
 
     /**
      * Creates a new QueryCLI instance.
      *
      * @param indexBaseDir The base directory for all index sets
+     * @param temporalStrategy The desired temporal execution strategy ("nash" or "naive")
      */
-    public QueryCLI(Path indexBaseDir) {
+    public QueryCLI(Path indexBaseDir, String temporalStrategy) {
         this.indexBaseDir = indexBaseDir;
         this.parser = new QueryParser();
         this.validator = new QuerySemanticValidator();
-        this.executor = new QueryExecutor(new ConditionExecutorFactory());
+
+        // Create and configure the factory
+        this.executorFactory = new ConditionExecutorFactory();
+        this.executorFactory.setTemporalStrategy(temporalStrategy);
+
+        // Pass the configured factory to the executor
+        this.executor = new QueryExecutor(this.executorFactory);
         
         // Initialize the SqliteAccessor singleton
         SqliteAccessor.initialize(indexBaseDir.toString());
@@ -91,7 +99,7 @@ public class QueryCLI {
             }
             
             // Initialize Nash temporal index for this corpus
-            logger.debug("Initializing Nash temporal index for corpus: {}", indexSetName);
+            logger.debug("Initializing Nash temporal index (if applicable) for corpus: {}", indexSetName);
 
             // Create a new TableResultService with the corpus-specific database path
             TableResultService tableResultService = new TableResultService(corpusDbPath);
@@ -213,6 +221,12 @@ public class QueryCLI {
         parser.addArgument("--export")
                 .help("Export results to a file in the specified format: csv:filename.csv, json:filename.json, or html:filename.html");
         
+        // Add the new temporal strategy flag
+        parser.addArgument("--temporal-strategy")
+                .choices("nash", "naive") // Define allowed choices
+                .setDefault("naive")      // Set the default value
+                .help("Select the execution strategy for temporal conditions (default: naive)");
+        
         parser.addArgument("query")
                 .nargs("?")
                 .help("Query string to execute");
@@ -223,6 +237,7 @@ public class QueryCLI {
             String indexDir = ns.getString("index_dir");
             String query = ns.getString("query");
             String exportArg = ns.getString("export");
+            String temporalStrategy = ns.getString("temporal_strategy"); // Get the strategy name
             
             // Parse export argument if provided
             Optional<String> exportFormat = Optional.empty();
@@ -239,8 +254,9 @@ public class QueryCLI {
                 }
             }
             
-            // Create and run CLI
-            QueryCLI cli = new QueryCLI(Path.of(indexDir));
+            // Create and run CLI, passing the chosen strategy
+            logger.info("Configuring temporal strategy: {}", temporalStrategy);
+            QueryCLI cli = new QueryCLI(Path.of(indexDir), temporalStrategy);
             
             if (query != null) {
                 // Execute the provided query
@@ -251,6 +267,7 @@ public class QueryCLI {
                 System.out.println("Query CLI - Enter queries or 'exit' to quit");
                 System.out.println("Using index directory: " + indexDir);
                 System.out.println("Database structure: " + indexDir + "/[CORPUS_NAME]/[CORPUS_NAME].db");
+                System.out.println("Temporal Strategy: " + temporalStrategy + " (Use --temporal-strategy nash|naive to change at startup)"); // Inform user
                 System.out.println("Snippet support is enabled. Use SNIPPET(variable) in SELECT clause to show text context.");
                 System.out.println("Export support: Add --export=format:filename to export results (formats: csv, json, html)");
                 
@@ -263,6 +280,7 @@ public class QueryCLI {
                     }
                     
                     if (!input.isEmpty()) {
+                        // Note: In interactive mode, the strategy chosen at startup is used for all queries.
                         cli.executeQuery(input, exportFormat, exportFilename);
                     }
                 }

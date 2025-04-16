@@ -381,4 +381,30 @@ public class QueryEndToEndTest {
         assertEquals(1, resultTable.rowCount()); 
         assertEquals(12, resultTable.intColumn("document_id").get(0));
     }
+
+    @Test
+    public void testOrQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
+        // Query for documents containing either "apple" or "banana"
+        String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"apple\") OR CONTAINS(\"banana\")";
+        Query query = queryParser.parse(queryString);
+
+        // Execute query
+        QueryResult result = queryExecutor.execute(query, mockIndexes);
+
+        // Assertions on QueryResult
+        assertNotNull(result);
+        assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'apple' OR 'banana'");
+        // apple is in doc 1 and 2, banana is in doc 2. Union should be doc 1 and 2.
+        assertEquals(Set.of(1, 2), result.getDetailsByDocId().keySet(), "Expected documents 1 and 2");
+        assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
+        
+        // Assertions on generated Table
+        Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
+        assertNotNull(resultTable);
+        assertEquals(2, resultTable.rowCount(), "Table should have 2 rows (docs 1 and 2)");
+        assertTrue(resultTable.columnNames().contains("document_id")); 
+        // Check that both document IDs are present (order might vary)
+        Set<Integer> tableDocIds = Set.copyOf(resultTable.intColumn("document_id").asList());
+        assertEquals(Set.of(1, 2), tableDocIds);
+    }
 } 

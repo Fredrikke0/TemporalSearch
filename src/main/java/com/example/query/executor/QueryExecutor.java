@@ -1,7 +1,6 @@
 package com.example.query.executor;
 
 import com.example.core.IndexAccessInterface;
-import com.example.query.model.DocSentenceMatch;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Logical.LogicalOperator;
@@ -81,14 +80,11 @@ public class QueryExecutor {
         }
         
         try {
-            // Get the TemporalExecutor from the factory
-            TemporalExecutor temporalExecutor = (TemporalExecutor) executorFactory.getExecutor(
-                    new com.example.query.model.condition.Temporal(
-                            com.example.query.model.TemporalPredicate.EQUAL, 
-                            java.time.LocalDateTime.now()));
+            // Get the configured TemporalExecutor instance directly from the factory
+            TemporalExecutor temporalExecutor = executorFactory.getTemporalExecutorInstance();
             
             // Let the TemporalExecutor handle the Nash initialization with the index manager
-            boolean success = temporalExecutor.initializeNashIndexForCorpus(corpusName, indexManager);
+            boolean success = temporalExecutor.initializeForCorpus(corpusName, indexManager);
             if (success) {
                 nashInitialized = true;
                 logger.info("Nash index successfully initialized for corpus: {}", corpusName);

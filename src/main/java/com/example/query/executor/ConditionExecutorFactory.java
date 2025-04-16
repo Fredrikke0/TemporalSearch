@@ -1,66 +1,139 @@
 package com.example.query.executor;
 
 import com.example.query.model.condition.*;
+import com.example.query.model.TemporalPredicate;
+import com.example.query.model.condition.Not;
+import com.example.query.model.condition.Contains;
+import com.example.query.executor.ContainsExecutor;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+
 /**
- * Factory for condition executors using pattern matching and singleton instances.
- * Maintains type safety through sealed interfaces.
+ * Factory for creating or retrieving ConditionExecutor instances based on Condition type.
+ * Ensures that singleton executors (like TemporalExecutor) are reused.
  */
-public final class ConditionExecutorFactory {
+public class ConditionExecutorFactory {
     private static final Logger logger = LoggerFactory.getLogger(ConditionExecutorFactory.class);
-    
-    // Executors are now all singletons since they don't need variable names
-    private final LogicalExecutor logicalExecutor;
-    private final NerExecutor nerExecutor;
-    private final ContainsExecutor containsExecutor;
-    private final PosExecutor posExecutor;
-    private final DependencyExecutor dependencyExecutor;
-    private final TemporalExecutor temporalExecutor;
-    private final NotExecutor notExecutor;
-    
-    /**
-     * Creates a new ConditionExecutorFactory with singleton executor instances.
-     */
+
+    // Cache for singleton executors like TemporalExecutor
+    private final Map<Class<? extends Condition>, ConditionExecutor<?>> executorCache = new ConcurrentHashMap<>();
+
+    // Configuration for TemporalExecutor strategy
+    private String desiredTemporalStrategy = "naive"; // Default strategy
+
     public ConditionExecutorFactory() {
-        // Logical executor needs this factory for recursive execution
-        this.logicalExecutor = new LogicalExecutor(this);
-        
-        // Other executors are now also singletons
-        this.nerExecutor = new NerExecutor();
-        this.containsExecutor = new ContainsExecutor();
-        this.posExecutor = new PosExecutor();
-        this.dependencyExecutor = new DependencyExecutor();
-        this.temporalExecutor = new TemporalExecutor();
-        this.notExecutor = new NotExecutor(this);
-        
+        // Pre-register common executors or initialize cache if needed
         logger.debug("Initialized condition executor factory");
     }
-    
+
     /**
-     * Gets the appropriate executor for a condition using pattern matching.
-     * All executors are now singletons since variable binding is done through
-     * the condition itself and the binding context.
+     * Sets the desired strategy name for the TemporalExecutor.
+     * Must be called before the TemporalExecutor is first requested.
      *
-     * @param <T> The condition type
-     * @param condition The condition
-     * @return The executor for the condition
-     * @throws IllegalArgumentException if the condition type is not supported
+     * @param strategyName The name of the strategy ("nash" or "naive").
+     */
+    public void setTemporalStrategy(String strategyName) {
+        if ("nash".equalsIgnoreCase(strategyName) || "naive".equalsIgnoreCase(strategyName)) {
+            this.desiredTemporalStrategy = strategyName.toLowerCase();
+            logger.info("Temporal execution strategy set to: {}", this.desiredTemporalStrategy);
+            // If TemporalExecutor already exists in cache, update its strategy
+            TemporalExecutor existingExecutor = (TemporalExecutor) executorCache.get(Temporal.class);
+            if (existingExecutor != null) {
+                 try {
+                     existingExecutor.setActiveStrategy(this.desiredTemporalStrategy);
+                 } catch (IllegalArgumentException e) {
+                      logger.error("Failed to set active strategy '{}' on existing TemporalExecutor: {}", this.desiredTemporalStrategy, e.getMessage());
+                 }
+            }
+        } else {
+            logger.warn("Invalid temporal strategy name provided: '{}'. Using default '{}'.", strategyName, this.desiredTemporalStrategy);
+        }
+    }
+
+    /**
+     * Gets the appropriate executor for the given condition.
+     * Creates new instances for non-singleton executors, reuses cached singletons.
+     *
+     * @param condition The condition requiring an executor
+     * @return The ConditionExecutor instance
+     * @throws IllegalArgumentException if no executor is found for the condition type
      */
     @SuppressWarnings("unchecked")
     public <T extends Condition> ConditionExecutor<T> getExecutor(T condition) {
-        logger.debug("Getting executor for condition type: {}", condition.getType());
-        
-        return (ConditionExecutor<T>) switch (condition) {
-            case Contains c -> containsExecutor;
-            case Ner c -> nerExecutor;
-            case Pos c -> posExecutor;
-            case Dependency c -> dependencyExecutor;
-            case Logical c -> logicalExecutor;
-            case Temporal c -> temporalExecutor;
-            case Not c -> notExecutor;
-            default -> throw new IllegalArgumentException("Unsupported condition type: " + condition.getClass().getSimpleName());
-        };
+        Class<? extends Condition> conditionClass = condition.getClass();
+
+        // Handle specific types that should be singletons or require special setup
+        if (conditionClass == Temporal.class) {
+            // Use computeIfAbsent for thread-safe singleton creation and configuration
+            return (ConditionExecutor<T>) executorCache.computeIfAbsent(Temporal.class, k -> {
+                TemporalExecutor temporalExecutor = new TemporalExecutor();
+                 try {
+                     temporalExecutor.setActiveStrategy(desiredTemporalStrategy);
+                 } catch (IllegalArgumentException e) {
+                     logger.error("Failed to set initial strategy '{}' on new TemporalExecutor: {}. Defaulting might occur.", desiredTemporalStrategy, e.getMessage());
+                     // Let TemporalExecutor's constructor default handle it
+                 }
+                 logger.debug("Created and cached TemporalExecutor instance with initial strategy preference: {}", desiredTemporalStrategy);
+                return temporalExecutor;
+            });
+        }
+
+        // Handle other condition types (assuming non-singleton for now)
+        if (condition instanceof Logical) {
+            return (ConditionExecutor<T>) new LogicalExecutor(this); // Pass factory for recursion
+        }
+        if (condition instanceof Contains) {
+            return (ConditionExecutor<T>) executorCache.computeIfAbsent(Contains.class, k -> {
+                 logger.debug("Creating and caching ContainsExecutor instance.");
+                 return new ContainsExecutor();
+            });
+        }
+        if (condition instanceof Ner) {
+             return (ConditionExecutor<T>) executorCache.computeIfAbsent(Ner.class, k -> {
+                 logger.debug("Creating and caching NerExecutor instance.");
+                 return new NerExecutor();
+             });
+        }
+         if (condition instanceof Pos) {
+              return (ConditionExecutor<T>) executorCache.computeIfAbsent(Pos.class, k -> {
+                  logger.debug("Creating and caching PosExecutor instance.");
+                  return new PosExecutor();
+              });
+         }
+          if (condition instanceof Dependency) {
+               return (ConditionExecutor<T>) executorCache.computeIfAbsent(Dependency.class, k -> {
+                   logger.debug("Creating and caching DependencyExecutor instance.");
+                   return new DependencyExecutor();
+               });
+          }
+          if (condition instanceof Not) {
+              // Use computeIfAbsent to cache NotExecutor as well, passing the factory
+              // Explicitly cast the lambda parameter type
+              Function<Class<? extends Condition>, NotExecutor> factoryFunction = k -> {
+                   logger.debug("Creating and caching NotExecutor instance.");
+                   return new NotExecutor(this);
+              };
+              return (ConditionExecutor<T>) executorCache.computeIfAbsent(Not.class, factoryFunction);
+          }
+        // Add cases for other condition types (Pos, Dependency, etc.)
+
+        throw new IllegalArgumentException("No executor found for condition type: " + conditionClass.getSimpleName());
     }
+
+     /**
+      * Utility method to specifically get the configured TemporalExecutor instance.
+      * Useful for operations like initialization.
+      * @return The singleton TemporalExecutor instance.
+      */
+     public TemporalExecutor getTemporalExecutorInstance() {
+         // Ensure the instance is created and configured if it wasn't already
+         // Create a dummy Temporal condition just to trigger the getExecutor logic for Temporal.class
+         Temporal dummyTemporal = new Temporal(TemporalPredicate.EQUAL, java.time.LocalDateTime.now());
+         return (TemporalExecutor) getExecutor(dummyTemporal);
+     }
 } 
