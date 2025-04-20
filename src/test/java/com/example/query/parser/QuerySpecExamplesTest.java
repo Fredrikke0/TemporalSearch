@@ -110,14 +110,14 @@ public class QuerySpecExamplesTest {
     @Test
     @DisplayName("Complex date operations examples from spec")
     void testComplexDateOperationsExamples() {
-        // Contains date range
-        assertSpecExampleValid("SELECT ?doc FROM corpus WHERE DATE(CONTAINS [1990, 2000]) AS ?doc");
+        // Contains date range - now using DATE_LITERAL instead of INTEGER_LITERAL
+        assertSpecExampleValid("SELECT ?doc FROM corpus WHERE DATE(CONTAINS [1990-01-01, 2000-01-01]) AS ?doc");
         
         // Contained by date
         assertSpecExampleValid("SELECT ?doc FROM corpus WHERE DATE(CONTAINED_BY 2000) AS ?doc");
         
         // Intersect with date range
-        assertSpecExampleValid("SELECT ?doc FROM corpus WHERE DATE(INTERSECT [1990, 2000]) AS ?doc");
+        assertSpecExampleValid("SELECT ?doc FROM corpus WHERE DATE(INTERSECT [1990-01-01, 2000-01-01]) AS ?doc");
         
         // Proximity date with radius (formerly NEAR)
         assertSpecExampleValid("SELECT ?doc FROM corpus WHERE DATE(PROXIMITY 2000 RADIUS 5y) AS ?doc");

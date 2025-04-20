@@ -847,4 +847,216 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
         throw new IllegalStateException("Invalid join column type");
     }
+
+    @Override
+    public Object visitDateLiteralComparisonExpression(QueryLangParser.DateLiteralComparisonExpressionContext ctx) {
+        String operator = ctx.comparisonOp().getText();
+        String dateText = ctx.date.getText();
+        
+        TemporalPredicate predicate = TemporalPredicate.INTERSECT; // Use INTERSECT for all comparisons
+        LocalDateTime queryStart;
+        Optional<LocalDateTime> queryEnd = Optional.empty();
+
+        // Parse the date literal
+        LocalDateTime parsedDate = parseDateLiteral(dateText);
+        
+        // Define the interval based on the comparison operator
+        switch (operator.toUpperCase()) {
+            case ">": // Greater than date
+                if (isYearOnly(dateText)) {
+                    // Year only: "2000" means after Dec 31, 2000
+                    LocalDate yearEnd = LocalDate.of(Integer.parseInt(dateText), 12, 31);
+                    queryStart = LocalDateTime.of(yearEnd, java.time.LocalTime.MAX).plusNanos(1);
+                } else if (isYearMonth(dateText)) {
+                    // Year-month: "2000-01" means after Jan 31, 2000
+                    String[] parts = dateText.split("-");
+                    int year = Integer.parseInt(parts[0]);
+                    int month = Integer.parseInt(parts[1]);
+                    LocalDate monthEnd = getLastDayOfMonth(year, month);
+                    queryStart = LocalDateTime.of(monthEnd, java.time.LocalTime.MAX).plusNanos(1);
+                } else {
+                    // Full date: "2000-01-01" means after that specific day
+                    queryStart = LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MAX).plusNanos(1);
+                }
+                queryEnd = Optional.of(LocalDateTime.MAX);
+                break;
+            case "<": // Less than date
+                if (isYearOnly(dateText)) {
+                    // Year only: "2000" means before Jan 1, 2000
+                    queryStart = LocalDateTime.MIN;
+                    queryEnd = Optional.of(LocalDateTime.of(Integer.parseInt(dateText), 1, 1, 0, 0));
+                } else if (isYearMonth(dateText)) {
+                    // Year-month: "2000-01" means before Jan 1, 2000
+                    String[] parts = dateText.split("-");
+                    int year = Integer.parseInt(parts[0]);
+                    int month = Integer.parseInt(parts[1]);
+                    queryStart = LocalDateTime.MIN;
+                    queryEnd = Optional.of(LocalDateTime.of(year, month, 1, 0, 0));
+                } else {
+                    // Full date: "2000-01-01" means before that specific day
+                    queryStart = LocalDateTime.MIN;
+                    queryEnd = Optional.of(LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MIN));
+                }
+                break;
+            case ">=": // Greater than or equal to date
+                if (isYearOnly(dateText)) {
+                    // Year only: "2000" means from Jan 1, 2000
+                    queryStart = LocalDateTime.of(Integer.parseInt(dateText), 1, 1, 0, 0);
+                } else if (isYearMonth(dateText)) {
+                    // Year-month: "2000-01" means from Jan 1, 2000
+                    String[] parts = dateText.split("-");
+                    queryStart = LocalDateTime.of(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), 1, 0, 0);
+                } else {
+                    // Full date: "2000-01-01" means from that specific day
+                    queryStart = LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MIN);
+                }
+                queryEnd = Optional.of(LocalDateTime.MAX);
+                break;
+            case "<=": // Less than or equal to date
+                if (isYearOnly(dateText)) {
+                    // Year only: "2000" means up to Dec 31, 2000
+                    queryStart = LocalDateTime.MIN;
+                    LocalDate yearEnd = LocalDate.of(Integer.parseInt(dateText), 12, 31);
+                    queryEnd = Optional.of(LocalDateTime.of(yearEnd, java.time.LocalTime.MAX));
+                } else if (isYearMonth(dateText)) {
+                    // Year-month: "2000-01" means up to Jan 31, 2000
+                    String[] parts = dateText.split("-");
+                    int year = Integer.parseInt(parts[0]);
+                    int month = Integer.parseInt(parts[1]);
+                    queryStart = LocalDateTime.MIN;
+                    LocalDate monthEnd = getLastDayOfMonth(year, month);
+                    queryEnd = Optional.of(LocalDateTime.of(monthEnd, java.time.LocalTime.MAX));
+                } else {
+                    // Full date: "2000-01-01" means up to end of that specific day
+                    queryStart = LocalDateTime.MIN;
+                    queryEnd = Optional.of(LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MAX));
+                }
+                break;
+            case "=":
+            case "==": // Equal to date
+                if (isYearOnly(dateText)) {
+                    // Year only: "2000" means the full year 2000
+                    queryStart = LocalDateTime.of(Integer.parseInt(dateText), 1, 1, 0, 0);
+                    LocalDate yearEnd = LocalDate.of(Integer.parseInt(dateText), 12, 31);
+                    queryEnd = Optional.of(LocalDateTime.of(yearEnd, java.time.LocalTime.MAX));
+                } else if (isYearMonth(dateText)) {
+                    // Year-month: "2000-01" means the full month
+                    String[] parts = dateText.split("-");
+                    int year = Integer.parseInt(parts[0]);
+                    int month = Integer.parseInt(parts[1]);
+                    queryStart = LocalDateTime.of(year, month, 1, 0, 0);
+                    LocalDate monthEnd = getLastDayOfMonth(year, month);
+                    queryEnd = Optional.of(LocalDateTime.of(monthEnd, java.time.LocalTime.MAX));
+                } else {
+                    // Full date: "2000-01-01" means the full day
+                    queryStart = LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MIN);
+                    queryEnd = Optional.of(LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MAX));
+                }
+                break;
+            default:
+                throw new IllegalStateException("Invalid comparison operator: " + operator);
+        }
+        
+        String variableName = null;
+        if (ctx.var != null) {
+            variableName = (String) visit(ctx.var);
+            // Register variable in registry with TEMPORAL type
+            variableRegistry.registerProducer(variableName, VariableType.TEMPORAL, "TEMPORAL");
+        }
+        
+        // Create the Temporal condition using the INTERSECT predicate and the defined interval
+        return new Temporal(queryStart, queryEnd, Optional.ofNullable(variableName), Optional.empty(), predicate);
+    }
+    
+    @Override
+    public Object visitDateLiteralRange(QueryLangParser.DateLiteralRangeContext ctx) {
+        LocalDateTime startDate = parseDateLiteral(ctx.start.getText());
+        LocalDateTime endDate;
+        
+        if (ctx.end != null) {
+            // If end date is provided, use it
+            endDate = parseDateLiteral(ctx.end.getText());
+            // Adjust end date to end of day/month/year
+            String endDateText = ctx.end.getText();
+            if (isYearOnly(endDateText)) {
+                // Year only: "2000" means up to Dec 31, 2000 23:59:59
+                LocalDate yearEnd = LocalDate.of(Integer.parseInt(endDateText), 12, 31);
+                endDate = LocalDateTime.of(yearEnd, java.time.LocalTime.MAX);
+            } else if (isYearMonth(endDateText)) {
+                // Year-month: "2000-01" means up to Jan 31, 2000 23:59:59
+                String[] parts = endDateText.split("-");
+                int year = Integer.parseInt(parts[0]);
+                int month = Integer.parseInt(parts[1]);
+                LocalDate monthEnd = getLastDayOfMonth(year, month);
+                endDate = LocalDateTime.of(monthEnd, java.time.LocalTime.MAX);
+            } else {
+                // Full date: "2000-01-01" means up to 2000-01-01 23:59:59
+                endDate = LocalDateTime.of(endDate.toLocalDate(), java.time.LocalTime.MAX);
+            }
+        } else {
+            // If no end date, adjust start date based on its format
+            String startDateText = ctx.start.getText();
+            if (isYearOnly(startDateText)) {
+                // Year only: "2000" means from Jan 1, 2000 00:00:00 to Dec 31, 2000 23:59:59
+                LocalDate yearEnd = LocalDate.of(Integer.parseInt(startDateText), 12, 31);
+                endDate = LocalDateTime.of(yearEnd, java.time.LocalTime.MAX);
+            } else if (isYearMonth(startDateText)) {
+                // Year-month: "2000-01" means from Jan 1, 2000 00:00:00 to Jan 31, 2000 23:59:59
+                String[] parts = startDateText.split("-");
+                int year = Integer.parseInt(parts[0]);
+                int month = Integer.parseInt(parts[1]);
+                LocalDate monthEnd = getLastDayOfMonth(year, month);
+                endDate = LocalDateTime.of(monthEnd, java.time.LocalTime.MAX);
+            } else {
+                // Full date: "2000-01-01" means the full day
+                endDate = LocalDateTime.of(startDate.toLocalDate(), java.time.LocalTime.MAX);
+            }
+        }
+        
+        return new LocalDateTime[] { startDate, endDate };
+    }
+    
+    // Helper methods for date literal handling
+    
+    /**
+     * Parse a date literal in the format YYYY, YYYY-MM, or YYYY-MM-DD
+     */
+    private LocalDateTime parseDateLiteral(String dateLiteral) {
+        if (isYearOnly(dateLiteral)) {
+            // Year only: "2000"
+            return LocalDateTime.of(Integer.parseInt(dateLiteral), 1, 1, 0, 0);
+        } else if (isYearMonth(dateLiteral)) {
+            // Year-month: "2000-01"
+            String[] parts = dateLiteral.split("-");
+            return LocalDateTime.of(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), 1, 0, 0);
+        } else {
+            // Full date: "2000-01-01"
+            String[] parts = dateLiteral.split("-");
+            int year = Integer.parseInt(parts[0]);
+            int month = Integer.parseInt(parts[1]);
+            int day = Integer.parseInt(parts[2]);
+            return LocalDateTime.of(year, month, day, 0, 0);
+        }
+    }
+    
+    /**
+     * Check if the date literal is year only format (YYYY)
+     */
+    private boolean isYearOnly(String dateLiteral) {
+        return dateLiteral.matches("\\d{4}");
+    }
+    
+    /**
+     * Check if the date literal is year-month format (YYYY-MM)
+     */
+    private boolean isYearMonth(String dateLiteral) {
+        return dateLiteral.matches("\\d{4}-\\d{1,2}");
+    }
+    
+    /**
+     * Get the last day of a given month in a given year
+     */
+    private LocalDate getLastDayOfMonth(int year, int month) {
+        return LocalDate.of(year, month, 1).plusMonths(1).minusDays(1);
+    }
 } 

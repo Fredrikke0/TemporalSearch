@@ -120,7 +120,7 @@ class QueryParserTest {
         // Verify the predicate is INTERSECT and the range is correct for < 2000
         assertEquals(TemporalPredicate.INTERSECT, condition.temporalType());
         assertEquals(LocalDateTime.MIN, condition.startDate());
-        assertEquals(Optional.of(LocalDateTime.of(1999, 12, 31, 23, 59, 59)), condition.endDate());
+        assertEquals(Optional.of(LocalDateTime.of(2000, 1, 1, 0, 0)), condition.endDate());
         assertTrue(condition.variable().isPresent());
         assertEquals("?date", condition.variable().get());
     }

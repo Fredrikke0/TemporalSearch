@@ -92,6 +92,9 @@ DOT: '.'; // Added for qualified identifiers
 YEAR: 'y';
 DAY: 'd';
 
+// Date Literals can be in formats: YYYY, YYYY-MM, YYYY-MM-DD
+DATE_LITERAL: [0-9][0-9][0-9][0-9] ('-' [0-9][0-9]? ('-' [0-9][0-9]?)?)?;
+
 // Basic Data Type Tokens
 IDENTIFIER: [a-zA-Z_][a-zA-Z0-9_]*;
 STRING
@@ -186,6 +189,7 @@ singleCondition
 
 dateExpression
     : DATE LPAREN comparisonOp year=INTEGER_LITERAL RPAREN (AS var=variable)?        # DateComparisonExpression
+    | DATE LPAREN comparisonOp date=DATE_LITERAL RPAREN (AS var=variable)?           # DateLiteralComparisonExpression
     | DATE LPAREN dateOperator dateValue
       (RADIUS radius=INTEGER_LITERAL unit=timeUnit)? RPAREN (AS var=variable)?       # DateOperatorExpression
     ;
@@ -199,7 +203,9 @@ dateOperator
 
 dateValue
     : LBRACKET start=INTEGER_LITERAL COMMA end=INTEGER_LITERAL RBRACKET  # DateRange
-    | single=INTEGER_LITERAL                                     # SingleYear
+    | LBRACKET start=DATE_LITERAL COMMA end=DATE_LITERAL RBRACKET        # DateLiteralRange
+    | start=DATE_LITERAL (COMMA end=DATE_LITERAL)?                       # DateSingleOrPair 
+    | single=INTEGER_LITERAL                                             # SingleYear
     ;
 
 timeUnit
