@@ -27,18 +27,26 @@ public class Annotations {
         this.limit = limit;
         
         // Create optimized CoreNLP configuration
-        CoreNLPConfig config = new CoreNLPConfig(threads);
-        this.pipeline = config.createPipeline();
+        this.pipeline = createCoreNLPPipeline(threads);
         logger.info("Created CoreNLP pipeline with optimized configuration");
     }
 
+    private StanfordCoreNLP createCoreNLPPipeline(int threads) {
+        CoreNLPConfig config = new CoreNLPConfig(threads);
+        return config.createPipeline();
+    }
+
     public void processDocuments() throws Exception {
-        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbFile)) {
+        String url = "jdbc:sqlite:" + dbFile;
+        Connection conn = null;
+        try {
+            conn = DriverManager.getConnection(url);
+            conn.setAutoCommit(false);
+            
             createTables(conn, overwrite);
             
             String query = buildQuery(overwrite, limit);
             
-            // First count total documents to process for progress tracking
             int totalDocuments = 0;
             try (Statement countStmt = conn.createStatement();
                  ResultSet countRs = countStmt.executeQuery("SELECT COUNT(*) FROM (" + query + ")")) {
@@ -49,42 +57,84 @@ public class Annotations {
             
             logger.info("Found {} documents to process", totalDocuments);
             
+            final int commitBatchSize = 100;
+            int documentsInBatch = 0;
+            int totalProcessed = 0;
+            int skipped = 0;
+            
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(query);
                  ProgressBar pb = new ProgressBar("Processing documents", totalDocuments)) {
-                
-                int processed = 0;
-                int skipped = 0;
+
                 while (rs.next()) {
                     int documentId = rs.getInt("document_id");
                     String text = rs.getString("text");
                     
-                    // Skip documents above 15,000 characters
                     if (text.length() > 15000) {
                         logger.info("Skipping document {} with length {}", documentId, text.length());
                         skipped++;
                         pb.step();
-                        processed++;
+                        totalProcessed++;
                         continue;
                     }
-                    
-                    // TODO: Implement chunking for large documents instead of skipping them
-                    // This would involve breaking the text into manageable chunks, processing each chunk
-                    // separately, and then combining the results, while maintaining correct offsets
                     
                     AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
                     insertData(conn, result.annotations, result.dependencies);
                     
                     pb.step();
-                    processed++;
+                    totalProcessed++;
+                    documentsInBatch++;
                     
-                    if (processed % 10 == 0) {
-                        pb.setExtraMessage(String.format("(%d/%d)", processed, totalDocuments));
+                    if (documentsInBatch >= commitBatchSize) {
+                        conn.commit();
+                        logger.debug("Committed batch of {} documents", documentsInBatch);
+                        documentsInBatch = 0;
+                    }
+                    
+                    if (totalProcessed % 10 == 0) {
+                        pb.setExtraMessage(String.format("(%d/%d)", totalProcessed, totalDocuments));
                     }
                 }
                 
+                if (documentsInBatch > 0) {
+                    conn.commit();
+                    logger.debug("Committed final batch of {} documents", documentsInBatch);
+                }
+
                 if (skipped > 0) {
                     logger.info("Skipped {} documents over 15,000 characters", skipped);
+                }
+                
+            } catch (SQLException e) {
+                logger.error("SQL Error during document processing, attempting rollback.", e);
+                if (conn != null) {
+                    try {
+                        conn.rollback();
+                        logger.info("Transaction rolled back successfully.");
+                    } catch (SQLException ex) {
+                        logger.error("Error attempting to rollback transaction.", ex);
+                    }
+                }
+                throw e;
+            } finally {
+                if (conn != null) {
+                    try {
+                       conn.close();
+                    } catch (SQLException e) {
+                       logger.error("Error closing database connection.", e);
+                    }
+                }
+            }
+
+        } catch (SQLException e) {
+            logger.error("Failed to connect to or process database: {}", url, e);
+            throw e;
+        } finally {
+            if (conn != null && !conn.isClosed()) {
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                    logger.error("Error closing database connection in final finally block.", e);
                 }
             }
         }
