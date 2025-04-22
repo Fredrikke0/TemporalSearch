@@ -9,6 +9,7 @@ import net.sourceforge.argparse4j.inf.Namespace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import me.tongfei.progressbar.ProgressBar;
+import me.tongfei.progressbar.ProgressBarBuilder;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -99,8 +100,10 @@ public class WikiJsonToSqlite {
             try (PreparedStatement pstmt = conn.prepareStatement(insertSql);
                  BufferedReader reader = new BufferedReader(
                      new InputStreamReader(new FileInputStream(inputFile.toFile()), StandardCharsets.UTF_8));
-                 ProgressBar pb = new ProgressBar("Processing Wikipedia dump", 
-                     limit != null ? limit : totalLines)) {
+                 ProgressBar pb = new ProgressBarBuilder()
+                    .setTaskName("Processing Wikipedia dump")
+                    .setInitialMax(limit != null ? limit : totalLines)
+                    .build()) {
 
                 String line;
                 while ((line = reader.readLine()) != null) {

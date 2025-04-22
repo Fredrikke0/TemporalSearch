@@ -96,6 +96,7 @@ public class ProgressTracker implements AutoCloseable {
         //     .setInitialMax(total)
         //     .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
         //     .setUpdateIntervalMillis(100)
+        //     .setConsumer(new DelegatingProgressBarConsumer(logger::info))
         //     .showSpeed()
         //     .build();
     }

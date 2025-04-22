@@ -45,38 +45,52 @@ public class Annotations {
             
             createTables(conn, overwrite);
             
-            String query = buildQuery(overwrite, limit);
+            // Build base query conditions (handling overwrite and length limit)
+            List<String> conditions = new ArrayList<>();
+            if (!overwrite) {
+                conditions.add("document_id NOT IN (SELECT DISTINCT document_id FROM annotations)");
+            }
+            conditions.add("LENGTH(text) <= 15000"); // Always filter by length
+
+            // Build count query for documents that will actually be processed
+            StringBuilder countQueryBuilder = new StringBuilder("SELECT COUNT(*) FROM documents");
+            if (!conditions.isEmpty()) { // Apply conditions (length filter, potentially NOT IN)
+                countQueryBuilder.append(" WHERE ").append(String.join(" AND ", conditions));
+            }
+            if (limit != null) {
+                countQueryBuilder.append(" LIMIT ").append(limit); // Apply limit directly to count query
+            }
+
+            String countQuery = countQueryBuilder.toString();
             
-            int totalDocuments = 0;
+            int documentsToProcess = 0;
             try (Statement countStmt = conn.createStatement();
-                 ResultSet countRs = countStmt.executeQuery("SELECT COUNT(*) FROM (" + query + ")")) {
+                 ResultSet countRs = countStmt.executeQuery(countQuery)) {
                 if (countRs.next()) {
-                    totalDocuments = countRs.getInt(1);
+                    documentsToProcess = countRs.getInt(1);
                 }
             }
             
-            logger.info("Found {} documents to process", totalDocuments);
+            logger.info("Found {} documents matching criteria (length <= 15000, overwrite={}, limit={}) to process.",
+                        documentsToProcess, overwrite, limit != null ? limit : "none");
+            
+            // Build the main processing query
+            String query = buildQuery(overwrite, limit, true); // Pass flag to include length filter
             
             final int commitBatchSize = 100;
             int documentsInBatch = 0;
             int totalProcessed = 0;
-            int skipped = 0;
             
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(query);
-                 ProgressBar pb = new ProgressBar("Processing documents", totalDocuments)) {
+                 ProgressBar pb = new ProgressBarBuilder()
+                    .setTaskName("Processing documents")
+                    .setInitialMax(documentsToProcess) // Use actual count to process
+                    .build()) {
 
                 while (rs.next()) {
                     int documentId = rs.getInt("document_id");
                     String text = rs.getString("text");
-                    
-                    if (text.length() > 15000) {
-                        logger.info("Skipping document {} with length {}", documentId, text.length());
-                        skipped++;
-                        pb.step();
-                        totalProcessed++;
-                        continue;
-                    }
                     
                     AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
                     insertData(conn, result.annotations, result.dependencies);
@@ -92,7 +106,7 @@ public class Annotations {
                     }
                     
                     if (totalProcessed % 10 == 0) {
-                        pb.setExtraMessage(String.format("(%d/%d)", totalProcessed, totalDocuments));
+                        pb.setExtraMessage(String.format("(%d/%d)", totalProcessed, documentsToProcess));
                     }
                 }
                 
@@ -101,10 +115,6 @@ public class Annotations {
                     logger.debug("Committed final batch of {} documents", documentsInBatch);
                 }
 
-                if (skipped > 0) {
-                    logger.info("Skipped {} documents over 15,000 characters", skipped);
-                }
-                
             } catch (SQLException e) {
                 logger.error("SQL Error during document processing, attempting rollback.", e);
                 if (conn != null) {
@@ -174,6 +184,9 @@ public class Annotations {
                             FOREIGN KEY (document_id) REFERENCES documents(document_id)
                         )
                     """);
+
+            // Add the index for faster lookups when not overwriting
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_annotations_document_id ON annotations (document_id)");
 
             stmt.execute("""
                         CREATE TABLE IF NOT EXISTS dependencies (
@@ -311,11 +324,21 @@ public class Annotations {
         }
     }
 
-    private static String buildQuery(boolean overwrite, Integer limit) {
+    // Overload buildQuery to optionally include the length filter in the WHERE clause
+    private static String buildQuery(boolean overwrite, Integer limit, boolean filterLength) {
         StringBuilder query = new StringBuilder("SELECT document_id, text FROM documents");
+        List<String> conditions = new ArrayList<>();
 
         if (!overwrite) {
-            query.append(" WHERE document_id NOT IN (SELECT DISTINCT document_id FROM annotations)");
+            conditions.add("document_id NOT IN (SELECT DISTINCT document_id FROM annotations)");
+        }
+
+        if (filterLength) {
+            conditions.add("LENGTH(text) <= 15000");
+        }
+
+        if (!conditions.isEmpty()) {
+            query.append(" WHERE ").append(String.join(" AND ", conditions));
         }
 
         if (limit != null) {
