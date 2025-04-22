@@ -14,6 +14,8 @@ import com.example.core.Position;
 import com.example.core.PositionList;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
+import java.util.List;
+import java.util.stream.Collectors;
 
 public class TrigramIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-trigram.txt";
@@ -103,6 +105,43 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         }
     }
 
+    private void setupPunctuationTestData() throws SQLException {
+        // Insert document 3
+        try (PreparedStatement pstmt = sqliteConn.prepareStatement(
+                "INSERT INTO documents (document_id, timestamp) VALUES (?, ?)")) {
+            pstmt.setInt(1, 3);
+            pstmt.setString(2, "2024-01-29");
+            pstmt.executeUpdate();
+        }
+
+        // Insert test sentence for Doc 3: "Anne Waldman ( born 1945 ) ."
+        String[][] punctuationWords = {
+                // Document 3, Sentence 0
+                { "3", "0", "0", "4", "Anne", "anne", "PROPN" },
+                { "3", "0", "5", "12", "Waldman", "waldman", "PROPN" },
+                { "3", "0", "13", "14", "(", "(", "PUNCT" }, // Punctuation
+                { "3", "0", "15", "19", "born", "born", "VERB" },
+                { "3", "0", "20", "24", "1945", "1945", "NUM" },
+                { "3", "0", "25", "26", ")", ")", "PUNCT" }, // Punctuation
+                { "3", "0", "27", "28", ".", ".", "PUNCT" }  // Punctuation
+        };
+
+        try (PreparedStatement pstmt = sqliteConn.prepareStatement(
+                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+            for (String[] word : punctuationWords) {
+                pstmt.setInt(1, Integer.parseInt(word[0]));
+                pstmt.setInt(2, Integer.parseInt(word[1]));
+                pstmt.setInt(3, Integer.parseInt(word[2]));
+                pstmt.setInt(4, Integer.parseInt(word[3]));
+                pstmt.setString(5, word[4]);
+                pstmt.setString(6, word[5]); // Use lemma for indexing
+                pstmt.setString(7, word[6]);
+                pstmt.executeUpdate();
+            }
+        }
+    }
+
     @AfterEach
     void tearDown() throws Exception {
         super.tearDown();
@@ -171,6 +210,41 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         assertTrue(now.isEmpty(), "Trigram should not cross sentence boundary");
     }
 
+    @Test
+    public void testTrigramWithPunctuationSkipping() throws Exception {
+        // Add specific data for this test
+        setupPunctuationTestData();
+
+        // Create and run trigram indexer
+        try (TrigramIndexGenerator indexer = new TrigramIndexGenerator(
+                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker())) {
+            indexer.generateIndex();
+        }
+
+        // Create IndexAccess instance for verification
+        Options options = new Options();
+        indexAccess = new IndexAccess(indexBaseDir.toPath(), "trigram", options);
+
+        // Expected trigrams (skipping punctuation)
+        // "Anne Waldman born" -> spans from 'Anne' start to 'born' end
+        verifyTrigram("anne" + IndexGenerator.DELIMITER + "waldman" +
+            IndexGenerator.DELIMITER + "born", 3, 0, 0, 19, 1);
+        // "Waldman born 1945" -> spans from 'Waldman' start to '1945' end
+        verifyTrigram("waldman" + IndexGenerator.DELIMITER + "born" +
+            IndexGenerator.DELIMITER + "1945", 3, 0, 5, 24, 1);
+
+        // Verify trigrams *including* punctuation are NOT present
+        verifyTrigramAbsent("waldman" + IndexGenerator.DELIMITER + "(" +
+            IndexGenerator.DELIMITER + "born", "Trigram should skip '('");
+        verifyTrigramAbsent("(" + IndexGenerator.DELIMITER + "born" +
+            IndexGenerator.DELIMITER + "1945", "Trigram should skip '('");
+        verifyTrigramAbsent("born" + IndexGenerator.DELIMITER + "1945" +
+            IndexGenerator.DELIMITER + ")", "Trigram should skip ')'");
+        verifyTrigramAbsent("1945" + IndexGenerator.DELIMITER + ")" +
+            IndexGenerator.DELIMITER + ".", "Trigram should skip ')' and '.'");
+
+    }
+
     private void verifyTrigram(String trigram, int expectedDocId, int expectedSentenceId,
             int expectedBeginChar, int expectedEndChar, int expectedCount) throws IOException, IndexAccessException {
         Optional<PositionList> positions = indexAccess.get(bytes(trigram));
@@ -184,6 +258,11 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         assertEquals(expectedSentenceId, pos.getSentenceId());
         assertEquals(expectedBeginChar, pos.getBeginPosition());
         assertEquals(expectedEndChar, pos.getEndPosition());
+    }
+
+    private void verifyTrigramAbsent(String trigram, String message) throws IOException, IndexAccessException {
+        Optional<PositionList> positions = indexAccess.get(bytes(trigram));
+        assertTrue(positions.isEmpty(), message + " - Found unexpected trigram: '" + trigram + "'");
     }
 
     @Test

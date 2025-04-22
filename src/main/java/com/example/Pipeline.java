@@ -184,7 +184,7 @@ public class Pipeline {
             WikiJsonToSqlite.ExtractionResult result = WikiJsonToSqlite.extractToSqlite(
                 Path.of(wikiDumpPath),
                 Path.of(dbPath),
-                ns.getBoolean("recreate"),
+                stage.equals("all") || ns.getBoolean("recreate"),
                 ns.getInt("limit")
             );
             System.out.printf("Conversion complete. %d entries added to database: %s%n",

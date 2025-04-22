@@ -17,6 +17,7 @@ import com.example.core.Position;
 import com.example.core.PositionList;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
+import java.util.stream.Collectors;
 
 /**
  * Generates a streaming bigram index from annotation entries.
@@ -68,41 +69,39 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
 
     @Override
     protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
+        // ---> Filter the batch here <---
+        List<AnnotationEntry> filteredBatch = batch.stream()
+             .filter(entry -> entry != null && entry.getLemma() != null && !entry.getLemma().isEmpty() &&
+                              entry.getLemma().chars().anyMatch(Character::isLetterOrDigit))
+             .collect(Collectors.toList());
+
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
         Map<String, PositionList> positionLists = new HashMap<>();
-        
-        for (int i = 0; i < batch.size() - 1; i++) {
-            AnnotationEntry entry = batch.get(i);
-            AnnotationEntry nextEntry = batch.get(i + 1);
-            
-            // Skip if either word is null
-            if (entry.getLemma() == null || nextEntry.getLemma() == null) {
-                continue;
-            }
-            
-            // Check if entries are from the same document and sentence
-            if (entry.getDocumentId() == nextEntry.getDocumentId() && 
-                entry.getSentenceId() == nextEntry.getSentenceId()) {
-                
-                String key = String.format("%s%s%s", 
-                    entry.getLemma().toLowerCase(),
-                    DELIMITER,
-                    nextEntry.getLemma().toLowerCase());
 
-                Position position = new Position(nextEntry.getDocumentId(), nextEntry.getSentenceId(),
-                    entry.getBeginChar(), nextEntry.getEndChar(), nextEntry.getTimestamp());
+        // Operate on filteredBatch
+        for (int i = 0; i < filteredBatch.size() - 1; i++) {
+            AnnotationEntry firstEntry = filteredBatch.get(i);
+            AnnotationEntry secondEntry = filteredBatch.get(i + 1);
 
-                // Get or create position list for this bigram
+            // Check sentence/doc ID
+            if (firstEntry.getDocumentId() == secondEntry.getDocumentId() &&
+                firstEntry.getSentenceId() == secondEntry.getSentenceId()) {
+
+                String key = String.format("%s%s%s",
+                    firstEntry.getLemma().toLowerCase(), DELIMITER,
+                    secondEntry.getLemma().toLowerCase());
+
+                Position position = new Position(secondEntry.getDocumentId(), secondEntry.getSentenceId(),
+                    firstEntry.getBeginChar(), secondEntry.getEndChar(), secondEntry.getTimestamp());
+
                 PositionList posList = positionLists.computeIfAbsent(key, k -> new PositionList());
                 posList.add(position);
             }
         }
-        
-        // Add all position lists to result
+
         for (Map.Entry<String, PositionList> entry : positionLists.entrySet()) {
             index.put(entry.getKey(), entry.getValue());
         }
-        
         return index;
     }
 

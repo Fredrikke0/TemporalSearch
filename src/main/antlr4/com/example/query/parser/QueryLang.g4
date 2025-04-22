@@ -229,7 +229,7 @@ orderSpec
     ;
 
 qualifiedIdentifier
-    : (identifier | variable) DOT (identifier | variable) // Changed '.' to DOT
+    : (identifier | variable) DOT (identifier | variable | TITLE | TIMESTAMP) // Changed '.' to DOT, Added TITLE, Added TIMESTAMP
     ;
 
 limitClause

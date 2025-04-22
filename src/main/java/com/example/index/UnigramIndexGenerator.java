@@ -15,6 +15,7 @@ import java.util.Map;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import java.util.stream.Collectors;
 
 /**
  * Generates a streaming unigram index from annotation entries.
@@ -81,30 +82,35 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
 
     @Override
     protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
+
+        // ---> Filter the batch here (primarily for symbol check, as DB handles nulls) <---
+        List<AnnotationEntry> filteredBatch = batch.stream()
+             .filter(entry -> entry != null && entry.getLemma() != null && !entry.getLemma().isEmpty() &&
+                              entry.getLemma().chars().anyMatch(Character::isLetterOrDigit))
+             .collect(Collectors.toList());
+
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
         Map<String, PositionList> positionLists = new HashMap<>();
-        
-        for (AnnotationEntry entry : batch) {
+
+        // Operate on filteredBatch
+        for (AnnotationEntry entry : filteredBatch) {
             String lemma = entry.getLemma().toLowerCase();
-            
-            // Skip stopwords
+
+            // Skip stopwords (keep this specific logic here)
             if (isStopword(lemma)) {
                 continue;
             }
-            
+
             Position position = new Position(entry.getDocumentId(), entry.getSentenceId(),
                 entry.getBeginChar(), entry.getEndChar(), entry.getTimestamp());
-            
-            // Get or create position list for this lemma
+
             PositionList posList = positionLists.computeIfAbsent(lemma, k -> new PositionList());
             posList.add(position);
         }
-        
-        // Add all position lists to result with prefix
+
         for (Map.Entry<String, PositionList> entry : positionLists.entrySet()) {
             index.put(entry.getKey(), entry.getValue());
         }
-        
         return index;
     }
 

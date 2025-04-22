@@ -50,6 +50,17 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     // Formatter for creating interval strings for Nash.invert ([YYYY-MM-DD , YYYY-MM-DD])
     private static final DateTimeFormatter NASH_INTERVAL_FORMATTER = DateTimeFormatter.ISO_DATE;
     
+    // --- New structure for Nash Index ---
+    /** Record to hold position and the ID of the specific date associated with it. */
+    private record NashDateEntryWithId(Position position, int dateId) {}
+
+    /** Stores the actual Nash index structure: Corpus -> Nash Prefix -> Set of entries with date IDs */
+    final Map<String, Map<String, Set<NashDateEntryWithId>>> nashIndicesWithIds = new HashMap<>();
+
+    /** Stores the lookup from date ID back to LocalDate for each corpus */
+    final Map<String, List<LocalDate>> corpusDateLookups = new HashMap<>();
+    // --- End New structure ---
+    
     // Store Nash indices per corpus: Map<CorpusName, Map<NashHashPrefix, Set<Position>>>
     // This is kept here as it's a shared resource potentially used by Nash strategy
     // Changed value type to Set<Position> to support sentence granularity with offsets
@@ -177,46 +188,22 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
              logger.warn("TemporalExecutor not explicitly initialized for corpus '{}'. Nash index might be unavailable.", corpusName);
         }
 
-        // --- Determine the execution strategy ---
-        TemporalExecutionStrategy activeStrategy = getActiveStrategy();
-        TemporalExecutionStrategy executionStrategy = activeStrategy; // Start with the active one
+        // --- Determine the execution strategy (Simpler now) ---
+        TemporalExecutionStrategy executionStrategy = getActiveStrategy(); // Always use the configured active strategy
 
-        // Check if the condition forces a fallback (e.g., Nash active but variable binding needed)
-        boolean conditionRequiresDirectAccess = condition.variable().isPresent(); // Sentence granularity no longer requires fallback
-
-        if (conditionRequiresDirectAccess && !activeStrategy.requiresDirectIndexAccess(condition, granularity)) {
-            // The active strategy (e.g., Nash) doesn't inherently require direct access for variables,
-            // but the *condition* does. We must fallback.
-            // Note: Sentence granularity check removed here as Nash now supports it.
-            logger.warn("Active strategy '{}' cannot handle variable binding for this query. Attempting to switch to 'naive'.", activeStrategy.getName());
-            TemporalExecutionStrategy fallbackStrategy = strategies.get("naive");
-            if (fallbackStrategy != null) {
-                executionStrategy = fallbackStrategy;
-            } else {
-                // This is problematic - active strategy is unsuitable, and index_scan isn't registered.
-                throw new QueryExecutionException(
-                    "Active strategy '" + activeStrategy.getName() + "' cannot handle this query (variable binding), and fallback 'naive' strategy is not registered.",
-                    condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
-            }
-        } else {
-            // Either the active strategy handles direct access if needed, or the condition doesn't require it.
-            // Use the originally selected active strategy.
-            logger.debug("Using selected strategy: {}", activeStrategy.getName());
-        }
-
-        logger.debug("Executing temporal condition: {} for corpus: {} using resolved strategy: {}",
+        logger.debug("Executing temporal condition: {} for corpus: {} using selected strategy: {}",
                      condition, corpusName, executionStrategy.getName());
         // --- End Strategy Selection ---
 
         try {
             // Delegate execution to the resolved strategy
-            List<MatchDetail> details = executionStrategy.execute( // Use the resolved executionStrategy
+            List<MatchDetail> details = executionStrategy.execute(
                 condition,
                 indexes,
                 granularity,
                 granularitySize,
                 corpusName,
-                this // Pass 'this' for context if needed by strategy
+                this // Pass 'this' for context (lookup tables, etc.)
             );
 
             logger.debug("Temporal strategy '{}' produced {} MatchDetail objects. Returning QueryResult.", executionStrategy.getName(), details.size());
@@ -239,7 +226,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
     /**
      * Internal method to initialize the Nash index structure for a specific corpus.
-     * Stores Set<Position> now.
+     * Stores Set<NashDateEntryWithId> now, using a date lookup table.
      */
     private boolean initializeNashIndexInternal(String corpusName, IndexManager indexManager) {
         // Check initialization status first
@@ -248,7 +235,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
              return nashInitializationStatus.getOrDefault(corpusName, true); // Return stored status
         }
 
-        logger.info("Initializing Nash index structure for corpus: {}", corpusName);
+        logger.info("Initializing Nash index structure with Date ID lookup for corpus: {}", corpusName);
 
         Optional<IndexAccessInterface> indexOpt = indexManager.getIndex(DATE_INDEX);
         if (indexOpt.isEmpty()) {
@@ -257,9 +244,14 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
         }
         IndexAccessInterface dateIndex = indexOpt.get();
 
+        // --- New: Date ID Lookup structures for this corpus ---
+        Map<LocalDate, Integer> dateToId = new HashMap<>();
+        List<LocalDate> idToDate = new ArrayList<>();
+        // --- End New ---
+
         List<String> intervalStrings = new ArrayList<>();
-        // Changed value type to Set<Position>
-        Map<Integer, Set<Position>> listIndexToPositions = new HashMap<>();
+        // Store List<NashDateEntryWithId> temporarily, mapped by the original interval list index
+        Map<Integer, List<NashDateEntryWithId>> listIndexToEntries = new HashMap<>();
         int intervalIndex = 0;
 
         try (var iterator = dateIndex.iterator()) {
@@ -274,24 +266,30 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                             NASH_INTERVAL_FORMATTER.format(docDate),
                             NASH_INTERVAL_FORMATTER.format(docDate));
 
-                    // Store the actual set of Position objects
+                    // --- New: Get or create Date ID ---
+                    int dateId = dateToId.computeIfAbsent(docDate, date -> {
+                        idToDate.add(date);
+                        return idToDate.size() - 1; // ID is the index
+                    });
+                    // --- End New ---
+
                     PositionList positions = PositionList.deserialize(entry.getValue());
-                    // Ensure we convert the List to a Set safely
-                    Set<Position> positionSet = null;
-                    if (positions != null && positions.getPositions() != null) {
-                        positionSet = new HashSet<>(positions.getPositions());
-                    }
+                    Set<Position> positionSet = (positions != null && positions.getPositions() != null)
+                                               ? new HashSet<>(positions.getPositions())
+                                               : null;
 
                     if (positionSet != null && !positionSet.isEmpty()) {
                          intervalStrings.add(interval); // Only add interval if positions exist
-                         listIndexToPositions.put(intervalIndex, positionSet);
-                    intervalIndex++;
+                         List<NashDateEntryWithId> entriesForInterval = new ArrayList<>();
+                         for (Position pos : positionSet) {
+                             entriesForInterval.add(new NashDateEntryWithId(pos, dateId));
+                         }
+                         listIndexToEntries.put(intervalIndex, entriesForInterval);
+                         intervalIndex++;
                     } else {
-                         // Handle case where PositionList is empty or null
                          logger.trace("Empty or null PositionList for key '{}', interval '{}'. Skipping interval.", dateStr, interval);
                     }
                 } else {
-                    // Log at trace, might be too noisy otherwise if keys aren't always dates
                     logger.trace("Skipping non-date key during Nash initialization: {}", dateStr);
                 }
             }
@@ -304,37 +302,40 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
         if (intervalStrings.isEmpty()) {
             logger.warn("No valid date intervals found in '{}' index for corpus '{}'. Nash index will be empty.", DATE_INDEX, corpusName);
-            nashIndices.put(corpusName, Collections.emptyMap());
+            nashIndicesWithIds.put(corpusName, Collections.emptyMap()); // Use new map name
+            corpusDateLookups.put(corpusName, Collections.emptyList()); // Store empty lookup
             return true; // Initialization technically complete (empty index)
         }
 
         try {
             MultiMap<String, Integer> invertedIndex = Nash.invert(intervalStrings);
-            // Changed value type to Set<Position>
-            Map<String, Set<Position>> corpusNashIndex = new HashMap<>();
+            // Store Set<NashDateEntryWithId>
+            Map<String, Set<NashDateEntryWithId>> corpusNashIndex = new HashMap<>();
             for (String nashPrefix : invertedIndex.keySet()) {
-                Set<Position> positionSet = new HashSet<>(); // Store Positions now
+                Set<NashDateEntryWithId> entrySet = new HashSet<>(); // Store entries now
                 for (Integer listIdx : invertedIndex.get(nashPrefix)) {
-                    Set<Position> positionsForIndex = listIndexToPositions.get(listIdx);
-                    if (positionsForIndex != null) {
-                        positionSet.addAll(positionsForIndex);
+                    List<NashDateEntryWithId> entriesForIndex = listIndexToEntries.get(listIdx);
+                    if (entriesForIndex != null) {
+                        entrySet.addAll(entriesForIndex);
                     } else {
-                         // This indicates an issue if listIdx came from invertedIndex but isn't in our map
-                         logger.warn("Inconsistency during Nash build: Prefix '{}' mapped to list index {} which has no associated positions.", nashPrefix, listIdx);
+                         logger.warn("Inconsistency during Nash build: Prefix '{}' mapped to list index {} which has no associated entries.", nashPrefix, listIdx);
                     }
                 }
-                 if (!positionSet.isEmpty()) {
-                    corpusNashIndex.put(nashPrefix, positionSet);
+                 if (!entrySet.isEmpty()) {
+                    corpusNashIndex.put(nashPrefix, entrySet);
                  }
             }
 
-            nashIndices.put(corpusName, corpusNashIndex);
-            logger.info("Nash index initialized with {} unique hash prefixes for corpus: {} (storing Position objects)", corpusNashIndex.size(), corpusName);
+            nashIndicesWithIds.put(corpusName, corpusNashIndex); // Use new map name
+            corpusDateLookups.put(corpusName, idToDate); // Store the lookup table
+            logger.info("Nash index initialized with {} unique hash prefixes for corpus: {} (using Date ID lookup, {} unique dates)",
+                corpusNashIndex.size(), corpusName, idToDate.size());
             return true; // Mark initialization as successful
 
         } catch (Exception e) {
             logger.error("Failed to generate Nash index structure for corpus '{}': {}", corpusName, e.getMessage(), e);
-            nashIndices.put(corpusName, Collections.emptyMap()); // Store empty map on failure
+            nashIndicesWithIds.put(corpusName, Collections.emptyMap()); // Store empty map on failure
+            corpusDateLookups.put(corpusName, Collections.emptyList()); // Store empty lookup
             return false; // Mark initialization as failed
         }
     }
@@ -345,7 +346,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
     /**
      * Strategy using the Nash index for efficient temporal queries, supporting document and sentence granularity.
-     * Stores full Position objects. Cannot handle variable binding.
+     * Uses Date ID lookup to handle variable binding and joins.
      */
     private static class NashTemporalStrategy implements TemporalExecutionStrategy {
         private static final Logger strategyLogger = LoggerFactory.getLogger(NashTemporalStrategy.class);
@@ -357,104 +358,91 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
         @Override
         public boolean initializeForCorpus(String corpusName, TemporalExecutor temporalExecutor) {
-             // Initialization logic is handled by TemporalExecutor's main init method
-             // We just need to check if it was successful for this corpus.
              boolean nashReady = temporalExecutor.nashInitializationStatus.getOrDefault(corpusName, false);
              if (!nashReady) {
-                 strategyLogger.warn("Nash index not successfully initialized for corpus '{}'. This strategy may fail or be unavailable.", corpusName);
+                 strategyLogger.warn("Nash index not successfully initialized for corpus '{}'. This strategy may fail.", corpusName);
+             } else if (!temporalExecutor.corpusDateLookups.containsKey(corpusName)) {
+                 // Should not happen if init was successful, but good sanity check
+                 strategyLogger.error("Nash index inconsistency: Initialization reported success for corpus '{}' but date lookup table is missing.", corpusName);
+                 return false; // Strategy cannot function without lookup
              }
-             // Strategy itself doesn't need extra init, relies on TemporalExecutor's Nash map.
-             return true; // Report successful strategy init (even if Nash itself failed, executor handles fallback)
-        }
-
-        @Override
-        public boolean requiresDirectIndexAccess(Temporal condition, Query.Granularity granularity) {
-             // Nash *can* now handle sentence granularity, but still not variable binding.
-             // Direct index access is required only for variable binding, as Nash doesn't store the specific date value.
-             return condition.variable().isPresent();
+             return true;
         }
 
         @Override
         public List<MatchDetail> execute(
             Temporal condition,
-                Map<String, IndexAccessInterface> indexes, // Not directly used, relies on precomputed Nash index
+                Map<String, IndexAccessInterface> indexes, // Not directly used
                 Query.Granularity granularity,
                 int granularitySize,
                 String corpusName,
                 TemporalExecutor temporalExecutor)
             throws QueryExecutionException {
-        
-             // Variable check - Nash still cannot bind the date value itself.
-             // This check is defensive; the main executor should already handle fallback.
-             // Update: The main executor's fallback WON'T trigger if NashTemporalStrategy
-             // itself claims it requires direct access for variables. This check is the
-             // primary enforcer against using Nash for variable binding.
-              if (condition.variable().isPresent()) {
-                  throw new QueryExecutionException(
-                      "Nash strategy cannot execute queries requiring variable binding.",
-                      condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
-              }
 
-             // Get the Nash index which now stores Set<Position>
-             Map<String, Set<Position>> nashIndex = temporalExecutor.nashIndices.get(corpusName);
-        if (nashIndex == null) {
-                 // Check initialization status
+             // --- Get required data structures ---
+             Map<String, Set<NashDateEntryWithId>> nashIndex = temporalExecutor.nashIndicesWithIds.get(corpusName);
+             List<LocalDate> dateLookup = temporalExecutor.corpusDateLookups.get(corpusName);
+
+             // --- Validation ---
+             if (nashIndex == null || dateLookup == null) {
                  boolean initAttempted = temporalExecutor.nashInitializationStatus.containsKey(corpusName);
                  boolean initSucceeded = temporalExecutor.nashInitializationStatus.getOrDefault(corpusName, false);
-
+                 String errorMsg;
                  if (!initAttempted) {
-                      strategyLogger.error("Nash index not initialized for corpus: {}. Initialization was never attempted.", corpusName);
-                      throw new QueryExecutionException("Nash index not initialized for corpus: " + corpusName, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+                      errorMsg = "Nash index not initialized for corpus: " + corpusName + ". Initialization was never attempted.";
                  } else if (!initSucceeded) {
-                      strategyLogger.error("Nash index initialization failed previously for corpus: {}. Cannot use Nash strategy (Fallback should have occurred).", corpusName);
-                      throw new QueryExecutionException("Nash index initialization failed for corpus: " + corpusName, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+                      errorMsg = "Nash index initialization failed previously for corpus: " + corpusName + ". Cannot use Nash strategy.";
                  } else {
-                     // Index is null but init status was true? Should not happen.
-                     strategyLogger.error("Nash index unexpectedly null for corpus {} despite successful initialization status. Returning empty list.", corpusName);
-                     return Collections.emptyList();
+                     errorMsg = "Nash index inconsistency for corpus " + corpusName + ": Index or lookup table is null despite successful initialization status.";
                  }
+                 strategyLogger.error(errorMsg);
+                 throw new QueryExecutionException(errorMsg, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
              }
              if (nashIndex.isEmpty()){
                  strategyLogger.debug("Nash index for corpus '{}' is empty. Returning empty result.", corpusName);
-            return Collections.emptyList(); 
-        }
-        
-        List<MatchDetail> details = new ArrayList<>();
-        String conditionId = String.valueOf(condition.hashCode());
-             // Use the Temporal object's method to get the Nash interval string
+                 return Collections.emptyList();
+             }
+             // --- End Validation ---
+
+             List<MatchDetail> details = new ArrayList<>();
+             String conditionId = String.valueOf(condition.hashCode());
+             String variableName = condition.variable().orElse(null); // Get variable name if present
+
              String interval = condition.toNashInterval();
-             // Expand year-only intervals if necessary BEFORE generating hash
              String expandedInterval = Temporal.expandYearOnlyInterval(interval);
+             Nash.RangePredicate nashPredicate = condition.temporalType().toNashPredicate();
+             strategyLogger.debug("Querying Nash index for corpus '{}' with expanded interval: {}, predicate: {}, variable: {}",
+                                  corpusName, expandedInterval, nashPredicate, variableName);
 
-        Nash.RangePredicate nashPredicate = condition.temporalType().toNashPredicate();
-             strategyLogger.debug("Querying Nash index for corpus '{}' with expanded interval: {}, predicate: {}", corpusName, expandedInterval, nashPredicate);
-
-        try {
-                 // Generate hashes based on the EXPANDED interval
+             try {
                  String[] hashPrefixes = Nash.generateTimeHash(expandedInterval, nashPredicate);
-                 Set<Position> matchingPositions = new HashSet<>(); // Collect Position objects
+                 Set<NashDateEntryWithId> matchingEntries = new HashSet<>(); // Collect entries
                  int prefixesChecked = 0;
-            for (String hashPrefix : hashPrefixes) {
+                 for (String hashPrefix : hashPrefixes) {
                      prefixesChecked++;
-                     Set<Position> positionsFromHash = nashIndex.get(hashPrefix);
-                     if (positionsFromHash != null) {
-                         matchingPositions.addAll(positionsFromHash);
+                     Set<NashDateEntryWithId> entriesFromHash = nashIndex.get(hashPrefix);
+                     if (entriesFromHash != null) {
+                         matchingEntries.addAll(entriesFromHash);
+                     }
                  }
-            }
-                 strategyLogger.debug("Checked {} Nash prefixes, found {} unique matching Positions", prefixesChecked, matchingPositions.size());
-            
-                 // Create MatchDetail using the retrieved Position objects
-                 for (Position pos : matchingPositions) {
-                     // Use the interval string as the 'value' for consistency in MatchDetail,
-                     // but include the full Position object.
-                     // The actual date value isn't easily available here without parsing the interval again,
-                     // so the interval string is a reasonable placeholder value.
-                     // Alternatively, could pass the condition's start/end dates if needed.
-                     details.add(new MatchDetail(interval, ValueType.DATE, pos, conditionId, null));
-            }
-            return details;
+                 strategyLogger.debug("Checked {} Nash prefixes, found {} unique matching NashDateEntryWithId objects", prefixesChecked, matchingEntries.size());
+
+                 // --- Create MatchDetail using Date ID lookup ---
+                 for (NashDateEntryWithId entry : matchingEntries) {
+                     if (entry.dateId() < 0 || entry.dateId() >= dateLookup.size()) {
+                          strategyLogger.error("Invalid dateId {} found in Nash entry for position {}. Max valid ID is {}. Skipping entry.",
+                                                entry.dateId(), entry.position(), dateLookup.size() - 1);
+                          continue;
+                     }
+                     LocalDate specificDate = dateLookup.get(entry.dateId());
+                     // Use the specificDate as the value, use the entry's position
+                     details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), conditionId, variableName));
+                 }
+                 // --- End MatchDetail Creation ---
+
+                 return details;
              } catch (Exception e) { // Catch specific Nash exceptions if possible
-            throw new QueryExecutionException("Error querying Nash index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+                 throw new QueryExecutionException("Error querying Nash index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
              }
         }
     }
@@ -476,12 +464,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
              // No specific initialization needed for this strategy.
              strategyLogger.debug("NaiveTemporalStrategy requires no specific initialization for corpus '{}'", corpusName);
              return true;
-        }
-
-        @Override
-        public boolean requiresDirectIndexAccess(Temporal condition, Query.Granularity granularity) {
-            // This strategy inherently uses direct index access.
-            return true;
         }
 
         @Override

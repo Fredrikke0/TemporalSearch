@@ -272,6 +272,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
                 <configuration>
+                    <argLine>--add-opens=java.base/sun.misc=ALL-UNNAMED</argLine>
                     <redirectTestOutputToFile>true</redirectTestOutputToFile>
                     <trimStackTrace>true</trimStackTrace>
                     <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
@@ -350,7 +351,7 @@
                 <version>3.5.0</version>
                 <configuration>
                     <mainClass>com.example.QueryCLI</mainClass>
-                    <vmArgs>-Xss16m -XX:MaxRAMPercentage=70</vmArgs>
+                    <vmArgs>-Xss16m -XX:MaxRAMPercentage=70 --add-opens=java.base/sun.misc=ALL-UNNAMED</vmArgs>
                 </configuration>
             </plugin>
 

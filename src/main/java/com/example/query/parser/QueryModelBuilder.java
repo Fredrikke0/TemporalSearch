@@ -14,6 +14,7 @@ import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
 
 import org.antlr.v4.runtime.tree.ParseTree;
+import org.antlr.v4.runtime.tree.TerminalNode;
 
 import java.time.LocalDateTime;
 import java.time.LocalDate;
@@ -127,10 +128,12 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     
     @Override
     public Object visitQualifiedColumn(QueryLangParser.QualifiedColumnContext ctx) {
-        // Visit the qualifiedIdentifier child to get the full name (e.g., "alias.?variable")
-        String qualifiedName = (String) visitQualifiedIdentifier(ctx.qualifiedIdentifier());
-        // Reuse VariableColumn to represent this selected column
-        return new VariableColumn(qualifiedName);
+        // Reverted: Visit the qualifiedIdentifier child to get the full name string
+        String qualifiedName = (String) visit(ctx.qualifiedIdentifier());
+        // Reverted: Use VariableColumn as a temporary placeholder to avoid compilation error.
+        // This is NOT correct logic for handling qualified columns but prevents build failure.
+        // The real logic will depend on the MatchDetail refactor.
+        return new VariableColumn(qualifiedName); 
     }
 
     @Override
@@ -787,55 +790,51 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     @Override
     public Object visitQualifiedIdentifier(QueryLangParser.QualifiedIdentifierContext ctx) {
-        // Grammar: (identifier | variable) '.' (identifier | variable)
-        String leftPart;
-        String rightPart;
-
-        // ANTLR generates lists for potentially multiple matches
-        List<QueryLangParser.IdentifierContext> ids = ctx.identifier();
-        List<QueryLangParser.VariableContext> vars = ctx.variable();
-
-        // The first child (index 0) is the left part
-        ParseTree firstChild = ctx.getChild(0);
-        if (firstChild instanceof QueryLangParser.VariableContext) {
-            // Should correspond to vars.get(0) if the list isn't empty
-            if (vars != null && !vars.isEmpty()) {
-                 leftPart = (String) visitVariable(vars.get(0));
-            } else {
-                 throw new IllegalStateException("Grammar mismatch: Expected VariableContext first but list is empty/null.");
-            }
-        } else if (firstChild instanceof QueryLangParser.IdentifierContext) {
-            // Should correspond to ids.get(0) if the list isn't empty
-            if (ids != null && !ids.isEmpty()) {
-                leftPart = ids.get(0).getText();
-            } else {
-                 throw new IllegalStateException("Grammar mismatch: Expected IdentifierContext first but list is empty/null.");
-            }
-        } else {
-             throw new IllegalStateException("QualifiedIdentifier couldn't determine left part before dot. Found: " + firstChild.getClass().getSimpleName());
+        // Reverted: Logic to parse alias.NAME, alias.?VAR, alias.TITLE, alias.TIMESTAMP
+        // and return a combined string.
+        if (ctx == null || ctx.getChildCount() < 3) {
+            throw new IllegalStateException("Invalid QualifiedIdentifierContext. Expected 'alias DOT column'.");
         }
 
-        // The third child (index 2, after the '.' at index 1) is the right part
-        ParseTree thirdChild = ctx.getChild(2);
-         if (thirdChild instanceof QueryLangParser.VariableContext) {
-            // Use the last variable in the list, as it must be the one after the dot.
-             if (vars != null && vars.size() > 0) {
-                 rightPart = (String) visitVariable(vars.get(vars.size() - 1));
-             } else {
-                  throw new IllegalStateException("Grammar mismatch: Expected VariableContext third but list is empty/null.");
-             }
-        } else if (thirdChild instanceof QueryLangParser.IdentifierContext) {
-             // Use the last identifier in the list, as it must be the one after the dot.
-             if (ids != null && ids.size() > 0) {
-                 rightPart = ids.get(ids.size() - 1).getText();
-             } else {
-                 throw new IllegalStateException("Grammar mismatch: Expected IdentifierContext third but list is empty/null.");
-             }
-        } else {
-            throw new IllegalStateException("QualifiedIdentifier couldn't determine right part after dot. Found: " + thirdChild.getClass().getSimpleName());
+        String alias = null;
+        String rightPart = null;
+
+        // 1. Determine the left part (alias)
+        ParseTree leftChild = ctx.getChild(0);
+        if (leftChild instanceof QueryLangParser.IdentifierContext identifierContext) {
+            alias = identifierContext.getText();
+        } else if (leftChild instanceof QueryLangParser.VariableContext variableContext) {
+            throw new IllegalStateException("Alias part of a qualified identifier cannot be a variable: " + variableContext.getText());
+         } else {
+             throw new IllegalStateException("QualifiedIdentifier couldn't determine alias (left part). Found: " + leftChild.getClass().getSimpleName());
         }
 
-        return leftPart + "." + rightPart;
+        // 2. Determine the right part (column name/type)
+        ParseTree rightChild = ctx.getChild(2); // Child after the DOT
+
+        if (rightChild instanceof QueryLangParser.VariableContext variableContext) {
+            rightPart = (String) visitVariable(variableContext); // visitVariable returns "?varname"
+        } else if (rightChild instanceof QueryLangParser.IdentifierContext idContext) {
+            rightPart = idContext.getText();
+         } else if (rightChild instanceof TerminalNode terminalNode) {
+            int tokenType = terminalNode.getSymbol().getType();
+            if (tokenType == QueryLangLexer.TITLE) {
+                rightPart = "TITLE";
+            } else if (tokenType == QueryLangLexer.TIMESTAMP) {
+                rightPart = "TIMESTAMP";
+            } else {
+                 throw new IllegalStateException("QualifiedIdentifier encountered unexpected terminal node after dot: " + terminalNode.getText());
+            }
+        } else {
+            throw new IllegalStateException("QualifiedIdentifier couldn't determine column part (right part). Found: " + rightChild.getClass().getSimpleName());
+        }
+
+        if (alias == null || rightPart == null) {
+             throw new IllegalStateException("Failed to parse qualified identifier parts completely.");
+        }
+
+        // Return the combined string representation (e.g., "q1.?person", "q1.TITLE")
+        return alias + "." + rightPart;
     }
 
     @Override

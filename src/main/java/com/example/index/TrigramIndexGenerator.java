@@ -17,6 +17,7 @@ import com.example.core.Position;
 import com.example.core.PositionList;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
+import java.util.stream.Collectors;
 
 /**
  * Generates a streaming trigram index from annotation entries.
@@ -68,46 +69,43 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
 
     @Override
     protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
+        List<AnnotationEntry> filteredBatch = batch.stream()
+             .filter(entry -> entry != null && entry.getLemma() != null && !entry.getLemma().isEmpty() &&
+                              entry.getLemma().chars().anyMatch(Character::isLetterOrDigit))
+             .collect(Collectors.toList());
+
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
         Map<String, PositionList> positionLists = new HashMap<>();
-        
-        for (int i = 0; i < batch.size() - 2; i++) {
-            AnnotationEntry entry = batch.get(i);
-            AnnotationEntry nextEntry = batch.get(i + 1);
-            AnnotationEntry nextNextEntry = batch.get(i + 2);
-            
-            // Skip if any entry has null lemma
-            if (entry.getLemma() == null || nextEntry.getLemma() == null || nextNextEntry.getLemma() == null) {
-                continue;
-            }
-            
-            // Check if all entries are from the same document and sentence
-            if (entry.getDocumentId() == nextEntry.getDocumentId() && 
-                entry.getDocumentId() == nextNextEntry.getDocumentId() &&
-                entry.getSentenceId() == nextEntry.getSentenceId() &&
-                entry.getSentenceId() == nextNextEntry.getSentenceId()) {
-                
-                String key = String.format("%s%s%s%s%s", 
-                    entry.getLemma().toLowerCase(),
-                    DELIMITER,
-                    nextEntry.getLemma().toLowerCase(),
-                    DELIMITER,
-                    nextNextEntry.getLemma().toLowerCase());
 
-                Position position = new Position(nextNextEntry.getDocumentId(), nextNextEntry.getSentenceId(),
-                    entry.getBeginChar(), nextNextEntry.getEndChar(), nextNextEntry.getTimestamp());
+        for (int i = 0; i < filteredBatch.size() - 2; i++) {
+            AnnotationEntry firstEntry = filteredBatch.get(i);
+            AnnotationEntry secondEntry = filteredBatch.get(i + 1);
+            AnnotationEntry thirdEntry = filteredBatch.get(i + 2);
 
-                // Get or create position list for this trigram
+            if (firstEntry.getDocumentId() == secondEntry.getDocumentId() &&
+                firstEntry.getDocumentId() == thirdEntry.getDocumentId() &&
+                firstEntry.getSentenceId() == secondEntry.getSentenceId() &&
+                firstEntry.getSentenceId() == thirdEntry.getSentenceId()) {
+
+                String key = String.format("%s%s%s%s%s",
+                    firstEntry.getLemma().toLowerCase(),
+                    DELIMITER,
+                    secondEntry.getLemma().toLowerCase(),
+                    DELIMITER,
+                    thirdEntry.getLemma().toLowerCase());
+
+                Position position = new Position(thirdEntry.getDocumentId(), thirdEntry.getSentenceId(),
+                    firstEntry.getBeginChar(), thirdEntry.getEndChar(), thirdEntry.getTimestamp());
+
                 PositionList posList = positionLists.computeIfAbsent(key, k -> new PositionList());
                 posList.add(position);
             }
         }
-        
-        // Add all position lists to result
+
         for (Map.Entry<String, PositionList> entry : positionLists.entrySet()) {
             index.put(entry.getKey(), entry.getValue());
         }
-        
+
         return index;
     }
 

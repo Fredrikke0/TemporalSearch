@@ -229,4 +229,220 @@ public class LogicalConditionExecutorTest {
         verify(mockFactory, never()).getExecutor(any());
     }
 
+    // --- Tests for intersectQueryResultsSortMerge --- 
+    
+    @Test
+    void intersectSortMerge_DocumentGranularity_BothEmpty() {
+        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, Collections.emptyList());
+        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, Collections.emptyList());
+        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+        assertTrue(result.getAllDetails().isEmpty());
+        assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
+    }
+
+    @Test
+    void intersectSortMerge_DocumentGranularity_OneEmpty() {
+        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(md(1), md(2)));
+        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, Collections.emptyList());
+        QueryResult result1 = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+        QueryResult result2 = logicalExecutor.intersectQueryResultsSortMerge(r2, r1);
+        assertTrue(result1.getAllDetails().isEmpty());
+        assertTrue(result2.getAllDetails().isEmpty());
+    }
+
+    @Test
+    void intersectSortMerge_DocumentGranularity_NoCommonDocs() {
+        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(md(1), md(3)));
+        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, List.of(md(2), md(4)));
+        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+        assertTrue(result.getAllDetails().isEmpty());
+    }
+
+    @Test
+    void intersectSortMerge_DocumentGranularity_SomeCommonDocs() {
+        MatchDetail d1_1 = md(1);
+        MatchDetail d1_2 = md(1); // Duplicate in same doc is possible
+        MatchDetail d2_1 = md(2);
+        MatchDetail d3_1 = md(3);
+        MatchDetail d4_1 = md(4);
+        MatchDetail d2_2 = md(2); 
+
+        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1_1, d1_2, d3_1)); // Docs 1, 3
+        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d2_1, d2_2, d4_1)); // Docs 2, 4
+        // Intentionally swapped order for r2 input
+        QueryResult r3 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d4_1, d2_1, d2_2)); // Docs 2, 4
+        QueryResult r4 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1_1, d2_1)); // Docs 1, 2
+
+        QueryResult result_1_3 = logicalExecutor.intersectQueryResultsSortMerge(r1, r3); // Docs 1,3 INTERSECT 2,4 -> {} 
+        QueryResult result_1_4 = logicalExecutor.intersectQueryResultsSortMerge(r1, r4); // Docs 1,3 INTERSECT 1,2 -> {Doc 1}
+        QueryResult result_3_4 = logicalExecutor.intersectQueryResultsSortMerge(r3, r4); // Docs 2,4 INTERSECT 1,2 -> {Doc 2}
+
+        assertTrue(result_1_3.getAllDetails().isEmpty());
+
+        // Use sorted lists for comparison
+        assertEquals(sortDetails(List.of(d1_1, d1_2, d1_1)), getSortedDetails(result_1_4), "Doc 1 intersection failed"); 
+        assertEquals(sortDetails(List.of(d2_1, d2_2, d2_1)), getSortedDetails(result_3_4), "Doc 2 intersection failed"); 
+    }
+
+     @Test
+    void intersectSortMerge_DocumentGranularity_IdenticalResults() {
+        MatchDetail d1 = md(1);
+        MatchDetail d2 = md(2);
+        List<MatchDetail> details = List.of(d1, d2);
+        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, details);
+        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, details);
+        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+
+        assertEquals(sortDetails(List.of(d1, d2, d1, d2)), getSortedDetails(result)); 
+    }
+
+    @Test
+    void intersectSortMerge_DocumentGranularity_Subset() {
+        MatchDetail d1 = md(1);
+        MatchDetail d2 = md(2);
+        MatchDetail d3 = md(3);
+
+        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1, d2, d3)); // Docs 1, 2, 3
+        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1, d3));    // Docs 1, 3
+
+        QueryResult result1 = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+        QueryResult result2 = logicalExecutor.intersectQueryResultsSortMerge(r2, r1);
+
+        assertEquals(sortDetails(List.of(d1, d3, d1, d3)), getSortedDetails(result1));
+        assertEquals(sortDetails(List.of(d1, d3, d1, d3)), getSortedDetails(result2));
+    }
+
+    // Helper to compare details ignoring order and potential duplicates from merge
+    private List<MatchDetail> getSortedDetails(QueryResult result) {
+        // Need a consistent way to sort MatchDetail for comparison
+        // Sorting by docId, then sentId, then value.toString()
+        List<MatchDetail> details = new ArrayList<>(result.getAllDetails());
+        details.sort(Comparator.<MatchDetail, Integer>comparing(MatchDetail::getDocumentId)
+                              .thenComparing(MatchDetail::getSentenceId)
+                              .thenComparing(d -> d.value().toString()) 
+                              // Add more criteria if needed for uniqueness in tests
+                              .thenComparing(System::identityHashCode)); // Tie-breaker
+        return details;
+    }
+
+    // Helper to sort details for comparison in tests
+    private List<MatchDetail> sortDetails(List<MatchDetail> details) {
+        List<MatchDetail> sorted = new ArrayList<>(details);
+        // Use the same comparator as in getSortedDetails
+        sorted.sort(Comparator.<MatchDetail, Integer>comparing(MatchDetail::getDocumentId)
+                            .thenComparing(MatchDetail::getSentenceId)
+                            .thenComparing(d -> d.value().toString())
+                            .thenComparing(System::identityHashCode)); // Tie-breaker
+        return sorted;
+    }
+
+    // Helper to create a basic MatchDetail for testing intersection logic
+    private MatchDetail md(int docId, int sentId) { 
+        // Using placeholder values for fields not directly used in intersection logic
+        return new MatchDetail(
+            "value_" + docId + "_" + sentId, // Dummy value
+            ValueType.TERM,                  // Dummy type
+            new Position(docId, sentId, 0, 0, null), // Position object
+            "cond_" + docId,                 // Dummy condition ID
+            null                             // No variable binding for basic test
+        );
+    }
+
+    private MatchDetail md(int docId) { // Helper for document granularity
+        return md(docId, -1); // Use -1 or a consistent marker for doc level
+    }
+
+    // --- Tests for Sentence Granularity --- 
+    @Test
+    void intersectSortMerge_SentenceGranularity_NoCommonDocs() {
+        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 1), md(1, 2)));
+        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(2, 1), md(2, 2)));
+        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+        assertTrue(result.getAllDetails().isEmpty());
+        assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
+        assertEquals(0, result.getGranularitySize());
+    }
+
+    @Test
+    void intersectSortMerge_SentenceGranularity_CommonDocs_NoOverlap_Window0() {
+        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 1), md(1, 3)));
+        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 2), md(1, 4), md(2,1)));
+        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+        assertTrue(result.getAllDetails().isEmpty(), "Expected no overlap with window size 0");
+    }
+
+    @Test
+    void intersectSortMerge_SentenceGranularity_CommonDocs_Overlap_Window0() {
+        MatchDetail d1_1 = md(1, 1);
+        MatchDetail d1_3 = md(1, 3);
+        MatchDetail d1_3_alt = md(1, 3); // From r2
+        MatchDetail d2_1 = md(2, 1);
+        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(d1_1, d1_3));        // Doc 1, Sents 1, 3
+        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 2), d1_3_alt, d2_1)); // Doc 1, Sents 2, 3; Doc 2, Sent 1
+        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+
+        assertEquals(sortDetails(List.of(d1_3, d1_3_alt)), getSortedDetails(result), "Expected overlap only for sentence 3 with window 0");
+    }
+
+    @Test
+    void intersectSortMerge_SentenceGranularity_CommonDocs_Overlap_Window1() {
+        // Window 1 means allowedDistance = (1-1)/2 = 0 -> Adjacent not allowed, only exact match
+        // Let's redefine window size interpretation or test case.
+        // Assuming window N means +/- (N-1)/2 sentences distance.
+        // So window size 1 -> distance 0 (exact match)
+        // Window size 3 -> distance 1 (adjacent allowed)
+        int windowSize = 3; // +/- 1 sentence
+        MatchDetail d1_1 = md(1, 1);
+        MatchDetail d1_2 = md(1, 2);
+        MatchDetail d1_3 = md(1, 3);
+        MatchDetail d1_4 = md(1, 4);
+        MatchDetail d1_5 = md(1, 5);
+        MatchDetail d2_1 = md(2, 1);
+        MatchDetail d2_3 = md(2, 3);
+
+        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, windowSize, List.of(d1_1, d1_4, d2_1));         // D1:S1,S4; D2:S1
+        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, windowSize, List.of(d1_3, d1_5, md(1, 8), d2_3)); // D1:S3,S5,S8; D2:S3
+
+        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+
+        // Expected: 
+        // Doc 1: S1(r1) no match. S4(r1) matches S3(r2) & S5(r2). S3(r2) matches S4(r1). S5(r2) matches S4(r1). S8(r2) no match.
+        // Doc 2: S1(r1) no match. S3(r2) no match.
+        // Result units: (1,3), (1,4), (1,5) 
+        // Use sorted lists for comparison, collecting details from involved units
+        List<MatchDetail> expectedDetails = List.of(d1_3, d1_4, d1_5); 
+
+        assertEquals(sortDetails(expectedDetails), getSortedDetails(result), "Expected overlap for sentences 3, 4, 5 in Doc 1 with window " + windowSize);
+        assertEquals(windowSize, result.getGranularitySize());
+    }
+
+    @Test
+    void intersectSortMerge_SentenceGranularity_IdenticalResults() {
+        int windowSize = 1; // Exact match
+        MatchDetail d1_1 = md(1, 1);
+        MatchDetail d2_2 = md(2, 2);
+        List<MatchDetail> details = List.of(d1_1, d2_2);
+        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, windowSize, details);
+        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, windowSize, details);
+        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+
+        assertEquals(sortDetails(List.of(d1_1, d2_2, d1_1, d2_2)), getSortedDetails(result));
+        assertEquals(windowSize, result.getGranularitySize());
+    }
+
+     @Test
+    void intersectSortMerge_MismatchedGranularity_ShouldReturnEmpty() {
+        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(md(1)));
+        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 1)));
+        QueryResult result1 = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+        QueryResult result2 = logicalExecutor.intersectQueryResultsSortMerge(r2, r1);
+
+        assertTrue(result1.getAllDetails().isEmpty(), "Intersection of different granularities should be empty");
+        assertEquals(Query.Granularity.DOCUMENT, result1.getGranularity()); // Returns first granularity on error
+
+        assertTrue(result2.getAllDetails().isEmpty(), "Intersection of different granularities should be empty");
+        assertEquals(Query.Granularity.SENTENCE, result2.getGranularity()); // Returns first granularity on error
+    }
+
+    // TODO: Add tests for executeAnd/executeOr with mocked sub-executors
 } 

@@ -20,6 +20,7 @@ import java.sql.Statement;
 import java.sql.ResultSet;
 import java.util.*;
 import java.nio.charset.Charset;
+import java.util.stream.Collectors;
 
 /**
  * Abstract base class for streaming index generation that processes large datasets efficiently
@@ -243,39 +244,53 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         int offset = 0;
         IndexingMetrics metrics = new IndexingMetrics();
         metrics.startBatch(config.getBatchSize(), getIndexName());
+        long totalRawEntriesProcessed = 0;
 
         try {
-            // Process batches and write to temp files
             while (true) {
                 List<T> batch = fetchBatch(offset);
                 if (batch.isEmpty()) {
                     break;
                 }
+                totalRawEntriesProcessed += batch.size();
 
-                // Process batch and write to temp file
+                // ---> Call processBatch directly with the fetched batch <---
                 ListMultimap<String, PositionList> positions = processBatch(batch);
-                File tempFile = writeBatchToTempFile(positions);
-                tempFiles.add(tempFile);
 
-                // Update progress and metrics
+                if (!positions.isEmpty()) {
+                    File tempFile = writeBatchToTempFile(positions);
+                    tempFiles.add(tempFile);
+                }
+
+                // Update progress based on the batch size processed from DB
                 offset += batch.size();
                 metrics.recordBatchSuccess(batch.size());
                 progress.updateIndex(batch.size());
             }
 
+            logger.info("Finished fetching {} raw entries.", totalRawEntriesProcessed);
+
+            if (tempFiles.isEmpty()) {
+                logger.warn("No indexable entries found after filtering. Index will be empty.");
+                return; // Exit early if no temp files were created
+            }
+
             // Sort and merge temp files
             File outputFile = new File(tempDir.toFile(), "sorted.tmp");
-            ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator());
+            logger.info("Merging {} temporary files...", tempFiles.size());
+            ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), true); // Using distinct=true assumes writeBatchToTempFile might produce duplicates per term within a batch
 
             // Write sorted entries to LevelDB
+            logger.info("Writing merged entries to LevelDB index...");
             writeToLevelDB(outputFile);
-            
+
             // Final metrics
             metrics.logIndexingMetrics();
-            logger.info("Index generation complete. Total entries: {}", totalNGramsGenerated);
+            logger.info("Index generation complete. Total unique terms written: {}", totalNGramsGenerated);
 
         } finally {
             // Cleanup temp files
+            logger.debug("Cleaning up {} temporary files...", tempFiles.size());
             for (File file : tempFiles) {
                 try {
                     Files.deleteIfExists(file.toPath());
@@ -283,6 +298,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     logger.debug("Could not delete temp file: {} ({})", file, e.getMessage());
                 }
             }
+            logger.debug("Temporary file cleanup complete.");
         }
     }
 

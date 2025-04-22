@@ -103,7 +103,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             if (combinedResult == null) {
                 combinedResult = currentResult;
             } else {
-                combinedResult = intersectQueryResults(combinedResult, currentResult);
+                combinedResult = intersectQueryResultsSortMerge(combinedResult, currentResult);
                 if (combinedResult.getAllDetails().isEmpty()) {
                     logger.debug("Intersection is empty, short-circuiting AND");
                     return combinedResult;
@@ -177,10 +177,10 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
     record SentenceKey(int documentId, int sentenceId) {}
 
     /**
-     * Computes the intersection of two QueryResult objects.
+     * Computes the intersection of two QueryResult objects using a hash-based approach.
      */
-    private QueryResult intersectQueryResults(QueryResult r1, QueryResult r2) {
-        // --- Start: Null/Empty/Granularity Checks (identical to QueryExecutor version) --- 
+    private QueryResult intersectQueryResultsHash(QueryResult r1, QueryResult r2) {
+        // --- Start: Null/Empty/Granularity Checks (identical to QueryExecutor version) ---
         if (r1 == null || r2 == null || r1.getAllDetails().isEmpty() || r2.getAllDetails().isEmpty()) {
              Query.Granularity defaultGranularity = (r1 != null) ? r1.getGranularity() : ((r2 != null) ? r2.getGranularity() : Query.Granularity.DOCUMENT);
              int defaultSize = (r1 != null) ? r1.getGranularitySize() : ((r2 != null) ? r2.getGranularitySize() : 0);
@@ -192,7 +192,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             return new QueryResult(granularity, r1.getGranularitySize(), Collections.emptyList());
         }
         int windowSize = r1.getGranularitySize();
-        // --- End: Null/Empty/Granularity Checks --- 
+        // --- End: Null/Empty/Granularity Checks ---
 
         if (granularity == Query.Granularity.DOCUMENT) {
             // --- Start: Document Granularity Logic (identical to QueryExecutor version) --- 
@@ -297,4 +297,172 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             // --- End: NEW Sentence Granularity Logic --- 
         }
     }
-} 
+
+    /**
+     * Computes the intersection of two QueryResult objects using a sort-merge approach.
+     * Assumes document IDs within QueryResult maps are effectively sorted or efficiently iterable in order.
+     */
+    QueryResult intersectQueryResultsSortMerge(QueryResult r1, QueryResult r2) {
+        // TODO: Implement sort-merge logic
+        // --- Start: Null/Empty/Granularity Checks (similar to hash version) ---
+        if (r1 == null || r2 == null || r1.getAllDetails().isEmpty() || r2.getAllDetails().isEmpty()) {
+             Query.Granularity defaultGranularity = (r1 != null) ? r1.getGranularity() : ((r2 != null) ? r2.getGranularity() : Query.Granularity.DOCUMENT);
+             int defaultSize = (r1 != null) ? r1.getGranularitySize() : ((r2 != null) ? r2.getGranularitySize() : 0);
+             return new QueryResult(defaultGranularity, defaultSize, Collections.emptyList());
+        }
+        Query.Granularity granularity = r1.getGranularity();
+        if (r1.getGranularity() != r2.getGranularity() || r1.getGranularitySize() != r2.getGranularitySize()) {
+            logger.error("Intersection of QueryResults with different granularities/sizes is not supported. ({},{}) vs ({},{})", r1.getGranularity(), r1.getGranularitySize(), r2.getGranularity(), r2.getGranularitySize());
+            return new QueryResult(granularity, r1.getGranularitySize(), Collections.emptyList());
+        }
+        int windowSize = r1.getGranularitySize();
+        // --- End: Null/Empty/Granularity Checks ---
+
+        List<MatchDetail> combinedDetails = new ArrayList<>();
+
+        if (granularity == Query.Granularity.DOCUMENT) {
+            // Implement sort-merge for DOCUMENT granularity
+            Map<Integer, List<MatchDetail>> map1 = r1.getDetailsByDocId();
+            Map<Integer, List<MatchDetail>> map2 = r2.getDetailsByDocId();
+
+            // Get sorted lists of keys (document IDs)
+            List<Integer> docIds1 = new ArrayList<>(map1.keySet());
+            List<Integer> docIds2 = new ArrayList<>(map2.keySet());
+            Collections.sort(docIds1);
+            Collections.sort(docIds2);
+
+            int i = 0, j = 0;
+            while (i < docIds1.size() && j < docIds2.size()) {
+                int docId1 = docIds1.get(i);
+                int docId2 = docIds2.get(j);
+
+                if (docId1 == docId2) {
+                    // Found a common document ID, combine details
+                    combinedDetails.addAll(map1.get(docId1));
+                    combinedDetails.addAll(map2.get(docId2));
+                    i++;
+                    j++;
+                } else if (docId1 < docId2) {
+                    // Advance pointer for the smaller ID
+                    i++;
+                } else { // docId2 < docId1
+                    j++;
+                }
+            }
+        } else { // Granularity.SENTENCE
+            // Implement sort-merge for SENTENCE granularity
+            Map<Integer, Map<Integer, List<MatchDetail>>> map1 = r1.getDetailsBySentence();
+            Map<Integer, Map<Integer, List<MatchDetail>>> map2 = r2.getDetailsBySentence();
+
+            List<Integer> docIds1 = new ArrayList<>(map1.keySet());
+            List<Integer> docIds2 = new ArrayList<>(map2.keySet());
+            Collections.sort(docIds1);
+            Collections.sort(docIds2);
+
+            int allowedDistance = (windowSize > 0) ? (windowSize - 1) / 2 : 0;
+            Set<SentenceKey> matchingSentenceUnits = new HashSet<>(); // Reusing SentenceKey record
+
+            int i = 0, j = 0;
+            while (i < docIds1.size() && j < docIds2.size()) {
+                int docId1 = docIds1.get(i);
+                int docId2 = docIds2.get(j);
+
+                if (docId1 == docId2) {
+                    // Common document ID found, now check sentence windows
+                    int currentDocId = docId1;
+                    Map<Integer, List<MatchDetail>> sentMap1 = map1.get(currentDocId);
+                    Map<Integer, List<MatchDetail>> sentMap2 = map2.get(currentDocId);
+                    Set<Integer> sentIds1 = sentMap1.keySet();
+                    Set<Integer> sentIds2 = sentMap2.keySet();
+
+                    // Convert to sorted lists for efficient window checking
+                    List<Integer> sortedSentIds1 = new ArrayList<>(sentIds1);
+                    List<Integer> sortedSentIds2 = new ArrayList<>(sentIds2);
+                    Collections.sort(sortedSentIds1);
+                    Collections.sort(sortedSentIds2);
+
+                     if (logger.isDebugEnabled()) {
+                        logger.debug("[SortMerge-Intersect] Doc {} - Sorted SentIDs1 (r1): {}", currentDocId, sortedSentIds1);
+                        logger.debug("[SortMerge-Intersect] Doc {} - Sorted SentIDs2 (r2): {}", currentDocId, sortedSentIds2);
+                     }
+
+                    // --- Optimized Sentence Window Check using Sorted Lists ---
+
+                    // Check from r1's perspective: For each sentId1, find if any sentId2 is within window
+                    int p2 = 0; // Pointer for sortedSentIds2
+                    for (int p1 = 0; p1 < sortedSentIds1.size(); p1++) {
+                        int sentId1 = sortedSentIds1.get(p1);
+                        // Advance p2 to the potential start of the window
+                        while (p2 < sortedSentIds2.size() && sortedSentIds2.get(p2) < sentId1 - allowedDistance) {
+                            p2++;
+                        }
+                        // Check within the window [sentId1 - allowedDistance, sentId1 + allowedDistance]
+                        boolean foundMatch = false;
+                        int temp_p2 = p2;
+                        while (temp_p2 < sortedSentIds2.size() && sortedSentIds2.get(temp_p2) <= sentId1 + allowedDistance) {
+                             // No need for abs() check here as we are iterating within the bounds
+                            foundMatch = true;
+                            break; // Found at least one match
+                            // temp_p2++; // Keep this commented out if break is used
+                        }
+                        if (foundMatch) {
+                            matchingSentenceUnits.add(new SentenceKey(currentDocId, sentId1));
+                        }
+                    }
+
+                    // Check from r2's perspective: For each sentId2, find if any sentId1 is within window
+                    int p1 = 0; // Pointer for sortedSentIds1
+                    for (p2 = 0; p2 < sortedSentIds2.size(); p2++) {
+                        int sentId2 = sortedSentIds2.get(p2);
+                        // Advance p1 to the potential start of the window
+                        while (p1 < sortedSentIds1.size() && sortedSentIds1.get(p1) < sentId2 - allowedDistance) {
+                            p1++;
+                        }
+                        // Check within the window [sentId2 - allowedDistance, sentId2 + allowedDistance]
+                         boolean foundMatchInWindow = false;
+                        int temp_p1 = p1;
+                        while (temp_p1 < sortedSentIds1.size() && sortedSentIds1.get(temp_p1) <= sentId2 + allowedDistance) {
+                            foundMatchInWindow = true;
+                            break; // Found at least one match
+                           // temp_p1++; // Keep this commented out if break is used
+                        }
+                        if (foundMatchInWindow) {
+                            matchingSentenceUnits.add(new SentenceKey(currentDocId, sentId2));
+                        }
+                    }
+                    // --- End Optimized Sentence Window Check ---
+
+                    // Advance both pointers after processing common doc
+                    i++;
+                    j++;
+                } else if (docId1 < docId2) {
+                    i++;
+                } else { // docId2 < docId1
+                    j++;
+                }
+            } // End while loop for documents
+
+            // Collect details for the identified matching sentence units (after checking all docs)
+            for (SentenceKey unit : matchingSentenceUnits) {
+                 int docId = unit.documentId();
+                 int sentId = unit.sentenceId();
+                 
+                 // Add details from r1 for this unit
+                 List<MatchDetail> details1 = map1.getOrDefault(docId, Collections.emptyMap()).get(sentId);
+                 if (details1 != null) {
+                      combinedDetails.addAll(details1);
+                 }
+                 
+                 // Add details from r2 for this unit
+                 List<MatchDetail> details2 = map2.getOrDefault(docId, Collections.emptyMap()).get(sentId);
+                 if (details2 != null) {
+                      combinedDetails.addAll(details2);
+                 }
+            }
+            logger.trace("[SortMerge-Intersect] (SENTENCE, window={}, distance={}) resulted in {} collected details from {} matching units",
+                    windowSize, allowedDistance, combinedDetails.size(), matchingSentenceUnits.size());
+        }
+         logger.debug("Sort-merge intersection (Granularity: {}) resulted in {} details", granularity, combinedDetails.size());
+        return new QueryResult(granularity, windowSize, combinedDetails); // Keep duplicates as intended by merge logic
+    }
+}
