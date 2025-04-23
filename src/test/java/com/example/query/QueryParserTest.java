@@ -99,19 +99,19 @@ class QueryParserTest {
     @Test
     @DisplayName("Parse query with NER variable binding")
     void parseNerVariableBinding() throws QueryParseException {
-        String queryStr = "SELECT ?scientist FROM wikipedia WHERE NER(PERSON) AS ?scientist";
+        String queryStr = "SELECT scientist FROM wikipedia WHERE NER(PERSON) AS scientist";
         Query query = parser.parse(queryStr);
 
         Ner condition = (Ner) query.conditions().get(0);
         assertEquals("PERSON", condition.entityType());
-        assertEquals("?scientist", condition.variableName());
+        assertEquals("scientist", condition.variableName());
         assertTrue(condition.isVariable());
     }
 
     @Test
     @DisplayName("Parse query with date comparison <")
     void parseDateComparison() throws QueryParseException {
-        String queryStr = "SELECT ?date FROM wikipedia WHERE DATE(< 2000) AS ?date";
+        String queryStr = "SELECT date FROM wikipedia WHERE DATE(< 2000) AS date";
         Query query = parser.parse(queryStr);
 
         assertTrue(query.conditions().get(0) instanceof Temporal);
@@ -122,13 +122,13 @@ class QueryParserTest {
         assertEquals(LocalDateTime.MIN, condition.startDate());
         assertEquals(Optional.of(LocalDateTime.of(2000, 1, 1, 0, 0)), condition.endDate());
         assertTrue(condition.variable().isPresent());
-        assertEquals("?date", condition.variable().get());
+        assertEquals("date", condition.variable().get());
     }
 
     @Test
     @DisplayName("Parse query with date comparison >")
     void parseDateNearRange() throws QueryParseException { // Renaming might be good later
-        String queryStr = "SELECT ?founding FROM wikipedia WHERE DATE(> 1980) AS ?founding";
+        String queryStr = "SELECT founding FROM wikipedia WHERE DATE(> 1980) AS founding";
         Query query = parser.parse(queryStr);
 
         Temporal condition = (Temporal) query.conditions().get(0);
@@ -138,7 +138,7 @@ class QueryParserTest {
         assertEquals(LocalDateTime.of(1981, 1, 1, 0, 0), condition.startDate());
         assertEquals(Optional.of(LocalDateTime.MAX), condition.endDate());
         assertTrue(condition.variable().isPresent());
-        assertEquals("?founding", condition.variable().get());
+        assertEquals("founding", condition.variable().get());
     }
 
     @Test
@@ -197,12 +197,12 @@ class QueryParserTest {
     @Test
     @DisplayName("Parse complex query with all features")
     void parseComplexQuery() throws QueryParseException {
-        String queryStr = "SELECT ?scientist, ?publication FROM wikipedia " +
-                         "WHERE CONTAINS(\"quantum physics\") " +
-                         "AND NER(\"PERSON\") AS ?scientist " +
-                         "AND DATE(< 2000) AS ?publication " +
-                         "ORDER BY date DESC " +
-                         "LIMIT 5";
+        String queryStr = "SELECT scientist, publication FROM wikipedia WHERE " +
+                          "CONTAINS(\"theory of relativity\") " +
+                          "AND NER(\"PERSON\") AS scientist " +
+                          "AND DATE(< 2000) AS publication " +
+                          "ORDER BY scientist " +
+                          "LIMIT 5";
         Query query = parser.parse(queryStr);
 
         assertEquals("wikipedia", query.source());
@@ -245,14 +245,37 @@ class QueryParserTest {
     }
 
     @Test
-    @DisplayName("Parse query with subquery")
-    void parseSubquery() {
-        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia " +
-                         "WHERE DATE(< 2000) AS ?date " +
-                         "AND (CONTAINS(\"subquery\") AND CONTAINS(\"nested\"))";
+    @DisplayName("Parse query with subquery - Requires JOIN")
+    void parseSubquery() throws QueryParseException {
+        // Updated query to use JOIN syntax as required by grammar
+        String queryStr = "SELECT main.something FROM mainSource " +
+                          "JOIN (" +
+                          "  SELECT date FROM documents " +
+                          "  WHERE DATE(< 2000) AS date " +
+                          ") AS sub " +
+                          "ON main.field CONTAINS sub.date " + // Example JOIN condition
+                          "LIMIT 10";
+        Query query = parser.parse(queryStr);
+
+        assertEquals("mainSource", query.source());
+        // Main query now has no WHERE clause itself in this example
+        assertTrue(query.conditions().isEmpty(), "Main query should have no WHERE conditions"); 
+        assertEquals(1, query.subqueries().size(), "Should have one subquery");
+        assertTrue(query.joinCondition().isPresent(), "Should have a join condition");
+        assertEquals(10, query.limit().get());
         
-        // This isn't really a subquery test anymore, but a test of nested conditions
-        assertDoesNotThrow(() -> parser.parse(queryStr));
+        // Verify subquery details
+        SubquerySpec subquerySpec = query.subqueries().get(0);
+        assertEquals("sub", subquerySpec.alias());
+        assertEquals("documents", subquerySpec.subquery().source());
+        assertEquals(1, subquerySpec.subquery().conditions().size());
+        assertTrue(subquerySpec.subquery().conditions().get(0) instanceof Temporal);
+        
+        // Verify join condition details
+        JoinCondition joinCondition = query.joinCondition().get();
+        assertEquals("main.field", joinCondition.leftColumn()); // Example left column
+        assertEquals("sub.date", joinCondition.rightColumn()); // Variable from subquery, now qualified
+        assertEquals(TemporalPredicate.CONTAINS, joinCondition.temporalPredicate()); // Example predicate
     }
 
     @Test
@@ -299,7 +322,7 @@ class QueryParserTest {
     @Test
     @DisplayName("Parse query with mixed logical operators")
     void parseMixedLogicalOperators() throws QueryParseException {
-        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE NER(PERSON) AS ?person AND (CONTAINS(\"physics\") OR NOT CONTAINS(\"biology\"))";
+        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE NER(PERSON) AS person AND (CONTAINS(\"physics\") OR NOT CONTAINS(\"biology\"))";
         Query query = parser.parse(queryStr);
 
         assertEquals(1, query.conditions().size());
@@ -324,12 +347,13 @@ class QueryParserTest {
     }
 
     @Test
-    @DisplayName("Query with invalid column name should fail")
+    @DisplayName("Query with invalid column name should parse (validation happens later)")
     void invalidColumnNameShouldFail() {
         String queryStr = "SELECT not_real_column FROM wikipedia WHERE NER(PERSON)";
         
-        // This should now fail with our grammar update
-        assertThrows(QueryParseException.class, () -> parser.parse(queryStr));
+        // Parser should now accept this, as 'not_real_column' is a valid IDENTIFIER.
+        // Semantic validation will catch that it's not bound.
+        assertDoesNotThrow(() -> parser.parse(queryStr));
     }
 
     @ParameterizedTest
@@ -350,17 +374,17 @@ class QueryParserTest {
     @Test
     @DisplayName("Parse query with subquery and join")
     void testSubqueryWithJoin() throws QueryParseException {
-        String query = "SELECT ?person FROM wikipedia " +
-                      "JOIN (SELECT ?org FROM companies WHERE NER(ORGANIZATION) AS ?org) AS companies " +
-                      "ON ?person INTERSECT ?org " +
-                      "WHERE NER(PERSON) AS ?person";
+        String queryStr = "SELECT person FROM people " +
+            "JOIN (SELECT org FROM companies WHERE NER(ORGANIZATION) AS org) AS companies " +
+            "ON person.date CONTAINS companies.date " +
+            "WHERE NER(PERSON) AS person";
         
-        // Should parse successfully
-        Query parsedQuery = parser.parse(query);
+        Query parsedQuery = parser.parse(queryStr);
         
         // Verify the main query
-        assertEquals("wikipedia", parsedQuery.source());
-        assertEquals(1, parsedQuery.conditions().size());
+        assertEquals("people", parsedQuery.source()); // Source is 'people'
+        assertFalse(parsedQuery.conditions().isEmpty(), "Main query should have a WHERE condition"); // Has WHERE clause
+        assertTrue(parsedQuery.conditions().get(0) instanceof Ner, "Main condition should be NER");
         
         // Verify subqueries
         assertTrue(parsedQuery.hasSubqueries());
@@ -369,20 +393,22 @@ class QueryParserTest {
         // Verify the subquery details
         SubquerySpec subquery = parsedQuery.subqueries().get(0);
         assertEquals("companies", subquery.alias());
-        assertEquals("companies", subquery.subquery().source());
+        assertEquals("companies", subquery.subquery().source()); 
+        assertEquals(1, subquery.subquery().conditions().size());
+        assertTrue(subquery.subquery().conditions().get(0) instanceof Ner); // Subquery condition is NER
         
         // Verify join condition
         assertTrue(parsedQuery.joinCondition().isPresent());
         JoinCondition joinCondition = parsedQuery.joinCondition().get();
-        assertEquals("?person", joinCondition.leftColumn());
-        assertEquals("?org", joinCondition.rightColumn());
-        assertEquals(TemporalPredicate.INTERSECT, joinCondition.temporalPredicate());
+        assertEquals("person.date", joinCondition.leftColumn()); // Join column from main query
+        assertEquals("companies.date", joinCondition.rightColumn()); // Join column from subquery
+        assertEquals(TemporalPredicate.CONTAINS, joinCondition.temporalPredicate());
     }
 
     @Test
     @DisplayName("Parse query selecting qualified identifier - now simple variable")
     void parseSelectQualifiedIdentifier() throws QueryParseException {
-        String queryStr = "SELECT ?a FROM wikipedia WHERE NER(PERSON) AS ?a";
+        String queryStr = "SELECT a FROM wikipedia WHERE NER(PERSON) AS a";
         Query query = parser.parse(queryStr);
 
         assertEquals("wikipedia", query.source());
@@ -393,14 +419,14 @@ class QueryParserTest {
         SelectColumn selectedColumn = query.selectColumns().get(0);
         assertTrue(selectedColumn instanceof VariableColumn, "Selected column should be a VariableColumn");
         VariableColumn varCol = (VariableColumn) selectedColumn;
-        assertEquals("?a", varCol.getColumnName(), "Selected variable name should be simple");
+        assertEquals("a", varCol.getColumnName(), "Selected variable name should be simple");
 
         // Verify Condition (sanity check)
         Condition condition = query.conditions().get(0);
         assertTrue(condition instanceof Ner, "Condition should be NER");
         Ner nerCondition = (Ner) condition;
         assertEquals("PERSON", nerCondition.entityType());
-        assertEquals("?a", nerCondition.variableName());
+        assertEquals("a", nerCondition.variableName());
         assertTrue(nerCondition.isVariable());
     }
 } 

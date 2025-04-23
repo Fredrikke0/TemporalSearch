@@ -29,15 +29,16 @@ public class SnippetColumn implements SelectColumn {
 
     private final String columnName; // Changed to instance variable
     private final int windowSize;
-    private final String variableName; // Stored variable name including ? prefix
+    private final String variableName; // Store plain variable name (e.g., "term")
 
-    public SnippetColumn(String variableNameWithPrefix, int windowSize) {
-        if (variableNameWithPrefix == null || variableNameWithPrefix.isEmpty() || !variableNameWithPrefix.startsWith("?")) {
-            throw new IllegalArgumentException("Variable name must not be null, empty, and must start with '?' for SnippetColumn");
+    public SnippetColumn(String plainVariableName, int windowSize) {
+        if (plainVariableName == null || plainVariableName.isEmpty()) {
+            throw new IllegalArgumentException("Variable name must not be null or empty for SnippetColumn");
         }
-        this.variableName = variableNameWithPrefix; // Store variable name (e.g., "?term")
+        // No longer check for '?' prefix
+        this.variableName = plainVariableName; // Store plain variable name
         this.windowSize = windowSize >= 0 ? windowSize : DEFAULT_SNIPPET_WINDOW; // Allow window 0
-        this.columnName = "snippet " + this.variableName.substring(1);
+        this.columnName = "snippet_" + this.variableName; // Use plain name for column name
     }
 
     public int getWindowSize() {
@@ -50,7 +51,7 @@ public class SnippetColumn implements SelectColumn {
     
     @Override
     public String getColumnName() {
-        return columnName; // Return dynamic name
+        return columnName; // Return dynamic name (now based on plain var name)
     }
     
     @Override
@@ -64,11 +65,12 @@ public class SnippetColumn implements SelectColumn {
                                Map<String, IndexAccessInterface> indexes) {
         StringColumn snippetColumn = table.stringColumn(this.columnName);
         
-        // 1. Find the first MatchDetail in the list that matches our variable name (including '?')
+        // 1. Find the first MatchDetail in the list that matches our plain variable name
         Optional<MatchDetail> relevantDetailOpt = detailsForUnit.stream()
             .filter(MatchDetail.class::isInstance)
             .map(MatchDetail.class::cast)
-            .filter(d -> variableName.equals(d.variableName()))
+            // Compare plain variableName with the (now plain) variableName in MatchDetail
+            .filter(d -> variableName.equals(d.variableName().orElse(null)))
             .findFirst();
             
         if (relevantDetailOpt.isEmpty()) {
@@ -152,6 +154,6 @@ public class SnippetColumn implements SelectColumn {
     
     @Override
     public String toString() {
-        return "SNIPPET(" + variableName + ")"; // Use full variable name
+        return "SNIPPET(" + variableName + ")"; // Use plain variable name
     }
 } 

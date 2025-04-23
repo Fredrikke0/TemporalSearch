@@ -43,13 +43,17 @@ public class CountColumn implements SelectColumn {
     }
     
     /**
-     * Creates a COUNT(UNIQUE ?var) column.
+     * Creates a COUNT(UNIQUE var) column.
      *
-     * @param variable The variable to count unique values of (should include ? prefix)
+     * @param variable The plain variable name to count unique values of (e.g., "term")
      */
     public static CountColumn countUnique(String variable) {
-        String colName = "count_" + (variable.startsWith("?") ? variable.substring(1) : variable);
-        return new CountColumn(CountType.UNIQUE, variable, colName);
+        if (variable == null || variable.isEmpty()) {
+             throw new IllegalArgumentException("Variable name must not be null or empty for COUNT(UNIQUE)");
+        }
+        // Generate column name from plain variable
+        String colName = "count_unique_" + variable;
+        return new CountColumn(CountType.UNIQUE, variable, colName); // Store plain variable
     }
     
     /**
@@ -63,21 +67,23 @@ public class CountColumn implements SelectColumn {
      * Creates a new count column.
      *
      * @param type The type of count operation
-     * @param variable The variable to count (for UNIQUE counts, with ? prefix)
+     * @param variable The plain variable name to count (for UNIQUE counts)
      * @param columnName The name for the column in the result table
      */
     private CountColumn(CountType type, String variable, String columnName) {
         this.type = type;
-        this.variable = variable;
+        // Store plain variable name (or null if not UNIQUE)
+        this.variable = (type == CountType.UNIQUE) ? variable : null; 
         this.columnName = columnName;
     }
     
     /**
-     * Returns the variable name (with '?') if this is a COUNT(UNIQUE ?var) column,
+     * Returns the plain variable name if this is a COUNT(UNIQUE var) column,
      * otherwise returns null. Used for validation purposes.
      */
     public String getVariableNameForValidation() {
-        return (type == CountType.UNIQUE) ? variable : null;
+        // Returns the stored plain name (which is null if not UNIQUE type)
+        return variable;
     }
     
     @Override

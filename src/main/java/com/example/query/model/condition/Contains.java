@@ -117,10 +117,11 @@ public record Contains(
 
     @Override
     public String toString() {
-        String termsString = String.join(" ", terms); // Use space for toString representation
+        String termsString = String.join(" ", terms);
         if (isVariable) {
-            return String.format("CONTAINS(\"%s\") AS ?%s", termsString, variableName);
+            return String.format("CONTAINS(\"%s\") AS %s", termsString, variableName);
+        } else {
+            return String.format("CONTAINS(\"%s\")", termsString);
         }
-        return String.format("CONTAINS(\"%s\")", termsString);
     }
 } 

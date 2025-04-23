@@ -188,48 +188,66 @@ public record Query(
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        sb.append("FROM ").append(source);
-        mainAlias.ifPresent(alias -> sb.append(" AS ").append(alias));
         
+        // Start with SELECT clause
         if (!selectColumns.isEmpty()) {
-            sb.append(" SELECT ");
+            sb.append("SELECT ");
             for (int i = 0; i < selectColumns.size(); i++) {
                 if (i > 0) sb.append(", ");
                 sb.append(selectColumns.get(i));
             }
+        } else {
+            // Handle case with no select columns explicitly, maybe SELECT * or COUNT(*)?
+            // For now, let's assume valid queries always have select columns based on validator
+            sb.append("SELECT [Missing Columns]"); 
         }
         
-        if (!conditions.isEmpty()) {
-            sb.append(" WHERE ");
-            for (int i = 0; i < conditions.size(); i++) {
-                if (i > 0) sb.append(" AND ");
-                sb.append(conditions.get(i));
-            }
-        }
+        // Add FROM clause
+        sb.append(" FROM ").append(source);
+        mainAlias.ifPresent(alias -> sb.append(" AS ").append(alias)); // Using AS for alias for now
         
-        // Add the subqueries and join conditions, if any
+        // Add JOIN clauses (if any)
         if (!subqueries.isEmpty()) {
             for (SubquerySpec subquery : subqueries) {
-                sb.append(" JOIN ").append(subquery);
+                 // TODO: Add join type (INNER, LEFT, RIGHT) if available
+                sb.append(" JOIN ").append(subquery); // Subquery toString should handle its structure
             }
-            
-            // Add join condition if present
-            joinCondition.ifPresent(jc -> sb.append(" ON ").append(jc));
+            joinCondition.ifPresent(jc -> sb.append(" ON ").append(jc)); // JoinCondition toString needed
         }
-        
+
+        // Add WHERE clause
+        if (!conditions.isEmpty()) {
+            sb.append(" WHERE ");
+            // This simple loop assumes conditions are implicitly ANDed.
+            // A more robust implementation would handle Logical conditions (AND/OR/NOT).
+            for (int i = 0; i < conditions.size(); i++) {
+                if (i > 0) sb.append(" AND "); 
+                sb.append(conditions.get(i)); // Relies on Condition.toString()
+            }
+        }
+
+        // Add GRANULARITY clause
+        if (granularity != Granularity.DOCUMENT || granularitySize.isPresent()) {
+            sb.append(" GRANULARITY ").append(granularity.name());
+            granularitySize.ifPresent(size -> sb.append(" ").append(size));
+        }
+
+        // Add ORDER BY clause
         if (!orderBy.isEmpty()) {
             sb.append(" ORDER BY ");
             for (int i = 0; i < orderBy.size(); i++) {
                 if (i > 0) sb.append(", ");
                 String column = orderBy.get(i);
+                // Assuming format "column" or "-column"
                 if (column.startsWith("-")) {
                     sb.append(column.substring(1)).append(" DESC");
                 } else {
-                    sb.append(column).append(" ASC");
+                    sb.append(column).append(" ASC"); // Default ASC optional?
                 }
             }
         }
         
+        // Add LIMIT clause
         limit.ifPresent(l -> sb.append(" LIMIT ").append(l));
         
         return sb.toString();

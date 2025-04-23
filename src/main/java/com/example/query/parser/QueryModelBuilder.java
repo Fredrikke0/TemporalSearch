@@ -147,7 +147,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         SnippetNode snippetNode = (SnippetNode) visit(ctx.snippetExpression());
         // Extract windowSize and variableName from the node
         int windowSize = snippetNode.windowSize(); 
-        String variableName = snippetNode.variable(); // Get variable name
+        String variableName = snippetNode.variable(); // Get plain variable name
         // Use variableName and windowSize to create SnippetColumn
         return new SnippetColumn(variableName, windowSize);
     }
@@ -346,7 +346,13 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         
         String termValue = null;
         if (ctx.termValue != null) {
-            termValue = (String) visitTerm(ctx.termValue);
+             Object termResult = visitTerm(ctx.termValue);
+             termValue = (String) termResult;
+             // Check if the original context was a variable and register consumer if so
+             if (ctx.termValue.variable() != null) {
+                  // Term is a variable, register consumption using its plain name
+                  variableRegistry.registerConsumer(termValue, VariableType.ANY, "NER Term");
+             }
         }
         
         return new Ner(type, termValue, variableName, isVariable);
@@ -393,7 +399,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     @Override
     public Object visitVariable(QueryLangParser.VariableContext ctx) {
-        return "?" + ctx.IDENTIFIER().getText();
+        // Return just the identifier text, without '?'
+        return ctx.IDENTIFIER().getText();
     }
 
     @Override
@@ -546,9 +553,27 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     @Override
     public Object visitDependsExpression(QueryLangParser.DependsExpressionContext ctx) {
-        String governor = (String) visitGovernor(ctx.gov);
+        String governor;
+        boolean governorIsVariable = false;
+        if (ctx.gov.variable() != null) {
+            governor = (String) visit(ctx.gov.variable());
+            governorIsVariable = true;
+        } else {
+            // Handle STRING or identifier
+            governor = (String) visit(ctx.gov);
+        }
+
         String relation = (String) visitRelation(ctx.rel);
-        String dependent = (String) visitDependent(ctx.dep);
+
+        String dependent;
+        boolean dependentIsVariable = false;
+        if (ctx.dep.variable() != null) {
+            dependent = (String) visit(ctx.dep.variable());
+            dependentIsVariable = true;
+        } else {
+             // Handle STRING or identifier
+            dependent = (String) visit(ctx.dep);
+        }
         
         String variableName = null;
         boolean isVariable = false;
@@ -561,12 +586,12 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
         
         // Register consumed variables directly
-        if (governor != null && governor.startsWith("?")) {
-            variableRegistry.registerConsumer(governor, VariableType.ANY, "DEPENDENCY");
+        if (governorIsVariable) {
+            variableRegistry.registerConsumer(governor, VariableType.ANY, "DEPENDENCY Governor");
         }
         
-        if (dependent != null && dependent.startsWith("?")) {
-            variableRegistry.registerConsumer(dependent, VariableType.ANY, "DEPENDENCY");
+        if (dependentIsVariable) {
+            variableRegistry.registerConsumer(dependent, VariableType.ANY, "DEPENDENCY Dependent");
         }
         
         return new Dependency(governor, relation, dependent, variableName, isVariable);
@@ -576,20 +601,22 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     public Object visitGovernor(QueryLangParser.GovernorContext ctx) {
         if (ctx.STRING() != null) {
             return unquote(ctx.STRING().getText());
-        } else if (ctx.variable() != null) {
-            return visit(ctx.variable());
+        } else if (ctx.identifier() != null) {
+            return visitIdentifier(ctx.identifier());
         }
-        return visitIdentifier(ctx.identifier());
+        // Variable case is handled directly in visitDependsExpression
+        throw new IllegalStateException("visitGovernor called on unexpected context type, expected STRING or identifier. Variable handled by caller.");
     }
 
     @Override
     public Object visitDependent(QueryLangParser.DependentContext ctx) {
         if (ctx.STRING() != null) {
             return unquote(ctx.STRING().getText());
-        } else if (ctx.variable() != null) {
-            return visit(ctx.variable());
+        } else if (ctx.identifier() != null) {
+            return visitIdentifier(ctx.identifier());
         }
-        return visitIdentifier(ctx.identifier());
+         // Variable case is handled directly in visitDependsExpression
+        throw new IllegalStateException("visitDependent called on unexpected context type, expected STRING or identifier. Variable handled by caller.");
     }
 
     @Override
@@ -609,8 +636,11 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             field = (String) visitIdentifier(ctx.identifier());
         } else if (ctx.variable() != null) {
             field = (String) visit(ctx.variable());
-        } else {
-            throw new IllegalStateException("OrderSpec must have either identifier or variable");
+        } else if (ctx.qualifiedIdentifier() != null) {
+            field = (String) visit(ctx.qualifiedIdentifier());
+        }
+        else {
+            throw new IllegalStateException("OrderSpec must have identifier, variable or qualifiedIdentifier");
         }
         
         // For descending order, prefix with minus sign
@@ -657,8 +687,14 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         String posTag = (String) visitPosTag(ctx.tag);
         String termValue = null;
         
-        if (ctx.term() != null) {
-            termValue = (String) visitTerm(ctx.term());
+        if (ctx.termValue != null) {
+             Object termResult = visitTerm(ctx.termValue);
+             termValue = (String) termResult;
+             // Check if the original context was a variable and register consumer if so
+             if (ctx.termValue.variable() != null) {
+                  // Term is a variable, register consumption using its plain name
+                  variableRegistry.registerConsumer(termValue, VariableType.ANY, "POS Term");
+             }
         }
         
         String variableName = null;
@@ -688,8 +724,10 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             return unquote(ctx.STRING().getText());
         } else if (ctx.variable() != null) {
             return visit(ctx.variable());
+        } else if (ctx.identifier() != null) {
+             return visitIdentifier(ctx.identifier());
         }
-        return visitIdentifier(ctx.identifier());
+        throw new IllegalStateException("visitTerm called on unexpected context type");
     }
 
     public Query buildSubquery(ParseTree tree) {
@@ -790,7 +828,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     @Override
     public Object visitQualifiedIdentifier(QueryLangParser.QualifiedIdentifierContext ctx) {
-        // Reverted: Logic to parse alias.NAME, alias.?VAR, alias.TITLE, alias.TIMESTAMP
+        // Reverted: Logic to parse alias.NAME, alias.VAR, alias.TITLE, alias.TIMESTAMP
         // and return a combined string.
         if (ctx == null || ctx.getChildCount() < 3) {
             throw new IllegalStateException("Invalid QualifiedIdentifierContext. Expected 'alias DOT column'.");
@@ -801,19 +839,23 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         // 1. Determine the left part (alias)
         ParseTree leftChild = ctx.getChild(0);
+        // Alias should come from an identifier rule (FROM alias=identifier, subquery alias=identifier)
         if (leftChild instanceof QueryLangParser.IdentifierContext identifierContext) {
             alias = identifierContext.getText();
         } else if (leftChild instanceof QueryLangParser.VariableContext variableContext) {
-            throw new IllegalStateException("Alias part of a qualified identifier cannot be a variable: " + variableContext.getText());
-         } else {
-             throw new IllegalStateException("QualifiedIdentifier couldn't determine alias (left part). Found: " + leftChild.getClass().getSimpleName());
+            // This case *shouldn't* happen if grammar is unambiguous and used correctly,
+            // but handle it by using the text if it does.
+            alias = variableContext.getText(); // Use text, likely a plain identifier now
+            // Consider logging a warning here if this path is taken unexpectedly.
+        } else {
+             throw new IllegalStateException("QualifiedIdentifier couldn't determine alias (left part). Expected IdentifierContext or VariableContext, Found: " + leftChild.getClass().getSimpleName());
         }
 
         // 2. Determine the right part (column name/type)
         ParseTree rightChild = ctx.getChild(2); // Child after the DOT
 
         if (rightChild instanceof QueryLangParser.VariableContext variableContext) {
-            rightPart = (String) visitVariable(variableContext); // visitVariable returns "?varname"
+            rightPart = (String) visitVariable(variableContext); // visitVariable returns plain "varname"
         } else if (rightChild instanceof QueryLangParser.IdentifierContext idContext) {
             rightPart = idContext.getText();
          } else if (rightChild instanceof TerminalNode terminalNode) {
@@ -833,15 +875,17 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
              throw new IllegalStateException("Failed to parse qualified identifier parts completely.");
         }
 
-        // Return the combined string representation (e.g., "q1.?person", "q1.TITLE")
-        return alias + "." + rightPart;
+        // Return the combined string representation (e.g., "q1.person", "q1.TITLE")
+        return alias + "." + rightPart; // Right part is now plain name if it was a variable
     }
 
     @Override
     public Object visitJoinColumn(QueryLangParser.JoinColumnContext ctx) {
         if (ctx.qualifiedIdentifier() != null) {
+            // Returns "alias.col" or "alias.var" (plain var)
             return visit(ctx.qualifiedIdentifier());
         } else if (ctx.variable() != null) {
+             // Returns plain variable name "var"
             return visit(ctx.variable());
         }
         throw new IllegalStateException("Invalid join column type");

@@ -15,34 +15,33 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Registry for all variables in a query.
- * Tracks both producer and consumer variables.
+ * Tracks both producer and consumer variables using plain names.
  */
 public class VariableRegistry {
     private static final Logger logger = LoggerFactory.getLogger(VariableRegistry.class);
     
-    // Map of variable name to producers
+    // Map of variable name (plain) to producers
     private final Map<String, Set<ProducerVariable>> producers = new ConcurrentHashMap<>();
     
-    // Map of variable name to consumers
+    // Map of variable name (plain) to consumers
     private final Map<String, Set<ConsumerVariable>> consumers = new ConcurrentHashMap<>();
     
     /**
      * Registers a producer variable.
      *
-     * @param name The variable name
+     * @param name The plain variable name
      * @param type The variable type
      * @param conditionType The condition type that produces the variable
      * @return The registered producer variable
      */
     public ProducerVariable registerProducer(String name, VariableType type, String conditionType) {
-        String formattedName = Variable.formatName(name);
-        ProducerVariable var = new ProducerVariable(formattedName, type, conditionType);
+        ProducerVariable var = new ProducerVariable(name, type, conditionType);
         
-        producers.computeIfAbsent(formattedName, k -> ConcurrentHashMap.newKeySet())
+        producers.computeIfAbsent(name, k -> ConcurrentHashMap.newKeySet())
                 .add(var);
         
         logger.debug("Registered producer variable: {} with type {} from condition {}", 
-                    formattedName, type, conditionType);
+                    name, type, conditionType);
                 
         return var;
     }
@@ -50,20 +49,19 @@ public class VariableRegistry {
     /**
      * Registers a consumer variable.
      *
-     * @param name The variable name
+     * @param name The plain variable name
      * @param type The variable type
      * @param conditionType The condition type that consumes the variable
      * @return The registered consumer variable
      */
     public ConsumerVariable registerConsumer(String name, VariableType type, String conditionType) {
-        String formattedName = Variable.formatName(name);
-        ConsumerVariable var = new ConsumerVariable(formattedName, type, conditionType);
+        ConsumerVariable var = new ConsumerVariable(name, type, conditionType);
         
-        consumers.computeIfAbsent(formattedName, k -> ConcurrentHashMap.newKeySet())
+        consumers.computeIfAbsent(name, k -> ConcurrentHashMap.newKeySet())
                 .add(var);
         
         logger.debug("Registered consumer variable: {} with type {} from condition {}", 
-                    formattedName, type, conditionType);
+                    name, type, conditionType);
                 
         return var;
     }
@@ -71,39 +69,36 @@ public class VariableRegistry {
     /**
      * Gets all producer variables for a given name.
      *
-     * @param name The variable name
+     * @param name The plain variable name
      * @return Unmodifiable set of producer variables
      */
     public Set<ProducerVariable> getProducers(String name) {
-        String formattedName = Variable.formatName(name);
-        Set<ProducerVariable> result = producers.getOrDefault(formattedName, Collections.emptySet());
-        logger.debug("getProducers('{}') returning {} producers", formattedName, result.size());
+        Set<ProducerVariable> result = producers.getOrDefault(name, Collections.emptySet());
+        logger.debug("getProducers('{}') returning {} producers", name, result.size());
         return Collections.unmodifiableSet(result);
     }
     
     /**
      * Gets all consumer variables for a given name.
      *
-     * @param name The variable name
+     * @param name The plain variable name
      * @return Unmodifiable set of consumer variables
      */
     public Set<ConsumerVariable> getConsumers(String name) {
-        String formattedName = Variable.formatName(name);
-        Set<ConsumerVariable> result = consumers.getOrDefault(formattedName, Collections.emptySet());
-        logger.debug("getConsumers('{}') returning {} consumers", formattedName, result.size());
+        Set<ConsumerVariable> result = consumers.getOrDefault(name, Collections.emptySet());
+        logger.debug("getConsumers('{}') returning {} consumers", name, result.size());
         return Collections.unmodifiableSet(result);
     }
     
     /**
      * Checks if a variable is produced (has at least one producer).
      *
-     * @param name The variable name
+     * @param name The plain variable name
      * @return true if the variable is produced, false otherwise
      */
     public boolean isProduced(String name) {
-        String formattedName = Variable.formatName(name);
-        boolean result = producers.containsKey(formattedName) && !producers.get(formattedName).isEmpty();
-        logger.debug("isProduced('{}') returning {}", formattedName, result);
+        boolean result = producers.containsKey(name) && !producers.get(name).isEmpty();
+        logger.debug("isProduced('{}') returning {}", name, result);
         return result;
     }
     
@@ -146,20 +141,18 @@ public class VariableRegistry {
      * Gets the inferred type for a variable, based on all its producers and consumers.
      * If there are conflicting types, ANY is returned.
      *
-     * @param name The variable name
+     * @param name The plain variable name
      * @return The inferred type, or ANY if unknown or conflicting
      */
     public VariableType getInferredType(String name) {
-        String formattedName = Variable.formatName(name);
-        
         // Collect all types from producers
-        Set<VariableType> producerTypes = producers.getOrDefault(formattedName, Collections.emptySet())
+        Set<VariableType> producerTypes = producers.getOrDefault(name, Collections.emptySet())
             .stream()
             .map(Variable::getType)
             .collect(Collectors.toSet());
             
         // Collect all types from consumers
-        Set<VariableType> consumerTypes = consumers.getOrDefault(formattedName, Collections.emptySet())
+        Set<VariableType> consumerTypes = consumers.getOrDefault(name, Collections.emptySet())
             .stream()
             .map(Variable::getType)
             .collect(Collectors.toSet());

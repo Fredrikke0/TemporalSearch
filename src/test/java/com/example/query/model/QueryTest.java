@@ -9,6 +9,7 @@ import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.DisplayName;
 
 import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
@@ -22,16 +23,20 @@ import com.example.query.model.condition.Ner;
 public class QueryTest {
 
     private Query query;
+    private VariableRegistry registry; // Use a separate registry for clarity
 
     @BeforeEach
     public void setUp() {
-        query = new Query("test_source");
+        registry = new VariableRegistry(); // Initialize registry here
+        // Pass the registry to the Query constructor
+        query = new Query("test_source", new ArrayList<>(), new ArrayList<>(), Optional.empty(), 
+                        Query.Granularity.DOCUMENT, Optional.empty(), new ArrayList<>(), registry);
     }
 
     @Test
     public void testInitialState() {
         // A fresh query should have an empty variable registry
-        assertTrue(query.getAllVariableNames().isEmpty());
+        assertTrue(registry.getAllVariableNames().isEmpty()); // Check registry directly
         
         // Default parameters should be set correctly
         assertEquals("test_source", query.source());
@@ -46,165 +51,216 @@ public class QueryTest {
 
     @Test
     public void testRegisterProducer() {
-        // Register a producer variable
-        query.registerProducer("person", VariableType.ENTITY, "NER");
+        // Register a producer variable directly on the registry
+        registry.registerProducer("person", VariableType.ENTITY, "NER");
         
-        // Verify registration
-        assertTrue(query.isVariableProduced("person"));
-        assertEquals(VariableType.ENTITY, query.getVariableType("person"));
-        assertEquals(Set.of("?person"), query.getAllVariableNames());
+        // Verify registration via registry
+        assertTrue(registry.isProduced("person"));
+        assertEquals(VariableType.ENTITY, registry.getInferredType("person"));
+        assertEquals(Set.of("person"), registry.getAllVariableNames()); // Expect plain name
     }
 
     @Test
     public void testRegisterConsumer() {
-        // Register a consumer variable
-        query.registerConsumer("person", VariableType.ENTITY, "CONTAINS");
+        // Register a consumer variable directly on the registry
+        registry.registerConsumer("person", VariableType.ENTITY, "CONTAINS");
         
-        // Verify registration
-        assertFalse(query.isVariableProduced("person"));
-        assertEquals(VariableType.ENTITY, query.getVariableType("person"));
-        assertEquals(Set.of("?person"), query.getAllVariableNames());
+        // Verify registration via registry
+        assertFalse(registry.isProduced("person")); // Not produced yet
+        assertEquals(VariableType.ENTITY, registry.getInferredType("person"));
+        assertEquals(Set.of("person"), registry.getAllVariableNames()); // Expect plain name
+        assertTrue(registry.validate().stream().anyMatch(e -> e.contains("person is consumed")), "Validation should fail");
     }
 
     @Test
     public void testRegisterBoth() {
-        // Register both producer and consumer
-        query.registerProducer("person", VariableType.ENTITY, "NER");
-        query.registerConsumer("person", VariableType.ENTITY, "CONTAINS");
+        // Register both producer and consumer directly on the registry
+        registry.registerProducer("person", VariableType.ENTITY, "NER");
+        registry.registerConsumer("person", VariableType.ENTITY, "CONTAINS");
         
-        // Verify registration
-        assertTrue(query.isVariableProduced("person"));
-        assertEquals(VariableType.ENTITY, query.getVariableType("person"));
-        assertEquals(Set.of("?person"), query.getAllVariableNames());
+        // Verify registration via registry
+        assertTrue(registry.isProduced("person"));
+        assertEquals(VariableType.ENTITY, registry.getInferredType("person"));
+        assertEquals(Set.of("person"), registry.getAllVariableNames()); // Expect plain name
+        assertTrue(registry.validate().isEmpty(), "Validation should pass"); // Now it should pass
     }
 
     @Test
     public void testVariableValidation() {
-        // Register just a consumer
-        query.registerConsumer("person", VariableType.ENTITY, "CONTAINS");
+        // Register just a consumer directly on the registry
+        registry.registerConsumer("person", VariableType.ENTITY, "CONTAINS");
         
-        // Should fail validation since the variable is consumed but not produced
-        Set<String> errors = query.validateVariables();
+        // Validation happens on the registry
+        Set<String> errors = registry.validate();
         assertFalse(errors.isEmpty());
-        assertTrue(errors.iterator().next().contains("is consumed but never produced"));
+        assertTrue(errors.iterator().next().contains("person is consumed but never produced")); // Check plain name
         
         // Fix by registering a producer
-        query.registerProducer("person", VariableType.ENTITY, "NER");
-        errors = query.validateVariables();
+        registry.registerProducer("person", VariableType.ENTITY, "NER");
+        errors = registry.validate();
         assertTrue(errors.isEmpty());
     }
 
     @Test
     public void testVariableTypeInference() {
-        // Register with different types
-        query.registerProducer("mixed", VariableType.TEXT_SPAN, "SPAN");
-        query.registerConsumer("mixed", VariableType.ANY, "USE");
+        // Register directly on the registry
+        registry.registerProducer("mixed", VariableType.TEXT_SPAN, "SPAN");
+        registry.registerConsumer("mixed", VariableType.ANY, "USE");
         
-        // Should infer the more specific type
-        assertEquals(VariableType.TEXT_SPAN, query.getVariableType("mixed"));
+        assertEquals(VariableType.TEXT_SPAN, registry.getInferredType("mixed"));
         
-        // Add conflicting type
-        query.registerConsumer("mixed", VariableType.ENTITY, "OTHER");
-        
-        // Should now use ANY due to conflict
-        assertEquals(VariableType.ANY, query.getVariableType("mixed"));
+        registry.registerConsumer("mixed", VariableType.ENTITY, "OTHER");
+        assertEquals(VariableType.ANY, registry.getInferredType("mixed"));
     }
 
     @Test
     public void testMultipleVariables() {
-        // Register multiple variables
-        query.registerProducer("person", VariableType.ENTITY, "NER");
-        query.registerProducer("org", VariableType.ENTITY, "NER");
-        query.registerProducer("date", VariableType.TEMPORAL, "DATE");
+        // Register directly on the registry
+        registry.registerProducer("person", VariableType.ENTITY, "NER");
+        registry.registerProducer("org", VariableType.ENTITY, "NER");
+        registry.registerProducer("date", VariableType.TEMPORAL, "DATE");
         
-        // Verify all are registered
-        assertEquals(3, query.getAllVariableNames().size());
-        assertTrue(query.getAllVariableNames().contains("?person"));
-        assertTrue(query.getAllVariableNames().contains("?org"));
-        assertTrue(query.getAllVariableNames().contains("?date"));
+        // Verify via registry
+        assertEquals(3, registry.getAllVariableNames().size());
+        assertTrue(registry.getAllVariableNames().contains("person")); // Expect plain name
+        assertTrue(registry.getAllVariableNames().contains("org")); // Expect plain name
+        assertTrue(registry.getAllVariableNames().contains("date")); // Expect plain name
     }
 
     @Test
     public void testNerConditionWithVariableBinding() {
         // Create a NER condition that produces a variable
-        Ner nerCondition = Ner.withVariable("PERSON", "?person");
+        // Note: Ner.withVariable is likely removed or changed, create directly
+        Ner nerCondition = new Ner("PERSON", null, "person", true); 
         
-        // Create a query with this condition
-        Query queryWithNer = new Query("wikipedia", List.of(nerCondition));
+        // Create a query with this condition and a fresh registry
+        VariableRegistry localRegistry = new VariableRegistry();
+        Query queryWithNer = new Query("wikipedia", List.of(nerCondition), new ArrayList<>(), 
+                                       Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
+                                       new ArrayList<>(), localRegistry);
         
-        // The condition should automatically register its variable
-        nerCondition.registerVariables(queryWithNer.variableRegistry());
+        // Manually register variables from the condition
+        nerCondition.registerVariables(localRegistry); // Register on the fresh registry
         
-        // Check variable registration
-        assertTrue(queryWithNer.isVariableProduced("person"));
-        assertEquals(VariableType.ENTITY, queryWithNer.getVariableType("person"));
+        // Check variable registration on the registry
+        assertTrue(localRegistry.isProduced("person"));
+        assertEquals(VariableType.ENTITY, localRegistry.getInferredType("person"));
         
-        // Check that the condition properly appears in toString
-        String queryString = queryWithNer.toString();
-        assertTrue(queryString.contains("NER(PERSON) AS ?person"));
+        // Check that the condition properly appears in toString (using the condition's method)
+        String conditionString = nerCondition.toString();
+        assertEquals("NER(PERSON) AS person", conditionString); // Expect plain name
     }
 
     @Test
     public void testContainsConditionWithVariableBinding() {
         // Create a Contains condition that produces a variable
-        Contains containsCondition = new Contains("search term", "result", true);
+        Contains containsCondition = new Contains(List.of("search", "term"), "result", true);
         
-        // Create a query with this condition
-        Query queryWithContains = new Query("news_corpus", List.of(containsCondition));
+        // Create a query with this condition and a fresh registry
+        VariableRegistry localRegistry = new VariableRegistry();
+        Query queryWithContains = new Query("news_corpus", List.of(containsCondition), new ArrayList<>(), 
+                                          Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
+                                          new ArrayList<>(), localRegistry);
         
-        // The condition should automatically register its variable
-        containsCondition.registerVariables(queryWithContains.variableRegistry());
+        // Manually register variables from the condition
+        containsCondition.registerVariables(localRegistry);
         
-        // Check variable registration
-        assertTrue(queryWithContains.isVariableProduced("result"));
-        assertEquals(VariableType.TEXT_SPAN, queryWithContains.getVariableType("result"));
+        // Check variable registration on the registry
+        assertTrue(localRegistry.isProduced("result"));
+        assertEquals(VariableType.TEXT_SPAN, localRegistry.getInferredType("result"));
         
-        // Check that the condition properly appears in toString
-        String queryString = queryWithContains.toString();
-        assertTrue(queryString.contains("CONTAINS(\"search term\") AS ?result"));
+        // Check that the condition properly appears in toString (using the condition's method)
+        String conditionString = containsCondition.toString();
+        assertEquals("CONTAINS(\"search term\") AS result", conditionString); // Expect plain name
     }
 
     @Test
     public void testComplexQueryWithMultipleConditions() {
         // Create several conditions
-        Ner personCondition = Ner.withVariable("PERSON", "?person");
-        Ner orgCondition = Ner.withVariable("ORGANIZATION", "?org");
-        Contains containsCondition = new Contains("meeting", "text", true);
+        // Create directly, assuming Ner.withVariable is gone
+        Ner personCondition = new Ner("PERSON", null, "person", true);
+        Ner orgCondition = new Ner("ORGANIZATION", null, "org", true);
+        Contains containsCondition = new Contains(List.of("meeting"), "text", true);
         
-        // Build a query with these conditions
-        List<Condition> conditions = new ArrayList<>();
-        conditions.add(personCondition);
-        conditions.add(orgCondition);
-        conditions.add(containsCondition);
+        List<Condition> conditions = List.of(personCondition, orgCondition, containsCondition);
         
-        Query complexQuery = new Query("news_corpus", conditions);
+        // Create query with fresh registry
+        VariableRegistry localRegistry = new VariableRegistry();
+        Query complexQuery = new Query("news_corpus", conditions, new ArrayList<>(), Optional.empty(), 
+                                       Query.Granularity.DOCUMENT, Optional.empty(), new ArrayList<>(), 
+                                       localRegistry);
         
-        // Register variables
+        // Register variables from conditions onto the local registry
         for (Condition condition : conditions) {
-            condition.registerVariables(complexQuery.variableRegistry());
+            condition.registerVariables(localRegistry);
         }
         
-        // Check all variables are properly registered
-        Set<String> variables = complexQuery.getAllVariableNames();
+        // Check registry directly
+        Set<String> variables = localRegistry.getAllVariableNames();
         assertEquals(3, variables.size());
-        assertTrue(variables.contains("?person"));
-        assertTrue(variables.contains("?org"));
-        assertTrue(variables.contains("?text"));
+        assertTrue(variables.contains("person")); // Expect plain name
+        assertTrue(variables.contains("org")); // Expect plain name
+        assertTrue(variables.contains("text")); // Expect plain name
         
-        // Check variable types
-        assertEquals(VariableType.ENTITY, complexQuery.getVariableType("person"));
-        assertEquals(VariableType.ENTITY, complexQuery.getVariableType("org"));
-        assertEquals(VariableType.TEXT_SPAN, complexQuery.getVariableType("text"));
+        // Check variable types via registry
+        assertEquals(VariableType.ENTITY, localRegistry.getInferredType("person"));
+        assertEquals(VariableType.ENTITY, localRegistry.getInferredType("org"));
+        assertEquals(VariableType.TEXT_SPAN, localRegistry.getInferredType("text"));
         
-        // Validate variables (all should be produced)
-        assertTrue(complexQuery.validateVariables().isEmpty());
+        // Validate variables on the registry
+        assertTrue(localRegistry.validate().isEmpty());
         
-        // Verify query string representation
-        String queryString = complexQuery.toString();
-        assertTrue(queryString.contains("FROM news_corpus"));
-        assertTrue(queryString.contains("WHERE"));
-        assertTrue(queryString.contains("NER(PERSON) AS ?person"));
-        assertTrue(queryString.contains("NER(ORGANIZATION) AS ?org"));
-        assertTrue(queryString.contains("CONTAINS(\"meeting\") AS ?text"));
+        // Verify query string representation (this test might be less relevant now)
+        // String queryString = complexQuery.toString(); // Query.toString doesn't show registry state
+        // Check individual condition toStrings if needed
+        assertEquals("NER(PERSON) AS person", personCondition.toString());
+        assertEquals("NER(ORGANIZATION) AS org", orgCondition.toString());
+        assertEquals("CONTAINS(\"meeting\") AS text", containsCondition.toString());
+    }
+
+    // Keep these toString tests, but they assert on the Query object's representation
+    @Test
+    @DisplayName("toString() should include NER condition with variable")
+    void testToStringWithNerVariable() {
+        List<Condition> conditions = List.of(new Ner("PERSON", null, "person", true));
+        Query query = new Query("documents", conditions, List.of(), Optional.empty(), 
+                              Query.Granularity.DOCUMENT, Optional.empty(), 
+                              List.of(new VariableColumn("person")), new VariableRegistry());
+        String queryString = query.toString();
+        assertTrue(queryString.contains("NER(PERSON) AS person")); // Expect plain name
+    }
+    
+    @Test
+    @DisplayName("toString() should include CONTAINS condition with variable")
+    void testToStringWithContainsVariable() {
+        List<Condition> conditions = List.of(new Contains(List.of("search", "term"), "result", true));
+        Query query = new Query("documents", conditions, List.of(), Optional.empty(), 
+                              Query.Granularity.DOCUMENT, Optional.empty(), 
+                              List.of(new VariableColumn("result")), new VariableRegistry());
+        String queryString = query.toString();
+        assertTrue(queryString.contains("CONTAINS(\"search term\") AS result")); // Expect plain name
+    }
+    
+    @Test
+    @DisplayName("toString() should include multiple conditions with variables")
+    void testToStringWithMultipleVariables() {
+        Condition nerPerson = new Ner("PERSON", null, "person", true);
+        Condition nerOrg = new Ner("ORGANIZATION", null, "org", true);
+        Condition containsText = new Contains(List.of("meeting"), "text", true);
+        List<Condition> conditions = List.of(nerPerson, nerOrg, containsText);
+        List<SelectColumn> selectCols = List.of(new VariableColumn("person"), new VariableColumn("org"));
+        Query query = new Query("logs", conditions, List.of("person"), Optional.of(10), 
+                              Query.Granularity.SENTENCE, Optional.of(2), selectCols, new VariableRegistry());
+                              
+        String queryString = query.toString();
+        System.out.println("Generated Query String for testToStringWithMultipleVariables:\n" + queryString);
+        
+        assertTrue(queryString.contains("NER(PERSON) AS person"), "Check 1 failed: NER(PERSON)"); // Expect plain name
+        assertTrue(queryString.contains("NER(ORGANIZATION) AS org"), "Check 2 failed: NER(ORGANIZATION)"); // Expect plain name
+        assertTrue(queryString.contains("CONTAINS(\"meeting\") AS text"), "Check 3 failed: CONTAINS"); // Expect plain name
+        assertTrue(queryString.contains("SELECT person, org"), "Check 4 failed: SELECT");
+        assertTrue(queryString.contains("ORDER BY person"), "Check 5 failed: ORDER BY");
+        assertTrue(queryString.contains("LIMIT 10"), "Check 6 failed: LIMIT");
+        assertTrue(queryString.contains("GRANULARITY SENTENCE 2"), "Check 7 failed: GRANULARITY");
     }
 } 

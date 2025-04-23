@@ -290,7 +290,7 @@ public class QueryEndToEndTest {
     
     @Test
     public void testNerVariableBindingQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT ?person FROM source WHERE NER(PERSON) AS ?person";
+        String queryString = "SELECT person FROM source WHERE NER(PERSON) AS person";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -301,18 +301,18 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(3, resultTable.rowCount()); // Grouped by doc (3 unique docs)
-        assertTrue(resultTable.columnNames().contains("?person"));
+        assertTrue(resultTable.columnNames().contains("person"));
         // Values in the table will be one of the entities from the doc (grouping picks one)
         Set<String> expectedValues = Set.of("albert einstein", "marie curie", "isaac newton", "albrecht kossel");
-        assertTrue(expectedValues.contains(resultTable.stringColumn("?person").get(0).toLowerCase()));
-        assertTrue(expectedValues.contains(resultTable.stringColumn("?person").get(1).toLowerCase()));
-        assertTrue(expectedValues.contains(resultTable.stringColumn("?person").get(2).toLowerCase())); // Added check for 3rd row
+        assertTrue(expectedValues.contains(resultTable.stringColumn("person").get(0).toLowerCase()));
+        assertTrue(expectedValues.contains(resultTable.stringColumn("person").get(1).toLowerCase()));
+        assertTrue(expectedValues.contains(resultTable.stringColumn("person").get(2).toLowerCase())); // Added check for 3rd row
     }
     
     @Test
     public void testNerVariableBindingWithTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Test partial match with binding
-        String queryString = "SELECT ?org FROM source WHERE NER(ORGANIZATION, 'corp') AS ?org"; // Use partial name
+        String queryString = "SELECT org FROM source WHERE NER(ORGANIZATION, 'corp') AS org"; // Use partial name
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -324,12 +324,12 @@ public class QueryEndToEndTest {
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount()); 
         assertEquals(11, resultTable.intColumn("document_id").get(0));
-        assertEquals("microsoft corporation", resultTable.stringColumn("?org").get(0));
+        assertEquals("microsoft corporation", resultTable.stringColumn("org").get(0));
     }
     
     @Test
     public void testNerNewTypeOrdinalQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT ?ord FROM source WHERE NER(ORDINAL, 'first') AS ?ord";
+        String queryString = "SELECT ord FROM source WHERE NER(ORDINAL, 'first') AS ord";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -340,12 +340,12 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount());
-        assertEquals("first", resultTable.stringColumn("?ord").get(0));
+        assertEquals("first", resultTable.stringColumn("ord").get(0));
     }
     
     @Test
     public void testNerNewTypeNumberQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT ?num FROM source WHERE NER(NUMBER) AS ?num";
+        String queryString = "SELECT num FROM source WHERE NER(NUMBER) AS num";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -356,7 +356,7 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount());
-        assertEquals("42", resultTable.stringColumn("?num").get(0));
+        assertEquals("42", resultTable.stringColumn("num").get(0));
     }
     
     @Test
@@ -490,7 +490,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testDateLiteralWithVariableBinding() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT ?date FROM source WHERE DATE(> 2000-01-01) AS ?date";
+        String queryString = "SELECT date FROM source WHERE DATE(> 2000-01-01) AS date";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -505,7 +505,7 @@ public class QueryEndToEndTest {
         
         // If there are results, the column with the variable name should exist
         if (resultTable.rowCount() > 0) {
-            assertTrue(resultTable.columnNames().contains("?date"), "Expected column with the variable name");
+            assertTrue(resultTable.columnNames().contains("date"), "Expected column with the variable name");
         }
     }
 

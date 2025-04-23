@@ -56,35 +56,36 @@ class QuerySemanticValidatorTest {
     @Test
     @DisplayName("Valid query with bound variable column should validate")
     void validQueryWithBoundVariableShouldValidate() {
-        // Create a registry and register the variable
+        // Create a registry and register the variable with its plain name
         VariableRegistry registry = new VariableRegistry();
-        registry.registerProducer("?person", VariableType.ENTITY, "NER");
+        registry.registerProducer("person", VariableType.ENTITY, "NER"); // Use plain name
         
-        // Create condition that binds a variable
-        Ner nerCondition = new Ner("PERSON", null, "?person", true);
+        // Create condition that binds the plain variable name
+        Ner nerCondition = new Ner("PERSON", null, "person", true); // Use plain name
         List<Condition> conditions = List.of(nerCondition);
         
-        // Use that variable in SELECT
+        // Use that variable in SELECT (already correct)
         List<SelectColumn> columns = List.of(new VariableColumn("person"));
         
         Query query = createQuery(columns, conditions, registry);
         
+        // Validation should now pass as the plain name 'person' is registered and used consistently
         assertDoesNotThrow(() -> validator.validate(query));
     }
     
     @Test
     @DisplayName("Valid query with snippet using bound variable should validate")
     void validQueryWithSnippetBoundVariableShouldValidate() {
-        // Create a registry and register the variable
+        // Create a registry and register the variable with its plain name
         VariableRegistry registry = new VariableRegistry();
-        registry.registerProducer("?person", VariableType.ENTITY, "NER");
+        registry.registerProducer("person", VariableType.ENTITY, "NER"); // Use plain name
         
-        // Create condition that binds a variable
-        Ner nerCondition = new Ner("PERSON", null, "?person", true);
+        // Create condition that binds the plain variable name
+        Ner nerCondition = new Ner("PERSON", null, "person", true); // Use plain name
         List<Condition> conditions = List.of(nerCondition);
         
-        // Use that variable in a SNIPPET column
-        SnippetNode snippetNode = new SnippetNode("?person");
+        // Use that variable in a SNIPPET column using the plain name
+        SnippetNode snippetNode = new SnippetNode("person"); // Use plain name
         List<SelectColumn> columns = Collections.singletonList(new SnippetColumn(snippetNode.variable(), snippetNode.windowSize()));
         
         Query query = createQuery(columns, conditions, registry);

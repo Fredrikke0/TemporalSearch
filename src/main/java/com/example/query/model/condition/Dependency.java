@@ -136,8 +136,9 @@ public record Dependency(
     @Override
     public String toString() {
         if (isVariable) {
-            return String.format("DEPENDS(%s, %s, %s) AS ?%s", governor, relation, dependent, variableName);
+            return String.format("DEPENDS(%s, %s, %s) AS %s", governor, relation, dependent, variableName);
+        } else {
+            return String.format("DEPENDS(%s, %s, %s)", governor, relation, dependent);
         }
-        return String.format("DEPENDS(%s, %s, %s)", governor, relation, dependent);
     }
 } 

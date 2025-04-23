@@ -4,16 +4,20 @@ import java.util.Collections;
 import java.util.Set;
 
 /**
- * Represents a variable in the query language.
- * Variables can be either producers (bind values) or consumers (use values).
- * A variable may be both a producer and consumer in different parts of the query.
+ * Represents a variable in the query, either a producer or a consumer.
+ * Tracks the variable name (plain identifier) and its inferred type.
+ * 
+ * Producer variables are created by conditions using `AS` syntax:
+ * For example, `NER(PERSON) AS person` produces person entities.
+ * 
+ * Consumer variables reference existing variables, potentially for filtering or joining.
  */
 public sealed interface Variable permits ProducerVariable, ConsumerVariable {
     
     /**
      * Gets the name of the variable.
      *
-     * @return The variable name, without the ? prefix
+     * @return The plain variable name
      */
     String getName();
     
@@ -24,24 +28,11 @@ public sealed interface Variable permits ProducerVariable, ConsumerVariable {
      * @return The variable's data type
      */
     VariableType getType();
-    
-    /**
-     * Creates a variable name from an identifier (adds ? prefix if needed).
-     *
-     * @param name The variable name, with or without the ? prefix
-     * @return The variable name with the ? prefix
-     */
-    static String formatName(String name) {
-        if (name == null) {
-            return null;
-        }
-        return name.startsWith("?") ? name : "?" + name;
-    }
 }
 
 /**
  * Represents a variable that produces values through extraction.
- * For example, NER(PERSON) AS ?person produces person entities.
+ * For example, NER(PERSON) AS person produces person entities.
  */
 record ProducerVariable(
     String name,
@@ -65,7 +56,6 @@ record ProducerVariable(
         }
         
         // Ensure defensive copies
-        name = Variable.formatName(name);
         producedBy = producedBy != null ? 
             Collections.unmodifiableSet(Set.copyOf(producedBy)) : 
             Collections.emptySet();
@@ -115,7 +105,6 @@ record ConsumerVariable(
         }
         
         // Ensure defensive copies
-        name = Variable.formatName(name);
         consumedBy = consumedBy != null ? 
             Collections.unmodifiableSet(Set.copyOf(consumedBy)) : 
             Collections.emptySet();

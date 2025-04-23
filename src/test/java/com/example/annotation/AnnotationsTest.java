@@ -21,7 +21,7 @@ class AnnotationsTest {
     void setUp(@TempDir Path tempDir) throws SQLException {
         dbFile = tempDir.resolve("test.db");
         conn = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
-        annotations = new Annotations(dbFile, 1, true, null);  // Initialize with test-appropriate values
+        annotations = new Annotations(dbFile, 1, false, null);  // Initialize with test-appropriate values
         
         // Create required tables
         try (Statement stmt = conn.createStatement()) {

@@ -19,8 +19,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Executor for POS (Part of Speech) conditions.
- * Handles basic part-of-speech tag lookups against the 'pos' index.
+ * Executor for POS conditions.
+ * Handles matching POS tags against indexed data.
+ * 
+ * POS Condition Logic:
+ *   - Simple match: POS(tag) -> Finds sentences containing the specified tag.
+ *   - Match with term: POS(tag, term) -> Finds sentences where 'term' has the specified tag.
+ *   - Variable binding: POS(tag) AS var -> Binds var to the tag string itself.
+ *   - Variable consumption: POS(tag, var) -> Filters sentences where 'var' (must be text) has the tag.
  * This executor reflects the basic index structure where keys are POS tags
  * and values are lists of all positions for that tag.
  * It supports:

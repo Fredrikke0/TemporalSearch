@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -139,31 +140,29 @@ public record DocSentenceMatch(
     /**
      * Sets a variable value specific to this match.
      * 
-     * @param variableName The variable name
+     * @param variableName The plain variable name
      * @param value The value to set
      */
     public void setVariableValue(String variableName, Object value) {
         if (variableName == null || value == null) {
             return;
         }
-        // Ensure variable name has ? prefix
-        String normalizedVarName = variableName.startsWith("?") ? variableName : "?" + variableName;
-        variableValues.put(normalizedVarName, value);
+        // Variable name should be plain
+        variableValues.put(variableName, value);
     }
     
     /**
      * Gets a variable value specific to this match.
      * 
-     * @param variableName The variable name
+     * @param variableName The plain variable name
      * @return The variable value, or null if not found
      */
     public Object getVariableValue(String variableName) {
         if (variableName == null) {
             return null;
         }
-        // Ensure variable name has ? prefix
-        String normalizedVarName = variableName.startsWith("?") ? variableName : "?" + variableName;
-        return variableValues.get(normalizedVarName);
+        // Variable name should be plain
+        return variableValues.get(variableName);
     }
     
     /**
@@ -190,11 +189,10 @@ public record DocSentenceMatch(
     @Override
     public String toString() {
         return "DocSentenceMatch{" +
-                "documentId=" + documentId +
-                ", sentenceId=" + sentenceId +
-                ", keys=" + matchPositions.keySet() +
-                ", positionCount=" + matchPositions.values().stream().mapToInt(Set::size).sum() +
-                ", variables=" + variableValues.keySet() +
-                '}';
+               "docId=" + documentId +
+               ", sentenceId=" + sentenceId +
+               ", matchPositions=" + matchPositions.keySet() + // Simplified for brevity
+               ", variableValues=" + variableValues +
+               '}';
     }
 } 

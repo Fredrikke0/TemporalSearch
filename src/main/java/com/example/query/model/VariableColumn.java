@@ -17,14 +17,14 @@ import org.slf4j.LoggerFactory;
 /**
  * Represents a variable column in the SELECT clause of a query.
  * This column selects the value of a variable binding from matching documents,
- * handling both simple variables (?var) and qualified variables (alias.?var).
+ * handling both simple variables (var) and qualified variables (alias.var).
  */
 public class VariableColumn implements SelectColumn {
     private static final Logger logger = LoggerFactory.getLogger(VariableColumn.class);
     
-    private final String columnName; // The full name as it appears in SELECT (e.g., "?var" or "alias.?var")
+    private final String columnName; // The full name as it appears in SELECT (e.g., "var" or "alias.var")
     private final String alias; // The alias part (e.g., "alias"), or null if unqualified
-    private final String targetVariableName; // The simple variable name (e.g., "?var")
+    private final String targetVariableName; // The simple variable name (e.g., "var")
     
     // TODO: Infer ColumnType based on VariableRegistry? Currently defaults to String.
     private final ColumnType columnType = ColumnType.STRING; 
@@ -32,24 +32,25 @@ public class VariableColumn implements SelectColumn {
     /**
      * Creates a new variable column, parsing qualified names if necessary.
      * 
-     * @param nameInSelect The name as it appears in the SELECT clause (e.g., "?var" or "alias.?var")
+     * @param nameInSelect The name as it appears in the SELECT clause (e.g., "var" or "alias.var")
      */
     public VariableColumn(String nameInSelect) {
         this.columnName = nameInSelect;
         if (nameInSelect.contains(".")) {
             String[] parts = nameInSelect.split("\\.", 2);
-            if (parts.length == 2 && parts[1].startsWith("?")) {
+            // Expect format alias.variable (plain variable name)
+            if (parts.length == 2) { 
                 this.alias = parts[0];
-                this.targetVariableName = parts[1];
+                this.targetVariableName = parts[1]; // Store plain variable name
             } else {
                 logger.warn("Invalid qualified variable format '{}' treated as simple variable name.", nameInSelect);
                 this.alias = null;
-                this.targetVariableName = nameInSelect.startsWith("?") ? nameInSelect : "?" + nameInSelect;
+                this.targetVariableName = nameInSelect; // Treat the whole thing as the name if format is wrong
             }
         } else {
+            // Unqualified variable: var
             this.alias = null;
-            // Ensure targetVariableName always starts with ? for unqualified names
-            this.targetVariableName = nameInSelect.startsWith("?") ? nameInSelect : "?" + nameInSelect;
+            this.targetVariableName = nameInSelect; // Store plain variable name
         }
         logger.trace("Created VariableColumn: columnName='{}', alias='{}', targetVariableName='{}'", 
                      this.columnName, this.alias, this.targetVariableName);
@@ -82,8 +83,10 @@ public class VariableColumn implements SelectColumn {
 
         for (Object obj : detailsForUnit) {
             if (obj instanceof com.example.query.binding.JoinedMatch joined) {
-                // Handle join result: check left and right
+                // Handle join result: check left and right using plain variable names
+                // Assuming JoinedMatch methods now return plain names
                 if (alias == null) {
+                    // Unqualified: Check both sides for the plain target name
                     if (targetVariableName.equals(joined.getLeftVariableName())) {
                         valueOpt = Optional.ofNullable(joined.getLeftValue());
                         break;
@@ -92,6 +95,8 @@ public class VariableColumn implements SelectColumn {
                         break;
                     }
                 } else {
+                    // Qualified: Check the side corresponding to the alias
+                    // TODO: Refine alias handling for joins if needed. Using hardcoded "left"/"right" might be brittle.
                     if ("left".equals(alias) && targetVariableName.equals(joined.getLeftVariableName())) {
                         valueOpt = Optional.ofNullable(joined.getLeftValue());
                         break;
@@ -101,8 +106,9 @@ public class VariableColumn implements SelectColumn {
                     }
                 }
             } else if (obj instanceof MatchDetail detail) {
-                if (alias == null) {
-                    if (targetVariableName.equals(detail.variableName().orElse(null))) {
+                 // Non-join result: Check if the detail's variable (plain name) matches the target (plain name)
+                if (alias == null) { // Only handle unqualified variables for non-join MatchDetails
+                    if (targetVariableName.equals(detail.variableName().orElse(null))) { // Compare plain names
                         valueOpt = Optional.ofNullable(detail.value());
                         break;
                     }
@@ -128,6 +134,7 @@ public class VariableColumn implements SelectColumn {
     
     @Override
     public String toString() {
-        return "?" + targetVariableName;
+        // Return the plain variable name, qualified if necessary
+        return columnName; 
     }
 } 

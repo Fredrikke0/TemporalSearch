@@ -125,7 +125,7 @@ public class QuerySemanticValidator {
     /**
      * Validates the select columns, ensuring all column references are valid.
      * Handles both unqualified variables (from the main query) and qualified variables
-     * (e.g., `alias.?var` from subqueries or the aliased main query).
+     * (e.g., `alias.var` from subqueries or the aliased main query).
      */
     private void validateSelectColumns(Query query, VariableRegistry mainRegistry) throws QueryParseException {
         if (query.selectColumns().isEmpty()) {
@@ -138,20 +138,21 @@ public class QuerySemanticValidator {
 
         for (SelectColumn column : query.selectColumns()) {
             if (column instanceof VariableColumn variableColumn) {
-                String columnName = variableColumn.getColumnName(); // Might be "?var" or "alias.?var"
+                String columnName = variableColumn.getColumnName(); // Might be "var" or "alias.var"
 
                 if (columnName.contains(".")) {
-                    // Qualified variable: alias.?var
+                    // Qualified variable: alias.var
                     String[] parts = columnName.split("\\.", 2);
-                    if (parts.length != 2 || !parts[1].startsWith("?")) {
-                        throw new QueryParseException("Invalid qualified variable format in SELECT: " + columnName + ". Expected format: alias.?variable");
+                    // No longer check for '?' prefix on the variable part
+                    if (parts.length != 2) { 
+                        throw new QueryParseException("Invalid qualified variable format in SELECT: " + columnName + ". Expected format: alias.variable");
                     }
                     String alias = parts[0];
-                    String variableName = parts[1]; // Includes '?' prefix
+                    String variableName = parts[1]; // Plain variable name
 
                     logger.debug("Validating qualified SELECT variable: {} from alias {}", variableName, alias);
 
-                    // Check if the alias refers to the aliased main query
+                    // Pass plain variableName to validation helper
                     if (query.mainAlias().isPresent() && query.mainAlias().get().equals(alias)) {
                         validateVariableInRegistry(variableName, mainRegistry, "main query (aliased as " + alias + ")");
                     } 
@@ -165,31 +166,32 @@ public class QuerySemanticValidator {
                     }
 
                 } else {
-                    // Unqualified variable: ?var - must belong to main query's scope
-                    String variableName = Variable.formatName(columnName); // Ensure '?' prefix
+                    // Unqualified variable: var - must belong to main query's scope
+                    String variableName = columnName; // Already the plain name
                     logger.debug("Validating unqualified SELECT variable: {}", variableName);
                     
                     // Unqualified variables are validated against the main registry.
-                    // If a main alias exists, conceptually these variables come from the main query's context.
+                     // Pass plain variableName to validation helper
                     validateVariableInRegistry(variableName, mainRegistry, "main query");
                 }
 
             } else if (column instanceof SnippetColumn snippetColumn) {
                 // Allow SNIPPET to reference qualified or unqualified variables
-                String fullVariableName = snippetColumn.getVariableName(); // Might be "?var" or "alias.?var"
+                String fullVariableName = snippetColumn.getVariableName(); // Might be "var" or "alias.var"
                 
                 if (fullVariableName.contains(".")) {
-                     // Qualified variable: alias.?var
+                     // Qualified variable: alias.var
                     String[] parts = fullVariableName.split("\\.", 2);
-                    if (parts.length != 2 || !parts[1].startsWith("?")) {
-                        throw new QueryParseException("Invalid qualified variable format in SNIPPET: " + fullVariableName + ". Expected format: alias.?variable");
+                     // No longer check for '?' prefix on the variable part
+                    if (parts.length != 2) { 
+                        throw new QueryParseException("Invalid qualified variable format in SNIPPET: " + fullVariableName + ". Expected format: alias.variable");
                     }
                     String alias = parts[0];
-                    String variableName = parts[1]; // Includes '?' prefix
+                    String variableName = parts[1]; // Plain variable name
 
                     logger.debug("Validating qualified SNIPPET variable: {} from alias {}", variableName, alias);
 
-                    // Check if the alias refers to the aliased main query
+                     // Pass plain variableName to validation helper
                     if (query.mainAlias().isPresent() && query.mainAlias().get().equals(alias)) {
                         validateVariableInRegistry(variableName, mainRegistry, "main query (aliased as " + alias + " for SNIPPET)");
                     } 
@@ -203,20 +205,21 @@ public class QuerySemanticValidator {
                     }
                     
                 } else {
-                    // Unqualified variable: ?var - must belong to main query's scope
-                    String variableName = Variable.formatName(fullVariableName); // Ensure '?' prefix
+                    // Unqualified variable: var - must belong to main query's scope
+                    String variableName = fullVariableName; // Already the plain name
                     logger.debug("Validating unqualified SNIPPET variable: {}", variableName);
+                     // Pass plain variableName to validation helper
                     validateVariableInRegistry(variableName, mainRegistry, "main query (for SNIPPET)");
                 }
             
             } else if (column instanceof CountColumn countColumn) {
-                // COUNT(UNIQUE ?var) - variable must be unqualified and belong to the main query registry
-                // We need a way to get the variable name only if it's a COUNT(UNIQUE ?var)
-                String variableName = countColumn.getVariableNameForValidation(); 
-                if (variableName != null) { // Only validate if it's COUNT(UNIQUE ?var)
+                // COUNT(UNIQUE var) - variable must be unqualified and belong to the main query registry
+                // We need a way to get the variable name only if it's a COUNT(UNIQUE var)
+                String variableName = countColumn.getVariableNameForValidation(); // Should return plain name or null
+                if (variableName != null) { // Only validate if it's COUNT(UNIQUE var)
                     logger.debug("Validating COUNT(UNIQUE) variable: {}", variableName);
-                    // Ensure '?' prefix before validation
-                    validateVariableInRegistry(Variable.formatName(variableName), mainRegistry, "main query (for COUNT)");
+                    // Pass plain variableName to validation helper
+                    validateVariableInRegistry(variableName, mainRegistry, "main query (for COUNT)");
                 }
             }
             // Other column types (TITLE, TIMESTAMP) don't need variable validation
@@ -226,16 +229,14 @@ public class QuerySemanticValidator {
     /**
      * Helper method to validate that a variable exists and is produced within a specific registry.
      * 
-     * @param variableName The variable name (must start with '?')
+     * @param variableName The plain variable name (without '?')
      * @param registry The VariableRegistry to check against
      * @param contextDescription A description of the context (e.g., "main query", "subquery 'sq1'") for error messages
      * @throws QueryParseException If the variable is not found or not produced
      */
     private void validateVariableInRegistry(String variableName, VariableRegistry registry, String contextDescription) throws QueryParseException {
-        // Ensure variable name starts with '?' - defensive check, should be guaranteed by callers
-        if (!variableName.startsWith("?")) {
-             throw new IllegalArgumentException("Internal validation error: variableName must start with '?' but got: " + variableName);
-        }
+        // Variable name is expected to be plain (no '?' prefix)
+        // Remove the starting '?' check
          
         if (!registry.getAllVariableNames().contains(variableName)) {
             throw new QueryParseException(String.format(

@@ -127,12 +127,15 @@ public record Ner(
     
     @Override
     public String toString() {
-        if (target != null) {
-            return String.format("NER(%s, %s)", entityType, target);
-        }
         if (isVariable) {
-            return String.format("NER(%s) AS ?%s", entityType, variableName);
+            // Format: NER(Type) AS var
+            return String.format("NER(%s) AS %s", entityType, variableName);
+        } else if (target != null) {
+            // Format: NER(Type, Target)
+            return String.format("NER(%s, %s)", entityType, target);
+        } else {
+            // Format: NER(Type)
+            return String.format("NER(%s)", entityType);
         }
-        return String.format("NER(%s)", entityType);
     }
 } 

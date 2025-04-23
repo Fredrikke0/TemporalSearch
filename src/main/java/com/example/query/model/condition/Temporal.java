@@ -227,38 +227,26 @@ public record Temporal(
     public String toString() {
         StringBuilder sb = new StringBuilder("DATE(");
         
-        // Format based on temporal type
-        if (temporalType.isComparisonOperator()) {
-            switch (temporalType) {
-                case BEFORE -> sb.append("< ");
-                case AFTER -> sb.append("> ");
-                case BEFORE_EQUAL -> sb.append("<= ");
-                case AFTER_EQUAL -> sb.append(">= ");
-                case EQUAL -> sb.append("== ");
-                default -> throw new IllegalStateException("Unexpected operator: " + temporalType);
-            }
-            sb.append(startDate.getYear());
-        } else if (temporalType.requiresDateRange()) {
-            // CONTAINS, CONTAINED_BY, INTERSECT
+        // Append operator and date value representation
+        if (temporalType == TemporalPredicate.INTERSECT && startDate != null && endDate.isPresent()) {
+            // Handle date comparison operators by showing the original comparison
+            // This requires mapping back from the internal representation, which is complex.
+            // For simplicity, show the internal INTERSECT format.
             sb.append(temporalType.name()).append(" ");
-            if (endDate.isPresent()) {
-                sb.append("[").append(startDate.getYear()).append(", ").append(endDate.get().getYear()).append("]");
-            } else {
-                sb.append(startDate.getYear());
-            }
-        } else if (temporalType == TemporalPredicate.PROXIMITY) {
-            sb.append("PROXIMITY ").append(startDate.getYear());
-            range.ifPresent(r -> sb.append(" RADIUS ").append(r.toString()));
+            sb.append("[").append(NASH_DATE_FORMAT.format(startDate));
+            sb.append(", ").append(NASH_DATE_FORMAT.format(endDate.get())).append("]");
         } else {
-            sb.append(temporalType.name()).append(" ").append(startDate.getYear());
+            sb.append(temporalType.name());
+            if (startDate != null) {
+                 sb.append(" ").append(NASH_DATE_FORMAT.format(startDate));
+                 endDate.ifPresent(end -> sb.append(" .. ").append(NASH_DATE_FORMAT.format(end)));
+            }
         }
         
+        range.ifPresent(r -> sb.append(" RADIUS ").append(r.value()));
         sb.append(")");
         
-        // Add variable if present
-        if (variable.isPresent()) {
-            sb.append(" AS ?").append(variable.get());
-        }
+        variable.ifPresent(var -> sb.append(" AS ").append(var)); // Append plain variable
         
         return sb.toString();
     }
