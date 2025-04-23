@@ -52,76 +52,76 @@ public class QuerySpecExamplesTest {
     }
 
     private final List<String> basicQueryExamples = List.of(
-        "SELECT doc FROM corpus WHERE CONTAINS(\"artificial intelligence\") AS doc",
+        "SELECT doc FROM corpus WHERE CONTAINS(\"artificial intelligence\") BIND doc",
         "SELECT title FROM corpus WHERE CONTAINS(\"search term\")",
-        "SELECT person FROM corpus WHERE NER(\"PERSON\") AS person",
+        "SELECT person FROM corpus WHERE NER(\"PERSON\") BIND person",
         "SELECT doc_id FROM corpus WHERE NER(LOCATION)"
     );
 
     private final List<String> snippetExamples = List.of(
-        "SELECT person, SNIPPET(person) FROM corpus WHERE NER(\"PERSON\") AS person",
-        "SELECT title, SNIPPET(text) FROM corpus WHERE CONTAINS(\"highlight\") AS text",
-        "SELECT person, SNIPPET(person, WINDOW=10) FROM corpus WHERE NER(\"PERSON\") AS person",
-        "SELECT timestamp FROM corpus WHERE CONTAINS(\"event\") AS event", // SNIPPET needs a variable
-        "SELECT SNIPPET(var1) FROM corpus WHERE CONTAINS(\"word\") AS var1"
+        "SELECT person, SNIPPET(person) FROM corpus WHERE NER(\"PERSON\") BIND person",
+        "SELECT title, SNIPPET(text) FROM corpus WHERE CONTAINS(\"highlight\") BIND text",
+        "SELECT person, SNIPPET(person, WINDOW=10) FROM corpus WHERE NER(\"PERSON\") BIND person",
+        "SELECT timestamp FROM corpus WHERE CONTAINS(\"event\") BIND event",
+        "SELECT SNIPPET(var1) FROM corpus WHERE CONTAINS(\"word\") BIND var1"
     );
 
     private final List<String> countExpressionExamples = List.of(
         "SELECT COUNT(*) FROM corpus",
         "SELECT COUNT(DOCUMENTS) FROM corpus",
-        "SELECT COUNT(UNIQUE person) FROM corpus WHERE NER(\"PERSON\") AS person",
-        "SELECT person, COUNT(*) FROM corpus WHERE NER(\"PERSON\") AS person"
+        "SELECT COUNT(UNIQUE person) FROM corpus WHERE NER(\"PERSON\") BIND person",
+        "SELECT person, COUNT(*) FROM corpus WHERE NER(\"PERSON\") BIND person"
         // "SELECT COUNT(UNIQUE missing_var) FROM corpus" // Semantic error, handled by validator
     );
     
     private final List<String> dateComparisonExamples = List.of(
-        "SELECT doc FROM corpus WHERE DATE(> 1990) AS doc",
+        "SELECT doc FROM corpus WHERE DATE(> 1990) BIND doc",
         "SELECT timestamp FROM corpus WHERE DATE(< 2000)",
-        "SELECT doc FROM corpus WHERE DATE(< 2000) AS doc",
+        "SELECT doc FROM corpus WHERE DATE(< 2000) BIND doc",
         "SELECT title FROM corpus WHERE DATE(== 1995)",
-        "SELECT doc FROM corpus WHERE DATE(== 1995) AS doc",
+        "SELECT doc FROM corpus WHERE DATE(== 1995) BIND doc",
         "SELECT title FROM corpus WHERE DATE(>= 1995)",
-        "SELECT doc FROM corpus WHERE DATE(>= 1995) AS doc",
+        "SELECT doc FROM corpus WHERE DATE(>= 1995) BIND doc",
         "SELECT title FROM corpus WHERE DATE(<= 2005)",
-        "SELECT doc FROM corpus WHERE DATE(<= 2005) AS doc",
+        "SELECT doc FROM corpus WHERE DATE(<= 2005) BIND doc",
         "SELECT title FROM corpus WHERE DATE(= 2010)" // Allow = as alias for ==
     );
     
     private final List<String> complexDateOperationsExamples = List.of(
-        "SELECT doc FROM corpus WHERE DATE(CONTAINS [1990-01-01, 2000-01-01]) AS doc",
+        "SELECT doc FROM corpus WHERE DATE(CONTAINS [1990-01-01, 2000-01-01]) BIND doc",
         "SELECT timestamp FROM corpus WHERE DATE(CONTAINED_BY 2000)",
-        "SELECT doc FROM corpus WHERE DATE(CONTAINED_BY 2000) AS doc",
+        "SELECT doc FROM corpus WHERE DATE(CONTAINED_BY 2000) BIND doc",
         "SELECT timestamp FROM corpus WHERE DATE(INTERSECT [1990-01-01, 2000-01-01])",
-        "SELECT doc FROM corpus WHERE DATE(INTERSECT [1990-01-01, 2000-01-01]) AS doc",
+        "SELECT doc FROM corpus WHERE DATE(INTERSECT [1990-01-01, 2000-01-01]) BIND doc",
         "SELECT timestamp FROM corpus WHERE DATE(PROXIMITY 2000 RADIUS 5y)",
-        "SELECT doc FROM corpus WHERE DATE(PROXIMITY 2000 RADIUS 5y) AS doc"
+        "SELECT doc FROM corpus WHERE DATE(PROXIMITY 2000 RADIUS 5y) BIND doc"
         // Add DATE literal examples
     );
 
     private final List<String> granularityExamples = List.of(
-        "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") AS entity GRANULARITY DOCUMENT",
+        "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity GRANULARITY DOCUMENT",
         "SELECT title FROM corpus GRANULARITY SENTENCE",
-        "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") AS entity GRANULARITY SENTENCE",
-        "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") AS entity GRANULARITY SENTENCE 3"
+        "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity GRANULARITY SENTENCE",
+        "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity GRANULARITY SENTENCE 3"
     );
     
     private final List<String> orderByExamples = List.of(
-        "SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") AS company ORDER BY company",
+        "SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") BIND company ORDER BY company",
         "SELECT title FROM corpus ORDER BY title ASC",
-        "SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") AS company ORDER BY company ASC",
-        "SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") AS company ORDER BY company DESC",
+        "SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") BIND company ORDER BY company ASC",
+        "SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") BIND company ORDER BY company DESC",
         "SELECT title, timestamp FROM corpus ORDER BY timestamp DESC, title ASC",
-        "SELECT company, date FROM corpus WHERE NER(\"ORGANIZATION\") AS company AND DATE(> 2000) AS date ORDER BY company ASC, date DESC"
+        "SELECT company, date FROM corpus WHERE NER(\"ORGANIZATION\") BIND company AND DATE(> 2000) BIND date ORDER BY company ASC, date DESC"
     );
     
     private final List<String> limitExamples = List.of(
-        "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") AS entity LIMIT 10",
+        "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity LIMIT 10",
         "SELECT title FROM corpus ORDER BY timestamp DESC LIMIT 5"
     );
     
     private final List<String> combinedFeaturesExamples = List.of(
         "SELECT person, SNIPPET(person, WINDOW=5) FROM corpus " +
-            "WHERE NER(\"PERSON\") AS person AND DATE(> 2000) AS date " +
+            "WHERE NER(\"PERSON\") BIND person AND DATE(> 2000) BIND date " +
             "GRANULARITY SENTENCE 3 ORDER BY person DESC LIMIT 5",
         "SELECT COUNT(DOCUMENTS) FROM corpus WHERE NER(LOCATION) AND CONTAINS(\"city\") LIMIT 1"
     );
@@ -149,38 +149,38 @@ public class QuerySpecExamplesTest {
     // Duplicate tests based on old names - consolidate if needed
     @Test
     void basicVariableBindingExamplesShouldBeValid() {
-        assertSpecExampleValid("SELECT person FROM corpus WHERE NER(\"PERSON\") AS person");
+        assertSpecExampleValid("SELECT person FROM corpus WHERE NER(\"PERSON\") BIND person");
     }
     @Test
     void snippetExamplesShouldBeValid() {
-        assertSpecExampleValid("SELECT person, SNIPPET(person) FROM corpus WHERE NER(\"PERSON\") AS person");
-        assertSpecExampleValid("SELECT person, SNIPPET(person, WINDOW=10) FROM corpus WHERE NER(\"PERSON\") AS person");
+        assertSpecExampleValid("SELECT person, SNIPPET(person) FROM corpus WHERE NER(\"PERSON\") BIND person");
+        assertSpecExampleValid("SELECT person, SNIPPET(person, WINDOW=10) FROM corpus WHERE NER(\"PERSON\") BIND person");
     }
     @Test
     void aggregationExamplesShouldBeValid() {
-        assertSpecExampleValid("SELECT COUNT(UNIQUE person) FROM corpus WHERE NER(\"PERSON\") AS person");
+        assertSpecExampleValid("SELECT COUNT(UNIQUE person) FROM corpus WHERE NER(\"PERSON\") BIND person");
     }
     @Test
     void granularityExamplesShouldBeValid() {
-        assertSpecExampleValid("SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") AS entity GRANULARITY DOCUMENT");
-        assertSpecExampleValid("SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") AS entity GRANULARITY SENTENCE");
-        assertSpecExampleValid("SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") AS entity GRANULARITY SENTENCE 3");
+        assertSpecExampleValid("SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity GRANULARITY DOCUMENT");
+        assertSpecExampleValid("SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity GRANULARITY SENTENCE");
+        assertSpecExampleValid("SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity GRANULARITY SENTENCE 3");
     }
     @Test
     void orderByExamplesShouldBeValid() {
-        assertSpecExampleValid("SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") AS company ORDER BY company");
-        assertSpecExampleValid("SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") AS company ORDER BY company ASC");
-        assertSpecExampleValid("SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") AS company ORDER BY company DESC");
-        assertSpecExampleValid("SELECT company, date FROM corpus WHERE NER(\"ORGANIZATION\") AS company AND DATE(> 2000) AS date ORDER BY company ASC, date DESC");
+        assertSpecExampleValid("SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") BIND company ORDER BY company");
+        assertSpecExampleValid("SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") BIND company ORDER BY company ASC");
+        assertSpecExampleValid("SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") BIND company ORDER BY company DESC");
+        assertSpecExampleValid("SELECT company, date FROM corpus WHERE NER(\"ORGANIZATION\") BIND company AND DATE(> 2000) BIND date ORDER BY company ASC, date DESC");
     }
     @Test
     void limitExamplesShouldBeValid() {
-        assertSpecExampleValid("SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") AS entity LIMIT 10");
+        assertSpecExampleValid("SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity LIMIT 10");
     }
     @Test
     void complexQueryExamplesShouldBeValid() {
         assertSpecExampleValid("SELECT person, org FROM corpus " +
-                                "WHERE NER(\"PERSON\") AS person AND NER(\"ORGANIZATION\") AS org AND CONTAINS(\"founded\") " +
+                                "WHERE NER(\"PERSON\") BIND person AND NER(\"ORGANIZATION\") BIND org AND CONTAINS(\"founded\") " +
                                 "ORDER BY person");
     }
 } 

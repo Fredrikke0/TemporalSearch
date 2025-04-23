@@ -42,7 +42,7 @@ public class BindingTest {
     @Test
     @DisplayName("Test basic variable production")
     public void testVariableProduction() {
-        String queryStr = "SELECT person FROM documents WHERE NER(PERSON) AS person";
+        String queryStr = "SELECT person FROM documents WHERE NER(PERSON) BIND person";
         Query query = assertDoesNotThrow(() -> parseQuery(queryStr));
         VariableRegistry registry = query.variableRegistry();
         assertTrue(registry.isProduced("person"), "person should be produced");
@@ -52,9 +52,9 @@ public class BindingTest {
     @DisplayName("Test variable consumption")
     public void testVariableConsumption() {
         String queryStr = "SELECT org FROM documents " +
-                        "WHERE NER(PERSON) AS person AND " +
-                        "DEPENDS(person, \"works_at\", \"company\") AS rel AND " +
-                        "NER(ORGANIZATION) AS org";
+                        "WHERE NER(PERSON) BIND person AND " +
+                        "DEPENDS(person, \"works_at\", \"company\") BIND rel AND " +
+                        "NER(ORGANIZATION) BIND org";
         Query query = assertDoesNotThrow(() -> parseQuery(queryStr));
         VariableRegistry registry = query.variableRegistry();
         assertTrue(registry.isProduced("person"), "person should be produced");
@@ -67,7 +67,7 @@ public class BindingTest {
     @DisplayName("Test variable type check: Temporal")
     public void testVariableTypeTemporal() {
         String queryStr = "SELECT date FROM documents " +
-                        "WHERE DATE(> 2020) AS date";
+                        "WHERE DATE(> 2020) BIND date";
         Query query = assertDoesNotThrow(() -> parseQuery(queryStr));
         VariableRegistry registry = query.variableRegistry();
         assertEquals(VariableType.TEMPORAL, registry.getInferredType("date"));
@@ -77,7 +77,7 @@ public class BindingTest {
     @DisplayName("Test variable type check: Entity via OR")
     public void testVariableTypeEntityOr() {
         String queryStr = "SELECT entity FROM documents " +
-                        "WHERE NER(PERSON) AS entity OR NER(ORGANIZATION) AS entity";
+                        "WHERE NER(PERSON) BIND entity OR NER(ORGANIZATION) BIND entity";
         Query query = assertDoesNotThrow(() -> parseQuery(queryStr));
         VariableRegistry registry = query.variableRegistry();
         assertEquals(VariableType.ENTITY, registry.getInferredType("entity"));
@@ -87,7 +87,7 @@ public class BindingTest {
     @DisplayName("Test variable type check: Any (via CONTAINS)")
     public void testVariableTypeAny() {
         String queryStr = "SELECT text FROM documents " +
-                        "WHERE CONTAINS(\"test\") AS text";
+                        "WHERE CONTAINS(\"test\") BIND text";
         Query query = assertDoesNotThrow(() -> parseQuery(queryStr));
         VariableRegistry registry = query.variableRegistry();
         assertEquals(VariableType.TEXT_SPAN, registry.getInferredType("text"));
@@ -97,10 +97,10 @@ public class BindingTest {
     @DisplayName("Test complex query with multiple bindings and types")
     public void testComplexQuery() {
         String queryStr = "SELECT person, org, date FROM documents " +
-                        "WHERE NER(PERSON) AS person AND " +
-                        "NER(ORGANIZATION) AS org AND " +
-                        "DEPENDS(person, \"founded\", org) AS foundedRel AND " +
-                        "DATE(> 2018) AS date";
+                        "WHERE NER(PERSON) BIND person AND " +
+                        "NER(ORGANIZATION) BIND org AND " +
+                        "DEPENDS(person, \"founded\", org) BIND foundedRel AND " +
+                        "DATE(> 2018) BIND date";
         Query query = assertDoesNotThrow(() -> parseQuery(queryStr));
         VariableRegistry registry = query.variableRegistry();
         

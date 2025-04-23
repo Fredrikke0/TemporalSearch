@@ -25,7 +25,8 @@ grammar QueryLang;
 SELECT: 'SELECT';
 FROM: 'FROM';
 WHERE: 'WHERE';
-AS: 'AS'; 
+ALIAS: 'ALIAS';
+BIND: 'BIND';
 SNIPPET: 'SNIPPET';
 WINDOW: 'WINDOW';
 NER: 'NER';
@@ -111,7 +112,7 @@ BLOCK_COMMENT: '/*' .*? '*/' -> skip;
 
 query
     : SELECT selectList
-      FROM identifier (AS alias=identifier)?
+      FROM identifier (ALIAS alias=identifier)?
       joinClause*
       whereClause?
       granularityClause?
@@ -187,10 +188,10 @@ singleCondition
     ;
 
 dateExpression
-    : DATE LPAREN comparisonOp year=INTEGER_LITERAL RPAREN (AS var=variable)?        # DateComparisonExpression
-    | DATE LPAREN comparisonOp date=DATE_LITERAL RPAREN (AS var=variable)?           # DateLiteralComparisonExpression
+    : DATE LPAREN comparisonOp year=INTEGER_LITERAL RPAREN (BIND var=variable)?        # DateComparisonExpression
+    | DATE LPAREN comparisonOp date=DATE_LITERAL RPAREN (BIND var=variable)?           # DateLiteralComparisonExpression
     | DATE LPAREN dateOperator dateValue
-      (RADIUS radius=INTEGER_LITERAL unit=timeUnit)? RPAREN (AS var=variable)?       # DateOperatorExpression
+      (RADIUS radius=INTEGER_LITERAL unit=timeUnit)? RPAREN (BIND var=variable)?       # DateOperatorExpression
     ;
 
 dateOperator
@@ -236,7 +237,7 @@ limitClause
     ;
 
 nerExpression
-    : NER LPAREN type=entityType (COMMA termValue=term)? RPAREN (AS var=variable)?
+    : NER LPAREN type=entityType (COMMA termValue=term)? RPAREN (BIND var=variable)?
     ;
 
 entityType // Should align with VALID_NER_TYPES in QuerySemanticValidator (case-insensitive)
@@ -257,11 +258,11 @@ entityType // Should align with VALID_NER_TYPES in QuerySemanticValidator (case-
     ;
 
 containsExpression
-    : CONTAINS LPAREN terms+=STRING (COMMA terms+=STRING)* RPAREN (AS var=variable)?
+    : CONTAINS LPAREN terms+=STRING (COMMA terms+=STRING)* RPAREN (BIND var=variable)?
     ;
 
 dependsExpression
-    : DEPENDS LPAREN gov=governor COMMA rel=relation COMMA dep=dependent RPAREN (AS var=variable)?
+    : DEPENDS LPAREN gov=governor COMMA rel=relation COMMA dep=dependent RPAREN (BIND var=variable)?
     ;
 
 governor
@@ -321,7 +322,7 @@ subquery
       FROM identifier
       whereClause?
       RPAREN
-      AS alias=identifier
+      ALIAS alias=identifier
     ;
 
 joinCondition
@@ -342,7 +343,7 @@ temporalOp
     ;
 
 posExpression
-    : POS LPAREN tag=posTag (COMMA termValue=term)? RPAREN (AS var=variable)?
+    : POS LPAREN tag=posTag (COMMA termValue=term)? RPAREN (BIND var=variable)?
     ;
 
 posTag
