@@ -45,12 +45,12 @@ class SubqueryContextTest {
 
     private MatchDetail createMatchDetail(int docId, int sentenceId, String value) {
         Position pos = new Position(docId, sentenceId, 0, value.length(), LocalDate.now());
-        return new MatchDetail(value, ValueType.TERM, pos, "mockCond", null);
+        return new MatchDetail(value, ValueType.TERM, pos, (String) null);
     }
 
     private MatchDetail createMatchDetail(int docId, String value) {
         Position pos = new Position(docId, -1, 0, value.length(), LocalDate.now());
-        return new MatchDetail(value, ValueType.TERM, pos, "mockCond", null);
+        return new MatchDetail(value, ValueType.TERM, pos, (String) null);
     }
 
     @Test

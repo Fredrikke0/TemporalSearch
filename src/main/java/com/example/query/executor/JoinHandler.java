@@ -9,6 +9,7 @@ import com.example.query.model.JoinCondition;
 import com.example.query.model.Query;
 import com.example.query.model.SubquerySpec;
 import com.example.query.model.TemporalPredicate;
+import com.example.query.binding.JoinedMatch;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +46,7 @@ public class JoinHandler {
      * @return A QueryResult representing the result of the join.
      * @throws QueryExecutionException if the join execution fails.
      */
-    public QueryResult handleJoin(
+    public List<JoinedMatch> handleJoin(
             Query query,
             SubqueryContext subqueryContext)
             throws QueryExecutionException {
@@ -91,7 +92,7 @@ public class JoinHandler {
                      leftAlias, leftDetails.size(), rightAlias, rightDetails.size());
 
         // 3. Execute the join based on JoinCondition and MatchDetail properties.
-        List<MatchDetail> joinedDetails = new ArrayList<>();
+        List<JoinedMatch> joinedDetails = new ArrayList<>();
         Query.Granularity resultGranularity = query.granularity();
         TemporalPredicate predicate = joinCondition.temporalPredicate();
         JoinCondition.JoinType joinType = joinCondition.type();
@@ -169,9 +170,9 @@ public class JoinHandler {
                     }
 
                     if (match) {
-                        // Create a new MatchDetail containing info from both sides
-                        MatchDetail joinedDetail = new MatchDetail(left, right); 
-                        joinedDetails.add(joinedDetail);
+                        // Create a new JoinedMatch containing info from both sides
+                        JoinedMatch joinedMatch = new JoinedMatch(left, right);
+                        joinedDetails.add(joinedMatch);
                         
                         // REMOVED: break; // Allow multiple matches per left detail (standard INNER JOIN)
                     }
@@ -181,10 +182,11 @@ public class JoinHandler {
              logger.warn("Join type {} not yet implemented. Returning empty result.", joinType);
         }
 
-        logger.debug("Join execution completed. Resulting QueryResult has {} details.", joinedDetails.size());
+        logger.debug("Join execution completed. Resulting join has {} pairs.", joinedDetails.size());
 
         int granularitySize = query.granularitySize().orElse(1);
-        return new QueryResult(resultGranularity, granularitySize, joinedDetails);
+        // Return the joined pairs directly for now (update QueryExecutor/TableResultService to consume this)
+        return joinedDetails;
     }
 
     /**
@@ -233,36 +235,40 @@ public class JoinHandler {
      * @param key The key to extract (e.g., "?myVar", "document_id")
      * @return The extracted value, or null if key is not supported or value is null.
      */
-    private Object extractValueForKey(MatchDetail detail, String key) {
-        if (detail == null || key == null) {
+    private Object extractValueForKey(Object detailObj, String key) {
+        if (detailObj == null || key == null) {
             return null;
         }
-        
-        // Check if the key is a variable name first
-        if (key.startsWith("?")) {
-            if (key.equals(detail.variableName())) {
-                return detail.value();
-            } else {
-                // If the key is a variable, but doesn't match the detail's variable,
-                // check if this detail is a join result and the key matches the right variable
-                if (detail.isJoinResult() && detail.getRightVariableName().isPresent() && key.equals(detail.getRightVariableName().get())) {
-                    return detail.getRightValue().orElse(null); 
+        if (detailObj instanceof JoinedMatch joined) {
+            // Check left and right for variable match
+            if (key.startsWith("?")) {
+                if (joined.left().variableName().isPresent() && key.equals(joined.left().variableName().get())) {
+                    return joined.left().value();
+                } else if (key.equals(joined.getRightVariableName())) {
+                    return joined.getRightValue();
                 }
-                logger.trace("Variable key '{}' does not match variable '{}' in detail {}", key, detail.variableName(), detail);
-                return null; // Variable key specified but doesn't match this detail
+                return null;
             }
+            // Fallback to standard keys for left/right
+            return switch (key.toLowerCase()) {
+                case "document_id" -> joined.left().getDocumentId();
+                case "sentence_id" -> joined.left().getSentenceId() != -1 ? joined.left().getSentenceId() : null;
+                default -> null;
+            };
+        } else if (detailObj instanceof MatchDetail detail) {
+            if (key.startsWith("?")) {
+                if (detail.variableName().isPresent() && key.equals(detail.variableName().get())) {
+                    return detail.value();
+                }
+                return null;
+            }
+            return switch (key.toLowerCase()) {
+                case "document_id" -> detail.getDocumentId();
+                case "sentence_id" -> detail.getSentenceId() != -1 ? detail.getSentenceId() : null;
+                default -> null;
+            };
         }
-        
-        // Fallback to standard keys if key is not a variable
-        return switch (key.toLowerCase()) {
-            case "document_id" -> detail.getDocumentId();
-            case "sentence_id" -> detail.getSentenceId() != -1 ? detail.getSentenceId() : null;
-            // Removed 'value' and 'date' cases as they should be handled by variable name check now
-            default -> {
-                logger.trace("Unsupported standard join key '{}' for MatchDetail", key);
-                yield null;
-            }
-        };
+        return null;
     }
 
     /**
@@ -273,30 +279,29 @@ public class JoinHandler {
      * @param key The key to extract (e.g., "?myVar", "document_id")
      * @return The extracted type, or null if key is not supported or value is null.
      */
-    private ValueType extractTypeForKey(MatchDetail detail, String key) {
-        if (detail == null || key == null) {
+    private ValueType extractTypeForKey(Object detailObj, String key) {
+        if (detailObj == null || key == null) {
             return null;
         }
-        
-        // Check if the key is a variable name first
-        if (key.startsWith("?")) {
-            if (key.equals(detail.variableName())) {
-                return detail.valueType();
-            } else {
-                 // If the key is a variable, but doesn't match the detail's variable,
-                // check if this detail is a join result and the key matches the right variable
-                 if (detail.isJoinResult() && detail.getRightVariableName().isPresent() && key.equals(detail.getRightVariableName().get())) {
-                     return detail.getRightValueType().orElse(null); // Return right type if variable matches
-                 }
-                return null; // Variable key specified but doesn't match this detail
+        if (detailObj instanceof JoinedMatch joined) {
+            if (key.startsWith("?")) {
+                if (joined.left().variableName().isPresent() && key.equals(joined.left().variableName().get())) {
+                    return joined.left().valueType();
+                } else if (key.equals(joined.getRightVariableName())) {
+                    return joined.getRightValueType();
+                }
+                return null;
             }
+            return null;
+        } else if (detailObj instanceof MatchDetail detail) {
+            if (key.startsWith("?")) {
+                if (detail.variableName().isPresent() && key.equals(detail.variableName().get())) {
+                    return detail.valueType();
+                }
+                return null;
+            }
+            return null;
         }
-        
-        // Fallback to standard keys if key is not a variable
-        return switch (key.toLowerCase()) {
-            // Only return type for keys where it's explicitly known
-            // Removed cases for document_id, sentence_id, value, date as they are handled elsewhere or via variable check
-            default -> null; // Return null for any standard keys passed here
-        };
+        return null;
     }
 } 

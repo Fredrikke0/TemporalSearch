@@ -95,11 +95,9 @@ public class QueryResult {
 
         Map<String, List<Object>> tempBindings = new HashMap<>();
         for (MatchDetail detail : allDetails) {
-            if (detail.variableName() != null && detail.value() != null) {
-                // Ensure variable name starts with '?'
-                String normalizedVarName = detail.variableName().startsWith("?")
-                                           ? detail.variableName()
-                                           : "?" + detail.variableName();
+            if (detail.variableName().isPresent() && detail.value() != null) {
+                String varName = detail.variableName().get();
+                String normalizedVarName = varName.startsWith("?") ? varName : "?" + varName;
                 tempBindings.computeIfAbsent(normalizedVarName, k -> new ArrayList<>()).add(detail.value());
             }
         }

@@ -36,24 +36,21 @@ public class TitleColumn implements SelectColumn {
     }
     
     @Override
-    public void populateColumn(Table table, int rowIndex, List<MatchDetail> detailsForUnit, 
+    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
                               String source,
                               Map<String, IndexAccessInterface> indexes) {
         StringColumn column = (StringColumn) table.column(getColumnName());
-        
-        // Get documentId from the first detail in the list (all should share the same docId)
         if (detailsForUnit == null || detailsForUnit.isEmpty()) {
             logger.warn("Received empty detail list for row {} in TitleColumn.", rowIndex);
             column.setMissing(rowIndex);
             return;
         }
-        int documentId = detailsForUnit.get(0).getDocumentId();
-
+        // Cast to List<MatchDetail>
+        @SuppressWarnings("unchecked")
+        List<MatchDetail> matchDetails = (List<MatchDetail>) detailsForUnit;
+        int documentId = matchDetails.get(0).getDocumentId();
         logger.debug("Getting title for document {} from source {}", documentId, source);
-        
-        // Get title using the SqliteAccessor singleton and the passed source
         String value = SqliteAccessor.getInstance().getMetadata(source, documentId, "title");
-        
         column.set(rowIndex, value != null ? value : "");
     }
     

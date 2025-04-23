@@ -155,9 +155,9 @@ class PosConditionExecutorTest {
         Set<Integer> docIds = result.getAllDetails().stream().map(MatchDetail::getDocumentId).collect(Collectors.toSet());
         assertTrue(docIds.containsAll(Set.of(1, 2)), "Docs 1 and 2 should be present");
         
-        assertTrue(result.getAllDetails().stream().allMatch(d -> "?adjVar".equals(d.variableName())), "Variable name mismatch");
+        assertTrue(result.getAllDetails().stream().allMatch(d -> d.variableName().isPresent() && d.variableName().get().equals("?adjVar")), "Variable name mismatch");
         // Assert the correct ValueType based on the modified executor
-        assertTrue(result.getAllDetails().stream().allMatch(d -> d.valueType() == ValueType.TERM), "ValueType mismatch");
+        assertTrue(result.getAllDetails().stream().allMatch(d -> d.valueType() == ValueType.POS_TERM), "ValueType mismatch");
 
         // Check captured values (should be the original tag "JJ")
         Set<String> capturedValues = result.getAllDetails().stream().map(d -> (String) d.value()).collect(Collectors.toSet());

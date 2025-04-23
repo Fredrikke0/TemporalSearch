@@ -110,9 +110,8 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                     // Bind variableName if isVariable is true.
                     MatchDetail detail = new MatchDetail(
                         valueString,        // Value is the POS tag itself
-                        ValueType.TERM,     // Use TERM as the closest type for the tag string
+                        ValueType.POS_TERM,     // Use POS_TERM as the closest type for the tag string
                         position,
-                        conditionId,
                         isVariable ? variableName : null // Bind variable if needed
                     );
                     details.add(detail);

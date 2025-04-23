@@ -37,7 +37,7 @@ public class TimestampColumn implements SelectColumn {
     }
     
     @Override
-    public void populateColumn(Table table, int rowIndex, List<MatchDetail> detailsForUnit, 
+    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
                                String source,
                                Map<String, IndexAccessInterface> indexes) {
         StringColumn column = (StringColumn) table.column(getColumnName());
@@ -48,7 +48,9 @@ public class TimestampColumn implements SelectColumn {
             column.setMissing(rowIndex);
             return;
         }
-        int documentId = detailsForUnit.get(0).getDocumentId();
+        // Cast to List<MatchDetail>
+        MatchDetail detail = (MatchDetail) detailsForUnit.get(0);
+        int documentId = detail.getDocumentId();
 
         logger.debug("Getting timestamp for document {} from source {}", documentId, source);
         

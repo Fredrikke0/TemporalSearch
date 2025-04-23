@@ -107,7 +107,7 @@ public final class NotExecutor implements ConditionExecutor<Not> {
             SimpleEntry<Integer, Integer> pair = (SimpleEntry<Integer, Integer>) id;
             pos = new Position(pair.getKey(), pair.getValue(), -1, -1, null);
         }
-        return new MatchDetail("NOT_MATCH", ValueType.TERM, pos, "not_result", null);
+        return new MatchDetail("NOT_MATCH", ValueType.TERM, pos, (String) null);
     }
 
     /**

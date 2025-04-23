@@ -236,7 +236,7 @@ class NotConditionExecutorTest {
 
     private MatchDetail createMatchDetail(int docId, int sentenceId, String value) {
         Position pos = new Position(docId, sentenceId, 0, 0, LocalDate.now());
-        return new MatchDetail(value, ValueType.TERM, pos, "mock", null);
+        return new MatchDetail(value, ValueType.TERM, pos, (String) null);
     }
 
     private MatchDetail createMatchDetail(int docId, String value) {

@@ -280,7 +280,6 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                 valueString, // Always use the reconstructed value with spaces
                 ValueType.TERM,
                 position,
-                condId,
                 isVariable ? variableName : null // Bind variable if needed
             );
             details.add(detail);
@@ -321,8 +320,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                         valueString, // Always use the reconstructed value with spaces
                         ValueType.TERM,
                         position,
-                        condId,
-                        isVariable ? variableName : null // Bind variable
+                        isVariable ? variableName : null // Bind variable if needed
                     );
                     details.add(detail);
                 }

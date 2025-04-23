@@ -70,61 +70,58 @@ public class VariableColumn implements SelectColumn {
         return StringColumn.create(columnName);
     }
     
+    @SuppressWarnings("unchecked")
     @Override
-    public void populateColumn(Table table, int rowIndex, List<MatchDetail> detailsForUnit, 
+    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
                                String source,
                                Map<String, IndexAccessInterface> indexes) {
-        
         logger.trace("Populating row {} for column '{}' (alias: {}, targetVar: {}). Details count: {}", 
                       rowIndex, columnName, alias, targetVariableName, detailsForUnit.size());
 
         Optional<Object> valueOpt = Optional.empty();
 
-        // Iterate through details to find the one matching our target variable and alias context
-        for (MatchDetail detail : detailsForUnit) {
-            if (alias == null) {
-                // Unqualified variable (?var) - look in the left/main part of the detail
-                if (targetVariableName.equals(detail.variableName())) {
-                    valueOpt = Optional.ofNullable(detail.value());
-                    logger.trace("Found match for unqualified '{}' in detail: {}", targetVariableName, detail);
-                    break; // Found the first match
+        for (Object obj : detailsForUnit) {
+            if (obj instanceof com.example.query.binding.JoinedMatch joined) {
+                // Handle join result: check left and right
+                if (alias == null) {
+                    if (targetVariableName.equals(joined.getLeftVariableName())) {
+                        valueOpt = Optional.ofNullable(joined.getLeftValue());
+                        break;
+                    } else if (targetVariableName.equals(joined.getRightVariableName())) {
+                        valueOpt = Optional.ofNullable(joined.getRightValue());
+                        break;
+                    }
+                } else {
+                    if ("left".equals(alias) && targetVariableName.equals(joined.getLeftVariableName())) {
+                        valueOpt = Optional.ofNullable(joined.getLeftValue());
+                        break;
+                    } else if ("right".equals(alias) && targetVariableName.equals(joined.getRightVariableName())) {
+                        valueOpt = Optional.ofNullable(joined.getRightValue());
+                        break;
+                    }
                 }
-            } else {
-                // Qualified variable (alias.?var) - look in the right part of the detail
-                if (detail.isJoinResult() && 
-                    detail.getRightVariableName().isPresent() && 
-                    targetVariableName.equals(detail.getRightVariableName().get())) 
-                {
-                    valueOpt = detail.getRightValue(); // Already Optional<Object>
-                    logger.trace("Found match for qualified '{}' in right side of join detail: {}", columnName, detail);
-                    break; // Found the first match
+            } else if (obj instanceof MatchDetail detail) {
+                if (alias == null) {
+                    if (targetVariableName.equals(detail.variableName().orElse(null))) {
+                        valueOpt = Optional.ofNullable(detail.value());
+                        break;
+                    }
                 }
-                 // As a fallback or alternative (depending on join implementation), 
-                 // check if the detail itself represents the right side *directly*
-                 // This depends on how JoinExecutor creates the final list of MatchDetails.
-                 // Let's add a log for this case.
-                 else if (targetVariableName.equals(detail.variableName())) {
-                     logger.trace("Checking potential direct match for qualified '{}' in detail: {}", columnName, detail);
-                     // If this detail directly represents the value for alias.?var, uncommenting the next line might be needed
-                     // valueOpt = Optional.ofNullable(detail.value());
-                     // break;
-                 }
             }
         }
-            
+
         Column<?> column = table.column(columnName);
         if (!(column instanceof StringColumn strCol)) {
             logger.error("VariableColumn '{}' requires a StringColumn, but found {}", columnName, (column != null ? column.type() : "null"));
-            return; // Cannot proceed if column type is wrong
+            return;
         }
-        
+
         if (valueOpt.isPresent()) {
             Object value = valueOpt.get();
-            strCol.set(rowIndex, value != null ? value.toString() : ""); // Set value from the found detail
+            strCol.set(rowIndex, value != null ? value.toString() : "");
             logger.trace("Set value '{}' for column '{}' at row {}", value, columnName, rowIndex);
         } else {
-            // No detail matched this variable for this unit
-            strCol.setMissing(rowIndex); // Mark as missing
+            strCol.setMissing(rowIndex);
             logger.trace("No matching detail found for column '{}' at row {}, setting missing.", columnName, rowIndex);
         }
     }

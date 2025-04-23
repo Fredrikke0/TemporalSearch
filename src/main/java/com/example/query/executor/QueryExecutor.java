@@ -101,12 +101,12 @@ public class QueryExecutor {
      *
      * @param query The query to execute
      * @param indexes Map of index name to IndexAccessInterface
-     * @return Set of matches (document or sentence level based on query granularity)
+     * @return QueryResult or List<JoinedMatch> depending on query type
      * @throws QueryExecutionException if execution fails
      */
-    public QueryResult execute(Query query, Map<String, IndexAccessInterface> indexes) 
+    public Object execute(Query query, Map<String, IndexAccessInterface> indexes) 
             throws QueryExecutionException {
-        // Call executeWithContext, which now returns QueryResult
+        // Call executeWithContext, which now returns QueryResult or List<JoinedMatch>
         return executeWithContext(query, indexes, new SubqueryContext());
     }
     
@@ -117,10 +117,10 @@ public class QueryExecutor {
      * @param query The query to execute
      * @param indexes Map of index name to IndexAccessInterface
      * @param subqueryContext Context containing results of previously executed subqueries
-     * @return Set of matches
+     * @return QueryResult or List<JoinedMatch> depending on query type
      * @throws QueryExecutionException if execution fails
      */
-    public QueryResult executeWithContext(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext) 
+    public Object executeWithContext(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext) 
             throws QueryExecutionException {
         logger.debug("Executing query: {}", query);
         
@@ -168,8 +168,9 @@ public class QueryExecutor {
             
             logger.debug("Delegating JOIN execution to JoinHandler.");
             JoinHandler joinHandler = new JoinHandler(); 
-            QueryResult joinResults = joinHandler.handleJoin(query, subqueryContext); 
-            logger.debug("Join completed. Returning QueryResult with {} details.", joinResults.getAllDetails().size());
+            List<com.example.query.binding.JoinedMatch> joinResults = joinHandler.handleJoin(query, subqueryContext); 
+            logger.debug("Join completed. Returning List<JoinedMatch> with {} pairs.", joinResults.size());
+            // Return as Object for now; downstream consumers must handle List<JoinedMatch> for join queries
             return joinResults;
         } else {
             // If no JOIN, return the result from executing the main conditions directly.
@@ -190,7 +191,7 @@ public class QueryExecutor {
             
             logger.debug("Executing subquery: {}", subquery);
             
-            QueryResult subqueryResults = executeWithContext(subquery.subquery(), indexes, subqueryContext);
+            QueryResult subqueryResults = (QueryResult) executeWithContext(subquery.subquery(), indexes, subqueryContext);
             
             subqueryContext.addQueryResult(subquery, subqueryResults); 
             logger.debug("Subquery '{}' executed, stored QueryResult with {} details.", 

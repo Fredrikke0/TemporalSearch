@@ -131,13 +131,13 @@ class QueryExecutorTest {
          // Create a placeholder position
         Position pos = new Position(docId, sentenceId, 0, value.length(), LocalDate.now());
         // Use the 5-argument constructor with null for variableName
-        return new MatchDetail(value, ValueType.TERM, pos, "mockCondition", null);
+        return new MatchDetail(value, ValueType.TERM, pos, (String) null);
     }
      private MatchDetail createMatchDetail(int docId, String value) {
          // Create a placeholder position for document level
         Position pos = new Position(docId, -1, 0, value.length(), LocalDate.now());
         // Use the 5-argument constructor with null for variableName
-        return new MatchDetail(value, ValueType.TERM, pos, "mockCondition", null);
+        return new MatchDetail(value, ValueType.TERM, pos, (String) null);
     }
 
     @Test
@@ -172,7 +172,7 @@ class QueryExecutorTest {
             .thenReturn(expectedAndResult);
 
         // Execute query
-        QueryResult results = queryExecutor.execute(query, indexes);
+        QueryResult results = (QueryResult) queryExecutor.execute(query, indexes);
         
         // Verify results - AND should result in intersection (doc 2)
         assertNotNull(results);
@@ -213,7 +213,7 @@ class QueryExecutorTest {
             .thenReturn(expectedOrResult);
 
         // Execute query
-        QueryResult results = queryExecutor.execute(query, indexes);
+        QueryResult results = (QueryResult) queryExecutor.execute(query, indexes);
         
         // Verify results - OR should result in union (docs 1, 2, 3)
         assertNotNull(results);
@@ -262,7 +262,7 @@ class QueryExecutorTest {
                 .thenReturn(notResults);
 
         // Execute query
-        QueryResult results = queryExecutor.execute(query, indexes);
+        QueryResult results = (QueryResult) queryExecutor.execute(query, indexes);
         
         // Verify results - Should contain docs not matched by Contains (e.g., 3, 4 in this mock)
         assertNotNull(results);
@@ -313,7 +313,7 @@ class QueryExecutorTest {
 
 
         // Execute query - Uses the factory to get the mockLogicalExecutor for the orCondition
-        QueryResult results = queryExecutor.execute(query, indexes);
+        QueryResult results = (QueryResult) queryExecutor.execute(query, indexes);
 
         // Verify final results based on the mocked output
         assertNotNull(results);
@@ -332,19 +332,15 @@ class QueryExecutorTest {
 
     @Test
     void testExecuteWithJoinCondition() throws QueryExecutionException {
-        // TODO: Refactor this test significantly (assertions might need more updates)
-
-        // --- REINSTATE SETUP CODE --- 
-        // 1. Setup Subqueries
+        // Setup Subqueries
         Contains containsConditionLeft = new Contains("apple");
         Query subQueryLeft = new Query("subSource", Collections.singletonList(containsConditionLeft), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
         SubquerySpec subquerySpecLeft = new SubquerySpec(subQueryLeft, "leftAlias");
         Contains containsConditionRight = new Contains("banana");
         Query subQueryRight = new Query("subSource", Collections.singletonList(containsConditionRight), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
         SubquerySpec subquerySpecRight = new SubquerySpec(subQueryRight, "rightAlias");
-        // --- END REINSTATE --- 
         
-        // 2. Setup Main Query with JOIN (remains the same)
+        // Main Query with JOIN
         JoinCondition joinCondition = new JoinCondition("leftAlias.document_id", "rightAlias.document_id", JoinCondition.JoinType.INNER, TemporalPredicate.EQUAL, Optional.empty());
         Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty());
 
@@ -365,47 +361,40 @@ class QueryExecutorTest {
                 .thenReturn(mockRightResult);
 
         // Execute Main Query
-        QueryResult finalResults = queryExecutor.execute(mainQuery, indexes); 
+        Object joinResultsObj = queryExecutor.execute(mainQuery, indexes); 
+        @SuppressWarnings("unchecked")
+        List<com.example.query.binding.JoinedMatch> joinResults = (List<com.example.query.binding.JoinedMatch>) joinResultsObj;
 
         // Verify Interactions
         verify(mockContainsExecutor).execute(eq(containsConditionLeft), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()); 
         verify(mockContainsExecutor).execute(eq(containsConditionRight), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString());
 
         // Assert Final Results
-        assertNotNull(finalResults);
-        assertEquals(1, finalResults.getAllDetails().size(), "Expected 1 match detail after join"); 
-        assertTrue(finalResults.getAllDetails().stream().anyMatch(d -> d.getDocumentId() == 2), "Expected match for document ID 2");
-        assertTrue(finalResults.getAllDetails().stream().anyMatch(d -> d.value().equals("apple")), "Expected value 'apple' from left side");
-
-        // Check the single resulting detail
-        MatchDetail resultDetail = finalResults.getAllDetails().get(0);
-        assertEquals(2, resultDetail.getDocumentId(), "Expected left document ID 2");
-        assertEquals("apple", resultDetail.value(), "Expected value 'apple' from left side");
-        assertTrue(resultDetail.isJoinResult(), "Detail should indicate it is a join result");
-        assertEquals(Optional.of(2), resultDetail.getRightDocumentId(), "Expected right document ID 2");
-        assertEquals(Optional.empty(), resultDetail.getRightSentenceId(), "Expected empty right sentence ID for document granularity join");
+        assertNotNull(joinResults);
+        assertEquals(1, joinResults.size(), "Expected 1 joined match after join");
+        com.example.query.binding.JoinedMatch result = joinResults.get(0);
+        assertEquals(2, result.left().getDocumentId(), "Expected left document ID 2");
+        assertEquals("apple", result.left().value(), "Expected value 'apple' from left side");
+        assertEquals(2, result.right().getDocumentId(), "Expected right document ID 2");
+        assertEquals("banana", result.right().value(), "Expected value 'banana' from right side");
     }
 
     @Test
     void testExecuteWithJoinConditionSentenceGranularity() throws QueryExecutionException {
-        // TODO: Refactor this test similarly (assertions might need more updates)
-
-        // --- REINSTATE SETUP CODE --- 
-        // 1. Setup Subqueries (SENTENCE Granularity)
+        // Setup Subqueries (SENTENCE Granularity)
         Contains containsConditionLeft = new Contains("apple");
         Query subQueryLeft = new Query("subSource", Collections.singletonList(containsConditionLeft), Collections.emptyList(), Optional.empty(), Query.Granularity.SENTENCE, Optional.of(0), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
         SubquerySpec subquerySpecLeft = new SubquerySpec(subQueryLeft, "leftAlias");
         Contains containsConditionRight = new Contains("banana");
         Query subQueryRight = new Query("subSource", Collections.singletonList(containsConditionRight), Collections.emptyList(), Optional.empty(), Query.Granularity.SENTENCE, Optional.of(0), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
         SubquerySpec subquerySpecRight = new SubquerySpec(subQueryRight, "rightAlias");
-        // --- END REINSTATE --- 
-
-        // 2. Setup Main Query with JOIN (SENTENCE Granularity, join on doc ID)
+        
+        // Main Query with JOIN (SENTENCE Granularity)
         JoinCondition joinCondition = new JoinCondition("leftAlias.document_id", "rightAlias.document_id", JoinCondition.JoinType.INNER, TemporalPredicate.EQUAL, Optional.empty());
         Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.SENTENCE, Optional.of(0), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty());
 
         // Mock Subquery Results
-         QueryResult mockLeftResult = createMockQueryResult(Query.Granularity.SENTENCE, 0, List.of(
+        QueryResult mockLeftResult = createMockQueryResult(Query.Granularity.SENTENCE, 0, List.of(
                 createMatchDetail(1, 1, "apple"), createMatchDetail(2, 5, "apple") 
         ));
         QueryResult mockRightResult = createMockQueryResult(Query.Granularity.SENTENCE, 0, List.of(
@@ -421,41 +410,37 @@ class QueryExecutorTest {
                 .thenReturn(mockRightResult);
         
         // Execute Main Query
-        QueryResult finalResults = queryExecutor.execute(mainQuery, indexes); 
+        Object joinResultsObj = queryExecutor.execute(mainQuery, indexes); 
+        @SuppressWarnings("unchecked")
+        List<com.example.query.binding.JoinedMatch> joinResults = (List<com.example.query.binding.JoinedMatch>) joinResultsObj;
 
         // Verify Interactions
         verify(mockContainsExecutor).execute(eq(containsConditionLeft), eq(indexes), eq(Query.Granularity.SENTENCE), eq(0), anyString());
         verify(mockContainsExecutor).execute(eq(containsConditionRight), eq(indexes), eq(Query.Granularity.SENTENCE), eq(0), anyString());
 
         // Assert Final Results
-        assertNotNull(finalResults);
-        assertEquals(1, finalResults.getAllDetails().size(), "Expected 1 sentence match detail after join on doc ID");
-
-        // Check the single resulting detail
-        MatchDetail resultDetail = finalResults.getAllDetails().get(0);
-        assertEquals(2, resultDetail.getDocumentId(), "Expected left document ID 2");
-        assertEquals(5, resultDetail.getSentenceId(), "Expected left sentence ID 5");
-        assertEquals("apple", resultDetail.value(), "Expected value 'apple' from left side");
-        assertTrue(resultDetail.isJoinResult(), "Detail should indicate it is a join result");
-        assertEquals(Optional.of(2), resultDetail.getRightDocumentId(), "Expected right document ID 2");
-        assertEquals(Optional.of(8), resultDetail.getRightSentenceId(), "Expected right sentence ID 8");
+        assertNotNull(joinResults);
+        assertEquals(1, joinResults.size(), "Expected 1 joined match after join on doc ID");
+        com.example.query.binding.JoinedMatch result = joinResults.get(0);
+        assertEquals(2, result.left().getDocumentId(), "Expected left document ID 2");
+        assertEquals(5, result.left().getSentenceId(), "Expected left sentence ID 5");
+        assertEquals("apple", result.left().value(), "Expected value 'apple' from left side");
+        assertEquals(2, result.right().getDocumentId(), "Expected right document ID 2");
+        assertEquals(8, result.right().getSentenceId(), "Expected right sentence ID 8");
+        assertEquals("banana", result.right().value(), "Expected value 'banana' from right side");
     }
 
     @Test
     void testExecuteWithJoinConditionEmptySubquery() throws QueryExecutionException {
-        // TODO: Refactor this test
-        
-        // --- REINSTATE SETUP CODE --- 
-        // 1. Setup Subqueries (Document Granularity)
+        // Setup Subqueries (Document Granularity)
         Contains containsConditionLeft = new Contains("apple");
         Query subQueryLeft = new Query("subSource", Collections.singletonList(containsConditionLeft), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
         SubquerySpec subquerySpecLeft = new SubquerySpec(subQueryLeft, "leftAlias");
         Contains containsConditionRight = new Contains("nonexistent"); // Condition yields no results
         Query subQueryRight = new Query("subSource", Collections.singletonList(containsConditionRight), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
         SubquerySpec subquerySpecRight = new SubquerySpec(subQueryRight, "rightAlias");
-        // --- END REINSTATE --- 
-
-        // 2. Setup Main Query with JOIN (Document Granularity)
+        
+        // Main Query with JOIN (Document Granularity)
         JoinCondition joinCondition = new JoinCondition("leftAlias.document_id", "rightAlias.document_id", JoinCondition.JoinType.INNER, TemporalPredicate.EQUAL, Optional.empty());
         Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty());
 
@@ -474,14 +459,16 @@ class QueryExecutorTest {
                 .thenReturn(mockRightResult); 
 
         // Execute Main Query
-        QueryResult finalResults = queryExecutor.execute(mainQuery, indexes); 
+        Object joinResultsObj = queryExecutor.execute(mainQuery, indexes); 
+        @SuppressWarnings("unchecked")
+        List<com.example.query.binding.JoinedMatch> joinResults = (List<com.example.query.binding.JoinedMatch>) joinResultsObj;
 
         // Verify Interactions
         verify(mockContainsExecutor).execute(eq(containsConditionLeft), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString());
         verify(mockContainsExecutor).execute(eq(containsConditionRight), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString());
 
         // Assert Final Results
-        assertNotNull(finalResults);
-        assertTrue(finalResults.getAllDetails().isEmpty(), "Expected empty result set for INNER JOIN with one empty subquery result");
+        assertNotNull(joinResults);
+        assertTrue(joinResults.isEmpty(), "Expected empty result set for INNER JOIN with one empty subquery result");
     }
 } 

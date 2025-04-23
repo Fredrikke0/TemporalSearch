@@ -199,7 +199,7 @@ public class TablesawQueryPerformanceTest {
                 valueType = ValueType.TERM;
             }
             
-            matches.add(new MatchDetail(value, valueType, pos, conditionId, variableName));
+            matches.add(new MatchDetail(value, valueType, pos, variableName));
         }
         return matches;
     }
@@ -213,7 +213,6 @@ public class TablesawQueryPerformanceTest {
         IntColumn endCol = IntColumn.create("end_pos");
         DateColumn docDateCol = DateColumn.create("doc_date");
         StringColumn valueTypeCol = StringColumn.create("value_type");
-        StringColumn conditionIdCol = StringColumn.create("condition_id");
         BooleanColumn hasVariableCol = BooleanColumn.create("has_variable");
         
         for (MatchDetail md : matches) {
@@ -223,13 +222,12 @@ public class TablesawQueryPerformanceTest {
             endCol.append(md.getEndPosition());
             docDateCol.append(md.getDocumentDate()); // Assuming Position has getTimestamp returning LocalDate
             valueTypeCol.append(md.valueType().name());
-            conditionIdCol.append(md.conditionId());
             hasVariableCol.append(md.isVariableBinding());
         }
         
         return Table.create("MatchDetailTable",
                 docIdCol, sentIdCol, startCol, endCol, docDateCol,
-                valueTypeCol, conditionIdCol, hasVariableCol);
+                valueTypeCol, hasVariableCol);
     }
     
     // --- Benchmark Runner ---

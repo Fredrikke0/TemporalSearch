@@ -96,7 +96,7 @@ public class SentenceGranularityTest {
     }
 
     // Updated execute method takes the map of indexes containing the mock
-    private QueryResult executeSentenceQuery(String queryString, Map<String, IndexAccessInterface> testIndexes) 
+    private Object executeSentenceQuery(String queryString, Map<String, IndexAccessInterface> testIndexes) 
         throws QueryParseException, QueryExecutionException {
         Query query = queryParser.parse(queryString);
         assertTrue(query.granularity() == Query.Granularity.SENTENCE || query.granularitySize().isPresent(), 
@@ -117,7 +117,7 @@ public class SentenceGranularityTest {
         IndexAccess mockIndex = setupMockIndexBehavior(mockData);
         Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndex); // Use the mock with correct type
         
-        QueryResult results = executeSentenceQuery(queryString, testIndexes);
+        QueryResult results = (QueryResult) executeSentenceQuery(queryString, testIndexes);
         
         assertNotNull(results);
         assertEquals(Query.Granularity.SENTENCE, results.getGranularity());
@@ -138,7 +138,7 @@ public class SentenceGranularityTest {
         IndexAccess mockIndex = setupMockIndexBehavior(mockData);
         Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndex); // Use the mock with correct type
 
-        QueryResult results = executeSentenceQuery(queryString, testIndexes);
+        QueryResult results = (QueryResult) executeSentenceQuery(queryString, testIndexes);
 
         assertNotNull(results);
         assertEquals(Query.Granularity.SENTENCE, results.getGranularity());
@@ -161,7 +161,7 @@ public class SentenceGranularityTest {
         IndexAccess mockIndex = setupMockIndexBehavior(mockData);
         Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndex); // Use the mock with correct type
         
-        QueryResult results = executeSentenceQuery(queryString, testIndexes);
+        QueryResult results = (QueryResult) executeSentenceQuery(queryString, testIndexes);
 
         assertNotNull(results);
         assertEquals(Query.Granularity.SENTENCE, results.getGranularity());

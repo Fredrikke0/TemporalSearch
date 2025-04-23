@@ -101,7 +101,7 @@ class NerConditionExecutorTest {
         assertTrue(docIds.containsAll(Set.of(1, 3)), "Result should contain document IDs 1 and 3");
         
         assertTrue(result.getAllDetails().stream().allMatch(d -> "PERSON".equals(d.value()) && d.valueType() == ValueType.ENTITY), "All results should be PERSON entities"); 
-        assertTrue(result.getAllDetails().stream().allMatch(d -> d.variableName() == null), "Variable name should be null for non-variable query");
+        assertTrue(result.getAllDetails().stream().allMatch(d -> d.variableName().isEmpty()), "Variable name should be null for non-variable query");
 
         verify(nerIndex).iterator(); 
         verify(mockIterator).seek(argThat(k -> Arrays.equals(k, expectedKeyPrefix.getBytes())));
@@ -180,7 +180,7 @@ class NerConditionExecutorTest {
         
         assertTrue(result.getAllDetails().stream().allMatch(d -> d.getDocumentId() == 4), "All matches should be from document 4");
         
-        assertTrue(result.getAllDetails().stream().allMatch(d -> "?orgVar".equals(d.variableName())), "Variable name should be '?orgVar'");
+        assertTrue(result.getAllDetails().stream().allMatch(d -> d.variableName().filter(v -> v.equals("?orgVar")).isPresent()), "Variable name should be '?orgVar'");
         assertTrue(result.getAllDetails().stream().allMatch(d -> d.valueType() == ValueType.ENTITY), "ValueType should be ENTITY");
 
         Set<String> capturedValues = result.getAllDetails().stream().map(d -> (String) d.value()).collect(Collectors.toSet());

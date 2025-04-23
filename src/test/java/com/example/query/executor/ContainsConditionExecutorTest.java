@@ -286,10 +286,9 @@ public class ContainsConditionExecutorTest {
         assertTrue(result.getAllDetails().stream().anyMatch(d -> d.getDocumentId() == 2 && d.getSentenceId() == 1));
 
         // Verify variable name is correctly set in MatchDetail
-        assertTrue(result.getAllDetails().stream().allMatch(d -> variableName.equals(d.variableName())),
+        assertTrue(result.getAllDetails().stream().allMatch(d -> d.variableName().filter(v -> v.equals(variableName)).isPresent()),
                    "Variable name should be set in MatchDetail");
-        assertTrue(result.getAllDetails().stream().allMatch(d -> searchTerm.equals(d.value())),
-                   "Value in MatchDetail should be the search term");
+        assertTrue(result.getAllDetails().stream().allMatch(d -> d.value().equals(searchTerm) && d.valueType() == ValueType.TERM));
     }
 
     @Test
@@ -303,7 +302,7 @@ public class ContainsConditionExecutorTest {
     // Helper to create simple MatchDetail (from QueryExecutorTest)
     private MatchDetail createMatchDetail(int docId, int sentenceId, int begin, int end, String value) {
         Position pos = new Position(docId, sentenceId, begin, end, LocalDate.now());
-        return new MatchDetail(value, ValueType.TERM, pos, "mockCond", null);
+        return new MatchDetail(value, ValueType.TERM, pos, (String) null);
     }
 
     @Test
@@ -435,7 +434,8 @@ public class ContainsConditionExecutorTest {
         MatchDetail detail = result.getAllDetails().get(0);
         assertEquals(5, detail.getDocumentId());
         assertEquals(searchTerm, detail.value());
-        assertEquals(variableName, detail.variableName());
+        assertTrue(detail.variableName().filter(v -> v.equals(variableName)).isPresent());
         assertEquals(ValueType.TERM, detail.valueType());
+        assertEquals(variableName, detail.variableName().orElse(null));
     }
 } 

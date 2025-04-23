@@ -436,7 +436,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                      }
                      LocalDate specificDate = dateLookup.get(entry.dateId());
                      // Use the specificDate as the value, use the entry's position
-                     details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), conditionId, variableName));
+                     details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), variableName));
                  }
                  // --- End MatchDetail Creation ---
 
@@ -515,7 +515,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                              // Create MatchDetail for each position matching the date criteria
                                          // Use docDate object (actual matched date) as the value when binding variables
                                          Object matchValue = (variableName != null) ? docDate : intervalStringFromDate(docDate); // Or use interval string?
-                                         details.add(new MatchDetail(matchValue, ValueType.DATE, position, conditionId, variableName));
+                                         details.add(new MatchDetail(matchValue, ValueType.DATE, position, variableName));
                                          matchesFound++;
                                      }
                                  }

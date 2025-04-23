@@ -12,6 +12,7 @@ import com.example.query.model.Query;
 import com.example.query.model.SelectColumn;
 import com.example.query.model.VariableColumn;
 import com.example.query.executor.SubqueryContext;
+import com.example.query.binding.JoinedMatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import tech.tablesaw.api.*;
@@ -44,7 +45,17 @@ class TableResultServiceTest {
     // Helper to create MatchDetail
     private MatchDetail createMatchDetail(int docId, int sentenceId, String value, ValueType type, String varName) {
         Position pos = new Position(docId, sentenceId, 0, 0, LocalDate.now());
-        return new MatchDetail(value, type, pos, "mockCond", varName);
+        return new MatchDetail(value, type, pos, varName);
+    }
+
+    // Helper to create JoinedMatch
+    private JoinedMatch createJoinedMatch(int leftDocId, int leftSentId, String leftValue, String leftVar,
+                                          int rightDocId, int rightSentId, String rightValue, String rightVar) {
+        Position leftPos = new Position(leftDocId, leftSentId, 0, 0, LocalDate.now());
+        Position rightPos = new Position(rightDocId, rightSentId, 0, 0, LocalDate.now());
+        MatchDetail left = new MatchDetail(leftValue, ValueType.TERM, leftPos, leftVar);
+        MatchDetail right = new MatchDetail(rightValue, ValueType.TERM, rightPos, rightVar);
+        return new JoinedMatch(left, right);
     }
 
     @Test
@@ -83,13 +94,15 @@ class TableResultServiceTest {
         assertEquals(3, table.rowCount(), "Should have 3 rows for 3 sentences");
         assertTrue(table.columnNames().contains("document_id"), "Should contain document_id column");
         assertTrue(table.columnNames().contains("sentence_id"), "Should contain sentence_id column");
-        // Assertions expecting IntColumns
-        assertEquals(1, table.intColumn("document_id").get(0));
-        assertEquals(1, table.intColumn("sentence_id").get(0));
-        assertEquals(1, table.intColumn("document_id").get(1));
-        assertEquals(2, table.intColumn("sentence_id").get(1));
-        assertEquals(2, table.intColumn("document_id").get(2));
-        assertEquals(1, table.intColumn("sentence_id").get(2));
+        // Check that all expected (docId, sentId) pairs are present, regardless of row order
+        Set<String> expectedPairs = Set.of("1|1", "1|2", "2|1");
+        Set<String> actualPairs = new HashSet<>();
+        for (int i = 0; i < table.rowCount(); i++) {
+            int docId = table.intColumn("document_id").get(i);
+            int sentId = table.intColumn("sentence_id").get(i);
+            actualPairs.add(docId + "|" + sentId);
+        }
+        assertEquals(expectedPairs, actualPairs, "All expected (docId, sentId) pairs should be present");
     }
     
      @Test
@@ -131,5 +144,54 @@ class TableResultServiceTest {
         assertNotNull(table);
         assertEquals(0, table.rowCount());
         assertTrue(table.name().contains("EmptyQueryResults"));
+    }
+
+    @Test
+    void testGenerateTableForJoinDocumentGranularity() throws ResultGenerationException {
+        Query query = new Query("testSource", Collections.emptyList(), Query.Granularity.DOCUMENT);
+        List<JoinedMatch> joined = List.of(
+            createJoinedMatch(1, -1, "apple", "?fruitL", 2, -1, "banana", "?fruitR"),
+            createJoinedMatch(3, -1, "cherry", "?fruitL", 4, -1, "date", "?fruitR")
+        );
+        Table table = tableResultService.generateTableForJoin(query, joined, indexes);
+        assertNotNull(table);
+        assertEquals(2, table.rowCount());
+        assertTrue(table.columnNames().contains("left_document_id"));
+        assertTrue(table.columnNames().contains("right_document_id"));
+        // Variable columns
+        assertTrue(table.columnNames().contains("?fruitL"));
+        assertTrue(table.columnNames().contains("?fruitR"));
+        assertEquals("apple", table.stringColumn("?fruitL").get(0));
+        assertEquals("banana", table.stringColumn("?fruitR").get(0));
+        assertEquals("cherry", table.stringColumn("?fruitL").get(1));
+        assertEquals("date", table.stringColumn("?fruitR").get(1));
+    }
+
+    @Test
+    void testGenerateTableForJoinSentenceGranularity() throws ResultGenerationException {
+        Query query = new Query("testSource", Collections.emptyList(), Query.Granularity.SENTENCE);
+        List<JoinedMatch> joined = List.of(
+            createJoinedMatch(1, 10, "apple", "?fruitL", 2, 20, "banana", "?fruitR"),
+            createJoinedMatch(3, 30, "cherry", "?fruitL", 4, 40, "date", "?fruitR")
+        );
+        Table table = tableResultService.generateTableForJoin(query, joined, indexes);
+        assertNotNull(table);
+        assertEquals(2, table.rowCount());
+        assertTrue(table.columnNames().contains("left_sentence_id"));
+        assertTrue(table.columnNames().contains("right_sentence_id"));
+        assertEquals(10, table.intColumn("left_sentence_id").get(0));
+        assertEquals(20, table.intColumn("right_sentence_id").get(0));
+        assertEquals(30, table.intColumn("left_sentence_id").get(1));
+        assertEquals(40, table.intColumn("right_sentence_id").get(1));
+    }
+
+    @Test
+    void testGenerateTableForJoinEmptyResult() throws ResultGenerationException {
+        Query query = new Query("testSource", Collections.emptyList(), Query.Granularity.DOCUMENT);
+        List<JoinedMatch> joined = Collections.emptyList();
+        Table table = tableResultService.generateTableForJoin(query, joined, indexes);
+        assertNotNull(table);
+        assertEquals(0, table.rowCount());
+        assertTrue(table.name().contains("EmptyJoinResults"));
     }
 } 

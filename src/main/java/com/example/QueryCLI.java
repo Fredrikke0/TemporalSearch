@@ -118,8 +118,11 @@ public class QueryCLI {
                 int windowSize = query.granularitySize().orElse(0); // Use 0 if not present
                 logger.info("Query granularity: {} with size: {}", granularity, windowSize);
                 
-                // executor.execute now returns QueryResult
-                QueryResult result = executor.execute(query, indexManager.getAllIndexes());
+                // executor.execute now returns QueryResult or List<JoinedMatch>
+                Object execResult = executor.execute(query, indexManager.getAllIndexes());
+                if (!(execResult instanceof QueryResult result)) {
+                    throw new IllegalStateException("Query execution did not return a QueryResult. Did you run a JOIN query in a non-join context?");
+                }
                 
                 // --- Adapt Match Count Display --- 
                 // Use result.getAllDetails().size() as a proxy for count. 

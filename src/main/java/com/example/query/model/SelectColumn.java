@@ -28,16 +28,16 @@ public interface SelectColumn {
     
     /**
      * Populates the column with data for a given result unit (document or sentence).
-     * Implementations should find the relevant detail(s) within the provided list 
-     * based on the column's purpose (e.g., matching variable name).
+     * Implementations should cast detailsForUnit to the appropriate type (e.g., List<MatchDetail> or List<JoinedMatch>)
+     * based on the column's purpose.
      * 
      * @param table The table containing the column
      * @param rowIndex The row index to populate
-     * @param detailsForUnit A list of all MatchDetail objects belonging to the current result unit (document or sentence)
+     * @param detailsForUnit A list of all details (MatchDetail or JoinedMatch) belonging to the current result unit
      * @param source The source name (corpus) for this detail
      * @param indexes The indexes for additional document information
      */
-    void populateColumn(Table table, int rowIndex, List<MatchDetail> detailsForUnit, 
+    void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
                         String source,
                         Map<String, IndexAccessInterface> indexes);
 } 

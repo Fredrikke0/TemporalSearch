@@ -48,7 +48,7 @@ public class LogicalConditionExecutorTest {
         Position pos = new Position(docId, sentId, begin, end, testDate);
         // Determine ValueType based on simple inspection of value for testing
         ValueType type = (value instanceof String) ? ValueType.TERM : ValueType.ENTITY; 
-        return new MatchDetail(value, type, pos, "cond_" + varName, varName);
+        return new MatchDetail(value, type, pos, varName);
     }
 
     @BeforeEach
@@ -129,8 +129,8 @@ public class LogicalConditionExecutorTest {
 
         // Check specific bindings for Doc 1
         List<MatchDetail> doc1Details = detailsByDoc.get(1);
-        assertTrue(doc1Details.stream().anyMatch(d -> var1.equals(d.variableName()) && val1.equals(d.value())));
-        assertTrue(doc1Details.stream().anyMatch(d -> var2.equals(d.variableName()) && val2.equals(d.value())));
+        assertTrue(doc1Details.stream().anyMatch(d -> var1.equals(d.variableName().orElse(null)) && val1.equals(d.value())));
+        assertTrue(doc1Details.stream().anyMatch(d -> var2.equals(d.variableName().orElse(null)) && val2.equals(d.value())));
     }
 
     @Test
@@ -185,10 +185,10 @@ public class LogicalConditionExecutorTest {
         assertEquals(expectedDetailSet, actualDetailSet);
 
         // Verify specific details are present
-        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 1 && d.getSentenceId() == 1 && var1.equals(d.variableName())));
-        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 1 && d.getSentenceId() == 1 && var2.equals(d.variableName())));
-        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 1 && d.getSentenceId() == 2 && var1.equals(d.variableName())));
-        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 3 && d.getSentenceId() == 1 && var2.equals(d.variableName())));
+        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 1 && d.getSentenceId() == 1 && var1.equals(d.variableName().orElse(null))));
+        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 1 && d.getSentenceId() == 1 && var2.equals(d.variableName().orElse(null))));
+        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 1 && d.getSentenceId() == 2 && var1.equals(d.variableName().orElse(null))));
+        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 3 && d.getSentenceId() == 1 && var2.equals(d.variableName().orElse(null))));
     }
 
     @Test
@@ -338,13 +338,11 @@ public class LogicalConditionExecutorTest {
 
     // Helper to create a basic MatchDetail for testing intersection logic
     private MatchDetail md(int docId, int sentId) { 
-        // Using placeholder values for fields not directly used in intersection logic
         return new MatchDetail(
             "value_" + docId + "_" + sentId, // Dummy value
             ValueType.TERM,                  // Dummy type
             new Position(docId, sentId, 0, 0, null), // Position object
-            "cond_" + docId,                 // Dummy condition ID
-            null                             // No variable binding for basic test
+            (String) null
         );
     }
 

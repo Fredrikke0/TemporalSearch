@@ -91,7 +91,7 @@ public class CountColumn implements SelectColumn {
     }
     
     @Override
-    public void populateColumn(Table table, int rowIndex, List<MatchDetail> detailsForUnit, 
+    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
                                String source,
                                Map<String, IndexAccessInterface> indexes) {
         // COUNT columns are handled by a separate aggregation step after initial table population.

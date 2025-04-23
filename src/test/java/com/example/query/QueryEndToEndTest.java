@@ -139,7 +139,7 @@ public class QueryEndToEndTest {
         Query query = queryParser.parse(queryString);
 
         // Execute query
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         // Assertions on QueryResult
         assertNotNull(result);
@@ -165,7 +165,7 @@ public class QueryEndToEndTest {
         String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"nonexistent\")";
         Query query = queryParser.parse(queryString);
         
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
         
         assertNotNull(result);
         assertTrue(result.getAllDetails().isEmpty(), "Expected no results for 'nonexistent'");
@@ -179,7 +179,7 @@ public class QueryEndToEndTest {
     public void testContainsSingleQuote() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT TITLE FROM source WHERE CONTAINS('grape')";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'grape'");
@@ -192,7 +192,7 @@ public class QueryEndToEndTest {
         // Assumes index contains lemmatized "read\0monkey"
         String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"read monkey\")";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'read monkey'");
@@ -205,7 +205,7 @@ public class QueryEndToEndTest {
         // Assumes index contains lemmatized "read\0monkey"
         String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"read\", \"monkey\")";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'read, monkey'");
@@ -218,7 +218,7 @@ public class QueryEndToEndTest {
         // Assumes index contains lemmatized "the\0quick\0fox"
         String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"the quick fox\")";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'the quick fox'");
@@ -231,7 +231,7 @@ public class QueryEndToEndTest {
         // Assumes index contains lemmatized "the\0quick\0fox"
         String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"the\", \"quick\", \"fox\")";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'the, quick, fox'");
@@ -247,7 +247,7 @@ public class QueryEndToEndTest {
     public void testNerSimpleTypeQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT TITLE FROM source WHERE NER(PERSON)";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertEquals(4, result.getAllDetails().size(), "Expected 4 PERSON entities");
@@ -263,7 +263,7 @@ public class QueryEndToEndTest {
         // Test exact match still works (case-insensitive)
         String queryString = "SELECT TITLE FROM source WHERE NER(PERSON, 'albert einstein')"; // Use full name 
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertEquals(1, result.getAllDetails().size(), "Expected 1 specific PERSON entity");
@@ -279,7 +279,7 @@ public class QueryEndToEndTest {
     public void testNerTypeWithTargetNoMatchQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT TITLE FROM source WHERE NER(PERSON, 'Non Existent')";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertTrue(result.getAllDetails().isEmpty(), "Expected no results");
@@ -292,7 +292,7 @@ public class QueryEndToEndTest {
     public void testNerVariableBindingQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT ?person FROM source WHERE NER(PERSON) AS ?person";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertEquals(4, result.getAllDetails().size(), "Expected 4 PERSON entities for binding");
@@ -314,7 +314,7 @@ public class QueryEndToEndTest {
         // Test partial match with binding
         String queryString = "SELECT ?org FROM source WHERE NER(ORGANIZATION, 'corp') AS ?org"; // Use partial name
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertEquals(1, result.getAllDetails().size(), "Expected 1 specific ORG entity via partial match");
@@ -331,7 +331,7 @@ public class QueryEndToEndTest {
     public void testNerNewTypeOrdinalQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT ?ord FROM source WHERE NER(ORDINAL, 'first') AS ?ord";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertEquals(1, result.getAllDetails().size(), "Expected 1 specific ORDINAL entity");
@@ -347,7 +347,7 @@ public class QueryEndToEndTest {
     public void testNerNewTypeNumberQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT ?num FROM source WHERE NER(NUMBER) AS ?num";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertEquals(1, result.getAllDetails().size(), "Expected 1 NUMBER entity");
@@ -386,7 +386,7 @@ public class QueryEndToEndTest {
         // Test partial match (case-insensitive)
         String queryString = "SELECT TITLE FROM source WHERE NER(PERSON, 'Albrecht')"; // Use partial name 
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         assertEquals(1, result.getAllDetails().size(), "Expected 1 partial PERSON match");
@@ -405,7 +405,7 @@ public class QueryEndToEndTest {
         Query query = queryParser.parse(queryString);
 
         // Execute query
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         // Assertions on QueryResult
         assertNotNull(result);
@@ -428,7 +428,7 @@ public class QueryEndToEndTest {
     public void testDateYearFormat() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT TITLE FROM source WHERE DATE(< 1990)";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         // The current implementation might return empty results with the mock ner_date index
@@ -444,7 +444,7 @@ public class QueryEndToEndTest {
     public void testDateYearMonthFormat() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT TITLE FROM source WHERE DATE(> 1998-05)";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         // The current implementation might return empty results with the mock ner_date index
@@ -460,7 +460,7 @@ public class QueryEndToEndTest {
     public void testDateYearMonthDayFormat() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT TITLE FROM source WHERE DATE(== 2005-07-04)";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         // The current implementation might return empty results with the mock ner_date index
@@ -476,7 +476,7 @@ public class QueryEndToEndTest {
     public void testDateRangeWithDateLiterals() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT TITLE FROM source WHERE DATE(CONTAINS [1995-01-01, 2000-12-31])";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         // The current implementation might return empty results with the mock ner_date index
@@ -492,7 +492,7 @@ public class QueryEndToEndTest {
     public void testDateLiteralWithVariableBinding() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT ?date FROM source WHERE DATE(> 2000-01-01) AS ?date";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         // The current implementation might return empty results with the mock ner_date index
@@ -513,7 +513,7 @@ public class QueryEndToEndTest {
     public void testCompoundDateQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         String queryString = "SELECT TITLE FROM source WHERE DATE(> 1990) AND DATE(< 2000)";
         Query query = queryParser.parse(queryString);
-        QueryResult result = queryExecutor.execute(query, mockIndexes);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
         assertNotNull(result);
         // The current implementation might return empty results with the mock ner_date index

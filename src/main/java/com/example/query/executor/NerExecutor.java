@@ -167,7 +167,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 PositionList positionList = PositionList.deserialize(entry.getValue());
                 
                 details.addAll(positionList.getPositions().stream()
-                    .map(pos -> new MatchDetail(value, valueType, pos, conditionId, variableName))
+                    .map(pos -> new MatchDetail(value, valueType, pos, variableName))
                     .collect(Collectors.toList()));
             }
         }
@@ -231,7 +231,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 PositionList positionList = PositionList.deserialize(entry.getValue());
                 
                 details.addAll(positionList.getPositions().stream()
-                    .map(pos -> new MatchDetail(detailValue, valueType, pos, conditionId, null))
+                    .map(pos -> new MatchDetail(detailValue, valueType, pos, (String) null))
                     .collect(Collectors.toList()));
             }
         }

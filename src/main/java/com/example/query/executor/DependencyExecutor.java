@@ -108,7 +108,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                 // Explicitly format the value for MatchDetail with a visible delimiter
                 String value = String.join(":", normalizedGovernor, normalizedRelation, normalizedDependent);
                 return positionList.getPositions().stream()
-                    .map(pos -> new MatchDetail(value, ValueType.DEPENDENCY, pos, conditionId, isVariable ? variableName : null))
+                    .map(pos -> new MatchDetail(value, ValueType.DEPENDENCY, pos, isVariable ? variableName : null))
                     .collect(Collectors.toList());
             } else {
                 return Collections.emptyList();
@@ -161,7 +161,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     String value = String.join("/", gov, rel, dep); // Reconstruct original case?
                     
                     details.addAll(positionList.getPositions().stream()
-                        .map(pos -> new MatchDetail(value, ValueType.DEPENDENCY, pos, conditionId, variableName))
+                        .map(pos -> new MatchDetail(value, ValueType.DEPENDENCY, pos, variableName))
                         .collect(Collectors.toList()));
                 } else {
                      logger.warn("Skipping invalid key format in dependency index: {}", key);

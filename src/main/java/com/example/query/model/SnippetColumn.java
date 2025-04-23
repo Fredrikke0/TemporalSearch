@@ -59,14 +59,16 @@ public class SnippetColumn implements SelectColumn {
     }
     
     @Override
-    public void populateColumn(Table table, int rowIndex, List<MatchDetail> detailsForUnit, 
-                               String source, // Add source parameter
+    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
+                               String source,
                                Map<String, IndexAccessInterface> indexes) {
         StringColumn snippetColumn = table.stringColumn(this.columnName);
         
         // 1. Find the first MatchDetail in the list that matches our variable name (including '?')
         Optional<MatchDetail> relevantDetailOpt = detailsForUnit.stream()
-            .filter(d -> variableName.equals(d.variableName())) // Compare with the full variable name including '?'.
+            .filter(MatchDetail.class::isInstance)
+            .map(MatchDetail.class::cast)
+            .filter(d -> variableName.equals(d.variableName()))
             .findFirst();
             
         if (relevantDetailOpt.isEmpty()) {
