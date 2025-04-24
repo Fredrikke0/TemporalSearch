@@ -120,26 +120,64 @@ public class QueryCLI {
                 
                 // executor.execute now returns QueryResult or List<JoinedMatch>
                 Object execResult = executor.execute(query, indexManager.getAllIndexes());
-                if (!(execResult instanceof QueryResult result)) {
-                    throw new IllegalStateException("Query execution did not return a QueryResult. Did you run a JOIN query in a non-join context?");
-                }
                 
-                // --- Adapt Match Count Display --- 
-                // Use result.getAllDetails().size() as a proxy for count. 
-                // TODO: Improve count logic based on QueryResult granularity/structure if needed.
-                int matchCount = result.getAllDetails().size(); 
-                String matchUnit = (granularity == Query.Granularity.DOCUMENT) ? "documents (approx details)" : "sentences (approx details)";
-                logger.info("Query executed, found {} matching details (granularity: {})", matchCount, granularity);
-                System.out.println("Total matches: " + matchCount + " " + matchUnit);
-                // Removed specific document ID counting block
+                Table resultTable;
+                int matchCount;
+                String matchUnit;
 
-                // 6. Generate results using TableResultService 
-                logger.debug("Generating result table");
-                Table resultTable = tableResultService.generateTable(
-                    query, 
-                    result, // Pass QueryResult 
-                    indexManager.getAllIndexes()
-                );
+                if (execResult instanceof QueryResult result) {
+                    // --- Handle QueryResult (Non-Join) ---
+                    matchCount = result.getAllDetails().size(); 
+                    matchUnit = (granularity == Query.Granularity.DOCUMENT) ? "documents (approx details)" : "sentences (approx details)";
+                    logger.info("Query executed, found {} matching details (granularity: {})", matchCount, granularity);
+                    System.out.println("Total matches: " + matchCount + " " + matchUnit);
+
+                    // Generate table from QueryResult
+                    logger.debug("Generating result table from QueryResult");
+                    resultTable = tableResultService.generateTable(
+                        query, 
+                        result, // Pass QueryResult 
+                        indexManager.getAllIndexes()
+                    );
+
+                } else if (execResult instanceof List<?> joinResultList && !joinResultList.isEmpty() && joinResultList.get(0) instanceof com.example.query.binding.JoinedMatch) {
+                    // --- Handle List<JoinedMatch> (Join) ---
+                    @SuppressWarnings("unchecked") // Cast is safe due to instanceof check above
+                    List<com.example.query.binding.JoinedMatch> joinedMatches = (List<com.example.query.binding.JoinedMatch>) joinResultList;
+                    
+                    matchCount = joinedMatches.size();
+                    matchUnit = "joined pairs"; // Granularity might not directly apply here
+                    logger.info("Join query executed, found {} matching {} (granularity: {})", matchCount, matchUnit, granularity);
+                    System.out.println("Total matches: " + matchCount + " " + matchUnit);
+                    
+                    // Generate table from List<JoinedMatch>
+                    logger.debug("Generating result table from List<JoinedMatch>");
+                    resultTable = tableResultService.generateTableForJoin(
+                        query,
+                        joinedMatches,
+                        indexManager.getAllIndexes()
+                    );
+                } else if (execResult instanceof List<?> emptyList && emptyList.isEmpty()) {
+                     // --- Handle Empty List (likely from an empty JOIN result) ---
+                    matchCount = 0;
+                    matchUnit = "joined pairs"; 
+                    logger.info("Join query executed, found 0 matching {}", matchUnit);
+                    System.out.println("Total matches: 0 " + matchUnit);
+                    
+                    // Create an empty table reflecting the SELECT columns
+                    resultTable = tableResultService.generateTableForJoin(
+                        query,
+                        Collections.emptyList(), // Pass empty list
+                        indexManager.getAllIndexes()
+                    ); // generateTableForJoin should handle empty list gracefully
+                } else {
+                     // --- Handle unexpected result type ---
+                    String resultType = (execResult == null) ? "null" : execResult.getClass().getName();
+                     throw new IllegalStateException("Unexpected query execution result type: " + resultType);
+                }
+
+                // 6. Generate results using TableResultService (removed from inside if/else)
+                // The specific generation logic is now handled within the if/else branches above
                 
                 // NOTE: We're now using Tablesaw's sorting capabilities directly
                 // The orderBy list in Query now contains Tablesaw-compatible sort strings

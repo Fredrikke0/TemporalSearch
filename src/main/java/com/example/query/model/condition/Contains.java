@@ -14,7 +14,7 @@ import com.example.query.binding.VariableType;
  */
 public record Contains(
     List<String> terms,
-    String variableName,
+    String qualifiedVariableName,
     boolean isVariable
 ) implements Condition {
     
@@ -29,7 +29,7 @@ public record Contains(
         terms = List.copyOf(terms);
         
         if (isVariable) {
-            Objects.requireNonNull(variableName, "variableName cannot be null when isVariable is true");
+            Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
         }
     }
 
@@ -61,6 +61,7 @@ public record Contains(
      */
     public Contains(String term, String variableName, boolean isVariable) {
         // Call the primary constructor, removing the 'value' argument
+        // Assumes variableName passed here is already qualified by the builder
         this(Collections.singletonList(Objects.requireNonNull(term, "term cannot be null")), 
              variableName, isVariable);
     }
@@ -89,8 +90,9 @@ public record Contains(
      * 
      * @return The variable name, or null if this is not a variable binding condition
      */
-    public String getVariableName() {
-        return variableName;
+    public String variableName() {
+        // Returns the qualified variable name if present, otherwise null
+        return qualifiedVariableName;
     }
 
     @Override
@@ -100,7 +102,8 @@ public record Contains(
     
     @Override
     public Set<String> getProducedVariables() {
-        return isVariable ? Set.of(variableName) : Collections.emptySet();
+        // Return the qualified name if bound
+        return isVariable ? Set.of(qualifiedVariableName) : Collections.emptySet();
     }
     
     @Override
@@ -111,7 +114,7 @@ public record Contains(
     @Override
     public void registerVariables(VariableRegistry registry) {
         if (isVariable) {
-            registry.registerProducer(variableName, getProducedVariableType(), getType());
+            registry.registerProducer(qualifiedVariableName, getProducedVariableType(), getType());
         }
     }
 
@@ -119,7 +122,8 @@ public record Contains(
     public String toString() {
         String termsString = String.join(" ", terms);
         if (isVariable) {
-            return String.format("CONTAINS(\"%s\") AS %s", termsString, variableName);
+            // Format: CONTAINS("term") BIND alias.var
+            return String.format("CONTAINS(\"%s\") BIND %s", termsString, qualifiedVariableName);
         } else {
             return String.format("CONTAINS(\"%s\")", termsString);
         }

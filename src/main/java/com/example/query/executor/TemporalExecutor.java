@@ -10,6 +10,10 @@ import com.example.query.model.TemporalPredicate;
 import com.example.query.model.condition.Temporal;
 import com.example.query.index.IndexManager;
 import com.example.query.executor.QueryResult;
+import com.example.query.binding.VariableRegistry;
+import com.example.query.binding.VariableType;
+import com.example.query.executor.QueryExecutionException.ErrorType;
+import com.example.query.model.condition.Condition;
 
 import org.apache.pig.impl.util.MultiMap;
 import org.slf4j.Logger;
@@ -406,43 +410,52 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
              List<MatchDetail> details = new ArrayList<>();
              String conditionId = String.valueOf(condition.hashCode());
-             String variableName = condition.variable().orElse(null); // Get variable name if present
+             Optional<String> variableName = condition.qualifiedVariableName(); // Use qualifiedVariableName()
+             if (variableName.isPresent()) {
+                 String qualifiedVarName = variableName.get(); // Get from Optional
+                 String matchedDateText = null;
+                 VariableType varType = null;
 
-             String interval = condition.toNashInterval();
-             String expandedInterval = Temporal.expandYearOnlyInterval(interval);
-             Nash.RangePredicate nashPredicate = condition.temporalType().toNashPredicate();
-             strategyLogger.debug("Querying Nash index for corpus '{}' with expanded interval: {}, predicate: {}, variable: {}",
-                                  corpusName, expandedInterval, nashPredicate, variableName);
+                 String interval = condition.toNashInterval();
+                 String expandedInterval = Temporal.expandYearOnlyInterval(interval);
+                 Nash.RangePredicate nashPredicate = condition.temporalType().toNashPredicate();
+                 strategyLogger.debug("Querying Nash index for corpus '{}' with expanded interval: {}, predicate: {}, variable: {}",
+                                      corpusName, expandedInterval, nashPredicate, qualifiedVarName);
 
-             try {
-                 String[] hashPrefixes = Nash.generateTimeHash(expandedInterval, nashPredicate);
-                 Set<NashDateEntryWithId> matchingEntries = new HashSet<>(); // Collect entries
-                 int prefixesChecked = 0;
-                 for (String hashPrefix : hashPrefixes) {
-                     prefixesChecked++;
-                     Set<NashDateEntryWithId> entriesFromHash = nashIndex.get(hashPrefix);
-                     if (entriesFromHash != null) {
-                         matchingEntries.addAll(entriesFromHash);
+                 try {
+                     String[] hashPrefixes = Nash.generateTimeHash(expandedInterval, nashPredicate);
+                     Set<NashDateEntryWithId> matchingEntries = new HashSet<>(); // Collect entries
+                     int prefixesChecked = 0;
+                     for (String hashPrefix : hashPrefixes) {
+                         prefixesChecked++;
+                         Set<NashDateEntryWithId> entriesFromHash = nashIndex.get(hashPrefix);
+                         if (entriesFromHash != null) {
+                             matchingEntries.addAll(entriesFromHash);
+                         }
                      }
-                 }
-                 strategyLogger.debug("Checked {} Nash prefixes, found {} unique matching NashDateEntryWithId objects", prefixesChecked, matchingEntries.size());
+                     strategyLogger.debug("Checked {} Nash prefixes, found {} unique matching NashDateEntryWithId objects", prefixesChecked, matchingEntries.size());
 
-                 // --- Create MatchDetail using Date ID lookup ---
-                 for (NashDateEntryWithId entry : matchingEntries) {
-                     if (entry.dateId() < 0 || entry.dateId() >= dateLookup.size()) {
-                          strategyLogger.error("Invalid dateId {} found in Nash entry for position {}. Max valid ID is {}. Skipping entry.",
-                                                entry.dateId(), entry.position(), dateLookup.size() - 1);
-                          continue;
+                     // --- Create MatchDetail using Date ID lookup ---
+                     for (NashDateEntryWithId entry : matchingEntries) {
+                         if (entry.dateId() < 0 || entry.dateId() >= dateLookup.size()) {
+                              strategyLogger.error("Invalid dateId {} found in Nash entry for position {}. Max valid ID is {}. Skipping entry.",
+                                                    entry.dateId(), entry.position(), dateLookup.size() - 1);
+                              continue;
+                         }
+                         LocalDate specificDate = dateLookup.get(entry.dateId());
+                         // Use the specificDate as the value, use the entry's position
+                         // Pass variable name Optional directly to canonical constructor
+                         details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), variableName));
                      }
-                     LocalDate specificDate = dateLookup.get(entry.dateId());
-                     // Use the specificDate as the value, use the entry's position
-                     details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), variableName));
-                 }
-                 // --- End MatchDetail Creation ---
+                     // --- End MatchDetail Creation ---
 
-                 return details;
-             } catch (Exception e) { // Catch specific Nash exceptions if possible
-                 throw new QueryExecutionException("Error querying Nash index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+                     return details;
+                 } catch (Exception e) { // Catch specific Nash exceptions if possible
+                     throw new QueryExecutionException("Error querying Nash index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+                 }
+             } else {
+                 strategyLogger.debug("No variable name found in condition. Nash strategy will return empty result.");
+                 return Collections.emptyList();
              }
         }
     }
@@ -483,10 +496,10 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
         LocalDateTime queryStart = condition.startDate();
             // Use queryStart if endDate is not present, ensuring queryEnd is never null.
         LocalDateTime queryEnd = condition.endDate().orElse(queryStart);
-            String variableName = condition.variable().orElse(null); // Get variable name if present
+            Optional<String> variableName = condition.qualifiedVariableName(); // Use qualifiedVariableName()
 
             strategyLogger.debug("Scanning DATE index directly for condition: {} ({}), interval [{} to {}], variable: {}",
-                                 type, conditionId, queryStart, queryEnd, variableName != null ? "?"+variableName : "none");
+                                 type, conditionId, queryStart, queryEnd, variableName.isPresent() ? "?"+variableName.get() : "none");
 
         try (var iterator = dateIndex.iterator()) {
             iterator.seekToFirst(); // Start scan from the beginning
@@ -514,7 +527,8 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                                      for (Position position : positionSet) {
                              // Create MatchDetail for each position matching the date criteria
                                          // Use docDate object (actual matched date) as the value when binding variables
-                                         Object matchValue = (variableName != null) ? docDate : intervalStringFromDate(docDate); // Or use interval string?
+                                         Object matchValue = (variableName.isPresent()) ? docDate : intervalStringFromDate(docDate); // Or use interval string?
+                                         // Pass variable name Optional directly to canonical constructor
                                          details.add(new MatchDetail(matchValue, ValueType.DATE, position, variableName));
                                          matchesFound++;
                                      }

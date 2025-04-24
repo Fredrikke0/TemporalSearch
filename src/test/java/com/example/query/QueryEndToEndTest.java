@@ -290,7 +290,7 @@ public class QueryEndToEndTest {
     
     @Test
     public void testNerVariableBindingQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT person FROM source WHERE NER(PERSON) BIND person";
+        String queryString = "SELECT main.person FROM source ALIAS main WHERE NER(PERSON) BIND person";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -301,18 +301,18 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(3, resultTable.rowCount()); // Grouped by doc (3 unique docs)
-        assertTrue(resultTable.columnNames().contains("person"));
+        assertTrue(resultTable.columnNames().contains("main.person"));
         // Values in the table will be one of the entities from the doc (grouping picks one)
         Set<String> expectedValues = Set.of("albert einstein", "marie curie", "isaac newton", "albrecht kossel");
-        assertTrue(expectedValues.contains(resultTable.stringColumn("person").get(0).toLowerCase()));
-        assertTrue(expectedValues.contains(resultTable.stringColumn("person").get(1).toLowerCase()));
-        assertTrue(expectedValues.contains(resultTable.stringColumn("person").get(2).toLowerCase())); // Added check for 3rd row
+        assertTrue(expectedValues.contains(resultTable.stringColumn("main.person").get(0).toLowerCase()));
+        assertTrue(expectedValues.contains(resultTable.stringColumn("main.person").get(1).toLowerCase()));
+        assertTrue(expectedValues.contains(resultTable.stringColumn("main.person").get(2).toLowerCase()));
     }
     
     @Test
     public void testNerVariableBindingWithTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Test partial match with binding
-        String queryString = "SELECT org FROM source WHERE NER(ORGANIZATION, 'corp') BIND org"; // Use partial name
+        String queryString = "SELECT main.org FROM source ALIAS main WHERE NER(ORGANIZATION, 'corp') BIND org";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -324,12 +324,12 @@ public class QueryEndToEndTest {
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount()); 
         assertEquals(11, resultTable.intColumn("document_id").get(0));
-        assertEquals("microsoft corporation", resultTable.stringColumn("org").get(0));
+        assertEquals("microsoft corporation", resultTable.stringColumn("main.org").get(0));
     }
     
     @Test
     public void testNerNewTypeOrdinalQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT ordinal_value FROM source WHERE NER(ORDINAL) BIND ordinal_value";
+        String queryString = "SELECT main.ordinal_value FROM source ALIAS main WHERE NER(ORDINAL) BIND ordinal_value";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -340,12 +340,12 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount());
-        assertEquals("first", resultTable.stringColumn("ordinal_value").get(0));
+        assertEquals("first", resultTable.stringColumn("main.ordinal_value").get(0));
     }
     
     @Test
     public void testNerNewTypeNumberQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT num FROM source WHERE NER(NUMBER) BIND num";
+        String queryString = "SELECT main.num FROM source ALIAS main WHERE NER(NUMBER) BIND num";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -356,7 +356,7 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount());
-        assertEquals("42", resultTable.stringColumn("num").get(0));
+        assertEquals("42", resultTable.stringColumn("main.num").get(0));
     }
     
     @Test
@@ -434,7 +434,6 @@ public class QueryEndToEndTest {
         // The current implementation might return empty results with the mock ner_date index
         // Just verify the query parses and executes without error
         // We'll verify the real functionality with integration tests
-        assertTrue(result.getAllDetails().isEmpty() || !result.getAllDetails().isEmpty());
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertTrue(resultTable.rowCount() >= 0, "Result table should have 0 or more rows");
@@ -450,7 +449,6 @@ public class QueryEndToEndTest {
         // The current implementation might return empty results with the mock ner_date index
         // Just verify the query parses and executes without error
         // We'll verify the real functionality with integration tests
-        assertTrue(result.getAllDetails().isEmpty() || !result.getAllDetails().isEmpty());
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertTrue(resultTable.rowCount() >= 0, "Result table should have 0 or more rows");
@@ -466,7 +464,6 @@ public class QueryEndToEndTest {
         // The current implementation might return empty results with the mock ner_date index
         // Just verify the query parses and executes without error
         // We'll verify the real functionality with integration tests
-        assertTrue(result.getAllDetails().isEmpty() || !result.getAllDetails().isEmpty());
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertTrue(resultTable.rowCount() >= 0, "Result table should have 0 or more rows");
@@ -482,7 +479,6 @@ public class QueryEndToEndTest {
         // The current implementation might return empty results with the mock ner_date index
         // Just verify the query parses and executes without error
         // We'll verify the real functionality with integration tests
-        assertTrue(result.getAllDetails().isEmpty() || !result.getAllDetails().isEmpty());
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertTrue(resultTable.rowCount() >= 0, "Result table should have 0 or more rows");
@@ -490,7 +486,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testDateLiteralWithVariableBinding() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT event_date FROM source WHERE DATE(= 1995) BIND event_date";
+        String queryString = "SELECT main.event_date FROM source ALIAS main WHERE DATE(= 1995) BIND event_date";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -498,14 +494,13 @@ public class QueryEndToEndTest {
         // The current implementation might return empty results with the mock ner_date index
         // Just verify the query parses and executes without error
         // We'll verify the real functionality with integration tests
-        assertTrue(result.getAllDetails().isEmpty() || !result.getAllDetails().isEmpty());
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertTrue(resultTable.rowCount() >= 0, "Result table should have 0 or more rows");
         
         // If there are results, the column with the variable name should exist
         if (resultTable.rowCount() > 0) {
-            assertTrue(resultTable.columnNames().contains("event_date"), "Expected column with the variable name");
+            assertTrue(resultTable.columnNames().contains("main.event_date"), "Expected column with the variable name");
         }
     }
 
@@ -519,7 +514,6 @@ public class QueryEndToEndTest {
         // The current implementation might return empty results with the mock ner_date index
         // Just verify the query parses and executes without error
         // We'll verify the real functionality with integration tests
-        assertTrue(result.getAllDetails().isEmpty() || !result.getAllDetails().isEmpty());
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertTrue(resultTable.rowCount() >= 0, "Result table should have 0 or more rows");

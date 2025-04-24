@@ -22,53 +22,41 @@ import org.slf4j.LoggerFactory;
 public class VariableColumn implements SelectColumn {
     private static final Logger logger = LoggerFactory.getLogger(VariableColumn.class);
     
-    private final String columnName; // The full name as it appears in SELECT (e.g., "var" or "alias.var")
-    private final String alias; // The alias part (e.g., "alias"), or null if unqualified
-    private final String targetVariableName; // The simple variable name (e.g., "var")
+    // Stores the fully qualified name (e.g., "var" qualified to "$main.var" or "alias.var")
+    private final String qualifiedVariableName; 
     
     // TODO: Infer ColumnType based on VariableRegistry? Currently defaults to String.
     private final ColumnType columnType = ColumnType.STRING; 
 
     /**
-     * Creates a new variable column, parsing qualified names if necessary.
+     * Creates a new variable column, storing the fully qualified name.
      * 
-     * @param nameInSelect The name as it appears in the SELECT clause (e.g., "var" or "alias.var")
+     * @param qualifiedName The fully qualified variable name (e.g., "$main.var" or "alias.var")
      */
-    public VariableColumn(String nameInSelect) {
-        this.columnName = nameInSelect;
-        if (nameInSelect.contains(".")) {
-            String[] parts = nameInSelect.split("\\.", 2);
-            // Expect format alias.variable (plain variable name)
-            if (parts.length == 2) { 
-                this.alias = parts[0];
-                this.targetVariableName = parts[1]; // Store plain variable name
-            } else {
-                logger.warn("Invalid qualified variable format '{}' treated as simple variable name.", nameInSelect);
-                this.alias = null;
-                this.targetVariableName = nameInSelect; // Treat the whole thing as the name if format is wrong
-            }
-        } else {
-            // Unqualified variable: var
-            this.alias = null;
-            this.targetVariableName = nameInSelect; // Store plain variable name
+    public VariableColumn(String qualifiedName) {
+        if (qualifiedName == null || qualifiedName.isBlank() || !qualifiedName.contains(".")) {
+            // Throw error if the name provided by the builder isn't qualified as expected.
+            throw new IllegalArgumentException("VariableColumn must be initialized with a qualified name (e.g., 'alias.var'), got: " + qualifiedName);
         }
-        logger.trace("Created VariableColumn: columnName='{}', alias='{}', targetVariableName='{}'", 
-                     this.columnName, this.alias, this.targetVariableName);
+        this.qualifiedVariableName = qualifiedName;
+        logger.trace("Created VariableColumn with qualifiedVariableName='{}'", this.qualifiedVariableName);
     }
     
     /**
-     * Gets the variable name.
-     * 
-     * @return The variable name (without '?')
+     * Gets the qualified variable name used by this column.
+     *
+     * @return The qualified variable name (e.g., "$main.var" or "alias.var")
      */
     @Override
     public String getColumnName() {
-        return columnName;
+        // Return the qualified name as the unique identifier for this column's data source
+        return qualifiedVariableName;
     }
     
     @Override
     public Column<?> createColumn() {
-        return StringColumn.create(columnName);
+        // Use the qualified name for the Tablesaw column name to ensure uniqueness
+        return StringColumn.create(qualifiedVariableName);
     }
     
     @SuppressWarnings("unchecked")
@@ -76,65 +64,54 @@ public class VariableColumn implements SelectColumn {
     public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
                                String source,
                                Map<String, IndexAccessInterface> indexes) {
-        logger.trace("Populating row {} for column '{}' (alias: {}, targetVar: {}). Details count: {}", 
-                      rowIndex, columnName, alias, targetVariableName, detailsForUnit.size());
+        logger.trace("Populating row {} for VariableColumn '{}'. Details count: {}", 
+                      rowIndex, qualifiedVariableName, detailsForUnit.size());
 
         Optional<Object> valueOpt = Optional.empty();
 
         for (Object obj : detailsForUnit) {
             if (obj instanceof com.example.query.binding.JoinedMatch joined) {
-                // Handle join result: check left and right using plain variable names
-                // Assuming JoinedMatch methods now return plain names
-                if (alias == null) {
-                    // Unqualified: Check both sides for the plain target name
-                    if (targetVariableName.equals(joined.getLeftVariableName())) {
-                        valueOpt = Optional.ofNullable(joined.getLeftValue());
-                        break;
-                    } else if (targetVariableName.equals(joined.getRightVariableName())) {
-                        valueOpt = Optional.ofNullable(joined.getRightValue());
-                        break;
-                    }
-                } else {
-                    // Qualified: Check the side corresponding to the alias
-                    // TODO: Refine alias handling for joins if needed. Using hardcoded "left"/"right" might be brittle.
-                    if ("left".equals(alias) && targetVariableName.equals(joined.getLeftVariableName())) {
-                        valueOpt = Optional.ofNullable(joined.getLeftValue());
-                        break;
-                    } else if ("right".equals(alias) && targetVariableName.equals(joined.getRightVariableName())) {
-                        valueOpt = Optional.ofNullable(joined.getRightValue());
-                        break;
-                    }
+                // Handle join result: check left and right sides using QUALIFIED names
+                // Assumes JoinedMatch provides access to the qualified name associated with left/right MatchDetail
+                // TODO: Update JoinedMatch structure or access logic if needed.
+                // For now, compare against the qualified name stored in the MatchDetail.
+                if (qualifiedVariableName.equals(joined.left().variableName().orElse(null))) {
+                    valueOpt = Optional.ofNullable(joined.left().value());
+                    break;
+                } else if (qualifiedVariableName.equals(joined.right().variableName().orElse(null))) {
+                    valueOpt = Optional.ofNullable(joined.right().value());
+                    break;
                 }
+
             } else if (obj instanceof MatchDetail detail) {
-                 // Non-join result: Check if the detail's variable (plain name) matches the target (plain name)
-                if (alias == null) { // Only handle unqualified variables for non-join MatchDetails
-                    if (targetVariableName.equals(detail.variableName().orElse(null))) { // Compare plain names
-                        valueOpt = Optional.ofNullable(detail.value());
-                        break;
-                    }
+                 // Non-join result: Check if the detail's qualified variable name matches.
+                 // MatchDetail.variableName() now stores the qualified name.
+                if (qualifiedVariableName.equals(detail.variableName().orElse(null))) {
+                    valueOpt = Optional.ofNullable(detail.value());
+                    break;
                 }
             }
         }
 
-        Column<?> column = table.column(columnName);
+        Column<?> column = table.column(qualifiedVariableName); // Use qualified name to get column
         if (!(column instanceof StringColumn strCol)) {
-            logger.error("VariableColumn '{}' requires a StringColumn, but found {}", columnName, (column != null ? column.type() : "null"));
+            logger.error("VariableColumn '{}' requires a StringColumn, but found {}", qualifiedVariableName, (column != null ? column.type() : "null"));
             return;
         }
 
         if (valueOpt.isPresent()) {
             Object value = valueOpt.get();
             strCol.set(rowIndex, value != null ? value.toString() : "");
-            logger.trace("Set value '{}' for column '{}' at row {}", value, columnName, rowIndex);
+            logger.trace("Set value '{}' for column '{}' at row {}", value, qualifiedVariableName, rowIndex);
         } else {
             strCol.setMissing(rowIndex);
-            logger.trace("No matching detail found for column '{}' at row {}, setting missing.", columnName, rowIndex);
+            logger.trace("No matching detail found for column '{}' at row {}, setting missing.", qualifiedVariableName, rowIndex);
         }
     }
     
     @Override
     public String toString() {
-        // Return the plain variable name, qualified if necessary
-        return columnName; 
+        // Return the qualified variable name for representation
+        return qualifiedVariableName; 
     }
 } 

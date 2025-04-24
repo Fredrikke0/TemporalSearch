@@ -24,7 +24,7 @@ import no.ntnu.sandbox.Nash;
 public record Temporal(
     LocalDateTime startDate,
     Optional<LocalDateTime> endDate,
-    Optional<String> variable,
+    Optional<String> qualifiedVariableName,
     Optional<TemporalRange> range,
     TemporalPredicate temporalType
 ) implements Condition {
@@ -59,7 +59,7 @@ public record Temporal(
     public Temporal {
         Objects.requireNonNull(startDate, "Start date cannot be null");
         endDate = endDate != null ? endDate : Optional.empty();
-        variable = variable != null ? variable : Optional.empty();
+        qualifiedVariableName = qualifiedVariableName != null ? qualifiedVariableName : Optional.empty();
         range = range != null ? range : Optional.empty();
         Objects.requireNonNull(temporalType, "Temporal type cannot be null");
     }
@@ -208,7 +208,7 @@ public record Temporal(
     
     @Override
     public Set<String> getProducedVariables() {
-        return variable.isPresent() ? Set.of(variable.get()) : Collections.emptySet();
+        return qualifiedVariableName.isPresent() ? Set.of(qualifiedVariableName.get()) : Collections.emptySet();
     }
     
     @Override
@@ -218,8 +218,9 @@ public record Temporal(
     
     @Override
     public void registerVariables(VariableRegistry registry) {
-        if (variable.isPresent()) {
-            registry.registerProducer(variable.get(), getProducedVariableType(), getType());
+        if (qualifiedVariableName.isPresent()) {
+            // Registration now happens in QueryModelBuilder with qualified name
+            // registry.registerProducer(qualifiedVariableName.get(), getProducedVariableType(), getType());
         }
     }
     
@@ -246,8 +247,18 @@ public record Temporal(
         range.ifPresent(r -> sb.append(" RADIUS ").append(r.value()));
         sb.append(")");
         
-        variable.ifPresent(var -> sb.append(" AS ").append(var)); // Append plain variable
+        // Append qualified variable name if present
+        qualifiedVariableName.ifPresent(var -> sb.append(" BIND ").append(var)); 
         
         return sb.toString();
+    }
+
+    /**
+     * Returns the variable name if this is a variable binding condition.
+     * 
+     * @return The qualified variable name, or null if not bound
+     */
+    public String variableName() {
+        return qualifiedVariableName.orElse(null);
     }
 } 

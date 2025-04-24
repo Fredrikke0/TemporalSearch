@@ -162,7 +162,7 @@ public class QueryExecutor {
         // Handle JOIN if present
         if (query.joinCondition().isPresent()) {
             // If there's a join, store the result of the main conditions under the main query alias
-            String mainAlias = query.mainAlias().orElse("main"); // Assume "main" if no explicit AS for FROM
+            String mainAlias = query.mainAlias().orElse("$main"); // Use "$main" if no explicit AS for FROM
             logger.debug("Storing main condition results under alias '{}' for join.", mainAlias);
             subqueryContext.addQueryResult(mainAlias, mainConditionsResult);
             

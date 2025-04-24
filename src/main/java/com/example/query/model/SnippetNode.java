@@ -5,7 +5,7 @@ package com.example.query.model;
  * This node captures the variable to extract a snippet for and the optional window size.
  */
 public record SnippetNode(
-    String variable,
+    String qualifiedVariableName,
     int windowSize,
     String highlightStyle,
     boolean showSentenceBoundaries
@@ -33,8 +33,8 @@ public record SnippetNode(
     }
     
     public SnippetNode {
-        if (variable == null || variable.isEmpty()) {
-            throw new IllegalArgumentException("variable must not be null or empty");
+        if (qualifiedVariableName == null || qualifiedVariableName.isEmpty() || !qualifiedVariableName.contains(".")) {
+            throw new IllegalArgumentException("qualifiedVariableName must be a valid qualified name (e.g., alias.var)");
         }
         if (windowSize < 0 || windowSize > 5) {
             throw new IllegalArgumentException("windowSize must be between 0 and 5");
@@ -47,7 +47,7 @@ public record SnippetNode(
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("SNIPPET(%s", variable));
+        sb.append(String.format("SNIPPET(%s", qualifiedVariableName));
         
         if (windowSize != DEFAULT_WINDOW_SIZE || 
             !highlightStyle.equals(DEFAULT_HIGHLIGHT_STYLE) || 
@@ -68,5 +68,14 @@ public record SnippetNode(
         
         sb.append(")");
         return sb.toString();
+    }
+
+    /**
+     * Returns the variable name this snippet is based on.
+     * 
+     * @return The qualified variable name, or null if not set
+     */
+    public String variableName() {
+        return qualifiedVariableName;
     }
 } 

@@ -135,122 +135,107 @@ public class QuerySemanticValidator {
         // Create a map for quick lookup of subqueries by alias
         Map<String, SubquerySpec> subqueryMap = query.subqueries().stream()
                 .collect(Collectors.toMap(SubquerySpec::alias, sq -> sq));
+        
+        logger.debug("Subquery aliases available: {}", subqueryMap.keySet());
+        logger.debug("SELECT columns: {}", query.selectColumns().stream().map(SelectColumn::getColumnName).toList());
+        
+        String mainAlias = query.mainAlias().orElse("$main"); // Use $main if no explicit alias
 
         for (SelectColumn column : query.selectColumns()) {
+            String fullColumnName; // This will hold the name as it appears in SELECT/SNIPPET
+            String context; // For error messages
+
             if (column instanceof VariableColumn variableColumn) {
-                String columnName = variableColumn.getColumnName(); // Might be "var" or "alias.var"
-
-                if (columnName.contains(".")) {
-                    // Qualified variable: alias.var
-                    String[] parts = columnName.split("\\.", 2);
-                    // No longer check for '?' prefix on the variable part
-                    if (parts.length != 2) { 
-                        throw new QueryParseException("Invalid qualified variable format in SELECT: " + columnName + ". Expected format: alias.variable");
-                    }
-                    String alias = parts[0];
-                    String variableName = parts[1]; // Plain variable name
-
-                    logger.debug("Validating qualified SELECT variable: {} from alias {}", variableName, alias);
-
-                    // Pass plain variableName to validation helper
-                    if (query.mainAlias().isPresent() && query.mainAlias().get().equals(alias)) {
-                        validateVariableInRegistry(variableName, mainRegistry, "main query (aliased as " + alias + ")");
-                    } 
-                    // Check if the alias refers to a subquery
-                    else if (subqueryMap.containsKey(alias)) {
-                        SubquerySpec subquerySpec = subqueryMap.get(alias);
-                        VariableRegistry subqueryRegistry = subquerySpec.subquery().variableRegistry();
-                        validateVariableInRegistry(variableName, subqueryRegistry, "subquery '" + alias + "'");
-                    } else {
-                        throw new QueryParseException("Unknown alias '" + alias + "' in SELECT column: " + columnName);
-                    }
-
-                } else {
-                    // Unqualified variable: var - must belong to main query's scope
-                    String variableName = columnName; // Already the plain name
-                    logger.debug("Validating unqualified SELECT variable: {}", variableName);
-                    
-                    // Unqualified variables are validated against the main registry.
-                     // Pass plain variableName to validation helper
-                    validateVariableInRegistry(variableName, mainRegistry, "main query");
-                }
-
+                fullColumnName = variableColumn.getColumnName();
+                context = "SELECT";
             } else if (column instanceof SnippetColumn snippetColumn) {
-                // Allow SNIPPET to reference qualified or unqualified variables
-                String fullVariableName = snippetColumn.getVariableName(); // Might be "var" or "alias.var"
-                
-                if (fullVariableName.contains(".")) {
-                     // Qualified variable: alias.var
-                    String[] parts = fullVariableName.split("\\.", 2);
-                     // No longer check for '?' prefix on the variable part
-                    if (parts.length != 2) { 
-                        throw new QueryParseException("Invalid qualified variable format in SNIPPET: " + fullVariableName + ". Expected format: alias.variable");
-                    }
-                    String alias = parts[0];
-                    String variableName = parts[1]; // Plain variable name
-
-                    logger.debug("Validating qualified SNIPPET variable: {} from alias {}", variableName, alias);
-
-                     // Pass plain variableName to validation helper
-                    if (query.mainAlias().isPresent() && query.mainAlias().get().equals(alias)) {
-                        validateVariableInRegistry(variableName, mainRegistry, "main query (aliased as " + alias + " for SNIPPET)");
-                    } 
-                    // Check if the alias refers to a subquery
-                    else if (subqueryMap.containsKey(alias)) {
-                        SubquerySpec subquerySpec = subqueryMap.get(alias);
-                        VariableRegistry subqueryRegistry = subquerySpec.subquery().variableRegistry();
-                        validateVariableInRegistry(variableName, subqueryRegistry, "subquery '" + alias + "' (for SNIPPET)");
-                    } else {
-                        throw new QueryParseException("Unknown alias '" + alias + "' in SNIPPET column: " + fullVariableName);
-                    }
-                    
-                } else {
-                    // Unqualified variable: var - must belong to main query's scope
-                    String variableName = fullVariableName; // Already the plain name
-                    logger.debug("Validating unqualified SNIPPET variable: {}", variableName);
-                     // Pass plain variableName to validation helper
-                    validateVariableInRegistry(variableName, mainRegistry, "main query (for SNIPPET)");
-                }
-            
-            } else if (column instanceof CountColumn countColumn) {
-                // COUNT(UNIQUE var) - variable must be unqualified and belong to the main query registry
-                // We need a way to get the variable name only if it's a COUNT(UNIQUE var)
-                String variableName = countColumn.getVariableNameForValidation(); // Should return plain name or null
-                if (variableName != null) { // Only validate if it's COUNT(UNIQUE var)
-                    logger.debug("Validating COUNT(UNIQUE) variable: {}", variableName);
-                    // Pass plain variableName to validation helper
-                    validateVariableInRegistry(variableName, mainRegistry, "main query (for COUNT)");
-                }
+                fullColumnName = snippetColumn.getVariableName();
+                context = "SNIPPET";
+            } else {
+                continue; // Skip non-variable columns (COUNT, TITLE, etc.)
             }
-            // Other column types (TITLE, TIMESTAMP) don't need variable validation
+
+            String alias; // Alias part extracted from fullColumnName
+            String plainVariableName; // Variable part extracted
+            String registryKey; // The key expected in the VariableRegistry (internally qualified)
+            VariableRegistry targetRegistry; // The registry to check
+
+            if (fullColumnName.contains(".")) {
+                // Qualified variable: alias.var
+                String[] parts = fullColumnName.split("\\.", 2);
+                if (parts.length != 2) {
+                    throw new QueryParseException(String.format(
+                        "Invalid qualified variable format in %s: %s. Expected format: alias.variable",
+                        context, fullColumnName));
+                }
+                alias = parts[0];
+                plainVariableName = parts[1];
+
+                logger.debug("Validating qualified {} variable: {} from alias {}", context, plainVariableName, alias);
+
+                // Determine target registry and registry key
+                if (subqueryMap.isEmpty()) {
+                    // We are inside the subquery's own validation context.
+                    // The mainRegistry *is* the subquery's registry (already requalified).
+                    // The fullColumnName (e.g., "q2.person") should exist directly in this registry.
+                    targetRegistry = mainRegistry;
+                    registryKey = fullColumnName; // Use the full qualified name as the key
+                    validateVariableInRegistry(registryKey, targetRegistry, String.format("subquery '%s' internal validation for %s", alias, context));
+                } else if (alias.equals(mainAlias) || (alias.equals("$main") && !query.mainAlias().isPresent())) { 
+                    // Belongs to main query (explicitly or implicitly via $main)
+                    targetRegistry = mainRegistry;
+                    registryKey = mainAlias + "." + plainVariableName; // Key uses main alias ($main or explicit)
+                    validateVariableInRegistry(registryKey, targetRegistry, String.format("main query (alias %s) for %s", mainAlias, context));
+                } else if (subqueryMap.containsKey(alias)) {
+                    // Belongs to a subquery (validation running in the main query context)
+                    SubquerySpec subquerySpec = subqueryMap.get(alias);
+                    targetRegistry = subquerySpec.subquery().variableRegistry();
+                    registryKey = alias + "." + plainVariableName; // Key uses subquery alias
+                    validateVariableInRegistry(registryKey, targetRegistry, String.format("subquery '%s' for %s", alias, context));
+                } else {
+                    // This case should ideally not be reached if the logic above is correct
+                    throw new QueryParseException(String.format("Unknown alias '%s' in %s column: %s", alias, context, fullColumnName));
+                }
+
+            } else {
+                // Unqualified variable: var - must belong to main query's scope
+                alias = mainAlias; // Implicitly belongs to main scope
+                plainVariableName = fullColumnName;
+                targetRegistry = mainRegistry;
+                registryKey = mainAlias + "." + plainVariableName; // Key uses main alias ($main or explicit)
+                logger.debug("Validating unqualified {} variable: {} (using alias {})", context, plainVariableName, alias);
+                validateVariableInRegistry(registryKey, targetRegistry, String.format("main query (alias %s) for %s", mainAlias, context));
+            }
         }
     }
     
     /**
-     * Helper method to validate that a variable exists and is produced within a specific registry.
-     * 
-     * @param variableName The plain variable name (without '?')
-     * @param registry The VariableRegistry to check against
-     * @param contextDescription A description of the context (e.g., "main query", "subquery 'sq1'") for error messages
-     * @throws QueryParseException If the variable is not found or not produced
+     * Validates that a specific internally qualified variable name is produced within the given registry.
+     *
+     * @param internalQualifiedName The fully qualified name expected in the registry (e.g., $main.var, alias.var)
+     * @param registry The VariableRegistry to check.
+     * @param contextDescription A description of the context for error messages.
+     * @throws QueryParseException If the variable is not found or not produced.
      */
-    private void validateVariableInRegistry(String variableName, VariableRegistry registry, String contextDescription) throws QueryParseException {
-        // Variable name is expected to be plain (no '?' prefix)
-        // Remove the starting '?' check
-         
-        if (!registry.getAllVariableNames().contains(variableName)) {
-            throw new QueryParseException(String.format(
-                "Unbound variable in SELECT: %s (referenced from %s). Variable not found in its scope.",
-                variableName, contextDescription
-            ));
+    private void validateVariableInRegistry(String internalQualifiedName, VariableRegistry registry, String contextDescription) throws QueryParseException {
+        // Check if the variable exists and is produced in the registry using isProduced
+        if (!registry.isProduced(internalQualifiedName)) {
+            // Need to differentiate between "not found" and "found but not produced"
+            // Let's check existence using getAllVariableNames for a better error message
+            if (!registry.getAllVariableNames().contains(internalQualifiedName)) {
+                 throw new QueryParseException(String.format(
+                    "Variable '%s' not found in its scope (%s). Available: %s",
+                    internalQualifiedName, contextDescription, registry.getAllVariableNames()
+                ));
+            } else {
+                 throw new QueryParseException(String.format(
+                    "Variable '%s' is consumed in %s but is never produced (bound).",
+                    internalQualifiedName, contextDescription
+                ));
+            }
         }
-        if (!registry.isProduced(variableName)) {
-            throw new QueryParseException(String.format(
-                "Variable %s in SELECT (referenced from %s) is consumed but not produced within its scope.",
-                variableName, contextDescription
-            ));
-        }
-        logger.debug("Variable {} successfully validated in registry for {}", variableName, contextDescription);
+        
+        logger.debug("Variable '{}' validated successfully in context: {}", internalQualifiedName, contextDescription);
     }
     
     /**
@@ -316,29 +301,67 @@ public class QuerySemanticValidator {
             throw new QueryParseException("Query with subqueries must have a join condition");
         }
         
+        // Create a map for quick lookup of subqueries by alias
+        Map<String, SubquerySpec> subqueryMap = query.subqueries().stream()
+                .collect(Collectors.toMap(SubquerySpec::alias, sq -> sq));
+
         // Validate the join condition if present
         query.joinCondition().ifPresent(joinCondition -> {
-            // Validate left column exists in main query
-            // This would require more context about available columns
-            // For Phase 1, we'll defer this validation
-            
-            // Validate right column exists in subquery
-            // This would require more context about available columns
-            // For Phase 1, we'll defer this validation
-            
-            // Validate proximity window if applicable
-            if (joinCondition.temporalPredicate() == TemporalPredicate.PROXIMITY) {
-                joinCondition.proximityWindow().ifPresent(window -> {
-                    if (window <= 0) {
-                        throw new RuntimeException(new QueryParseException("Proximity window must be greater than 0"));
-                    }
-                    
-                    if (window > MAX_TEMPORAL_PROXIMITY_WINDOW) {
-                        throw new RuntimeException(new QueryParseException(
-                            String.format("Proximity window %d exceeds maximum allowed size of %d days", 
-                                         window, MAX_TEMPORAL_PROXIMITY_WINDOW)));
-                    }
-                });
+            try {
+                // Validate left column exists in main query
+                String leftQualified = joinCondition.leftColumn();
+                String rightQualified = joinCondition.rightColumn();
+
+                // Validate left column: must be qualified as mainAlias.var or $main.var
+                if (leftQualified == null || !leftQualified.contains(".")) {
+                    throw new QueryParseException("Left join column must be qualified (alias.var): " + leftQualified);
+                }
+                String[] leftParts = leftQualified.split("\\.", 2);
+                if (leftParts.length != 2) {
+                    throw new QueryParseException("Invalid qualified variable format for left join column: " + leftQualified);
+                }
+                String leftAlias = leftParts[0];
+                String leftVar = leftParts[1];
+                VariableRegistry mainRegistry = query.variableRegistry();
+                if (query.mainAlias().isPresent() && query.mainAlias().get().equals(leftAlias)) {
+                    validateVariableInRegistry(leftQualified, mainRegistry, "main query (aliased as " + leftAlias + " for JOIN)");
+                } else if ("$main".equals(leftAlias)) {
+                    validateVariableInRegistry(leftQualified, mainRegistry, "main query ($main for JOIN)");
+                } else {
+                    throw new QueryParseException("Unknown alias '" + leftAlias + "' for left join column: " + leftQualified);
+                }
+
+                // Validate right column: must be qualified as subqueryAlias.var
+                if (rightQualified == null || !rightQualified.contains(".")) {
+                    throw new QueryParseException("Right join column must be qualified (alias.var): " + rightQualified);
+                }
+                String[] rightParts = rightQualified.split("\\.", 2);
+                if (rightParts.length != 2) {
+                    throw new QueryParseException("Invalid qualified variable format for right join column: " + rightQualified);
+                }
+                String rightAlias = rightParts[0];
+                String rightVar = rightParts[1];
+                if (!subqueryMap.containsKey(rightAlias)) {
+                    throw new QueryParseException("Unknown alias '" + rightAlias + "' for right join column: " + rightQualified);
+                }
+                VariableRegistry subqueryRegistry = subqueryMap.get(rightAlias).subquery().variableRegistry();
+                validateVariableInRegistry(rightQualified, subqueryRegistry, "subquery '" + rightAlias + "' (for JOIN)");
+
+                // Validate proximity window if applicable
+                if (joinCondition.temporalPredicate() == TemporalPredicate.PROXIMITY) {
+                    joinCondition.proximityWindow().ifPresent(window -> {
+                        if (window <= 0) {
+                            throw new RuntimeException(new QueryParseException("Proximity window must be greater than 0"));
+                        }
+                        if (window > MAX_TEMPORAL_PROXIMITY_WINDOW) {
+                            throw new RuntimeException(new QueryParseException(
+                                String.format("Proximity window %d exceeds maximum allowed size of %d days", 
+                                             window, MAX_TEMPORAL_PROXIMITY_WINDOW)));
+                        }
+                    });
+                }
+            } catch (QueryParseException e) {
+                throw new RuntimeException(e);
             }
         });
     }

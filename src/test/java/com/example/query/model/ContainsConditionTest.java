@@ -58,10 +58,10 @@ class ContainsConditionTest {
     }
     
     @Test
-    @DisplayName("toString should format with variable correctly (AS-based style)")
+    @DisplayName("toString should format with variable correctly (BIND-based style)")
     void toStringShouldFormatWithVariableCorrectly() {
         var condition = new Contains("test value", "match", true);
-        assertEquals("CONTAINS(\"test value\") AS match", condition.toString());
+        assertEquals("CONTAINS(\"test value\") BIND match", condition.toString());
     }
     
     @Test
@@ -83,6 +83,6 @@ class ContainsConditionTest {
     public void testToStringWithVariable() {
         Contains condition = new Contains(List.of("test", "value"), "match", true);
         String str = condition.toString();
-        assertEquals("CONTAINS(\"test value\") AS match", str);
+        assertEquals("CONTAINS(\"test value\") BIND match", str);
     }
 } 

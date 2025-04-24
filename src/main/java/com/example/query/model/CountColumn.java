@@ -31,7 +31,7 @@ public class CountColumn implements SelectColumn {
     }
     
     private final CountType type;
-    private final String variable;
+    private final String qualifiedVariableName;
     private final String columnName;
     private final ColumnType columnType = ColumnType.INTEGER;
     
@@ -45,15 +45,16 @@ public class CountColumn implements SelectColumn {
     /**
      * Creates a COUNT(UNIQUE var) column.
      *
-     * @param variable The plain variable name to count unique values of (e.g., "term")
+     * @param qualifiedVariableName The qualified variable name to count unique values of (e.g., $main.var)
      */
-    public static CountColumn countUnique(String variable) {
-        if (variable == null || variable.isEmpty()) {
-             throw new IllegalArgumentException("Variable name must not be null or empty for COUNT(UNIQUE)");
+    public static CountColumn countUnique(String qualifiedVariableName) {
+        // Expects qualified name like $main.var from the builder
+        if (qualifiedVariableName == null || qualifiedVariableName.isEmpty() || !qualifiedVariableName.contains(".")) {
+             throw new IllegalArgumentException("COUNT(UNIQUE) requires a qualified variable name (e.g., $main.var), got: " + qualifiedVariableName);
         }
-        // Generate column name from plain variable
-        String colName = "count_unique_" + variable;
-        return new CountColumn(CountType.UNIQUE, variable, colName); // Store plain variable
+        // Generate column name from qualified variable, replacing '.'
+        String colName = "count_unique_" + qualifiedVariableName.replace('.', '_');
+        return new CountColumn(CountType.UNIQUE, qualifiedVariableName, colName); // Store qualified variable name
     }
     
     /**
@@ -67,23 +68,23 @@ public class CountColumn implements SelectColumn {
      * Creates a new count column.
      *
      * @param type The type of count operation
-     * @param variable The plain variable name to count (for UNIQUE counts)
+     * @param qualifiedVariableName The qualified variable name to count (for UNIQUE counts)
      * @param columnName The name for the column in the result table
      */
-    private CountColumn(CountType type, String variable, String columnName) {
+    private CountColumn(CountType type, String qualifiedVariableName, String columnName) {
         this.type = type;
-        // Store plain variable name (or null if not UNIQUE)
-        this.variable = (type == CountType.UNIQUE) ? variable : null; 
+        // Store qualified variable name (or null if not UNIQUE)
+        this.qualifiedVariableName = (type == CountType.UNIQUE) ? qualifiedVariableName : null; 
         this.columnName = columnName;
     }
     
     /**
-     * Returns the plain variable name if this is a COUNT(UNIQUE var) column,
+     * Returns the qualified variable name if this is a COUNT(UNIQUE var) column,
      * otherwise returns null. Used for validation purposes.
      */
     public String getVariableNameForValidation() {
-        // Returns the stored plain name (which is null if not UNIQUE type)
-        return variable;
+        // Returns the stored qualified name (which is null if not UNIQUE type)
+        return qualifiedVariableName;
     }
     
     @Override
@@ -162,7 +163,7 @@ public class CountColumn implements SelectColumn {
     public String toString() {
         return switch (type) {
             case ALL -> "COUNT(*)";
-            case UNIQUE -> "COUNT(UNIQUE " + variable + ")";
+            case UNIQUE -> "COUNT(UNIQUE " + qualifiedVariableName + ")";
             case DOCUMENTS -> "COUNT(DOCUMENTS)";
         };
     }

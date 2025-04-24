@@ -18,7 +18,7 @@ public record Dependency(
     String governor,
     String relation,
     String dependent,
-    String variableName,
+    String qualifiedVariableName,
     boolean isVariable
 ) implements Condition {
     
@@ -33,7 +33,7 @@ public record Dependency(
         Objects.requireNonNull(dependent, "dependent cannot be null");
         
         if (isVariable) {
-            Objects.requireNonNull(variableName, "variableName cannot be null when isVariable is true");
+            Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
         }
     }
 
@@ -67,7 +67,16 @@ public record Dependency(
      * Returns the variable name if this is a variable binding condition.
      */
     public String getVariableName() {
-        return variableName;
+        return qualifiedVariableName;
+    }
+    
+    /**
+     * Returns the variable name if this is a variable binding condition.
+     * 
+     * @return The qualified variable name, or null if not bound
+     */
+    public String variableName() {
+        return qualifiedVariableName;
     }
     
     /**
@@ -84,7 +93,7 @@ public record Dependency(
     
     @Override
     public Set<String> getProducedVariables() {
-        return isVariable ? Set.of(variableName) : Collections.emptySet();
+        return isVariable ? Set.of(qualifiedVariableName) : Collections.emptySet();
     }
     
     @Override
@@ -111,7 +120,10 @@ public record Dependency(
     public void registerVariables(VariableRegistry registry) {
         logger.debug("Registering variables for DEPENDS({}, {}, {})", governor, relation, dependent);
         
-        // Register produced variable
+        // Produced and Consumed variables are now registered directly in QueryModelBuilder
+        // using qualified names for registry lookup.
+        
+        /*
         if (isVariable) {
             logger.debug("Registering {} as producer variable", variableName);
             registry.registerProducer(variableName, getProducedVariableType(), getType());
@@ -131,12 +143,13 @@ public record Dependency(
         } else {
             logger.debug("Dependent '{}' is not a variable reference", dependent);
         }
+        */
     }
     
     @Override
     public String toString() {
         if (isVariable) {
-            return String.format("DEPENDS(%s, %s, %s) AS %s", governor, relation, dependent, variableName);
+            return String.format("DEPENDS(%s, %s, %s) BIND %s", governor, relation, dependent, qualifiedVariableName);
         } else {
             return String.format("DEPENDS(%s, %s, %s)", governor, relation, dependent);
         }

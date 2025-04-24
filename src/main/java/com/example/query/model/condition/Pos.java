@@ -69,8 +69,8 @@ import com.example.query.binding.VariableType;
  */
 public record Pos(
     String posTag,
-    String term,        // Term can be null when isVariable is true
-    String variableName,
+    String term,        // Term can be null when isVariable is true; stores plain name if variable
+    String qualifiedVariableName, // Renamed from variableName
     boolean isVariable
 ) implements Condition {
     
@@ -82,7 +82,7 @@ public record Pos(
         
         if (isVariable) {
             // When binding a variable, term can be null (extract any term with the tag)
-            Objects.requireNonNull(variableName, "variableName cannot be null when isVariable is true");
+            Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
         } else {
             // When searching for a specific term/tag combination, term must be provided
             Objects.requireNonNull(term, "term cannot be null when isVariable is false");
@@ -105,6 +105,7 @@ public record Pos(
      * Creates a new POS condition with variable binding.
      */
     public Pos(String posTag, String term, String variableName) {
+        // Assumes variableName passed here is already qualified by the builder
         this(posTag, term, variableName, true);
     }
 
@@ -119,7 +120,18 @@ public record Pos(
      * Returns the variable name if this is a variable binding condition.
      */
     public String getVariableName() {
-        return variableName;
+        // Method kept for potential backward compatibility? Or remove?
+        // Returning the qualified name here.
+        return qualifiedVariableName;
+    }
+
+    /**
+     * Returns the variable name if this is a variable binding condition.
+     * 
+     * @return The qualified variable name, or null if not bound
+     */
+    public String variableName() {
+        return qualifiedVariableName;
     }
     
     @Override
@@ -129,7 +141,8 @@ public record Pos(
     
     @Override
     public Set<String> getProducedVariables() {
-        return isVariable ? Set.of(variableName) : Collections.emptySet();
+        // Return the qualified name if bound
+        return isVariable ? Set.of(qualifiedVariableName) : Collections.emptySet();
     }
     
     @Override
@@ -141,14 +154,17 @@ public record Pos(
     @Override
     public void registerVariables(VariableRegistry registry) {
         if (isVariable) {
-            registry.registerProducer(variableName, getProducedVariableType(), getType());
+            // Registration now happens in QueryModelBuilder with qualified name
+            // registry.registerProducer(qualifiedVariableName, getProducedVariableType(), getType());
         }
+        // Consumption of 'term' if it were a variable would also be handled in builder
     }
     
     @Override
     public String toString() {
         if (isVariable) {
-            return String.format("POS(%s) AS %s", posTag, variableName);
+            // Format: POS(Tag) BIND alias.var
+            return String.format("POS(%s) BIND %s", posTag, qualifiedVariableName);
         } else {
             return String.format("POS(%s, %s)", posTag, term);
         }

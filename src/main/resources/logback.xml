@@ -56,11 +56,11 @@
     </logger>
 
     <!-- Root logger -->
-    <root level="WARN">
+    <root level="DEBUG">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
     </root>
 
     <!-- Application logging -->
-    <logger name="com.example" level="INFO" />
+    <logger name="com.example" level="DEBUG" />
 </configuration>

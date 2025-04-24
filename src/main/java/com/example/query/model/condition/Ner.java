@@ -33,7 +33,7 @@ import com.example.query.binding.VariableType;
 public record Ner(
     String entityType,
     String target,
-    String variableName,
+    String qualifiedVariableName,
     boolean isVariable
 ) implements Condition {
     
@@ -44,7 +44,7 @@ public record Ner(
         Objects.requireNonNull(entityType, "entityType cannot be null");
         
         if (isVariable) {
-            Objects.requireNonNull(variableName, "variableName cannot be null when isVariable is true");
+            Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
         }
     }
     
@@ -72,6 +72,7 @@ public record Ner(
      * 
      * @param entityType The entity type to match
      * @param variableName The variable to bind the entities to
+     * @param isVariable Flag indicating if binding occurs (always true for this constructor)
      */
     public Ner(String entityType, String variableName, boolean isVariable) {
         this(entityType, null, variableName, isVariable);
@@ -96,11 +97,13 @@ public record Ner(
      * @param variableName The variable name to bind entities to (with ? prefix)
      * @return A new NER condition
      */
+    @Deprecated // Use builder which handles qualification
     public static Ner withVariable(String entityType, String variableName) {
         if (!variableName.startsWith("?")) {
             throw new IllegalArgumentException("Variable name must start with ?");
         }
-        return new Ner(entityType, null, variableName.substring(1), true);
+        // This method is deprecated as qualification ($main.var) should happen in builder
+        return new Ner(entityType, null, "$main." + variableName.substring(1), true);
     }
     
     @Override
@@ -110,7 +113,7 @@ public record Ner(
     
     @Override
     public Set<String> getProducedVariables() {
-        return isVariable ? Set.of(variableName) : Collections.emptySet();
+        return isVariable ? Set.of(qualifiedVariableName) : Collections.emptySet();
     }
     
     @Override
@@ -121,15 +124,16 @@ public record Ner(
     @Override
     public void registerVariables(VariableRegistry registry) {
         if (isVariable) {
-            registry.registerProducer(variableName, getProducedVariableType(), getType());
+            registry.registerProducer(qualifiedVariableName, getProducedVariableType(), getType());
         }
+        // Consumption of 'target' if it were a variable would also be handled in builder
     }
     
     @Override
     public String toString() {
         if (isVariable) {
-            // Format: NER(Type) AS var
-            return String.format("NER(%s) AS %s", entityType, variableName);
+            // Format: NER(Type) BIND alias.var
+            return String.format("NER(%s) BIND %s", entityType, qualifiedVariableName);
         } else if (target != null) {
             // Format: NER(Type, Target)
             return String.format("NER(%s, %s)", entityType, target);
@@ -137,5 +141,14 @@ public record Ner(
             // Format: NER(Type)
             return String.format("NER(%s)", entityType);
         }
+    }
+    
+    /**
+     * Returns the variable name if this is a variable binding condition.
+     * 
+     * @return The qualified variable name, or null if not bound
+     */
+    public String variableName() {
+        return qualifiedVariableName;
     }
 } 

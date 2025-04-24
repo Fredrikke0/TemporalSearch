@@ -107,7 +107,7 @@ class TableResultServiceTest {
     
      @Test
     void testGenerateTableWithSelectColumns() throws ResultGenerationException {
-        List<SelectColumn> select = List.of(new VariableColumn("?fruit"));
+        List<SelectColumn> select = List.of(new VariableColumn("main.fruit"));
         Query query = new Query(
             "testSource",
             Collections.emptyList(),
@@ -119,8 +119,8 @@ class TableResultServiceTest {
         );
         
         List<MatchDetail> details = List.of(
-            createMatchDetail(1, -1, "apple", ValueType.TERM, "?fruit"),
-            createMatchDetail(2, -1, "banana", ValueType.TERM, "?fruit")
+            createMatchDetail(1, -1, "apple", ValueType.TERM, "main.fruit"),
+            createMatchDetail(2, -1, "banana", ValueType.TERM, "main.fruit")
         );
         QueryResult queryResult = createQueryResult(Query.Granularity.DOCUMENT, details);
 
@@ -129,9 +129,9 @@ class TableResultServiceTest {
         assertNotNull(table);
         assertEquals(2, table.rowCount());
         assertTrue(table.columnNames().contains("document_id"));
-        assertTrue(table.columnNames().contains("?fruit")); 
-        assertEquals("apple", table.stringColumn("?fruit").get(0));
-        assertEquals("banana", table.stringColumn("?fruit").get(1));
+        assertTrue(table.columnNames().contains("main.fruit")); 
+        assertEquals("apple", table.stringColumn("main.fruit").get(0));
+        assertEquals("banana", table.stringColumn("main.fruit").get(1));
     }
 
     @Test
@@ -150,8 +150,8 @@ class TableResultServiceTest {
     void testGenerateTableForJoinDocumentGranularity() throws ResultGenerationException {
         Query query = new Query("testSource", Collections.emptyList(), Query.Granularity.DOCUMENT);
         List<JoinedMatch> joined = List.of(
-            createJoinedMatch(1, -1, "apple", "?fruitL", 2, -1, "banana", "?fruitR"),
-            createJoinedMatch(3, -1, "cherry", "?fruitL", 4, -1, "date", "?fruitR")
+            createJoinedMatch(1, -1, "apple", "main.fruitL", 2, -1, "banana", "main.fruitR"),
+            createJoinedMatch(3, -1, "cherry", "main.fruitL", 4, -1, "date", "main.fruitR")
         );
         Table table = tableResultService.generateTableForJoin(query, joined, indexes);
         assertNotNull(table);
@@ -159,20 +159,20 @@ class TableResultServiceTest {
         assertTrue(table.columnNames().contains("left_document_id"));
         assertTrue(table.columnNames().contains("right_document_id"));
         // Variable columns
-        assertTrue(table.columnNames().contains("?fruitL"));
-        assertTrue(table.columnNames().contains("?fruitR"));
-        assertEquals("apple", table.stringColumn("?fruitL").get(0));
-        assertEquals("banana", table.stringColumn("?fruitR").get(0));
-        assertEquals("cherry", table.stringColumn("?fruitL").get(1));
-        assertEquals("date", table.stringColumn("?fruitR").get(1));
+        assertTrue(table.columnNames().contains("main.fruitL"));
+        assertTrue(table.columnNames().contains("main.fruitR"));
+        assertEquals("apple", table.stringColumn("main.fruitL").get(0));
+        assertEquals("banana", table.stringColumn("main.fruitR").get(0));
+        assertEquals("cherry", table.stringColumn("main.fruitL").get(1));
+        assertEquals("date", table.stringColumn("main.fruitR").get(1));
     }
 
     @Test
     void testGenerateTableForJoinSentenceGranularity() throws ResultGenerationException {
         Query query = new Query("testSource", Collections.emptyList(), Query.Granularity.SENTENCE);
         List<JoinedMatch> joined = List.of(
-            createJoinedMatch(1, 10, "apple", "?fruitL", 2, 20, "banana", "?fruitR"),
-            createJoinedMatch(3, 30, "cherry", "?fruitL", 4, 40, "date", "?fruitR")
+            createJoinedMatch(1, 10, "apple", "main.fruitL", 2, 20, "banana", "main.fruitR"),
+            createJoinedMatch(3, 30, "cherry", "main.fruitL", 4, 40, "date", "main.fruitR")
         );
         Table table = tableResultService.generateTableForJoin(query, joined, indexes);
         assertNotNull(table);

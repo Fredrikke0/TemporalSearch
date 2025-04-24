@@ -107,10 +107,10 @@ class NerConditionTest {
     }
     
     @Test
-    @DisplayName("toString should format with variable correctly (new AS-based style)")
+    @DisplayName("toString should format with variable correctly (BIND-based style)")
     void testToStringWithVariable() {
         Ner condition = new Ner("PERSON", null, "scientist", true);
-        assertEquals("NER(PERSON) AS scientist", condition.toString());
+        assertEquals("NER(PERSON) BIND scientist", condition.toString());
     }
     
     @Test

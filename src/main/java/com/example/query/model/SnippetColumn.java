@@ -27,36 +27,39 @@ public class SnippetColumn implements SelectColumn {
     
     private static final int DEFAULT_SNIPPET_WINDOW = 5; // Default words before/after
 
-    private final String columnName; // Changed to instance variable
+    private final String columnName;
     private final int windowSize;
-    private final String variableName; // Store plain variable name (e.g., "term")
+    private final String qualifiedVariableName; // Store qualified name (e.g., "$main.term" or "q1.term")
 
-    public SnippetColumn(String plainVariableName, int windowSize) {
-        if (plainVariableName == null || plainVariableName.isEmpty()) {
-            throw new IllegalArgumentException("Variable name must not be null or empty for SnippetColumn");
+    public SnippetColumn(String qualifiedVariableName, int windowSize) {
+        if (qualifiedVariableName == null || qualifiedVariableName.isEmpty() || !qualifiedVariableName.contains(".")) {
+            throw new IllegalArgumentException("SnippetColumn requires a qualified variable name (e.g., alias.var), got: " + qualifiedVariableName);
         }
-        // No longer check for '?' prefix
-        this.variableName = plainVariableName; // Store plain variable name
+        this.qualifiedVariableName = qualifiedVariableName; 
         this.windowSize = windowSize >= 0 ? windowSize : DEFAULT_SNIPPET_WINDOW; // Allow window 0
-        this.columnName = "snippet_" + this.variableName; // Use plain name for column name
+        // Generate a unique column name based on the qualified name
+        this.columnName = "snippet_" + this.qualifiedVariableName.replace('.', '_');
     }
 
     public int getWindowSize() {
         return windowSize;
     }
     
+    /**
+     * Gets the qualified variable name this snippet is based on.
+     */
     public String getVariableName() {
-        return variableName;
+        return qualifiedVariableName;
     }
     
     @Override
     public String getColumnName() {
-        return columnName; // Return dynamic name (now based on plain var name)
+        return columnName;
     }
     
     @Override
     public Column<?> createColumn() {
-        return StringColumn.create(columnName); // Use dynamic name
+        return StringColumn.create(columnName);
     }
     
     @Override
@@ -65,12 +68,12 @@ public class SnippetColumn implements SelectColumn {
                                Map<String, IndexAccessInterface> indexes) {
         StringColumn snippetColumn = table.stringColumn(this.columnName);
         
-        // 1. Find the first MatchDetail in the list that matches our plain variable name
+        // 1. Find the first MatchDetail in the list that matches our QUALIFIED variable name
         Optional<MatchDetail> relevantDetailOpt = detailsForUnit.stream()
             .filter(MatchDetail.class::isInstance)
             .map(MatchDetail.class::cast)
-            // Compare plain variableName with the (now plain) variableName in MatchDetail
-            .filter(d -> variableName.equals(d.variableName().orElse(null)))
+            // Compare qualifiedVariableName with the qualified name stored in MatchDetail
+            .filter(d -> qualifiedVariableName.equals(d.variableName().orElse(null)))
             .findFirst();
             
         if (relevantDetailOpt.isEmpty()) {
@@ -82,7 +85,7 @@ public class SnippetColumn implements SelectColumn {
         
         // 2. Check if the found detail has a valid position
         if (relevantDetail.position() == null || relevantDetail.position().getBeginPosition() == -1) {
-            logger.debug("Relevant MatchDetail for variable '{}' lacks valid position. Cannot generate snippet.", variableName);
+            logger.debug("Relevant MatchDetail for variable '{}' lacks valid position. Cannot generate snippet.", qualifiedVariableName);
             snippetColumn.set(rowIndex, "[Snippet N/A: Match lacks position. Use DATE(?d) etc. for context.]");
             return;
         }
@@ -154,6 +157,7 @@ public class SnippetColumn implements SelectColumn {
     
     @Override
     public String toString() {
-        return "SNIPPET(" + variableName + ")"; // Use plain variable name
+        // Represent with qualified variable name
+        return "SNIPPET(" + qualifiedVariableName + ")";
     }
 } 

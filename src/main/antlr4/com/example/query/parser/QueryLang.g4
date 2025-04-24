@@ -135,7 +135,7 @@ selectColumn
     ;
 
 snippetExpression
-    : SNIPPET LPAREN variable (COMMA WINDOW EQUALS windowSize=INTEGER_LITERAL)? RPAREN
+    : SNIPPET LPAREN (variable | qualifiedIdentifier) (COMMA WINDOW EQUALS windowSize=INTEGER_LITERAL)? RPAREN
     ;
 
 titleExpression
@@ -266,7 +266,8 @@ dependsExpression
     ;
 
 governor
-    : variable
+    : qualifiedIdentifier
+    | variable
     | STRING
     | identifier
     ;
@@ -277,7 +278,8 @@ relation
     ;
 
 dependent
-    : variable
+    : qualifiedIdentifier
+    | variable
     | STRING
     | identifier
     ;
