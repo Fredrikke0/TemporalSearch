@@ -44,6 +44,7 @@ import com.example.query.model.condition.Temporal;
 import com.example.query.binding.MatchDetail;
 import com.example.query.binding.ValueType;
 import com.example.query.index.IndexManager; // Added import for IndexManager
+import static org.mockito.Mockito.spy;
 
 @ExtendWith(MockitoExtension.class)
 class QueryExecutorTest {
@@ -436,5 +437,44 @@ class QueryExecutorTest {
         com.example.query.binding.JoinedMatch result = joinResults.get(0);
         assertEquals("foo", result.left().value());
         assertEquals("foo", result.right().value());
+    }
+
+    @Test
+    void testJoinStrategySelection() throws QueryExecutionException {
+        // Create a dummy join condition (INNER join)
+        JoinCondition joinCondition = new JoinCondition("$main.id", "q1.id", JoinCondition.JoinType.INNER, TemporalPredicate.INTERSECT);
+        Query query = new Query(
+            "test_source",
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Optional.empty(),
+            Query.Granularity.DOCUMENT,
+            Optional.empty(),
+            Collections.emptyList(),
+            new com.example.query.binding.VariableRegistry(),
+            List.of(new SubquerySpec(new Query("test_source"), "q1")),
+            Optional.of(joinCondition),
+            Optional.of("$main")
+        );
+        // Default should be INDEPENDENT
+        QueryExecutor defaultExecutor = new QueryExecutor(factory, mockTableResultService);
+        assertEquals(JoinOptimizationStrategy.INDEPENDENT, getJoinStrategy(defaultExecutor));
+        // Set to DEPENDENT and verify
+        defaultExecutor.setJoinOptimizationStrategy(JoinOptimizationStrategy.DEPENDENT);
+        assertEquals(JoinOptimizationStrategy.DEPENDENT, getJoinStrategy(defaultExecutor));
+        // Set to INDEPENDENT and verify
+        defaultExecutor.setJoinOptimizationStrategy(JoinOptimizationStrategy.INDEPENDENT);
+        assertEquals(JoinOptimizationStrategy.INDEPENDENT, getJoinStrategy(defaultExecutor));
+    }
+
+    // Helper to access private joinStrategy field via reflection
+    private JoinOptimizationStrategy getJoinStrategy(QueryExecutor executor) {
+        try {
+            java.lang.reflect.Field field = QueryExecutor.class.getDeclaredField("joinStrategy");
+            field.setAccessible(true);
+            return (JoinOptimizationStrategy) field.get(executor);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 } 

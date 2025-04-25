@@ -12,7 +12,7 @@ import com.example.query.result.ResultGenerationException;
 import com.example.query.result.TableResultService;
 import com.example.query.sqlite.SqliteAccessor;
 import com.example.query.index.IndexManager;
-
+import com.example.query.executor.JoinOptimizationStrategy;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +42,7 @@ public class QueryExecutor {
     private final ConditionExecutorFactory executorFactory;
     private TableResultService tableResultService;
     private boolean nashInitialized = false;
+    private JoinOptimizationStrategy joinStrategy = JoinOptimizationStrategy.INDEPENDENT;
     
     /**
      * Creates a new QueryExecutor with the provided executor factory.
@@ -120,23 +121,13 @@ public class QueryExecutor {
     public Object executeWithContext(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext) 
             throws QueryExecutionException {
         logger.debug("Executing query: {}", query);
-        
         Query.Granularity granularity = query.granularity();
         int granularitySize = query.granularitySize().orElse(0);
-        
         if (granularitySize < 0 || granularitySize > 10) {
             throw new IllegalArgumentException("Granularity size must be between 0 and 10, got: " + granularitySize);
         }
-        
         String source = query.source();
         logger.debug("Using source: {}", source);
-
-        // Execute subqueries first and store results in context
-        if (query.hasSubqueries()) {
-            logger.debug("Executing {} subqueries", query.subqueries().size());
-            executeSubqueries(query.subqueries(), indexes, subqueryContext);
-        }
-
         // Always execute main conditions first if they exist.
         QueryResult mainConditionsResult = null;
         List<Condition> mainConditions = query.conditions();
@@ -152,25 +143,22 @@ public class QueryExecutor {
             logger.debug("Main query conditions executed, {} details found.", mainConditionsResult.getAllDetails().size());
         } else {
             logger.debug("No main query conditions found.");
-            // If no main conditions, create an empty result. Join logic might need to handle this (e.g., cross join?).
-             mainConditionsResult = new QueryResult(granularity, granularitySize, Collections.emptyList());
+            mainConditionsResult = new QueryResult(granularity, granularitySize, Collections.emptyList());
         }
-
-        // Handle JOIN if present
+        // --- JOIN STRATEGY BRANCHING ---
         if (query.joinCondition().isPresent()) {
-            // If there's a join, store the result of the main conditions under the main query alias
-            String mainAlias = query.mainAlias().orElse("$main"); // Use "$main" if no explicit AS for FROM
-            logger.debug("Storing main condition results under alias '{}' for join.", mainAlias);
+            JoinCondition joinCondition = query.joinCondition().get();
+            String mainAlias = query.mainAlias().orElse("$main");
             subqueryContext.addQueryResult(mainAlias, mainConditionsResult);
-            
-            logger.debug("Delegating JOIN execution to JoinHandler.");
-            JoinHandler joinHandler = new JoinHandler(); 
-            List<com.example.query.binding.JoinedMatch> joinResults = joinHandler.handleJoin(query, subqueryContext); 
-            logger.debug("Join completed. Returning List<JoinedMatch> with {} pairs.", joinResults.size());
-            // Return as Object for now; downstream consumers must handle List<JoinedMatch> for join queries
-            return joinResults;
+            if (this.joinStrategy == JoinOptimizationStrategy.DEPENDENT && joinCondition.type() == JoinCondition.JoinType.INNER) {
+                logger.info("Using DEPENDENT join strategy flow.");
+                return executeDependentJoin(query, indexes, subqueryContext, mainAlias, mainConditionsResult);
+            } else {
+                logger.info("Using INDEPENDENT join strategy flow.");
+                return executeIndependentJoin(query, indexes, subqueryContext);
+            }
         } else {
-            // If no JOIN, return the result from executing the main conditions directly.
+            // No JOIN
             return mainConditionsResult;
         }
     }
@@ -284,6 +272,38 @@ public class QueryExecutor {
                 QueryExecutionException.ErrorType.INTERNAL_ERROR
             );
         }
+    }
+    
+    /**
+     * Sets the join optimization strategy for this executor.
+     * @param strategy The join optimization strategy to use
+     */
+    public void setJoinOptimizationStrategy(JoinOptimizationStrategy strategy) {
+        this.joinStrategy = (strategy != null) ? strategy : JoinOptimizationStrategy.INDEPENDENT;
+    }
+    
+    /**
+     * Executes the current (independent) join logic.
+     */
+    private Object executeIndependentJoin(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext) throws QueryExecutionException {
+        // Execute all subqueries and store results in context
+        if (query.hasSubqueries()) {
+            logger.debug("Executing {} subqueries", query.subqueries().size());
+            executeSubqueries(query.subqueries(), indexes, subqueryContext);
+        }
+        logger.debug("Delegating JOIN execution to JoinHandler.");
+        JoinHandler joinHandler = new JoinHandler();
+        List<com.example.query.binding.JoinedMatch> joinResults = joinHandler.handleJoin(query, subqueryContext);
+        logger.debug("Join completed. Returning List<JoinedMatch> with {} pairs.", joinResults.size());
+        return joinResults;
+    }
+
+    /**
+     * Stub for dependent join strategy. To be implemented.
+     */
+    private Object executeDependentJoin(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext, String mainAlias, QueryResult mainConditionsResult) throws QueryExecutionException {
+        logger.warn("Dependent join strategy is not yet implemented. Falling back to independent join.");
+        return executeIndependentJoin(query, indexes, subqueryContext);
     }
     
     /**

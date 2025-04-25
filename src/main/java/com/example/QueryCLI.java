@@ -7,6 +7,7 @@ import com.example.query.model.*;
 import com.example.query.result.*;
 import com.example.core.*;
 import com.example.query.sqlite.SqliteAccessor;
+import com.example.query.executor.JoinOptimizationStrategy;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
@@ -34,28 +35,25 @@ public class QueryCLI {
     private final QuerySemanticValidator validator;
     private final ConditionExecutorFactory executorFactory;
     private final QueryExecutor executor;
+    private final JoinOptimizationStrategy joinStrategy;
 
     /**
      * Creates a new QueryCLI instance.
      *
      * @param indexBaseDir The base directory for all index sets
      * @param temporalStrategy The desired temporal execution strategy ("nash" or "naive")
+     * @param joinStrategy The desired join execution strategy ("independent" or "dependent")
      */
-    public QueryCLI(Path indexBaseDir, String temporalStrategy) {
+    public QueryCLI(Path indexBaseDir, String temporalStrategy, JoinOptimizationStrategy joinStrategy) {
         this.indexBaseDir = indexBaseDir;
         this.parser = new QueryParser();
         this.validator = new QuerySemanticValidator();
-
-        // Create and configure the factory
         this.executorFactory = new ConditionExecutorFactory();
         this.executorFactory.setTemporalStrategy(temporalStrategy);
-
-        // Pass the configured factory to the executor
         this.executor = new QueryExecutor(this.executorFactory);
-        
-        // Initialize the SqliteAccessor singleton
+        this.executor.setJoinOptimizationStrategy(joinStrategy);
+        this.joinStrategy = joinStrategy;
         SqliteAccessor.initialize(indexBaseDir.toString());
-        
         logger.info("Initialized QueryCLI with base directory: {}", indexBaseDir);
         logger.info("Using database structure: {}/[CORPUS_NAME]/[CORPUS_NAME].db", indexBaseDir);
     }
@@ -268,6 +266,12 @@ public class QueryCLI {
                 .setDefault("naive")      // Set the default value
                 .help("Select the execution strategy for temporal conditions (default: naive)");
         
+        // Add the new join strategy flag
+        parser.addArgument("--join-strategy")
+                .choices("independent", "dependent")
+                .setDefault("independent")
+                .help("Specifies the execution strategy for JOIN operations. 'independent' executes both sides fully before joining (default). 'dependent' attempts to optimize by filtering one side based on the results of the other.");
+        
         parser.addArgument("query")
                 .nargs("?")
                 .help("Query string to execute");
@@ -279,6 +283,13 @@ public class QueryCLI {
             String query = ns.getString("query");
             String exportArg = ns.getString("export");
             String temporalStrategy = ns.getString("temporal_strategy"); // Get the strategy name
+            String joinStrategyStr = ns.getString("join_strategy");
+            JoinOptimizationStrategy joinStrategy;
+            if ("dependent".equalsIgnoreCase(joinStrategyStr)) {
+                joinStrategy = JoinOptimizationStrategy.DEPENDENT;
+            } else {
+                joinStrategy = JoinOptimizationStrategy.INDEPENDENT;
+            }
             
             // Parse export argument if provided
             Optional<String> exportFormat = Optional.empty();
@@ -295,9 +306,10 @@ public class QueryCLI {
                 }
             }
             
-            // Create and run CLI, passing the chosen strategy
+            // Create and run CLI, passing the chosen strategies
             logger.info("Configuring temporal strategy: {}", temporalStrategy);
-            QueryCLI cli = new QueryCLI(Path.of(indexDir), temporalStrategy);
+            logger.info("Configuring join strategy: {}", joinStrategy);
+            QueryCLI cli = new QueryCLI(Path.of(indexDir), temporalStrategy, joinStrategy);
             
             if (query != null) {
                 // Execute the provided query
@@ -308,7 +320,8 @@ public class QueryCLI {
                 System.out.println("Query CLI - Enter queries or 'exit' to quit");
                 System.out.println("Using index directory: " + indexDir);
                 System.out.println("Database structure: " + indexDir + "/[CORPUS_NAME]/[CORPUS_NAME].db");
-                System.out.println("Temporal Strategy: " + temporalStrategy + " (Use --temporal-strategy nash|naive to change at startup)"); // Inform user
+                System.out.println("Temporal Strategy: " + temporalStrategy + " (Use --temporal-strategy nash|naive to change at startup)");
+                System.out.println("Join Strategy: " + joinStrategy.name().toLowerCase() + " (Use --join-strategy independent|dependent to change at startup)");
                 System.out.println("Snippet support is enabled. Use SNIPPET(variable) in SELECT clause to show text context.");
                 System.out.println("Export support: Add --export=format:filename to export results (formats: csv, json, html)");
                 
