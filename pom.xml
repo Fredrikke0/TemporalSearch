@@ -226,6 +226,12 @@
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
             </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <includes>
+                    <include>logback.xml</include>
+                </includes>
+            </resource>
         </resources>
         
         <!-- Add the sandbox source directory to build path -->
