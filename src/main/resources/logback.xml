@@ -3,9 +3,6 @@
     <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
     
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
-            <level>DEBUG</level>
-        </filter>
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %-5level - %msg%n</pattern>
         </encoder>
@@ -38,29 +35,14 @@
     <!-- Specific logger for metrics -->
     <logger name="com.example.logging.IndexingMetrics" level="INFO" additivity="false">
         <appender-ref ref="METRICS"/>
-        <appender-ref ref="FILE"/>
     </logger>
 
     <!-- Suppress LevelDB configuration messages -->
     <logger name="com.example.index.LevelDBConfig" level="WARN"/>
 
-    <!-- Index generation logging -->
-    <logger name="com.example.index" level="INFO">
-        <appender-ref ref="FILE"/>
-    </logger>
-
-    <!-- Debug logging for query executor -->
-    <logger name="com.example.query.executor" level="DEBUG" additivity="false">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
-    </logger>
-
     <!-- Root logger -->
-    <root level="DEBUG">
+    <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
     </root>
-
-    <!-- Application logging -->
-    <logger name="com.example" level="DEBUG" />
 </configuration>
