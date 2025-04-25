@@ -41,7 +41,6 @@ public class QueryExecutor {
     
     private final ConditionExecutorFactory executorFactory;
     private TableResultService tableResultService;
-    private JoinExecutor joinExecutor;
     private boolean nashInitialized = false;
     
     /**
@@ -50,19 +49,17 @@ public class QueryExecutor {
      * @param executorFactory Factory for creating condition executors
      */
     public QueryExecutor(ConditionExecutorFactory executorFactory) {
-        this(executorFactory, new JoinExecutor(), new TableResultService());
+        this(executorFactory, new TableResultService());
     }
 
     /**
      * Constructor for testing purposes, allowing injection of mocks.
      *
      * @param executorFactory Factory for creating condition executors
-     * @param joinExecutor Mocked JoinExecutor
      * @param tableResultService Mocked TableResultService
      */
-    QueryExecutor(ConditionExecutorFactory executorFactory, JoinExecutor joinExecutor, TableResultService tableResultService) {
+    public QueryExecutor(ConditionExecutorFactory executorFactory, TableResultService tableResultService) {
         this.executorFactory = executorFactory;
-        this.joinExecutor = joinExecutor;
         this.tableResultService = tableResultService;
     }
     
@@ -287,137 +284,6 @@ public class QueryExecutor {
                 QueryExecutionException.ErrorType.INTERNAL_ERROR
             );
         }
-    }
-    
-    /**
-     * Computes the intersection of two QueryResult objects.
-     * (Copied from LogicalExecutor)
-     */
-    private QueryResult intersectQueryResults(QueryResult r1, QueryResult r2) {
-        if (r1 == null || r2 == null || r1.getAllDetails().isEmpty() || r2.getAllDetails().isEmpty()) {
-            Query.Granularity defaultGranularity = (r1 != null) ? r1.getGranularity() : ((r2 != null) ? r2.getGranularity() : Query.Granularity.DOCUMENT);
-            int defaultSize = (r1 != null) ? r1.getGranularitySize() : ((r2 != null) ? r2.getGranularitySize() : 0);
-            return new QueryResult(defaultGranularity, defaultSize, Collections.emptyList());
-        }
-        Query.Granularity granularity = r1.getGranularity();
-        if (r1.getGranularity() != r2.getGranularity() || r1.getGranularitySize() != r2.getGranularitySize()) {
-            logger.error("Intersection of QueryResults with different granularities/sizes is not supported. ({},{}) vs ({},{})", r1.getGranularity(), r1.getGranularitySize(), r2.getGranularity(), r2.getGranularitySize());
-            return new QueryResult(granularity, r1.getGranularitySize(), Collections.emptyList());
-        }
-
-        List<MatchDetail> intersectionDetails;
-        int windowSize = r1.getGranularitySize();
-
-        if (granularity == Query.Granularity.DOCUMENT) {
-            Map<Integer, List<MatchDetail>> map1 = r1.getDetailsByDocId();
-            Map<Integer, List<MatchDetail>> map2 = r2.getDetailsByDocId();
-            Map<Integer, List<MatchDetail>> smallerMap = map1.size() < map2.size() ? map1 : map2;
-            Map<Integer, List<MatchDetail>> largerMap = smallerMap == map1 ? map2 : map1;
-            List<MatchDetail> combinedDocDetails = new ArrayList<>();
-            for (Map.Entry<Integer, List<MatchDetail>> entry : smallerMap.entrySet()) {
-                int docId = entry.getKey();
-                if (largerMap.containsKey(docId)) {
-                    List<MatchDetail> merged = new ArrayList<>(entry.getValue());
-                    merged.addAll(largerMap.get(docId));
-                    combinedDocDetails.addAll(merged);
-                }
-            }
-            intersectionDetails = combinedDocDetails;
-        } else {
-            Map<Integer, Map<Integer, List<MatchDetail>>> map1 = r1.getDetailsBySentence();
-            Map<Integer, Map<Integer, List<MatchDetail>>> map2 = r2.getDetailsBySentence();
-
-            Set<MatchDetail> representativeDetails = new HashSet<>();
-
-            Map<Integer, Map<Integer, List<MatchDetail>>> smallerMap = map1.size() < map2.size() ? map1 : map2;
-            Map<Integer, Map<Integer, List<MatchDetail>>> largerMap = smallerMap == map1 ? map2 : map1;
-
-            for (Map.Entry<Integer, Map<Integer, List<MatchDetail>>> docEntry : smallerMap.entrySet()) {
-                int docId = docEntry.getKey();
-                if (largerMap.containsKey(docId)) {
-                    Map<Integer, List<MatchDetail>> smallerSentMap = docEntry.getValue();
-                    Map<Integer, List<MatchDetail>> largerSentMap = largerMap.get(docId);
-
-                    for (Map.Entry<Integer, List<MatchDetail>> sentEntry1 : smallerSentMap.entrySet()) {
-                        int sentId1 = sentEntry1.getKey();
-
-                        for (Map.Entry<Integer, List<MatchDetail>> sentEntry2 : largerSentMap.entrySet()) {
-                            int sentId2 = sentEntry2.getKey();
-
-                            if (Math.abs(sentId1 - sentId2) <= windowSize) {
-                                int representativeSentId = Math.max(sentId1, sentId2);
-                                List<MatchDetail> detailsFromRep1 = smallerSentMap.get(representativeSentId);
-                                List<MatchDetail> detailsFromRep2 = largerSentMap.get(representativeSentId);
-                                
-                                if (detailsFromRep1 != null) representativeDetails.addAll(detailsFromRep1);
-                                if (detailsFromRep2 != null) representativeDetails.addAll(detailsFromRep2);
-                            }
-                        }
-                    }
-                }
-            }
-            intersectionDetails = new ArrayList<>(representativeDetails);
-        }
-
-        logger.trace("Intersection resulted in {} details", intersectionDetails.size());
-        return new QueryResult(granularity, windowSize, intersectionDetails);
-    }
-    
-    /**
-     * Utility method to apply windowing if required by the query.
-     * Uses a simple approach for now.
-     */
-    private QueryResult applyWindowFilter(QueryResult inputResult) {
-        // Ensure details are sorted by document ID, then sentence ID if applicable
-        List<MatchDetail> sortedDetails;
-        if (inputResult.getGranularity() == Query.Granularity.DOCUMENT) {
-            // Use getter method reference
-            sortedDetails = inputResult.getAllDetails().stream()
-                                       .sorted(Comparator.comparingInt(MatchDetail::getDocumentId))
-                                       .collect(Collectors.toList());
-        } else { // SENTENCE granularity
-            // Use getter method references
-            sortedDetails = inputResult.getAllDetails().stream()
-                                       .sorted(Comparator.comparingInt(MatchDetail::getDocumentId)
-                                                         .thenComparingInt(MatchDetail::getSentenceId))
-                                       .collect(Collectors.toList());
-        }
-
-        List<MatchDetail> filteredDetails = new ArrayList<>();
-        int windowSize = inputResult.getGranularitySize();
-
-        for (int i = 0; i < sortedDetails.size() - 1; i++) {
-            MatchDetail detail1 = sortedDetails.get(i);
-            MatchDetail detail2 = sortedDetails.get(i + 1);
-
-            // Check if they are in the same document
-            if (detail1.getDocumentId() == detail2.getDocumentId()) {
-                // If sentence granularity, check sentence distance
-                if (inputResult.getGranularity() == Query.Granularity.SENTENCE) {
-                    // Use getters
-                    int sentenceDiff = Math.abs(detail1.getSentenceId() - detail2.getSentenceId());
-                    if (sentenceDiff <= windowSize) {
-                        // Add both details if they are within the window
-                        // Avoid adding duplicates if detail1 was added in the previous iteration
-                        if (!filteredDetails.contains(detail1)) {
-                             filteredDetails.add(detail1);
-                        }
-                         filteredDetails.add(detail2);
-                    }
-                } else { 
-                    // Document granularity, always consider them within window (size 0)
-                    // This might need refinement based on exact windowing logic for docs
-                    if (!filteredDetails.contains(detail1)) {
-                        filteredDetails.add(detail1);
-                    }
-                    filteredDetails.add(detail2);
-                }
-            }
-        }
-        
-        // If no pairs were found within the window, the result might be empty or need singletons?
-        // For now, return the filtered pairs.
-        return new QueryResult(inputResult.getGranularity(), windowSize, filteredDetails);
     }
     
     /**

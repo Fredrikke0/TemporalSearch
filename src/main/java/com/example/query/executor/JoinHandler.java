@@ -103,14 +103,13 @@ public class JoinHandler {
                          predicate, leftAlias, leftKey, predicate, rightAlias, rightKey);
 
             // --- Always use Hash Join for now ---
-            // In the future, compare with sort-merge join for performance/behavior.
-            // The sort-merge join code is commented out below for future experimentation.
-            //
-            // Example (future):
-            // List<JoinedMatch> joinedDetails = performSortMergeJoin(leftDetails, rightDetails, leftKey, rightKey);
-            //
-            // For now, always use hash join:
-            joinedDetails = performHashJoinOnDate(leftDetails, rightDetails, leftKey, rightKey);
+            // If both keys are 'date', use the date-specific hash join
+            if (leftKey.equals("date") && rightKey.equals("date")) {
+                joinedDetails = performHashJoinOnDate(leftDetails, rightDetails, leftKey, rightKey);
+            } else {
+                // Generic hash join for any key type
+                joinedDetails = performGenericHashJoin(leftDetails, rightDetails, leftKey, rightKey);
+            }
             //
             // --- Sort-Merge Join (for future comparison, currently disabled) ---
             // joinedDetails = performSortMergeJoin(leftDetails, rightDetails, leftKey, rightKey);
@@ -316,5 +315,40 @@ public class JoinHandler {
             };
         }
         return null;
+    }
+
+    private List<JoinedMatch> performGenericHashJoin(
+            List<MatchDetail> leftDetails, List<MatchDetail> rightDetails, String leftKey, String rightKey)
+    {
+        Map<Object, List<MatchDetail>> leftGrouped = new HashMap<>();
+        for (MatchDetail detail : leftDetails) {
+            Object val = extractValueForKey(detail, leftKey);
+            if (val != null) {
+                leftGrouped.computeIfAbsent(val, k -> new ArrayList<>()).add(detail);
+            }
+        }
+        Map<Object, List<MatchDetail>> rightGrouped = new HashMap<>();
+        for (MatchDetail detail : rightDetails) {
+            Object val = extractValueForKey(detail, rightKey);
+            if (val != null) {
+                rightGrouped.computeIfAbsent(val, k -> new ArrayList<>()).add(detail);
+            }
+        }
+        List<JoinedMatch> joinedDetails = new ArrayList<>();
+        // Iterate through the smaller map's keys for efficiency
+        Map<Object, List<MatchDetail>> smallerMap = leftGrouped.size() < rightGrouped.size() ? leftGrouped : rightGrouped;
+        Map<Object, List<MatchDetail>> largerMap = smallerMap == leftGrouped ? rightGrouped : leftGrouped;
+        for (Object key : smallerMap.keySet()) {
+            if (largerMap.containsKey(key)) {
+                List<MatchDetail> leftMatches = leftGrouped.getOrDefault(key, List.of());
+                List<MatchDetail> rightMatches = rightGrouped.getOrDefault(key, List.of());
+                if (!leftMatches.isEmpty() && !rightMatches.isEmpty()) {
+                    // For simplicity, only join the first from each side (like the date join)
+                    joinedDetails.add(new JoinedMatch(leftMatches.get(0), rightMatches.get(0)));
+                }
+            }
+        }
+        logger.debug("Generic hash join finished, produced {} pairs.", joinedDetails.size());
+        return joinedDetails;
     }
 } 
