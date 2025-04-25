@@ -199,7 +199,7 @@ public class PositionList {
             // Read metadata
             int count = buffer.getInt();
             boolean hasSpecialPositions = buffer.get() != 0;
-            logger.debug("Deserializing {} positions, hasSpecialPositions: {}", count, hasSpecialPositions);
+            //logger.debug("Deserializing {} positions, hasSpecialPositions: {}", count, hasSpecialPositions);
 
             // Prepare arrays
             int[] docIds = new int[count];

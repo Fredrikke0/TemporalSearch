@@ -78,7 +78,7 @@ public class SqliteAccessor {
      */
     public Connection getConnection(String source) throws SQLException {
         String dbPath = getDatabasePath(source);
-        logger.debug("Opening connection to database: {}", dbPath);
+        //logger.debug("Opening connection to database: {}", dbPath);
         
         try {
             Class.forName("org.sqlite.JDBC");
@@ -135,7 +135,7 @@ public class SqliteAccessor {
                 }
             }
             
-            logger.debug("Retrieved metadata for document {} from {}: {}", documentId, source, value);
+            //logger.debug("Retrieved metadata for document {} from {}: {}", documentId, source, value);
         } catch (Exception e) {
             // Log error and continue
             logger.error("Error getting metadata for document {} from {}: {}", 

@@ -102,82 +102,20 @@ public class JoinHandler {
             logger.debug("Performing INNER JOIN with predicate {} on keys: {}.{} {} {}.{}",
                          predicate, leftAlias, leftKey, predicate, rightAlias, rightKey);
 
-            for (MatchDetail left : leftDetails) {
-                for (MatchDetail right : rightDetails) {
-                    Object leftVal = extractValueForKey(left, leftKey);
-                    Object rightVal = extractValueForKey(right, rightKey);
-                    ValueType leftType = extractTypeForKey(left, leftKey); 
-                    ValueType rightType = extractTypeForKey(right, rightKey); 
+            // --- Always use Hash Join for now ---
+            // In the future, compare with sort-merge join for performance/behavior.
+            // The sort-merge join code is commented out below for future experimentation.
+            //
+            // Example (future):
+            // List<JoinedMatch> joinedDetails = performSortMergeJoin(leftDetails, rightDetails, leftKey, rightKey);
+            //
+            // For now, always use hash join:
+            joinedDetails = performHashJoinOnDate(leftDetails, rightDetails, leftKey, rightKey);
+            //
+            // --- Sort-Merge Join (for future comparison, currently disabled) ---
+            // joinedDetails = performSortMergeJoin(leftDetails, rightDetails, leftKey, rightKey);
+            // --- End Sort-Merge Join ---
 
-                    boolean match = false;
-                    // Special handling for structural keys first
-                    if (Objects.equals(leftKey, "document_id") && Objects.equals(rightKey, "document_id")) {
-                         if (Objects.equals(leftVal, rightVal)) { match = true; }
-                    } else if (Objects.equals(leftKey, "sentence_id") && Objects.equals(rightKey, "sentence_id")) {
-                         if (leftVal != null && rightVal != null && Objects.equals(leftVal, rightVal)) { match = true; }
-                    }
-                    // Handle temporal predicates based on extracted keys
-                    else if (leftType == ValueType.DATE && rightType == ValueType.DATE && 
-                             leftVal instanceof LocalDate && rightVal instanceof LocalDate) {
-                        LocalDate leftDate = (LocalDate) leftVal;
-                        LocalDate rightDate = (LocalDate) rightVal;
-                        
-                        switch (predicate) {
-                            case EQUAL:
-                                match = leftDate.isEqual(rightDate);
-                                break;
-                            case INTERSECT: 
-                                // For single dates, INTERSECT is the same as EQUAL
-                                match = leftDate.isEqual(rightDate);
-                                break;
-                            case CONTAINS: // Does leftDate contain rightDate? (Only true if equal)
-                                match = leftDate.isEqual(rightDate);
-                                break;
-                            case CONTAINED_BY: // Is leftDate contained by rightDate? (Only true if equal)
-                                match = leftDate.isEqual(rightDate);
-                                break;
-                             case BEFORE:
-                                match = leftDate.isBefore(rightDate);
-                                break;
-                             case AFTER:
-                                match = leftDate.isAfter(rightDate);
-                                break;
-                             case BEFORE_EQUAL:
-                                match = !leftDate.isAfter(rightDate);
-                                break;
-                             case AFTER_EQUAL:
-                                match = !leftDate.isBefore(rightDate);
-                                break;
-                            case PROXIMITY:
-                                if (proximityWindow.isPresent()) {
-                                    long daysBetween = java.time.temporal.ChronoUnit.DAYS.between(leftDate, rightDate);
-                                    match = Math.abs(daysBetween) <= proximityWindow.get();
-                                } else {
-                                    logger.warn("PROXIMITY predicate used without window size.");
-                                }
-                                break;
-                        }
-                    } 
-                    // Handle other value types if necessary (only EQUAL currently supported implicitly)
-                    else if (leftType == rightType && predicate == TemporalPredicate.EQUAL) {
-                        if (Objects.equals(leftVal, rightVal)) {
-                           match = true;
-                        }
-                    } else {
-                        // Types are different or predicate not supported for these types
-                        logger.trace("Skipping join comparison for predicate {} between keys/types: '{}' ({}) vs '{}' ({})", 
-                                     predicate, leftKey, leftType, rightKey, rightType);
-                    }
-
-                    if (match) {
-                        // Create a new JoinedMatch containing info from both sides
-                        JoinedMatch joinedMatch = new JoinedMatch(left, right);
-                        joinedDetails.add(joinedMatch);
-                        
-                        // REMOVED: break; // Allow multiple matches per left detail (standard INNER JOIN)
-                    }
-                }
-            }
         } else {
              logger.warn("Join type {} not yet implemented. Returning empty result.", joinType);
         }
@@ -188,6 +126,61 @@ public class JoinHandler {
         // Return the joined pairs directly for now (update QueryExecutor/TableResultService to consume this)
         return joinedDetails;
     }
+
+    // --- Hash Join Implementation for Dates ---
+    private record DocDateKey(int documentId, LocalDate dateValue) {}
+
+    private List<JoinedMatch> performHashJoinOnDate(
+            List<MatchDetail> leftDetails, List<MatchDetail> rightDetails, String leftKey, String rightKey)
+    {
+        // Group left details by (docId, dateValue)
+        Map<DocDateKey, List<MatchDetail>> leftGrouped = groupDetailsByDocDate(leftDetails, leftKey);
+        // Group right details by (docId, dateValue)
+        Map<DocDateKey, List<MatchDetail>> rightGrouped = groupDetailsByDocDate(rightDetails, rightKey);
+
+        List<JoinedMatch> joinedDetails = new ArrayList<>();
+        // Iterate through the smaller map's keys for efficiency
+        Map<DocDateKey, List<MatchDetail>> smallerMap = leftGrouped.size() < rightGrouped.size() ? leftGrouped : rightGrouped;
+        Map<DocDateKey, List<MatchDetail>> largerMap = smallerMap == leftGrouped ? rightGrouped : leftGrouped;
+
+        logger.debug("Performing hash join: Left groups = {}, Right groups = {}, Iterating smaller map (size {}).",
+                     leftGrouped.size(), rightGrouped.size(), smallerMap.size());
+
+        for (DocDateKey key : smallerMap.keySet()) {
+            if (largerMap.containsKey(key)) {
+                // Found a match for (docId, dateValue)
+                List<MatchDetail> leftMatches = leftGrouped.get(key);
+                List<MatchDetail> rightMatches = rightGrouped.get(key);
+
+                // IMPORTANT: Add only ONE JoinedMatch per key to avoid duplicates from multiple mentions
+                if (!leftMatches.isEmpty() && !rightMatches.isEmpty()) {
+                    // Use the first match from each list as representatives
+                    joinedDetails.add(new JoinedMatch(leftMatches.get(0), rightMatches.get(0)));
+                     logger.trace("Hash join matched key {}: Added JoinedMatch({}, {})", key, leftMatches.get(0), rightMatches.get(0));
+                } else {
+                     logger.warn("Hash join matched key {} but one list was empty? Left: {}, Right: {}", key, leftMatches.size(), rightMatches.size());
+                }
+            } else {
+                 logger.trace("Key {} from smaller map not found in larger map.", key);
+            }
+        }
+        logger.debug("Hash join finished, produced {} pairs.", joinedDetails.size());
+        return joinedDetails;
+    }
+
+    private Map<DocDateKey, List<MatchDetail>> groupDetailsByDocDate(List<MatchDetail> details, String dateKey) {
+        Map<DocDateKey, List<MatchDetail>> grouped = new HashMap<>();
+        for (MatchDetail detail : details) {
+            Object val = extractValueForKey(detail, dateKey);
+            if (val instanceof LocalDate dateValue) {
+                DocDateKey key = new DocDateKey(detail.getDocumentId(), dateValue);
+                grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(detail);
+            }
+        }
+         logger.trace("Grouped {} details into {} DocDateKey groups for key '{}'.", details.size(), grouped.size(), dateKey);
+        return grouped;
+    }
+    // --- End Hash Join Implementation ---
 
     /**
      * Extracts the alias part from a column name in the format "alias.key".
@@ -239,33 +232,40 @@ public class JoinHandler {
         if (detailObj == null || key == null) {
             return null;
         }
+        // Handle JoinedMatch first (might occur in nested joins, though not currently supported)
         if (detailObj instanceof JoinedMatch joined) {
-            // Check left and right for variable match
-            if (key.startsWith("?")) {
-                if (joined.left().variableName().isPresent() && key.equals(joined.left().variableName().get())) {
-                    return joined.left().value();
-                } else if (key.equals(joined.getRightVariableName())) {
-                    return joined.getRightValue();
-                }
-                return null;
-            }
-            // Fallback to standard keys for left/right
-            return switch (key.toLowerCase()) {
-                case "document_id" -> joined.left().getDocumentId();
-                case "sentence_id" -> joined.left().getSentenceId() != -1 ? joined.left().getSentenceId() : null;
-                default -> null;
-            };
+             // Simplified: Assume key directly matches intended part for now
+             // A more robust solution might need alias context here too.
+            Object leftVal = extractValueForKey(joined.left(), key);
+            if (leftVal != null) return leftVal;
+            return extractValueForKey(joined.right(), key);
+
         } else if (detailObj instanceof MatchDetail detail) {
-            if (key.startsWith("?")) {
-                if (detail.variableName().isPresent() && key.equals(detail.variableName().get())) {
-                    return detail.value();
+             // Handle bound variables stored in MatchDetail (e.g., "q1.date")
+            if (detail.variableName().isPresent()) {
+                String storedVarName = detail.variableName().get();
+                // Check if stored variable name has a dot (alias.key format)
+                int dotIndex = storedVarName.indexOf('.');
+                if (dotIndex != -1 && dotIndex < storedVarName.length() - 1) {
+                    String storedBaseKey = storedVarName.substring(dotIndex + 1);
+                    // Compare the requested key with the base key part of the stored variable
+                    if (key.equals(storedBaseKey)) {
+                        return detail.value();
+                    }
+                } else {
+                    // Handle cases where variable name might not have an alias (shouldn't happen with current parsing?)
+                     if (key.equals(storedVarName)) {
+                         return detail.value();
+                     }
                 }
-                return null;
             }
+            // Fallback to check structural keys if no variable matched
             return switch (key.toLowerCase()) {
                 case "document_id" -> detail.getDocumentId();
                 case "sentence_id" -> detail.getSentenceId() != -1 ? detail.getSentenceId() : null;
-                default -> null;
+                // Add case for the "date" key specifically if it refers to the document date
+                // case "date" -> detail.getDocumentDate(); // Example - uncomment if needed
+                default -> null; // Key doesn't match variable or known structural key
             };
         }
         return null;
@@ -280,27 +280,40 @@ public class JoinHandler {
      * @return The extracted type, or null if key is not supported or value is null.
      */
     private ValueType extractTypeForKey(Object detailObj, String key) {
-        if (detailObj == null || key == null) {
+         if (detailObj == null || key == null) {
             return null;
         }
+        // Handle JoinedMatch first
         if (detailObj instanceof JoinedMatch joined) {
-            if (key.startsWith("?")) {
-                if (joined.left().variableName().isPresent() && key.equals(joined.left().variableName().get())) {
-                    return joined.left().valueType();
-                } else if (key.equals(joined.getRightVariableName())) {
-                    return joined.getRightValueType();
-                }
-                return null;
-            }
-            return null;
+            // Simplified: Assume key directly matches intended part for now
+            ValueType leftType = extractTypeForKey(joined.left(), key);
+            if (leftType != null) return leftType;
+            return extractTypeForKey(joined.right(), key);
+
         } else if (detailObj instanceof MatchDetail detail) {
-            if (key.startsWith("?")) {
-                if (detail.variableName().isPresent() && key.equals(detail.variableName().get())) {
-                    return detail.valueType();
-                }
-                return null;
+             // Handle bound variables stored in MatchDetail (e.g., "q1.date")
+             if (detail.variableName().isPresent()) {
+                String storedVarName = detail.variableName().get();
+                int dotIndex = storedVarName.indexOf('.');
+                 if (dotIndex != -1 && dotIndex < storedVarName.length() - 1) {
+                    String storedBaseKey = storedVarName.substring(dotIndex + 1);
+                    if (key.equals(storedBaseKey)) {
+                        return detail.valueType();
+                    }
+                } else {
+                     if (key.equals(storedVarName)) {
+                         return detail.valueType();
+                     }
+                 }
             }
-            return null;
+            // Fallback for structural keys (return appropriate type if needed)
+            return switch (key.toLowerCase()) {
+                 // No specific ValueType for IDs, handled by direct key check
+                 // case "document_id" -> ValueType.INTEGER;
+                 // case "sentence_id" -> ValueType.INTEGER;
+                 // case "date" -> ValueType.DATE; // Example for document date
+                 default -> null;
+            };
         }
         return null;
     }

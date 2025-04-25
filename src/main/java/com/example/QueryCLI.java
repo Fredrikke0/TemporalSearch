@@ -129,16 +129,16 @@ public class QueryCLI {
                     // --- Handle QueryResult (Non-Join) ---
                     matchCount = result.getAllDetails().size(); 
                     matchUnit = (granularity == Query.Granularity.DOCUMENT) ? "documents (approx details)" : "sentences (approx details)";
-                    logger.info("Query executed, found {} matching details (granularity: {})", matchCount, granularity);
-                    System.out.println("Total matches: " + matchCount + " " + matchUnit);
+                logger.info("Query executed, found {} matching details (granularity: {})", matchCount, granularity);
+                System.out.println("Total matches: " + matchCount + " " + matchUnit);
 
                     // Generate table from QueryResult
                     logger.debug("Generating result table from QueryResult");
                     resultTable = tableResultService.generateTable(
-                        query, 
-                        result, // Pass QueryResult 
-                        indexManager.getAllIndexes()
-                    );
+                    query, 
+                    result, // Pass QueryResult 
+                    indexManager.getAllIndexes()
+                );
 
                 } else if (execResult instanceof List<?> joinResultList && !joinResultList.isEmpty() && joinResultList.get(0) instanceof com.example.query.binding.JoinedMatch) {
                     // --- Handle List<JoinedMatch> (Join) ---

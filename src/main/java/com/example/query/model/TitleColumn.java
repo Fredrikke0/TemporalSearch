@@ -49,7 +49,7 @@ public class TitleColumn implements SelectColumn {
         @SuppressWarnings("unchecked")
         List<MatchDetail> matchDetails = (List<MatchDetail>) detailsForUnit;
         int documentId = matchDetails.get(0).getDocumentId();
-        logger.debug("Getting title for document {} from source {}", documentId, source);
+        //logger.debug("Getting title for document {} from source {}", documentId, source);
         String value = SqliteAccessor.getInstance().getMetadata(source, documentId, "title");
         column.set(rowIndex, value != null ? value : "");
     }

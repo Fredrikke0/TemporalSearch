@@ -103,7 +103,8 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             if (combinedResult == null) {
                 combinedResult = currentResult;
             } else {
-                combinedResult = intersectQueryResultsSortMerge(combinedResult, currentResult);
+                // Use the hash-based intersection which correctly handles detail merging
+                combinedResult = intersectQueryResultsHash(combinedResult, currentResult);
                 if (combinedResult.getAllDetails().isEmpty()) {
                     logger.debug("Intersection is empty, short-circuiting AND");
                     return combinedResult;
@@ -204,9 +205,15 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             for (Map.Entry<Integer, List<MatchDetail>> entry : smallerMap.entrySet()) {
                 int docId = entry.getKey();
                 if (largerMap.containsKey(docId)) {
-                    List<MatchDetail> merged = new ArrayList<>(entry.getValue());
-                    merged.addAll(largerMap.get(docId));
-                    combinedDocDetails.addAll(merged);
+                    // Corrected Logic:
+                    // Combine details from both sources for the matching document ID
+                    // and ensure uniqueness using distinct().
+                    List<MatchDetail> details1 = entry.getValue();
+                    List<MatchDetail> details2 = largerMap.get(docId);
+                    
+                    Stream.concat(details1.stream(), details2.stream())
+                          .distinct() // Remove duplicates based on MatchDetail record equality
+                          .forEach(combinedDocDetails::add);
                 }
             }
             logger.trace("Intersection (DOCUMENT) resulted in {} details", combinedDocDetails.size());
