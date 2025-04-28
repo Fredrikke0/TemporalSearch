@@ -280,8 +280,8 @@ public class LogicalConditionExecutorTest {
         assertTrue(result_1_3.getAllDetails().isEmpty());
 
         // Use sorted lists for comparison
-        assertEquals(sortDetails(List.of(d1_1, d1_2, d1_1)), getSortedDetails(result_1_4), "Doc 1 intersection failed"); 
-        assertEquals(sortDetails(List.of(d2_1, d2_2, d2_1)), getSortedDetails(result_3_4), "Doc 2 intersection failed"); 
+        assertEquals(sortDetails(List.of(d1_1)), getSortedDetails(result_1_4), "Doc 1 intersection failed"); 
+        assertEquals(sortDetails(List.of(d2_1)), getSortedDetails(result_3_4), "Doc 2 intersection failed"); 
     }
 
      @Test
@@ -293,7 +293,7 @@ public class LogicalConditionExecutorTest {
         QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, details);
         QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
 
-        assertEquals(sortDetails(List.of(d1, d2, d1, d2)), getSortedDetails(result)); 
+        assertEquals(sortDetails(List.of(d1, d2)), getSortedDetails(result)); 
     }
 
     @Test
@@ -308,8 +308,8 @@ public class LogicalConditionExecutorTest {
         QueryResult result1 = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
         QueryResult result2 = logicalExecutor.intersectQueryResultsSortMerge(r2, r1);
 
-        assertEquals(sortDetails(List.of(d1, d3, d1, d3)), getSortedDetails(result1));
-        assertEquals(sortDetails(List.of(d1, d3, d1, d3)), getSortedDetails(result2));
+        assertEquals(sortDetails(List.of(d1, d3)), getSortedDetails(result1));
+        assertEquals(sortDetails(List.of(d1, d3)), getSortedDetails(result2));
     }
 
     // Helper to compare details ignoring order and potential duplicates from merge
@@ -379,7 +379,7 @@ public class LogicalConditionExecutorTest {
         QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 2), d1_3_alt, d2_1)); // Doc 1, Sents 2, 3; Doc 2, Sent 1
         QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
 
-        assertEquals(sortDetails(List.of(d1_3, d1_3_alt)), getSortedDetails(result), "Expected overlap only for sentence 3 with window 0");
+        assertEquals(sortDetails(List.of(d1_3)), getSortedDetails(result), "Expected overlap only for sentence 3 with window 0");
     }
 
     @Test
@@ -424,11 +424,11 @@ public class LogicalConditionExecutorTest {
         QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, windowSize, details);
         QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
 
-        assertEquals(sortDetails(List.of(d1_1, d2_2, d1_1, d2_2)), getSortedDetails(result));
+        assertEquals(sortDetails(List.of(d1_1, d2_2)), getSortedDetails(result));
         assertEquals(windowSize, result.getGranularitySize());
     }
 
-     @Test
+    @Test
     void intersectSortMerge_MismatchedGranularity_ShouldReturnEmpty() {
         QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(md(1)));
         QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 1)));

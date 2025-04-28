@@ -40,6 +40,9 @@ import java.util.Set;
 import java.nio.file.Path;
 import java.util.stream.Collectors;
 
+import com.example.index.NashDateEntryWithId;
+import com.example.index.util.NashSerializationUtils;
+
 /**
  * Executor for temporal conditions in queries. Delegates execution to a selected strategy.
  * Returns QueryResult containing MatchDetail objects.
@@ -48,28 +51,12 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     private static final Logger logger = LoggerFactory.getLogger(TemporalExecutor.class);
     
     private static final String DATE_INDEX = "ner_date";
+    private static final String NASH_INDEX = "nash";
     
     // Formatter for parsing keys from the ner_date index (YYYY-MM-DD)
     private static final DateTimeFormatter INDEX_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE; // yyyyMMdd
     // Formatter for creating interval strings for Nash.invert ([YYYY-MM-DD , YYYY-MM-DD])
     private static final DateTimeFormatter NASH_INTERVAL_FORMATTER = DateTimeFormatter.ISO_DATE;
-    
-    // --- New structure for Nash Index ---
-    /** Record to hold position and the ID of the specific date associated with it. */
-    private record NashDateEntryWithId(Position position, int dateId) {}
-
-    /** Stores the actual Nash index structure: Corpus -> Nash Prefix -> Set of entries with date IDs */
-    final Map<String, Map<String, Set<NashDateEntryWithId>>> nashIndicesWithIds = new HashMap<>();
-
-    /** Stores the lookup from date ID back to LocalDate for each corpus */
-    final Map<String, List<LocalDate>> corpusDateLookups = new HashMap<>();
-    // --- End New structure ---
-    
-    // Store Nash indices per corpus: Map<CorpusName, Map<NashHashPrefix, Set<Position>>>
-    // This is kept here as it's a shared resource potentially used by Nash strategy
-    // Changed value type to Set<Position> to support sentence granularity with offsets
-    final Map<String, Map<String, Set<Position>>> nashIndices = new HashMap<>();
-    private final Map<String, Boolean> nashInitializationStatus = new HashMap<>(); // Track init status per corpus
     
     // --- Strategy Management ---
     private final Map<String, TemporalExecutionStrategy> strategies = new HashMap<>();
@@ -140,39 +127,14 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     // --- End Strategy Management ---
 
     /**
-     * Initializes necessary resources for a specific corpus, like the Nash index.
-     * Delegates initialization to the active strategy if needed.
-     * Ensures Nash index is initialized only once per corpus if Nash strategy is active or potentially active.
+     * Initializes necessary resources for a specific corpus. No Nash-specific logic needed.
      */
     public boolean initializeForCorpus(String corpusName, IndexManager indexManager) {
         logger.info("Initializing TemporalExecutor for corpus: {}", corpusName);
-
-        // Ensure Nash index is initialized if the Nash strategy *might* be used.
-        // We do this eagerly regardless of the *currently* active strategy to avoid
-        // re-initialization if the strategy is switched later.
-        // Use nashInitializationStatus for the check, as nashIndices might exist but be empty from a failed attempt.
-        if (!nashInitializationStatus.containsKey(corpusName)) {
-            logger.debug("Attempting Nash index initialization for corpus: {}", corpusName);
-            boolean nashInitSuccess = initializeNashIndexInternal(corpusName, indexManager);
-            nashInitializationStatus.put(corpusName, nashInitSuccess);
-            if (!nashInitSuccess) {
-                logger.error("Nash index initialization failed for corpus: {}. Nash strategy will be unavailable.", corpusName);
-                // Decide if this is a fatal error or if we can proceed with fallback strategies.
-                // For now, log error and continue.
-            }
-        } else {
-             logger.debug("Nash index already initialized or initialization previously attempted for corpus: {}", corpusName);
-        }
-
-        // Allow the *currently active* strategy to perform its own initialization.
+        // Only allow the active strategy to perform its own initialization.
         TemporalExecutionStrategy currentStrategy = getActiveStrategy();
         logger.debug("Performing strategy-specific initialization for '{}' on corpus '{}'", currentStrategy.getName(), corpusName);
-        boolean strategyInitSuccess = currentStrategy.initializeForCorpus(corpusName, this);
-
-        // Overall success depends on both Nash (if relevant) and the active strategy's init.
-        // If Nash failed but the active strategy doesn't need it (e.g., index_scan), we might still consider it successful overall.
-        // Let's return the active strategy's success status for now.
-        return strategyInitSuccess;
+        return currentStrategy.initializeForCorpus(corpusName, this);
     }
 
     @Override
@@ -188,10 +150,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             throw new QueryExecutionException(String.format("Missing required index: %s", DATE_INDEX), condition.toString(), QueryExecutionException.ErrorType.MISSING_INDEX);
         }
         
-        if (!nashInitializationStatus.containsKey(corpusName)) {
-             logger.warn("TemporalExecutor not explicitly initialized for corpus '{}'. Nash index might be unavailable.", corpusName);
-        }
-
         // --- Determine the execution strategy (Simpler now) ---
         TemporalExecutionStrategy executionStrategy = getActiveStrategy(); // Always use the configured active strategy
 
@@ -225,132 +183,12 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     }
 
     // =========================================================================
-    // Internal Nash Index Initialization (used by initializeForCorpus)
-    // =========================================================================
-
-    /**
-     * Internal method to initialize the Nash index structure for a specific corpus.
-     * Stores Set<NashDateEntryWithId> now, using a date lookup table.
-     */
-    private boolean initializeNashIndexInternal(String corpusName, IndexManager indexManager) {
-        // Check initialization status first
-        if (nashInitializationStatus.containsKey(corpusName)) {
-             logger.debug("Nash index already present or previously initialized for corpus: {}", corpusName);
-             return nashInitializationStatus.getOrDefault(corpusName, true); // Return stored status
-        }
-
-        logger.info("Initializing Nash index structure with Date ID lookup for corpus: {}", corpusName);
-
-        Optional<IndexAccessInterface> indexOpt = indexManager.getIndex(DATE_INDEX);
-        if (indexOpt.isEmpty()) {
-            logger.error("Cannot initialize Nash index: '{}' index not found via IndexManager for corpus '{}'.", DATE_INDEX, corpusName);
-            return false; // Mark initialization as failed
-        }
-        IndexAccessInterface dateIndex = indexOpt.get();
-
-        // --- New: Date ID Lookup structures for this corpus ---
-        Map<LocalDate, Integer> dateToId = new HashMap<>();
-        List<LocalDate> idToDate = new ArrayList<>();
-        // --- End New ---
-
-        List<String> intervalStrings = new ArrayList<>();
-        // Store List<NashDateEntryWithId> temporarily, mapped by the original interval list index
-        Map<Integer, List<NashDateEntryWithId>> listIndexToEntries = new HashMap<>();
-        int intervalIndex = 0;
-
-        try (var iterator = dateIndex.iterator()) {
-            iterator.seekToFirst();
-            while (iterator.hasNext()) {
-                Entry<byte[], byte[]> entry = iterator.next();
-                String dateStr = new String(entry.getKey(), StandardCharsets.UTF_8);
-                LocalDate docDate = parseDateKey(dateStr); // Use shared parsing logic
-
-                if (docDate != null) {
-                    String interval = String.format("[%s , %s]",
-                            NASH_INTERVAL_FORMATTER.format(docDate),
-                            NASH_INTERVAL_FORMATTER.format(docDate));
-
-                    // --- New: Get or create Date ID ---
-                    int dateId = dateToId.computeIfAbsent(docDate, date -> {
-                        idToDate.add(date);
-                        return idToDate.size() - 1; // ID is the index
-                    });
-                    // --- End New ---
-
-                    PositionList positions = PositionList.deserialize(entry.getValue());
-                    Set<Position> positionSet = (positions != null && positions.getPositions() != null)
-                                               ? new HashSet<>(positions.getPositions())
-                                               : null;
-
-                    if (positionSet != null && !positionSet.isEmpty()) {
-                         intervalStrings.add(interval); // Only add interval if positions exist
-                         List<NashDateEntryWithId> entriesForInterval = new ArrayList<>();
-                         for (Position pos : positionSet) {
-                             entriesForInterval.add(new NashDateEntryWithId(pos, dateId));
-                         }
-                         listIndexToEntries.put(intervalIndex, entriesForInterval);
-                         intervalIndex++;
-                    } else {
-                         logger.trace("Empty or null PositionList for key '{}', interval '{}'. Skipping interval.", dateStr, interval);
-                    }
-                } else {
-                    logger.trace("Skipping non-date key during Nash initialization: {}", dateStr);
-                }
-            }
-        } catch (Exception e) {
-            logger.error("Error reading from '{}' index during Nash initialization for corpus '{}': {}", DATE_INDEX, corpusName, e.getMessage(), e);
-            return false; // Mark initialization as failed
-        }
-
-        logger.debug("Prepared {} interval strings from '{}' index for Nash inversion.", intervalStrings.size(), DATE_INDEX);
-
-        if (intervalStrings.isEmpty()) {
-            logger.warn("No valid date intervals found in '{}' index for corpus '{}'. Nash index will be empty.", DATE_INDEX, corpusName);
-            nashIndicesWithIds.put(corpusName, Collections.emptyMap()); // Use new map name
-            corpusDateLookups.put(corpusName, Collections.emptyList()); // Store empty lookup
-            return true; // Initialization technically complete (empty index)
-        }
-
-        try {
-            MultiMap<String, Integer> invertedIndex = Nash.invert(intervalStrings);
-            // Store Set<NashDateEntryWithId>
-            Map<String, Set<NashDateEntryWithId>> corpusNashIndex = new HashMap<>();
-            for (String nashPrefix : invertedIndex.keySet()) {
-                Set<NashDateEntryWithId> entrySet = new HashSet<>(); // Store entries now
-                for (Integer listIdx : invertedIndex.get(nashPrefix)) {
-                    List<NashDateEntryWithId> entriesForIndex = listIndexToEntries.get(listIdx);
-                    if (entriesForIndex != null) {
-                        entrySet.addAll(entriesForIndex);
-                    } else {
-                         logger.warn("Inconsistency during Nash build: Prefix '{}' mapped to list index {} which has no associated entries.", nashPrefix, listIdx);
-                    }
-                }
-                 if (!entrySet.isEmpty()) {
-                    corpusNashIndex.put(nashPrefix, entrySet);
-                 }
-            }
-
-            nashIndicesWithIds.put(corpusName, corpusNashIndex); // Use new map name
-            corpusDateLookups.put(corpusName, idToDate); // Store the lookup table
-            logger.info("Nash index initialized with {} unique hash prefixes for corpus: {} (using Date ID lookup, {} unique dates)",
-                corpusNashIndex.size(), corpusName, idToDate.size());
-            return true; // Mark initialization as successful
-
-        } catch (Exception e) {
-            logger.error("Failed to generate Nash index structure for corpus '{}': {}", corpusName, e.getMessage(), e);
-            nashIndicesWithIds.put(corpusName, Collections.emptyMap()); // Store empty map on failure
-            corpusDateLookups.put(corpusName, Collections.emptyList()); // Store empty lookup
-            return false; // Mark initialization as failed
-        }
-    }
-
-    // =========================================================================
     // Concrete Strategy Implementations (Inner Classes for now)
     // =========================================================================
 
     /**
      * Strategy using the Nash index for efficient temporal queries, supporting document and sentence granularity.
-     * Uses Date ID lookup to handle variable binding and joins.
+     * Reads from LevelDB using IndexAccessInterface and NashSerializationUtils.
      */
     private static class NashTemporalStrategy implements TemporalExecutionStrategy {
         private static final Logger strategyLogger = LoggerFactory.getLogger(NashTemporalStrategy.class);
@@ -362,101 +200,73 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
         @Override
         public boolean initializeForCorpus(String corpusName, TemporalExecutor temporalExecutor) {
-             boolean nashReady = temporalExecutor.nashInitializationStatus.getOrDefault(corpusName, false);
-             if (!nashReady) {
-                 strategyLogger.warn("Nash index not successfully initialized for corpus '{}'. This strategy may fail.", corpusName);
-             } else if (!temporalExecutor.corpusDateLookups.containsKey(corpusName)) {
-                 // Should not happen if init was successful, but good sanity check
-                 strategyLogger.error("Nash index inconsistency: Initialization reported success for corpus '{}' but date lookup table is missing.", corpusName);
-                 return false; // Strategy cannot function without lookup
-             }
-             return true;
+            // No special initialization needed; index must exist on disk.
+            return true;
         }
 
         @Override
         public List<MatchDetail> execute(
             Temporal condition,
-                Map<String, IndexAccessInterface> indexes, // Not directly used
-                Query.Granularity granularity,
-                int granularitySize,
-                String corpusName,
-                TemporalExecutor temporalExecutor)
+            Map<String, IndexAccessInterface> indexes,
+            Query.Granularity granularity,
+            int granularitySize,
+            String corpusName,
+            TemporalExecutor temporalExecutor)
             throws QueryExecutionException {
 
-             // --- Get required data structures ---
-             Map<String, Set<NashDateEntryWithId>> nashIndex = temporalExecutor.nashIndicesWithIds.get(corpusName);
-             List<LocalDate> dateLookup = temporalExecutor.corpusDateLookups.get(corpusName);
+            IndexAccessInterface nashIndex = indexes.get(NASH_INDEX);
+            if (nashIndex == null) {
+                throw new QueryExecutionException("Missing required Nash index for corpus: " + corpusName, condition.toString(), QueryExecutionException.ErrorType.MISSING_INDEX);
+            }
 
-             // --- Validation ---
-             if (nashIndex == null || dateLookup == null) {
-                 boolean initAttempted = temporalExecutor.nashInitializationStatus.containsKey(corpusName);
-                 boolean initSucceeded = temporalExecutor.nashInitializationStatus.getOrDefault(corpusName, false);
-                 String errorMsg;
-                 if (!initAttempted) {
-                      errorMsg = "Nash index not initialized for corpus: " + corpusName + ". Initialization was never attempted.";
-                 } else if (!initSucceeded) {
-                      errorMsg = "Nash index initialization failed previously for corpus: " + corpusName + ". Cannot use Nash strategy.";
-                 } else {
-                     errorMsg = "Nash index inconsistency for corpus " + corpusName + ": Index or lookup table is null despite successful initialization status.";
-                 }
-                 strategyLogger.error(errorMsg);
-                 throw new QueryExecutionException(errorMsg, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
-             }
-             if (nashIndex.isEmpty()){
-                 strategyLogger.debug("Nash index for corpus '{}' is empty. Returning empty result.", corpusName);
-                 return Collections.emptyList();
-             }
-             // --- End Validation ---
+            // Fetch and deserialize the date lookup table
+            List<LocalDate> dateLookup;
+            try {
+                var rawLookup = nashIndex.getRaw(NashSerializationUtils.DATE_LOOKUP_KEY);
+                if (rawLookup.isEmpty()) {
+                    strategyLogger.warn("Nash date lookup table missing or empty for corpus '{}'.", corpusName);
+                    return Collections.emptyList();
+                }
+                dateLookup = NashSerializationUtils.deserializeDateLookup(rawLookup.get());
+            } catch (Exception e) {
+                throw new QueryExecutionException("Failed to read Nash date lookup table: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+            }
 
-             List<MatchDetail> details = new ArrayList<>();
-             String conditionId = String.valueOf(condition.hashCode());
-             Optional<String> variableName = condition.qualifiedVariableName(); // Use qualifiedVariableName()
-             if (variableName.isPresent()) {
-                 String qualifiedVarName = variableName.get(); // Get from Optional
-                 String matchedDateText = null;
-                 VariableType varType = null;
-
-                 String interval = condition.toNashInterval();
-                 String expandedInterval = Temporal.expandYearOnlyInterval(interval);
-                 Nash.RangePredicate nashPredicate = condition.temporalType().toNashPredicate();
-                 strategyLogger.debug("Querying Nash index for corpus '{}' with expanded interval: {}, predicate: {}, variable: {}",
-                                      corpusName, expandedInterval, nashPredicate, qualifiedVarName);
-
-                 try {
-                     String[] hashPrefixes = Nash.generateTimeHash(expandedInterval, nashPredicate);
-                     Set<NashDateEntryWithId> matchingEntries = new HashSet<>(); // Collect entries
-                     int prefixesChecked = 0;
-                     for (String hashPrefix : hashPrefixes) {
-                         prefixesChecked++;
-                         Set<NashDateEntryWithId> entriesFromHash = nashIndex.get(hashPrefix);
-                         if (entriesFromHash != null) {
-                             matchingEntries.addAll(entriesFromHash);
-                         }
-                     }
-                     strategyLogger.debug("Checked {} Nash prefixes, found {} unique matching NashDateEntryWithId objects", prefixesChecked, matchingEntries.size());
-
-                     // --- Create MatchDetail using Date ID lookup ---
-                     for (NashDateEntryWithId entry : matchingEntries) {
-                         if (entry.dateId() < 0 || entry.dateId() >= dateLookup.size()) {
-                              strategyLogger.error("Invalid dateId {} found in Nash entry for position {}. Max valid ID is {}. Skipping entry.",
-                                                    entry.dateId(), entry.position(), dateLookup.size() - 1);
-                              continue;
-                         }
-                         LocalDate specificDate = dateLookup.get(entry.dateId());
-                         // Use the specificDate as the value, use the entry's position
-                         // Pass variable name Optional directly to canonical constructor
-                         details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), variableName));
-                     }
-                     // --- End MatchDetail Creation ---
-
-                     return details;
-                 } catch (Exception e) { // Catch specific Nash exceptions if possible
-                     throw new QueryExecutionException("Error querying Nash index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
-                 }
-             } else {
-                 strategyLogger.debug("No variable name found in condition. Nash strategy will return empty result.");
-                 return Collections.emptyList();
-             }
+            List<MatchDetail> details = new ArrayList<>();
+            Optional<String> variableName = condition.qualifiedVariableName();
+            if (variableName.isEmpty()) {
+                strategyLogger.debug("No variable name found in condition. Nash strategy will return empty result.");
+                return Collections.emptyList();
+            }
+            String qualifiedVarName = variableName.get();
+            String interval = condition.toNashInterval();
+            String expandedInterval = Temporal.expandYearOnlyInterval(interval);
+            Nash.RangePredicate nashPredicate = condition.temporalType().toNashPredicate();
+            strategyLogger.debug("Querying Nash index for corpus '{}' with expanded interval: {}, predicate: {}, variable: {}",
+                                 corpusName, expandedInterval, nashPredicate, qualifiedVarName);
+            try {
+                String[] hashPrefixes = Nash.generateTimeHash(expandedInterval, nashPredicate);
+                Set<NashDateEntryWithId> matchingEntries = new HashSet<>();
+                for (String hashPrefix : hashPrefixes) {
+                    var rawData = nashIndex.getRaw(hashPrefix.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    if (rawData.isPresent()) {
+                        List<NashDateEntryWithId> entries = NashSerializationUtils.deserializeNashEntries(rawData.get());
+                        matchingEntries.addAll(entries);
+                    }
+                }
+                for (NashDateEntryWithId entry : matchingEntries) {
+                    if (entry.dateId() < 0 || entry.dateId() >= dateLookup.size()) {
+                        strategyLogger.error("Invalid dateId {} found in Nash entry for position {}. Max valid ID is {}. Skipping entry.",
+                                entry.dateId(), entry.position(), dateLookup.size() - 1);
+                        continue;
+                    }
+                    LocalDate specificDate = dateLookup.get(entry.dateId());
+                    details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), variableName));
+                }
+                return details;
+            } catch (Exception e) {
+                throw new QueryExecutionException("Error querying Nash index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+            }
         }
     }
     

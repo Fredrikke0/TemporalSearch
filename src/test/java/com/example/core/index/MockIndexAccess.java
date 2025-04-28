@@ -178,6 +178,7 @@ public class MockIndexAccess implements IndexAccessInterface {
         private final NavigableMap<ByteArrayWrapper, byte[]> originalMap;
         private Iterator<Map.Entry<ByteArrayWrapper, byte[]>> iterator;
         private Map.Entry<ByteArrayWrapper, byte[]> currentEntry;
+        private Map.Entry<ByteArrayWrapper, byte[]> nextEntryBuffer = null;
 
         MockDBIterator(NavigableMap<ByteArrayWrapper, byte[]> map) {
             // Store the original map for seeking
@@ -212,17 +213,19 @@ public class MockIndexAccess implements IndexAccessInterface {
 
         @Override
         public Map.Entry<byte[], byte[]> peekNext() {
-             if (!hasNext()) {
-                throw new NoSuchElementException();
+            if (nextEntryBuffer == null) {
+                if (!iterator.hasNext()) {
+                    throw new NoSuchElementException();
+                }
+                nextEntryBuffer = iterator.next();
             }
-            // This requires storing the next element and making hasNext/next idempotent
-             throw new UnsupportedOperationException("peekNext not implemented in MockDBIterator");
+            // Return a copy as Map.Entry<byte[], byte[]>
+            return Map.entry(nextEntryBuffer.getKey().getData(), nextEntryBuffer.getValue());
         }
         
         @Override
         public boolean hasNext() {
-            // If currentEntry is used by peekNext, check it first
-            return iterator.hasNext();
+            return nextEntryBuffer != null || iterator.hasNext();
         }
 
         @Override
@@ -230,8 +233,12 @@ public class MockIndexAccess implements IndexAccessInterface {
             if (!hasNext()) {
                 throw new NoSuchElementException();
             }
-            currentEntry = iterator.next();
-            // Convert ByteArrayWrapper back to byte[] for the key
+            if (nextEntryBuffer != null) {
+                currentEntry = nextEntryBuffer;
+                nextEntryBuffer = null;
+            } else {
+                currentEntry = iterator.next();
+            }
             return Map.entry(currentEntry.getKey().getData(), currentEntry.getValue());
         }
         

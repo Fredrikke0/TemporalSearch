@@ -49,7 +49,7 @@ public class IndexRunner {
                 .help("Batch size for processing (default: 1000)");
 
         parser.addArgument("-t", "--type")
-                .choices("all", "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch")
+                .choices("all", "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch", "nash")
                 .setDefault("all")
                 .help("Type of index to generate");
 
@@ -350,6 +350,26 @@ public class IndexRunner {
                     progress.completeIndex();
                 }
 
+                if (indexType.equals("all") || indexType.equals("nash")) {
+                    currentIndex++;
+                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
+                    metrics.startBatch(batchSize, "nash");
+                    long count = getNerDateCount(conn, limit);
+                    progress.startIndex("Nash Index", count);
+                    
+                    // Get path with proper directory structure
+                    Path nashPath = Path.of(indexDir).resolve("nash");
+                    try (NashIndexGenerator gen = new NashIndexGenerator(
+                            nashPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                        gen.generateIndex();
+                        metrics.recordBatchSuccess((int)count);
+                    } catch (Exception e) {
+                        metrics.recordBatchFailure();
+                        logger.error("Error generating nash index: {}", e.getMessage(), e);
+                    }
+                    progress.completeIndex();
+                }
+
             } finally {
                 metrics.logIndexingMetrics();
                 progress.close();
@@ -508,6 +528,9 @@ public class IndexRunner {
         }
         if (indexType.equals("all") || indexType.equals("stitch")) {
             Files.createDirectories(Path.of(indexDir, "stitch"));
+        }
+        if (indexType.equals("all") || indexType.equals("nash")) {
+            Files.createDirectories(Path.of(indexDir, "nash"));
         }
     }
 }

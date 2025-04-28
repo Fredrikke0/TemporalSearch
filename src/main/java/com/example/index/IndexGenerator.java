@@ -33,7 +33,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     public static final String DELIMITER = "\0";
     public static final char ESCAPE_CHAR = '\u001F';
 
-    private final IndexAccess indexAccess;
+    protected final IndexAccess indexAccess;
     private final Set<String> stopwords;
     protected final Connection sqliteConn;
     protected final ProgressTracker progress;

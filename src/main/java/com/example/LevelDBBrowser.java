@@ -10,11 +10,15 @@ import java.io.*;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.time.LocalDate;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.core.Position;
 import com.example.core.PositionList;
 import com.example.index.StitchPosition;
+import com.example.index.NashDateEntryWithId;
+import com.example.index.util.NashSerializationUtils;
 
 public class LevelDBBrowser {
     private static final String DELIMITER = "\u0000";
@@ -29,7 +33,7 @@ public class LevelDBBrowser {
                 .description("Browse contents of LevelDB index databases");
 
         parser.addArgument("index_type")
-                .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "hypernym", "stitch")
+                .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "hypernym", "stitch", "nash")
                 .help("Type of index to browse");
 
         parser.addArgument("db_path")
@@ -77,7 +81,7 @@ public class LevelDBBrowser {
                     displayEntry(db, key, indexType, annotationSynonyms);
                 } else if (prefix != null) {
                     listEntriesByPrefix(db, prefix, limit, indexType, annotationSynonyms);
-                    } else {
+                } else {
                     listAllEntries(db, limit, indexType, annotationSynonyms);
                 }
             }
@@ -118,11 +122,16 @@ public class LevelDBBrowser {
             return;
         }
 
-        PositionList positions = PositionList.deserialize(data);
-        displayPositions(key, positions, indexType, synonyms);
+        if (indexType.equals("nash")) {
+            displayNashEntry(bytes(key), data);
+        } else {
+            PositionList positions = PositionList.deserialize(data);
+            displayPositions(key, positions, indexType, synonyms);
+        }
     }
 
     private static void listEntriesByPrefix(DB db, String prefix, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
+        boolean isNash = indexType.equals("nash");
         System.out.printf("Entries with prefix '%s':%n", prefix);
         System.out.println("=".repeat(20 + prefix.length()));
         
@@ -131,11 +140,16 @@ public class LevelDBBrowser {
             iterator.seek(bytes(prefix));
             
             while (iterator.hasNext() && (limit == 0 || count < limit)) {
-                String key = asString(iterator.peekNext().getKey());
+                Map.Entry<byte[], byte[]> entry = iterator.peekNext();
+                String key = asString(entry.getKey());
                 if (!key.startsWith(prefix)) break;
                 
-                PositionList positions = PositionList.deserialize(iterator.peekNext().getValue());
-                displayPositions(key, positions, indexType, synonyms);
+                if (isNash) {
+                    displayNashEntry(entry.getKey(), entry.getValue());
+                } else {
+                    PositionList positions = PositionList.deserialize(entry.getValue());
+                    displayPositions(key, positions, indexType, synonyms);
+                }
                 count++;
                 iterator.next();
             }
@@ -147,6 +161,7 @@ public class LevelDBBrowser {
     }
 
     private static void listAllEntries(DB db, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
+        boolean isNash = indexType.equals("nash");
         System.out.println("All Entries");
         System.out.println("===========");
         
@@ -155,9 +170,15 @@ public class LevelDBBrowser {
             iterator.seekToFirst();
             
             while (iterator.hasNext() && (limit == 0 || count < limit)) {
-                String key = asString(iterator.peekNext().getKey());
-                PositionList positions = PositionList.deserialize(iterator.peekNext().getValue());
-                displayPositions(key, positions, indexType, synonyms);
+                Map.Entry<byte[], byte[]> entry = iterator.peekNext();
+
+                if (isNash) {
+                    displayNashEntry(entry.getKey(), entry.getValue());
+                } else {
+                    String key = asString(entry.getKey());
+                    PositionList positions = PositionList.deserialize(entry.getValue());
+                    displayPositions(key, positions, indexType, synonyms);
+                }
                 count++;
                 iterator.next();
             }
@@ -243,5 +264,54 @@ public class LevelDBBrowser {
 
     private static byte[] bytes(String str) {
         return str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static void displayNashEntry(byte[] keyBytes, byte[] valueBytes) throws IOException {
+        if (Arrays.equals(keyBytes, NashSerializationUtils.DATE_LOOKUP_KEY)) {
+            System.out.printf("%nKey: %s (Date Lookup Table)%n", new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8));
+            System.out.println("----------");
+            try {
+                List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(valueBytes);
+                System.out.printf("Dates: %d%n", dateLookup.size());
+                int displayCount = 0;
+                for (LocalDate date : dateLookup) {
+                    System.out.printf("  [%d]: %s%n", displayCount, date);
+                    displayCount++;
+                    if (displayCount >= 100) { // Limit displayed dates
+                         System.out.println("  ... (showing first 100 dates)");
+                         break;
+                    }
+                }
+            } catch (IOException e) {
+                System.out.println("  Error deserializing date lookup table: " + e.getMessage());
+            }
+        } else {
+            String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+            System.out.printf("%nKey: %s (Nash Prefix)%n", key);
+             System.out.println("----------");
+            List<NashDateEntryWithId> entries = NashSerializationUtils.deserializeNashEntries(valueBytes);
+            System.out.printf("Entries: %d%n", entries.size());
+            displayNashPositions(entries); // Use a helper for detailed display
+        }
+    }
+
+    private static void displayNashPositions(List<NashDateEntryWithId> entries) {
+         int count = 0;
+         int maxPositions = 100; // Limit display
+         for (NashDateEntryWithId entry : entries) {
+             if (count >= maxPositions) {
+                 System.out.printf("%nShowing first %d entries. Total entries: %d%n", maxPositions, entries.size());
+                 break;
+             }
+             Position pos = entry.position();
+             System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][time:%s][dateId:%d]%n",
+                     pos.getDocumentId(),
+                     pos.getSentenceId(),
+                     pos.getBeginPosition(),
+                     pos.getEndPosition(),
+                     pos.getTimestamp(),
+                     entry.dateId());
+             count++;
+         }
     }
 }

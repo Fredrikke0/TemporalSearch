@@ -68,7 +68,7 @@ public class IndexManager implements AutoCloseable {
         // Initialize all required indexes
         String[] indexTypes = {
             "unigram", "bigram", "trigram", "pos", "ner", "ner_date", 
-            "dependency"
+            "dependency", "nash"
         };
 
         for (String type : indexTypes) {

@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
+ * @deprecated This class is deprecated. Use {@link com.example.query.binding.Match} instead.
  * Represents a match at either document or sentence level.
  * This is the core data structure for representing matches with different granularity.
  */

@@ -14,6 +14,9 @@ import com.example.query.QueryParser;
 import com.example.query.result.ResultGenerationException;
 import com.example.query.result.TableResultService;
 import com.example.query.sqlite.SqliteAccessor;
+import com.example.index.NashDateEntryWithId;
+import com.example.index.util.NashSerializationUtils;
+import no.ntnu.sandbox.Nash;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -28,6 +31,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -47,8 +52,10 @@ public class QueryEndToEndTest {
     private static MockIndexAccess mockTrigramIndex;
     private static MockIndexAccess mockNerIndex;
     private static MockIndexAccess mockNerDateIndex; // Added mock NER_DATE index for temporal queries
+    private static MockIndexAccess mockNashIndex; // Add mock Nash index
     private static Map<String, IndexAccessInterface> mockIndexes;
     private static QueryParser queryParser;
+    private static ConditionExecutorFactory factory;
 
     private static final char DELIMITER = '\0';
 
@@ -110,17 +117,36 @@ public class QueryEndToEndTest {
         mockNerDateIndex.addTestData("DATE" + DELIMITER + "2001-03-01T00:00/2001-03-31T23:59:59" + DELIMITER + "March 2001", 24, 1, 5, 15);
         mockNerDateIndex.addTestData("DATE" + DELIMITER + "2005-07-04T00:00/2005-07-04T23:59:59" + DELIMITER + "July 4, 2005", 25, 1, 0, 12);
 
-        // Update the map of indexes
+        // Create and populate mock Nash index
+        mockNashIndex = new MockIndexAccess();
+        // Use the same interval and predicate as the query
+        String interval = "[1100-01-01 , 2025-01-01]"; // Valid Nash interval
+        Nash.RangePredicate predicate = Nash.RangePredicate.INTERSECT;
+        String[] hashPrefixes = Nash.generateTimeHash(interval, predicate);
+        var pos = new com.example.core.Position(30, 1, 0, 10, java.time.LocalDate.parse("2024-01-15"));
+        var entry = new NashDateEntryWithId(pos, 0);
+        var entries = java.util.List.of(entry);
+        byte[] serializedEntries = NashSerializationUtils.serializeNashEntries(entries);
+        for (String hashPrefix : hashPrefixes) {
+            mockNashIndex.put(hashPrefix.getBytes(StandardCharsets.UTF_8), serializedEntries);
+        }
+        // Add the lookup table (with one date)
+        java.util.List<java.time.LocalDate> lookup = java.util.List.of(java.time.LocalDate.parse("2024-01-15"));
+        byte[] serializedLookup = NashSerializationUtils.serializeDateLookup(lookup);
+        mockNashIndex.put(NashSerializationUtils.DATE_LOOKUP_KEY, serializedLookup);
+
+        // Register all indexes, including Nash
         mockIndexes = Map.of(
             "unigram", mockUnigramIndex,
             "bigram", mockBigramIndex,
             "trigram", mockTrigramIndex,
             "ner", mockNerIndex,
-            "ner_date", mockNerDateIndex  // Add the NER_DATE index for temporal queries
+            "ner_date", mockNerDateIndex,
+            "nash", mockNashIndex // <-- Add Nash
         );
         
         // Initialize executor and result service
-        ConditionExecutorFactory factory = new ConditionExecutorFactory();
+        factory = new ConditionExecutorFactory();
         queryExecutor = new QueryExecutor(factory);
         tableResultService = new TableResultService();
         queryParser = new QueryParser();
@@ -290,7 +316,7 @@ public class QueryEndToEndTest {
     
     @Test
     public void testNerVariableBindingQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT main.person FROM source ALIAS main WHERE NER(PERSON) BIND person";
+        String queryString = "SELECT t1.person FROM source ALIAS t1 WHERE NER(PERSON) BIND person";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -301,18 +327,18 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(3, resultTable.rowCount()); // Grouped by doc (3 unique docs)
-        assertTrue(resultTable.columnNames().contains("main.person"));
+        assertTrue(resultTable.columnNames().contains("t1.person"));
         // Values in the table will be one of the entities from the doc (grouping picks one)
         Set<String> expectedValues = Set.of("albert einstein", "marie curie", "isaac newton", "albrecht kossel");
-        assertTrue(expectedValues.contains(resultTable.stringColumn("main.person").get(0).toLowerCase()));
-        assertTrue(expectedValues.contains(resultTable.stringColumn("main.person").get(1).toLowerCase()));
-        assertTrue(expectedValues.contains(resultTable.stringColumn("main.person").get(2).toLowerCase()));
+        assertTrue(expectedValues.contains(resultTable.stringColumn("t1.person").get(0).toLowerCase()));
+        assertTrue(expectedValues.contains(resultTable.stringColumn("t1.person").get(1).toLowerCase()));
+        assertTrue(expectedValues.contains(resultTable.stringColumn("t1.person").get(2).toLowerCase()));
     }
     
     @Test
     public void testNerVariableBindingWithTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Test partial match with binding
-        String queryString = "SELECT main.org FROM source ALIAS main WHERE NER(ORGANIZATION, 'corp') BIND org";
+        String queryString = "SELECT t1.org FROM source ALIAS t1 WHERE NER(ORGANIZATION, 'corp') BIND org";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -324,12 +350,12 @@ public class QueryEndToEndTest {
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount()); 
         assertEquals(11, resultTable.intColumn("document_id").get(0));
-        assertEquals("microsoft corporation", resultTable.stringColumn("main.org").get(0));
+        assertEquals("microsoft corporation", resultTable.stringColumn("t1.org").get(0));
     }
     
     @Test
     public void testNerNewTypeOrdinalQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT main.ordinal_value FROM source ALIAS main WHERE NER(ORDINAL) BIND ordinal_value";
+        String queryString = "SELECT t1.ordinal_value FROM source ALIAS t1 WHERE NER(ORDINAL) BIND ordinal_value";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -340,12 +366,12 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount());
-        assertEquals("first", resultTable.stringColumn("main.ordinal_value").get(0));
+        assertEquals("first", resultTable.stringColumn("t1.ordinal_value").get(0));
     }
     
     @Test
     public void testNerNewTypeNumberQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT main.num FROM source ALIAS main WHERE NER(NUMBER) BIND num";
+        String queryString = "SELECT t1.num FROM source ALIAS t1 WHERE NER(NUMBER) BIND num";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -356,7 +382,7 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount());
-        assertEquals("42", resultTable.stringColumn("main.num").get(0));
+        assertEquals("42", resultTable.stringColumn("t1.num").get(0));
     }
     
     @Test
@@ -486,7 +512,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testDateLiteralWithVariableBinding() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT main.event_date FROM source ALIAS main WHERE DATE(= 1995) BIND event_date";
+        String queryString = "SELECT t1.event_date FROM source ALIAS t1 WHERE DATE(= 1995) BIND event_date";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -500,7 +526,7 @@ public class QueryEndToEndTest {
         
         // If there are results, the column with the variable name should exist
         if (resultTable.rowCount() > 0) {
-            assertTrue(resultTable.columnNames().contains("main.event_date"), "Expected column with the variable name");
+            assertTrue(resultTable.columnNames().contains("t1.event_date"), "Expected column with the variable name");
         }
     }
 
@@ -517,5 +543,20 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertTrue(resultTable.rowCount() >= 0, "Result table should have 0 or more rows");
+    }
+
+    @Test
+    public void testNashTemporalQuery() throws Exception {
+        // Set the temporal strategy to Nash for this test
+        factory.setTemporalStrategy("nash");
+        String queryString = "SELECT TITLE FROM source WHERE DATE(< 2025) BIND date";
+        Query query = queryParser.parse(queryString);
+        QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
+        assertNotNull(result);
+        // Should find the entry we put in the Nash index
+        assertFalse(result.getAllDetails().isEmpty(), "Expected results from Nash index");
+        assertEquals(1, result.getAllDetails().size());
+        assertEquals(30, result.getAllDetails().get(0).getDocumentId());
+        assertEquals(java.time.LocalDate.parse("2024-01-15"), result.getAllDetails().get(0).value());
     }
 } 
