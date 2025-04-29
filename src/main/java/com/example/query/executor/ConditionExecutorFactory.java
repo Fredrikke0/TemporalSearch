@@ -56,6 +56,15 @@ public class ConditionExecutorFactory {
     }
 
     /**
+     * Gets the currently configured temporal strategy name.
+     *
+     * @return The name of the temporal strategy ("nash" or "naive").
+     */
+    public String getTemporalStrategy() {
+        return this.desiredTemporalStrategy;
+    }
+
+    /**
      * Gets the appropriate executor for the given condition.
      * Creates new instances for non-singleton executors, reuses cached singletons.
      *

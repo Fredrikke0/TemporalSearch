@@ -146,10 +146,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             String corpusName)
             throws QueryExecutionException {
         
-        if (!indexes.containsKey(DATE_INDEX)) {
-            throw new QueryExecutionException(String.format("Missing required index: %s", DATE_INDEX), condition.toString(), QueryExecutionException.ErrorType.MISSING_INDEX);
-        }
-        
         // --- Determine the execution strategy (Simpler now) ---
         TemporalExecutionStrategy executionStrategy = getActiveStrategy(); // Always use the configured active strategy
 
@@ -299,9 +295,19 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 TemporalExecutor temporalExecutor) // temporalExecutor not needed here
             throws QueryExecutionException {
         
+            // ADDED: Check if the required ner_date index is available
+            IndexAccessInterface dateIndex = indexes.get(DATE_INDEX);
+            if (dateIndex == null) {
+                throw new QueryExecutionException(
+                    String.format("Naive strategy requires index '%s' which is missing or failed to initialize for corpus '%s'.", DATE_INDEX, corpusName),
+                    condition.toString(), 
+                    QueryExecutionException.ErrorType.MISSING_INDEX
+                );
+            }
+            
         List<MatchDetail> details = new ArrayList<>();
         String conditionId = String.valueOf(condition.hashCode());
-            IndexAccessInterface dateIndex = indexes.get(DATE_INDEX); // Assumes index exists (checked by main executor)
+            // IndexAccessInterface dateIndex = indexes.get(DATE_INDEX); // Assumes index exists (checked by main executor)
         TemporalPredicate type = condition.temporalType();
         LocalDateTime queryStart = condition.startDate();
             // Use queryStart if endDate is not present, ensuring queryEnd is never null.

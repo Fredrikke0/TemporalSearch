@@ -103,8 +103,8 @@ public class QueryCLI {
             TableResultService tableResultService = new TableResultService(corpusDbPath);
             logger.info("Using corpus-specific database at: {}", corpusDbPath);
             
-            // 4. Create IndexManager for the resolved path
-            try (IndexManager indexManager = new IndexManager(indexBaseDir, indexSetName)) {
+            // 4. Create IndexManager for the resolved path, passing the query and strategy
+            try (IndexManager indexManager = new IndexManager(indexBaseDir, indexSetName, query, this.executorFactory.getTemporalStrategy())) {
                 logger.debug("Created IndexManager for index set: {}", indexSetName);
                 
                 // Initialize Nash index with the index manager

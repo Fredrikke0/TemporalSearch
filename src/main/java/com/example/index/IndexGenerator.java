@@ -63,8 +63,8 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         // Initialize IndexAccess with optimized options
         Options options = new Options();
         options.createIfMissing(true);
-        options.cacheSize(64 * 1024 * 1024); // 64MB cache
-        options.writeBufferSize(8 * 1024 * 1024); // 8MB write buffer
+        options.cacheSize(128 * 1024 * 1024); // 128MB cache
+        options.writeBufferSize(32 * 1024 * 1024); // 32MB write buffer
         options.blockSize(4 * 1024); // 4KB block size
         options.compressionType(org.iq80.leveldb.CompressionType.SNAPPY);
 
@@ -162,7 +162,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     protected void writeToLevelDB(File sortedFile) throws IOException {
         int batchCount = 0;
         long startTime = System.currentTimeMillis();
-        
+        final int MAX_RETRIES = 3;
+        final long RETRY_DELAY_MS = 100; // 100 milliseconds
+
         try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile))) {
             String currentTerm = null;
             PositionList mergedPositions = null;
@@ -188,23 +190,19 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                 // If we have a new term, write the current one
                 if (!currentTerm.equals(term)) {
-                    // Write current term
-                    try {
-                        indexAccess.put(bytes(currentTerm), mergedPositions);
-                        batchCount++;
-                        totalNGramsGenerated++;
-                    } catch (IndexAccessException e) {
-                        throw new IOException("Failed to write term: " + currentTerm, e);
-                    }
-                    
+                    // Write current term with retries
+                    writeWithRetry(currentTerm, mergedPositions, MAX_RETRIES, RETRY_DELAY_MS);
+                    batchCount++;
+                    totalNGramsGenerated++;
+
                     // Collect stats periodically
-                    if (totalNGramsGenerated % 10000 == 0) {
+                    if (totalNGramsGenerated % 100000 == 0) {
                         long elapsed = System.currentTimeMillis() - startTime;
-                        logger.info("Write progress: {} terms, {} terms/sec", 
+                        logger.debug("Write progress: {} terms, {} terms/sec",
                             totalNGramsGenerated,
                             String.format("%.2f", totalNGramsGenerated * 1000.0 / elapsed));
                     }
-                    
+
                     // Start new term
                     currentTerm = term;
                     mergedPositions = positions;
@@ -216,15 +214,47 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
             // Write the last term if we have one
             if (currentTerm != null && mergedPositions != null) {
-                try {
-                    indexAccess.put(bytes(currentTerm), mergedPositions);
-                    totalNGramsGenerated++;
-                } catch (IndexAccessException e) {
-                    throw new IOException("Failed to write final term: " + currentTerm, e);
-                }
+                // Write final term with retries
+                writeWithRetry(currentTerm, mergedPositions, MAX_RETRIES, RETRY_DELAY_MS);
+                totalNGramsGenerated++;
             }
 
             logger.info("Finished writing {} terms to index", totalNGramsGenerated);
+        }
+    }
+
+    /**
+     * Attempts to write a term and its positions to the index, retrying on specific failures.
+     */
+    private void writeWithRetry(String term, PositionList positions, int maxRetries, long delayMs) throws IOException {
+        int attempt = 0;
+        while (true) {
+            try {
+                indexAccess.put(bytes(term), positions);
+                return; // Success
+            } catch (IndexAccessException e) {
+                attempt++;
+                // Check if the cause might be the transient FileNotFoundException
+                Throwable cause = e.getCause();
+                boolean possiblyTransient = cause instanceof org.iq80.leveldb.DBException &&
+                                             cause.getMessage() != null &&
+                                             (cause.getMessage().contains("Could not open table") ||
+                                              cause.getMessage().contains("FileNotFoundException"));
+
+                if (possiblyTransient && attempt <= maxRetries) {
+                    logger.warn("Attempt {} failed to write term '{}' due to potential transient LevelDB issue ({}). Retrying in {}ms...",
+                                attempt, term, cause.getMessage(), delayMs);
+                    try {
+                        Thread.sleep(delayMs * attempt); // Simple backoff
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("Interrupted during retry wait for term: " + term, ie);
+                    }
+                } else {
+                    // Non-transient error or max retries exceeded
+                    throw new IOException("Failed to write term '" + term + "' after " + attempt + " attempts", e);
+                }
+            }
         }
     }
 
