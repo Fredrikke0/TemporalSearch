@@ -13,6 +13,8 @@ import java.sql.*;
 import java.util.*;
 import me.tongfei.progressbar.*;
 import java.nio.file.Path;
+import java.io.PrintStream;
+import java.io.OutputStream;
 
 public class Annotations {
     private static final Logger logger = LoggerFactory.getLogger(Annotations.class);
@@ -82,38 +84,50 @@ public class Annotations {
             int totalProcessed = 0;
             
             try (Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery(query);
-                 ProgressBar pb = new ProgressBarBuilder()
+                 ResultSet rs = stmt.executeQuery(query)) {
+                
+                 // Check system property to potentially disable progress bar output
+                 boolean silentProgress = Boolean.parseBoolean(System.getProperty("progbar.silent", "false"));
+                 
+                 ProgressBarBuilder pbb = new ProgressBarBuilder()
                     .setTaskName("Processing documents")
-                    .setInitialMax(documentsToProcess) // Use actual count to process
-                    .build()) {
-
-                while (rs.next()) {
-                    int documentId = rs.getInt("document_id");
-                    String text = rs.getString("text");
+                    .setInitialMax(documentsToProcess); // Use actual count to process
                     
-                    AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
-                    insertData(conn, result.annotations, result.dependencies);
-                    
-                    pb.step();
-                    totalProcessed++;
-                    documentsInBatch++;
-                    
-                    if (documentsInBatch >= commitBatchSize) {
-                        conn.commit();
-                        logger.debug("Committed batch of {} documents", documentsInBatch);
-                        documentsInBatch = 0;
-                    }
-                    
-                    if (totalProcessed % 10 == 0) {
-                        pb.setExtraMessage(String.format("(%d/%d)", totalProcessed, documentsToProcess));
-                    }
+                // If silent, redirect output to a null stream
+                if (silentProgress) {
+                    logger.debug("Progress bar output disabled via system property.");
+                    pbb.setPrintStream(new PrintStream(OutputStream.nullOutputStream()));
                 }
                 
-                if (documentsInBatch > 0) {
-                    conn.commit();
-                    logger.debug("Committed final batch of {} documents", documentsInBatch);
-                }
+                // Build the ProgressBar within the try-with-resources
+                try (ProgressBar pb = pbb.build()) {
+                    while (rs.next()) {
+                        int documentId = rs.getInt("document_id");
+                        String text = rs.getString("text");
+                        
+                        AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
+                        insertData(conn, result.annotations, result.dependencies);
+                        
+                        pb.step();
+                        totalProcessed++;
+                        documentsInBatch++;
+                        
+                        if (documentsInBatch >= commitBatchSize) {
+                            conn.commit();
+                            logger.debug("Committed batch of {} documents", documentsInBatch);
+                            documentsInBatch = 0;
+                        }
+                        
+                        if (totalProcessed % 10 == 0) {
+                            pb.setExtraMessage(String.format("(%d/%d)", totalProcessed, documentsToProcess));
+                        }
+                    }
+                    
+                    if (documentsInBatch > 0) {
+                        conn.commit();
+                        logger.debug("Committed final batch of {} documents", documentsInBatch);
+                    }
+                } // ProgressBar pb is closed here
 
             } catch (SQLException e) {
                 logger.error("SQL Error during document processing, attempting rollback.", e);

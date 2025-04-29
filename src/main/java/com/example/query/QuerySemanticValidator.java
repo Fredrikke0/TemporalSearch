@@ -145,14 +145,29 @@ public class QuerySemanticValidator {
             String fullColumnName; // This will hold the name as it appears in SELECT/SNIPPET
             String context; // For error messages
 
-            if (column instanceof VariableColumn variableColumn) {
-                fullColumnName = variableColumn.getColumnName();
-                context = "SELECT";
-            } else if (column instanceof SnippetColumn snippetColumn) {
-                fullColumnName = snippetColumn.getVariableName();
+            // Explicitly handle different column types
+            if (column instanceof VariableColumn variableColumn) { 
+                fullColumnName = variableColumn.getColumnName(); // e.g., q1.date or $main.date
+                context = "SELECT (Variable)";
+                 logger.trace("Validating VariableColumn: {}", fullColumnName);
+                 // Proceed to validation logic below...
+            } else if (column instanceof SnippetColumn snippetColumn) { 
+                fullColumnName = snippetColumn.getVariableName(); // e.g., q1.person or $main.person
                 context = "SNIPPET";
-            } else {
+                logger.trace("Validating SnippetColumn for variable: {}", fullColumnName);
+                 // Proceed to validation logic below...
+            } else if (column instanceof StructuralColumn structuralColumn) {
+                // Structural columns (e.g., q1.TITLE) don't rely on VariableRegistry bindings
+                 logger.trace("Skipping VariableRegistry validation for StructuralColumn: {}", structuralColumn.getColumnName());
+                continue; // Skip VariableRegistry validation for this column
+            } else if (column instanceof CountColumn) {
+                 // Count columns might need specific validation later, but not VariableRegistry lookup
+                 logger.trace("Skipping VariableRegistry validation for CountColumn: {}", column.getColumnName());
                 continue; // Skip non-variable columns (COUNT, TITLE, etc.)
+            } else {
+                // Unknown column type - log a warning or throw an error?
+                 logger.warn("Skipping VariableRegistry validation for unknown SelectColumn type: {}", column.getClass().getName());
+                 continue;
             }
 
             String alias; // Alias part extracted from fullColumnName
@@ -348,7 +363,9 @@ public class QuerySemanticValidator {
                 validateVariableInRegistry(rightQualified, subqueryRegistry, "subquery '" + rightAlias + "' (for JOIN)");
 
                 // Validate proximity window if applicable
-                if (joinCondition.temporalPredicate() == TemporalPredicate.PROXIMITY) {
+                if (joinCondition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL &&
+                    joinCondition.temporalPredicate().isPresent() &&
+                    joinCondition.temporalPredicate().get() == TemporalPredicate.PROXIMITY) {
                     joinCondition.proximityWindow().ifPresent(window -> {
                         if (window <= 0) {
                             throw new RuntimeException(new QueryParseException("Proximity window must be greater than 0"));

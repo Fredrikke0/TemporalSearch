@@ -1,125 +1,143 @@
 package com.example.query.model;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.DisplayName;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import com.example.query.binding.VariableRegistry;
+import com.example.query.model.condition.Contains;
+import com.example.query.model.JoinCondition.JoinType;
+import com.example.query.model.JoinCondition.JoinOperatorType;
 
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /**
- * Tests for the subquery model classes.
+ * Tests for SubquerySpec and JoinCondition interactions.
  */
-public class SubqueryTest {
-    
+@DisplayName("Subquery and Join Model Tests")
+@ExtendWith(MockitoExtension.class)
+class SubqueryTest {
+
+    @Mock
+    private Query subquery;
+
     @Test
     @DisplayName("Test SubquerySpec creation")
-    public void testSubquerySpecCreation() {
-        // Create a simple query to use as a subquery
-        Query subquery = new Query("test_source");
-        
-        // Create a subquery specification
-        SubquerySpec spec = new SubquerySpec(subquery, "test_alias");
-        
-        // Verify fields
+    void testSubquerySpecCreation() {
+        String alias = "sub1";
+        List<String> projectedColumns = List.of("col1", "col2");
+        SubquerySpec spec = new SubquerySpec(subquery, alias, Optional.of(projectedColumns));
+        assertEquals(alias, spec.alias());
         assertEquals(subquery, spec.subquery());
-        assertEquals("test_alias", spec.alias());
-        assertTrue(spec.projectedColumns().isEmpty());
-        
-        // Create a subquery spec with projected columns
-        List<String> columns = List.of("column1", "column2");
-        SubquerySpec specWithColumns = new SubquerySpec(subquery, "test_alias", Optional.of(columns));
-        
-        // Verify fields
-        assertEquals(subquery, specWithColumns.subquery());
-        assertEquals("test_alias", specWithColumns.alias());
-        assertTrue(specWithColumns.projectedColumns().isPresent());
-        assertEquals(columns, specWithColumns.projectedColumns().get());
+        assertTrue(spec.projectedColumns().isPresent());
+        assertEquals(projectedColumns, spec.projectedColumns().get());
+        assertTrue(spec.toString().contains(alias));
+        assertTrue(spec.toString().contains("col1"));
+    }
+
+    @Test
+    @DisplayName("Test SubquerySpec creation without projected columns")
+    void testSubquerySpecNoProjected() {
+        String alias = "sub2";
+        SubquerySpec spec = new SubquerySpec(subquery, alias);
+        assertEquals(alias, spec.alias());
+        assertEquals(subquery, spec.subquery());
+        assertFalse(spec.projectedColumns().isPresent());
     }
     
     @Test
-    @DisplayName("Test SubquerySpec validation")
-    public void testSubquerySpecValidation() {
-        Query subquery = new Query("test_source");
-        
-        // Test null subquery
-        assertThrows(NullPointerException.class, () -> new SubquerySpec(null, "test_alias"));
-        
-        // Test null alias
-        assertThrows(NullPointerException.class, () -> new SubquerySpec(subquery, null));
-        
-        // Test empty alias
-        assertThrows(IllegalArgumentException.class, () -> new SubquerySpec(subquery, ""));
-        
-        // Test null projected columns
-        assertThrows(NullPointerException.class, () -> new SubquerySpec(subquery, "test_alias", null));
+    @DisplayName("Test Query creation with subquery and join - Equality Join")
+    void testQueryWithSubqueryAndJoinEquality() {
+        VariableRegistry subRegistry = new VariableRegistry();
+        SubquerySpec subquerySpec = new SubquerySpec(subquery, "sub");
+        VariableRegistry mainRegistry = new VariableRegistry();
+
+        // Use factory for equality join
+        JoinCondition joinCondition = JoinCondition.createEqualityJoin("main.id", "sub.id", JoinType.INNER);
+
+        Query mainQuery = new Query(
+            "source",
+            List.of(new Contains(List.of("main_term"))),
+            List.of(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
+            List.of(), // No select columns in this test
+            mainRegistry,
+            List.of(subquerySpec),
+            Optional.of(joinCondition),
+            Optional.of("main") // Explicit main alias
+        );
+
+        assertEquals(1, mainQuery.subqueries().size());
+        assertTrue(mainQuery.joinCondition().isPresent());
+        assertEquals(joinCondition, mainQuery.joinCondition().get());
     }
-    
+
     @Test
-    @DisplayName("Test JoinCondition creation")
-    public void testJoinConditionCreation() {
-        // Create a join condition
-        JoinCondition condition = new JoinCondition(
-            "left_column", 
-            "right_column", 
-            JoinCondition.JoinType.INNER, 
-            TemporalPredicate.INTERSECT
+    @DisplayName("Test Query creation with subquery and join - Temporal Join")
+    void testQueryWithSubqueryAndJoinTemporal() {
+        VariableRegistry subRegistry = new VariableRegistry();
+        SubquerySpec subquerySpec = new SubquerySpec(subquery, "sub");
+        VariableRegistry mainRegistry = new VariableRegistry();
+
+        // Use full constructor for temporal join with INTERSECT, but do NOT specify a window (should be empty)
+        JoinCondition joinCondition = new JoinCondition("main.date", "sub.date", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT), Optional.empty());
+
+        Query mainQuery = new Query(
+            "source",
+            List.of(), // No main conditions
+            List.of(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
+            List.of(), // No select columns
+            mainRegistry,
+            List.of(subquerySpec),
+            Optional.of(joinCondition),
+            Optional.of("main")
         );
         
-        // Verify fields
-        assertEquals("left_column", condition.leftColumn());
-        assertEquals("right_column", condition.rightColumn());
-        assertEquals(JoinCondition.JoinType.INNER, condition.type());
-        assertEquals(TemporalPredicate.INTERSECT, condition.temporalPredicate());
-        assertTrue(condition.proximityWindow().isEmpty());
-        
-        // Create a proximity join condition
-        JoinCondition proximityCondition = new JoinCondition(
-            "left_column", 
-            "right_column", 
-            JoinCondition.JoinType.INNER, 
-            TemporalPredicate.PROXIMITY,
-            Optional.of(7)
-        );
-        
-        // Verify fields
-        assertEquals(TemporalPredicate.PROXIMITY, proximityCondition.temporalPredicate());
-        assertTrue(proximityCondition.proximityWindow().isPresent());
-        assertEquals(7, proximityCondition.proximityWindow().get());
+        assertEquals(1, mainQuery.subqueries().size());
+        assertTrue(mainQuery.joinCondition().isPresent());
+        assertEquals(joinCondition, mainQuery.joinCondition().get());
     }
-    
+
     @Test
     @DisplayName("Test JoinCondition validation")
-    public void testJoinConditionValidation() {
-        // Test null left column
-        assertThrows(NullPointerException.class, () -> new JoinCondition(
-            null, "right_column", JoinCondition.JoinType.INNER, TemporalPredicate.INTERSECT
-        ));
+    void testJoinConditionValidation() {
+        // Test valid TEMPORAL condition (Proximity)
+        assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.PROXIMITY), Optional.of(5)));
+        // Test valid TEMPORAL condition (Non-Proximity)
+        assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT), Optional.empty()));
+        // Test factory method for Temporal
+        assertDoesNotThrow(() -> JoinCondition.createTemporalJoin("l.col", "r.col", JoinType.INNER, TemporalPredicate.INTERSECT)); 
+
+        // Test valid EQUALITY condition
+        assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.empty()));
+        // Test factory method for Equality
+        assertDoesNotThrow(() -> JoinCondition.createEqualityJoin("l.col", "r.col", JoinType.INNER));
+
+        // Test null checks (using full constructor)
+        assertThrows(NullPointerException.class, () -> new JoinCondition(null, "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.empty()));
+        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", null, JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.empty()));
+        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", "r.col", null, JoinOperatorType.EQUALITY, Optional.empty(), Optional.empty()));
+        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, null, Optional.empty(), Optional.empty())); // Operator type
+        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, null, Optional.empty())); // Temporal predicate Optional
+
+        // Test operator type / temporal predicate mismatch
+        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.empty(), Optional.empty()), "Temporal predicate required for TEMPORAL join");
+        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.of(TemporalPredicate.INTERSECT), Optional.empty()), "Temporal predicate not allowed for EQUALITY join");
         
-        // Test null right column
-        assertThrows(NullPointerException.class, () -> new JoinCondition(
-            "left_column", null, JoinCondition.JoinType.INNER, TemporalPredicate.INTERSECT
-        ));
-        
-        // Test null join type
-        assertThrows(NullPointerException.class, () -> new JoinCondition(
-            "left_column", "right_column", null, TemporalPredicate.INTERSECT
-        ));
-        
-        // Test null temporal predicate
-        assertThrows(NullPointerException.class, () -> new JoinCondition(
-            "left_column", "right_column", JoinCondition.JoinType.INNER, null
-        ));
-        
-        // Test PROXIMITY without window
-        assertThrows(IllegalArgumentException.class, () -> new JoinCondition(
-            "left_column", "right_column", JoinCondition.JoinType.INNER, TemporalPredicate.PROXIMITY, Optional.empty()
-        ));
-        
-        // Test non-PROXIMITY with window
-        assertThrows(IllegalArgumentException.class, () -> new JoinCondition(
-            "left_column", "right_column", JoinCondition.JoinType.INNER, TemporalPredicate.INTERSECT, Optional.of(7)
-        ));
+        // Test proximity validation
+        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.PROXIMITY), Optional.empty()),
+            "Proximity window must be specified for PROXIMITY joins");
+
+        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT), Optional.of(5)),
+            "Proximity window should not be specified for non-PROXIMITY joins");
+
+        // Test window with EQUALITY join
+        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.of(5)), 
+            "Proximity window should not be specified for non-PROXIMITY joins"); // EQUALITY is implicitly non-proximity
     }
 } 

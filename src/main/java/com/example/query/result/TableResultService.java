@@ -200,7 +200,8 @@ public class TableResultService {
                     Column<?> tableCol = columnMap.get(selectColumn.getColumnName());
                     if (tableCol != null) {
                         // Pass the whole list of details for this unit
-                        selectColumn.populateColumn(table, rowIndex, detailsForUnit, source, indexes);
+                        // Call the new populateColumn method with the query context
+                        selectColumn.populateColumn(table, rowIndex, detailsForUnit, source, indexes, query);
                     } else {
                         logger.warn("Column '{}' defined in SelectColumn but not found in table structure?", selectColumn.getColumnName());
                     }
@@ -504,7 +505,8 @@ public class TableResultService {
                     if (tableCol != null) {
                         // For join, pass both left and right as a list for compatibility
                         List<MatchDetail> details = List.of(joined.left(), joined.right());
-                        selectColumn.populateColumn(table, rowIndex, details, query.source(), indexes);
+                        // Call the new populateColumn method with the query context
+                        selectColumn.populateColumn(table, rowIndex, details, query.source(), indexes, query);
                     } else {
                         logger.warn("Column '{}' defined in SelectColumn but not found in table structure?", selectColumn.getColumnName());
                     }

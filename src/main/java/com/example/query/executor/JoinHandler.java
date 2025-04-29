@@ -91,16 +91,41 @@ public class JoinHandler {
         logger.debug("Left QueryResult ('{}') has {} details, Right QueryResult ('{}') has {} details",
                      leftAlias, leftDetails.size(), rightAlias, rightDetails.size());
 
+        // Add INFO logging for the content of the lists (for debugging)
+        if (logger.isInfoEnabled()) {
+            String leftDetailsString = leftDetails.stream()
+                .limit(20) // Limit to first 20
+                .map(Object::toString) // Assuming MatchDetail.toString() is suitable
+                .collect(Collectors.joining("\n    ", "\n    ", "")); // Indent each detail
+            String rightDetailsString = rightDetails.stream()
+                .limit(20) // Limit to first 20
+                .map(Object::toString)
+                .collect(Collectors.joining("\n    ", "\n    ", ""));
+
+            // Add indication if list was truncated
+            String leftCountSuffix = leftDetails.size() > 20 ? " (showing first 20)" : "";
+            String rightCountSuffix = rightDetails.size() > 20 ? " (showing first 20)" : "";
+
+            logger.info("Attempting JOIN. Left Details (size={}{}):{}{}\nRight Details (size={}{}):{}{}",
+                        leftDetails.size(),
+                        leftCountSuffix,
+                        leftDetailsString.isEmpty() ? " [EMPTY]" : "", leftDetailsString,
+                        rightDetails.size(),
+                        rightCountSuffix,
+                        rightDetailsString.isEmpty() ? " [EMPTY]" : "", rightDetailsString);
+        }
+
         // 3. Execute the join based on JoinCondition and MatchDetail properties.
         List<JoinedMatch> joinedDetails = new ArrayList<>();
         Query.Granularity resultGranularity = query.granularity();
-        TemporalPredicate predicate = joinCondition.temporalPredicate();
+        // TemporalPredicate predicate = joinCondition.temporalPredicate().orElse(null); // Get predicate if needed later
         JoinCondition.JoinType joinType = joinCondition.type();
+        JoinCondition.JoinOperatorType operatorType = joinCondition.operatorType(); // Get operator type
         Optional<Integer> proximityWindow = joinCondition.proximityWindow(); // Needed for PROXIMITY
 
         if (joinType == JoinCondition.JoinType.INNER) {
-            logger.debug("Performing INNER JOIN with predicate {} on keys: {}.{} {} {}.{}",
-                         predicate, leftAlias, leftKey, predicate, rightAlias, rightKey);
+            logger.debug("Performing INNER JOIN with operator {} on keys: {}.{} {} {}.{}",
+                         operatorType, leftAlias, leftKey, operatorType, rightAlias, rightKey);
 
             // --- Always use Hash Join for now ---
             // If both keys are 'date', use the date-specific hash join
@@ -127,59 +152,61 @@ public class JoinHandler {
     }
 
     // --- Hash Join Implementation for Dates ---
-    private record DocDateKey(int documentId, LocalDate dateValue) {}
+    private Map<LocalDate, List<MatchDetail>> groupDetailsByDate(List<MatchDetail> details, String dateKey) {
+        Map<LocalDate, List<MatchDetail>> grouped = new HashMap<>();
+        for (MatchDetail detail : details) {
+            Object val = extractValueForKey(detail, dateKey);
+            if (val instanceof LocalDate dateValue) {
+                grouped.computeIfAbsent(dateValue, k -> new ArrayList<>()).add(detail);
+            }
+        }
+         logger.trace("Grouped {} details into {} LocalDate groups for key '{}'.", details.size(), grouped.size(), dateKey);
+        return grouped;
+    }
 
     private List<JoinedMatch> performHashJoinOnDate(
             List<MatchDetail> leftDetails, List<MatchDetail> rightDetails, String leftKey, String rightKey)
     {
-        // Group left details by (docId, dateValue)
-        Map<DocDateKey, List<MatchDetail>> leftGrouped = groupDetailsByDocDate(leftDetails, leftKey);
-        // Group right details by (docId, dateValue)
-        Map<DocDateKey, List<MatchDetail>> rightGrouped = groupDetailsByDocDate(rightDetails, rightKey);
+        Map<LocalDate, List<MatchDetail>> leftGrouped = groupDetailsByDate(leftDetails, leftKey);
+        // Group right details by dateValue only
+        Map<LocalDate, List<MatchDetail>> rightGrouped = groupDetailsByDate(rightDetails, rightKey);
 
         List<JoinedMatch> joinedDetails = new ArrayList<>();
         // Iterate through the smaller map's keys for efficiency
-        Map<DocDateKey, List<MatchDetail>> smallerMap = leftGrouped.size() < rightGrouped.size() ? leftGrouped : rightGrouped;
-        Map<DocDateKey, List<MatchDetail>> largerMap = smallerMap == leftGrouped ? rightGrouped : leftGrouped;
+        Map<LocalDate, List<MatchDetail>> smallerMap = leftGrouped.size() < rightGrouped.size() ? leftGrouped : rightGrouped;
+        Map<LocalDate, List<MatchDetail>> largerMap = smallerMap == leftGrouped ? rightGrouped : leftGrouped;
 
-        logger.debug("Performing hash join: Left groups = {}, Right groups = {}, Iterating smaller map (size {}).",
+        logger.debug("Performing hash join on DATE: Left groups = {}, Right groups = {}, Iterating smaller map (size {}).",
                      leftGrouped.size(), rightGrouped.size(), smallerMap.size());
 
-        for (DocDateKey key : smallerMap.keySet()) {
-            if (largerMap.containsKey(key)) {
-                // Found a match for (docId, dateValue)
-                List<MatchDetail> leftMatches = leftGrouped.get(key);
-                List<MatchDetail> rightMatches = rightGrouped.get(key);
+        for (LocalDate dateKey : smallerMap.keySet()) {
+            if (largerMap.containsKey(dateKey)) {
+                // Found a match for dateValue
+                List<MatchDetail> leftMatches = leftGrouped.get(dateKey);
+                List<MatchDetail> rightMatches = rightGrouped.get(dateKey);
 
-                // IMPORTANT: Add only ONE JoinedMatch per key to avoid duplicates from multiple mentions
-                if (!leftMatches.isEmpty() && !rightMatches.isEmpty()) {
-                    // Use the first match from each list as representatives
-                    joinedDetails.add(new JoinedMatch(leftMatches.get(0), rightMatches.get(0)));
-                     logger.trace("Hash join matched key {}: Added JoinedMatch({}, {})", key, leftMatches.get(0), rightMatches.get(0));
+                // Create a cross product for all matching details on this date
+                if (leftMatches != null && rightMatches != null && !leftMatches.isEmpty() && !rightMatches.isEmpty()) {
+                    for (MatchDetail leftDetail : leftMatches) {
+                        for (MatchDetail rightDetail : rightMatches) {
+                            // Avoid joining a detail with itself if from the same source list (unlikely but possible)
+                            // and document ID based joins (though this method is for date)
+                            if (leftDetail != rightDetail) {
+                                joinedDetails.add(new JoinedMatch(leftDetail, rightDetail));
+                                logger.trace("Date hash join matched key {}: Added JoinedMatch({}, {})", dateKey, leftDetail, rightDetail);
+                            }
+                        }
+                    }
                 } else {
-                     logger.warn("Hash join matched key {} but one list was empty? Left: {}, Right: {}", key, leftMatches.size(), rightMatches.size());
+                     logger.warn("Date hash join matched key {} but one list was null or empty? Left: {}, Right: {}", dateKey, leftMatches, rightMatches);
                 }
             } else {
-                 logger.trace("Key {} from smaller map not found in larger map.", key);
+                 logger.trace("Key {} from smaller map not found in larger map.", dateKey);
             }
         }
-        logger.debug("Hash join finished, produced {} pairs.", joinedDetails.size());
+        logger.debug("Date hash join finished, produced {} pairs.", joinedDetails.size());
         return joinedDetails;
     }
-
-    private Map<DocDateKey, List<MatchDetail>> groupDetailsByDocDate(List<MatchDetail> details, String dateKey) {
-        Map<DocDateKey, List<MatchDetail>> grouped = new HashMap<>();
-        for (MatchDetail detail : details) {
-            Object val = extractValueForKey(detail, dateKey);
-            if (val instanceof LocalDate dateValue) {
-                DocDateKey key = new DocDateKey(detail.getDocumentId(), dateValue);
-                grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(detail);
-            }
-        }
-         logger.trace("Grouped {} details into {} DocDateKey groups for key '{}'.", details.size(), grouped.size(), dateKey);
-        return grouped;
-    }
-    // --- End Hash Join Implementation ---
 
     /**
      * Extracts the alias part from a column name in the format "alias.key".
@@ -338,14 +365,31 @@ public class JoinHandler {
         // Iterate through the smaller map's keys for efficiency
         Map<Object, List<MatchDetail>> smallerMap = leftGrouped.size() < rightGrouped.size() ? leftGrouped : rightGrouped;
         Map<Object, List<MatchDetail>> largerMap = smallerMap == leftGrouped ? rightGrouped : leftGrouped;
+
+        logger.debug("Performing generic hash join: Left groups = {}, Right groups = {}, Iterating smaller map (size {}).",
+                     leftGrouped.size(), rightGrouped.size(), smallerMap.size());
+
         for (Object key : smallerMap.keySet()) {
             if (largerMap.containsKey(key)) {
                 List<MatchDetail> leftMatches = leftGrouped.getOrDefault(key, List.of());
                 List<MatchDetail> rightMatches = rightGrouped.getOrDefault(key, List.of());
+
+                // Create a cross product for all matching details for this key
                 if (!leftMatches.isEmpty() && !rightMatches.isEmpty()) {
-                    // For simplicity, only join the first from each side (like the date join)
-                    joinedDetails.add(new JoinedMatch(leftMatches.get(0), rightMatches.get(0)));
+                    for (MatchDetail leftDetail : leftMatches) {
+                        for (MatchDetail rightDetail : rightMatches) {
+                             // Avoid joining a detail with itself if key represents something like doc ID
+                            if (leftDetail != rightDetail) {
+                                joinedDetails.add(new JoinedMatch(leftDetail, rightDetail));
+                                logger.trace("Generic hash join matched key {}: Added JoinedMatch({}, {})", key, leftDetail, rightDetail);
+                            }
+                        }
+                    }
+                } else {
+                     logger.warn("Generic hash join matched key {} but one list was empty? Left: {}, Right: {}", key, leftMatches.size(), rightMatches.size());
                 }
+            } else {
+                 logger.trace("Key {} from smaller map not found in larger map.", key);
             }
         }
         logger.debug("Generic hash join finished, produced {} pairs.", joinedDetails.size());

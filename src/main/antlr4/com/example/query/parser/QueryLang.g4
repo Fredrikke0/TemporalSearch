@@ -111,7 +111,7 @@ BLOCK_COMMENT: '/*' .*? '*/' -> skip;
 // Parser Rules =============================================================
 
 query
-    : SELECT selectList
+    : selectClause
       FROM identifier (ALIAS alias=identifier)?
       joinClause*
       whereClause?
@@ -121,16 +121,22 @@ query
       EOF
     ;
 
+selectClause
+    : SELECT selectList
+    ;
+
 selectList
     : selectColumn (',' selectColumn)*
     ;
 
 selectColumn
-    : variable                                  # VariableColumn
-    | qualifiedIdentifier                       # QualifiedColumn
+    : variable                                  # VariableColumn           // myVar (implicitly $main.myVar if no alias/join)
+    | qualifiedIdentifier                       # QualifiedIdentifierColumn // alias.myVar or alias.TITLE (handled by visitor)
+    | qualifiedStructuralColumn                 # StructColumn             // alias.TITLE, alias.TIMESTAMP, etc.
+    | TITLE                                     # UnqualifiedTitleColumn   // TITLE (implicitly $main.TITLE)
+    | TIMESTAMP                                 # UnqualifiedTimestampColumn // TIMESTAMP (implicitly $main.TIMESTAMP)
+    // TODO: Add DOCUMENT_ID, SENTENCE_ID here if needed standalone?
     | snippetExpression                         # SnippetColumn
-    | titleExpression                           # TitleColumn
-    | timestampExpression                       # TimestampColumn
     | countExpression                           # CountColumn
     ;
 
@@ -138,12 +144,8 @@ snippetExpression
     : SNIPPET LPAREN (variable | qualifiedIdentifier) (COMMA WINDOW EQUALS windowSize=INTEGER_LITERAL)? RPAREN
     ;
 
-titleExpression
-    : TITLE
-    ;
-
-timestampExpression
-    : TIMESTAMP
+qualifiedStructuralColumn
+    : alias=IDENTIFIER DOT field=(TITLE | TIMESTAMP | DOCUMENT_ID | SENTENCE_ID)
     ;
 
 countExpression
@@ -229,7 +231,7 @@ orderSpec
     ;
 
 qualifiedIdentifier
-    : (identifier | variable) DOT (identifier | variable | TITLE | TIMESTAMP) // Changed '.' to DOT, Added TITLE, Added TIMESTAMP
+    : alias=identifier DOT (identifier | variable | TITLE | TIMESTAMP | DOCUMENT_ID | SENTENCE_ID)
     ;
 
 limitClause
@@ -328,8 +330,9 @@ subquery
     ;
 
 joinCondition
-    : leftColumn=joinColumn temporalOp rightColumn=joinColumn
-      (WINDOW window=INTEGER_LITERAL)?
+    : leftColumn=joinColumn op=temporalOp rightColumn=joinColumn
+      (WINDOW window=INTEGER_LITERAL)?                 # TemporalJoinCondition
+    | leftColumn=joinColumn op=(EQ | EQUALS) rightColumn=joinColumn # EqualityJoinCondition
     ;
 
 joinColumn
@@ -351,4 +354,9 @@ posExpression
 posTag
     : STRING
     | identifier
-    ; 
+    ;
+
+// Define DOCUMENT_ID and SENTENCE_ID if they are not already keywords
+// Assuming they are needed for qualifiedStructuralColumn but not elsewhere as keywords yet
+DOCUMENT_ID: 'DOCUMENT_ID';
+SENTENCE_ID: 'SENTENCE_ID'; 

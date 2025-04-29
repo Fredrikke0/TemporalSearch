@@ -14,6 +14,8 @@ import com.example.query.model.TemporalPredicate;
 import com.example.query.model.TemporalRange;
 import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
+import com.example.core.IndexAccessInterface;
+import com.example.query.binding.MatchDetail;
 
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.antlr.v4.runtime.tree.TerminalNode;
@@ -25,12 +27,15 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
 /**
  * Visitor implementation that builds a Query model from the parse tree.
  * Handles conversion from parse tree nodes to model objects.
+ * Uses VariableRegistry to manage variable scopes and types.
  */
 public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     private static final Logger logger = LoggerFactory.getLogger(QueryModelBuilder.class);
@@ -93,9 +98,9 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         boolean qualificationRequired = explicitMainAlias.isPresent() || !subqueries.isEmpty();
 
         // Extract select columns, passing qualification requirement
-        if (ctx.selectList() != null) {
+        if (ctx.selectClause() != null && ctx.selectClause().selectList() != null) {
             // Pass qualification requirement to visitSelectList
-            selectColumns = visitSelectList(ctx.selectList(), qualificationRequired);
+            selectColumns = visitSelectList(ctx.selectClause().selectList(), qualificationRequired);
         }
 
         if (ctx.whereClause() != null) {
@@ -146,19 +151,21 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     }
 
     // Helper method to dispatch select column visits with qualification context
+    // Note: We now visit qualifiedIdentifier directly, so no specific visitQualifiedColumn needed here.
     private Object visitSelectColumn(QueryLangParser.SelectColumnContext ctx, boolean qualificationRequired) {
         if (ctx instanceof QueryLangParser.VariableColumnContext vcc) {
             return visitVariableColumn(vcc, qualificationRequired);
-        } else if (ctx instanceof QueryLangParser.QualifiedColumnContext qcc) {
-            // Qualified columns are always okay, qualification requirement doesn't strictly apply here
-            // but the structure implies qualification is intended.
-            return visitQualifiedColumn(qcc); // No need to pass the flag
-        } else if (ctx instanceof QueryLangParser.SnippetColumnContext scc) {
+        } else if (ctx.getChild(0) instanceof QueryLangParser.QualifiedIdentifierContext qic) { 
+            // If the child is a QualifiedIdentifierContext, visit it
+            return visitQualifiedIdentifier(qic); 
+        } else if (ctx instanceof QueryLangParser.SnippetColumnContext scc) { 
             return visitSnippetColumn(scc, qualificationRequired);
-        } else if (ctx instanceof QueryLangParser.TitleColumnContext tcc) {
-            return visitTitleColumn(tcc); // No qualification needed
-        } else if (ctx instanceof QueryLangParser.TimestampColumnContext tscc) {
-            return visitTimestampColumn(tscc); // No qualification needed
+        } else if (ctx instanceof QueryLangParser.StructColumnContext scc) {
+            return visitStructColumn(scc);
+        } else if (ctx instanceof QueryLangParser.UnqualifiedTitleColumnContext utcc) {
+            return visitUnqualifiedTitleColumn(utcc);
+        } else if (ctx instanceof QueryLangParser.UnqualifiedTimestampColumnContext utsc) {
+            return visitUnqualifiedTimestampColumn(utsc);
         } else if (ctx instanceof QueryLangParser.CountColumnContext ccc) {
             return visitCountColumn(ccc, qualificationRequired); // Pass flag for COUNT(UNIQUE var)
         } else {
@@ -167,11 +174,21 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     }
     
     @Override
-    public Object visitQualifiedColumn(QueryLangParser.QualifiedColumnContext ctx) {
-        // Visit the qualifiedIdentifier child to get the full qualified name string ("alias.name")
-        String qualifiedName = (String) visit(ctx.qualifiedIdentifier());
-        // VariableColumn now stores the qualified name directly
-        return new VariableColumn(qualifiedName);
+    public Object visitQualifiedIdentifier(QueryLangParser.QualifiedIdentifierContext ctx) {
+        // Access children by position: child 0 is alias (identifier), child 2 is field
+        String alias = ctx.getChild(0).getText(); 
+        String fieldName = ctx.getChild(2).getText();
+        String fullQualifiedName = alias + "." + fieldName;
+        
+        // Check if the field name is a known structural field
+        if (Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID").contains(fieldName.toUpperCase())) {
+            logger.trace("Identified StructuralColumn from qualifiedIdentifier: {}", fullQualifiedName);
+            return new com.example.query.model.StructuralColumn(alias, fieldName);
+        } else {
+            // Otherwise, assume it's a variable reference
+            logger.trace("Identified VariableColumn from qualifiedIdentifier: {}", fullQualifiedName);
+            return new VariableColumn(fullQualifiedName);
+        }
     }
 
     // Overload visitVariableColumn
@@ -204,15 +221,23 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     }
     
     @Override
-    public Object visitTitleColumn(QueryLangParser.TitleColumnContext ctx) {
-        return new TitleColumn();
+    public Object visitStructColumn(QueryLangParser.StructColumnContext ctx) {
+        String alias = ctx.qualifiedStructuralColumn().alias.getText();
+        String field = ctx.qualifiedStructuralColumn().field.getText();
+        // Use the new external StructuralColumn class
+        return new com.example.query.model.StructuralColumn(alias, field);
     }
-    
-    @Override
-    public Object visitTimestampColumn(QueryLangParser.TimestampColumnContext ctx) {
-        return new TimestampColumn();
+
+    // Handle standalone TITLE (implicitly $main.TITLE)
+    public Object visitUnqualifiedTitleColumn(QueryLangParser.UnqualifiedTitleColumnContext ctx) {
+        return new com.example.query.model.StructuralColumn(DEFAULT_MAIN_ALIAS, "TITLE");
     }
-    
+
+    // Handle standalone TIMESTAMP (implicitly $main.TIMESTAMP)
+    public Object visitUnqualifiedTimestampColumn(QueryLangParser.UnqualifiedTimestampColumnContext ctx) {
+        return new com.example.query.model.StructuralColumn(DEFAULT_MAIN_ALIAS, "TIMESTAMP");
+    }
+
     // Overload visitCountColumn
     public Object visitCountColumn(QueryLangParser.CountColumnContext ctx, boolean qualificationRequired) {
         // Pass qualificationRequired down to the specific count expression visitor
@@ -720,10 +745,22 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     // Overload visitGovernor to accept alias and return VariableReference if it's a variable
     public Object visitGovernor(QueryLangParser.GovernorContext ctx, String currentScopeAlias) {
         if (ctx.qualifiedIdentifier() != null) {
-            String qualifiedName = (String) visit(ctx.qualifiedIdentifier());
-            logger.debug("Registering consumer: {} type: ANY for DEPENDENCY Governor", qualifiedName);
-            variableRegistry.registerConsumer(qualifiedName, VariableType.ANY, "DEPENDENCY Governor");
-            return new VariableReference(qualifiedName, qualifiedName);
+            // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn
+            Object qualifiedResult = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
+
+            if (qualifiedResult instanceof VariableColumn vc) {
+                String qualifiedName = vc.getColumnName(); // Get qualified name from VariableColumn
+                logger.debug("Registering consumer: {} type: ANY for DEPENDENCY Governor", qualifiedName);
+                variableRegistry.registerConsumer(qualifiedName, VariableType.ANY, "DEPENDENCY Governor");
+                // Return VariableReference containing both plain and qualified name if possible
+                // We only have qualified name here, maybe refine VariableReference or lookup?
+                // For now, use qualified name for both fields in VariableReference.
+                return new VariableReference(qualifiedName, qualifiedName); // Pass qualified name
+            } else if (qualifiedResult instanceof com.example.query.model.StructuralColumn sc) {
+                throw new IllegalStateException("Structural column ('" + sc.getColumnName() + "') cannot be used as governor in DEPENDS clause.");
+            } else {
+                throw new IllegalStateException("Unexpected result type from visitQualifiedIdentifier for governor: " + qualifiedResult.getClass().getName());
+            }
         } else if (ctx.variable() != null) {
             String plainVarName = (String) visit(ctx.variable());
             String qualifiedName = currentScopeAlias + "." + plainVarName;
@@ -741,10 +778,20 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     // Overload visitDependent to accept alias and return VariableReference
     public Object visitDependent(QueryLangParser.DependentContext ctx, String currentScopeAlias) {
         if (ctx.qualifiedIdentifier() != null) {
-            String qualifiedName = (String) visit(ctx.qualifiedIdentifier());
-            logger.debug("Registering consumer: {} type: ANY for DEPENDENCY Dependent", qualifiedName);
-            variableRegistry.registerConsumer(qualifiedName, VariableType.ANY, "DEPENDENCY Dependent");
-            return new VariableReference(qualifiedName, qualifiedName);
+            // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn
+            Object qualifiedResult = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
+
+            if (qualifiedResult instanceof VariableColumn vc) {
+                String qualifiedName = vc.getColumnName(); // Get qualified name from VariableColumn
+                logger.debug("Registering consumer: {} type: ANY for DEPENDENCY Dependent", qualifiedName);
+                variableRegistry.registerConsumer(qualifiedName, VariableType.ANY, "DEPENDENCY Dependent");
+                // For now, use qualified name for both fields in VariableReference.
+                return new VariableReference(qualifiedName, qualifiedName); // Pass qualified name
+            } else if (qualifiedResult instanceof com.example.query.model.StructuralColumn sc) {
+                throw new IllegalStateException("Structural column ('" + sc.getColumnName() + "') cannot be used as dependent in DEPENDS clause.");
+            } else {
+                throw new IllegalStateException("Unexpected result type from visitQualifiedIdentifier for dependent: " + qualifiedResult.getClass().getName());
+            }
         } else if (ctx.variable() != null) {
             String plainVarName = (String) visit(ctx.variable());
             String qualifiedName = currentScopeAlias + "." + plainVarName;
@@ -777,8 +824,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     // Overload visitOrderSpec to accept qualification requirement
     public String visitOrderSpec(QueryLangParser.OrderSpecContext ctx, boolean qualificationRequired) {
-        String field;
-        String qualifiedField = null;
+        String qualifiedFieldName; // Holds the final name, e.g., $main.var, alias.var, alias.TITLE
         
         // Determine the base field name (plain or qualified)
         if (ctx.variable() != null) {
@@ -786,21 +832,35 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             if (qualificationRequired) {
                  throw new IllegalStateException(
                     String.format("Unqualified variable '%s' used in ORDER BY where qualification is required. Use 'alias.%s'.",
-                                  variableName, variableName)
-                    // TODO: Add line/pos info
+                                   variableName, variableName)
                  );
             }
             // If not required, implicitly qualify
-            qualifiedField = DEFAULT_MAIN_ALIAS + "." + variableName;
+            qualifiedFieldName = DEFAULT_MAIN_ALIAS + "." + variableName;
         } else if (ctx.qualifiedIdentifier() != null) {
-            qualifiedField = (String) visit(ctx.qualifiedIdentifier());
+            // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn
+            Object qualifiedResult = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
+            if (qualifiedResult instanceof VariableColumn vc) {
+                qualifiedFieldName = vc.getColumnName(); 
+            } else if (qualifiedResult instanceof com.example.query.model.StructuralColumn sc) {
+                qualifiedFieldName = sc.getColumnName();
+            } else {
+                throw new IllegalStateException("Unexpected result type from visitQualifiedIdentifier for ORDER BY column: " + qualifiedResult.getClass().getName());
+            }
         } else if (ctx.identifier() != null) {
-            // Assume TITLE, TIMESTAMP, or other non-variable identifiers
-            // These don't get qualified in the same way variables do.
-            // We might need a way to associate them with an alias if needed,
-            // but for now, treat them as top-level identifiers.
-            qualifiedField = (String) visitIdentifier(ctx.identifier());
-            // TODO: Revisit if ordering by TITLE/TIMESTAMP needs qualification in joins
+            // Only treat TITLE, TIMESTAMP, DOCUMENT_ID, SENTENCE_ID as structural fields
+            String id = ctx.identifier().getText();
+            if (Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID").contains(id.toUpperCase())) {
+                if (qualificationRequired) {
+                    throw new IllegalStateException(
+                        String.format("Unqualified identifier '%s' used in ORDER BY where qualification is required. Use 'alias.%s' or select a bound variable.",
+                                       id, id));
+                }
+                qualifiedFieldName = DEFAULT_MAIN_ALIAS + "." + id.toUpperCase();
+            } else {
+                // Treat as variable binding (e.g., $main.date)
+                qualifiedFieldName = DEFAULT_MAIN_ALIAS + "." + id;
+            }
         }
         else {
             throw new IllegalStateException("OrderSpec must have identifier, variable or qualifiedIdentifier");
@@ -808,9 +868,9 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         
         // Return the qualified field name, prefixed with "-" if DESC
         if (ctx.DESC() != null) {
-            return "-" + qualifiedField;
+            return "-" + qualifiedFieldName;
         }
-        return qualifiedField;
+        return qualifiedFieldName;
     }
 
     // Overload visitOrderByClause
@@ -987,7 +1047,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         SubquerySpec subquery = (SubquerySpec) visit(ctx.subquery());
         
         // Visit the join condition, passing the flag
-        JoinCondition joinCondition = (JoinCondition) visitJoinCondition(ctx.joinCondition(), qualificationRequired);
+        JoinCondition joinCondition = visitJoinCondition(ctx.joinCondition(), qualificationRequired);
         
         // Get the join type - defaults to INNER if not specified
         JoinCondition.JoinType joinType = JoinCondition.JoinType.INNER;
@@ -1000,12 +1060,19 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
         
         // Update the join condition with the correct join type
+        Optional<Integer> proximityWindow = joinCondition.proximityWindow();
+        if (joinCondition.operatorType() != JoinCondition.JoinOperatorType.TEMPORAL ||
+            joinCondition.temporalPredicate().isEmpty() ||
+            joinCondition.temporalPredicate().get() != TemporalPredicate.PROXIMITY) {
+            proximityWindow = Optional.empty();
+        }
         joinCondition = new JoinCondition(
-            joinCondition.leftColumn(),
-            joinCondition.rightColumn(),
-            joinType,
-            joinCondition.temporalPredicate(),
-            joinCondition.proximityWindow()
+            joinCondition.leftColumn(),       // Keep original
+            joinCondition.rightColumn(),      // Keep original
+            joinType,                         // Use the determined type (INNER/LEFT/RIGHT)
+            joinCondition.operatorType(),     // Keep original
+            joinCondition.temporalPredicate(), // Keep original
+            proximityWindow                    // Only keep if valid
         );
         
         // Return both the subquery and the updated join condition
@@ -1013,13 +1080,24 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     }
 
     // Overload visitJoinCondition to accept qualification requirement
-    public JoinCondition visitJoinCondition(QueryLangParser.JoinConditionContext ctx, boolean qualificationRequired) {
+    private JoinCondition visitJoinCondition(QueryLangParser.JoinConditionContext ctx, boolean qualificationRequired) {
+        if (ctx instanceof QueryLangParser.TemporalJoinConditionContext tjcc) {
+            return visitTemporalJoinCondition(tjcc, qualificationRequired);
+        } else if (ctx instanceof QueryLangParser.EqualityJoinConditionContext ejcc) {
+            return visitEqualityJoinCondition(ejcc, qualificationRequired);
+        } else {
+            throw new IllegalStateException("Unknown JoinConditionContext type: " + ctx.getClass().getName());
+        }
+    }
+
+    // Visit Temporal Join Condition
+    private JoinCondition visitTemporalJoinCondition(QueryLangParser.TemporalJoinConditionContext ctx, boolean qualificationRequired) {
         // Visit the left and right columns, passing the flag
         String leftColumn = visitJoinColumn(ctx.leftColumn, qualificationRequired);
         String rightColumn = visitJoinColumn(ctx.rightColumn, qualificationRequired);
         
         // Get the temporal operator
-        TemporalPredicate temporalPredicate = mapOperatorToTemporal(ctx.temporalOp().getText());
+        TemporalPredicate temporalPredicate = mapOperatorToTemporal(ctx.op.getText()); // Use labeled op
         
         // Check if there's a window specification
         Optional<Integer> proximityWindow = Optional.empty();
@@ -1027,21 +1105,42 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             proximityWindow = Optional.of(Integer.parseInt(ctx.window.getText()));
         }
         
-        // Create and return the join condition with potentially qualified column names
+        // Create and return the TEMPORAL join condition
         return new JoinCondition(
             leftColumn, // Now potentially qualified
             rightColumn, // Now potentially qualified
-            JoinCondition.JoinType.INNER, // default, will be updated in visitJoinClause
-            temporalPredicate,
-            proximityWindow
+            JoinCondition.JoinType.INNER,       // Default type, updated later
+            JoinCondition.JoinOperatorType.TEMPORAL, // Explicitly TEMPORAL
+            Optional.of(temporalPredicate),     // The actual predicate
+            proximityWindow                     // The proximity window
         );
+    }
+
+    // Visit Equality Join Condition
+    private JoinCondition visitEqualityJoinCondition(QueryLangParser.EqualityJoinConditionContext ctx, boolean qualificationRequired) {
+        // Visit the left and right columns, passing the flag
+        String leftColumn = visitJoinColumn(ctx.leftColumn, qualificationRequired);
+        String rightColumn = visitJoinColumn(ctx.rightColumn, qualificationRequired);
+
+        // Create and return the EQUALITY join condition
+        return JoinCondition.createEqualityJoin(leftColumn, rightColumn, JoinCondition.JoinType.INNER); // Default type
     }
 
     // Overload visitJoinColumn to accept qualification requirement
     public String visitJoinColumn(QueryLangParser.JoinColumnContext ctx, boolean qualificationRequired) {
         if (ctx.qualifiedIdentifier() != null) {
-            // Returns "alias.col" or "alias.var"
-            return (String) visit(ctx.qualifiedIdentifier());
+            // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn
+            Object qualifiedResult = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
+            
+            if (qualifiedResult instanceof VariableColumn vc) {
+                // Return the qualified name (e.g., alias.variable) for the JoinCondition
+                return vc.getColumnName(); 
+            } else if (qualifiedResult instanceof com.example.query.model.StructuralColumn sc) {
+                // Return the qualified name (e.g., alias.FIELD) for the JoinCondition
+                return sc.getColumnName();
+            } else {
+                throw new IllegalStateException("Unexpected result type from visitQualifiedIdentifier for join column: " + qualifiedResult.getClass().getName());
+            }
         } else if (ctx.variable() != null) {
             String variableName = (String) visit(ctx.variable());
              if (qualificationRequired) {
@@ -1257,11 +1356,4 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     // Helper record to distinguish Variable references in ambiguous contexts (like DEPENDS)
     private record VariableReference(String plainName, String qualifiedName) {}
-
-    // Add specific visitor for qualifiedIdentifier
-    @Override
-    public Object visitQualifiedIdentifier(QueryLangParser.QualifiedIdentifierContext ctx) {
-        // Return the full text of the qualified identifier node (e.g., "alias.variable")
-        return ctx.getText(); 
-    }
 } 
