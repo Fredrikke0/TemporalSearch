@@ -256,11 +256,11 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
 
         int windowSize = SnippetNode.DEFAULT_WINDOW_SIZE;
-        if (ctx.windowSize != null) {
+        if (ctx.windowSize != null) { // Grammar rule name for window size is 'windowSize'
             windowSize = Integer.parseInt(ctx.windowSize.getText());
         }
         
-        // SnippetNode now stores the qualified name
+        // Call the simplified SnippetNode constructor
         return new SnippetNode(qualifiedTargetName, windowSize);
     }
     
