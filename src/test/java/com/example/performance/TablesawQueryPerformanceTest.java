@@ -358,4 +358,260 @@ public class TablesawQueryPerformanceTest {
          // Group by document and count occurrences of different value types (example aggregation)
         return table.summarize("value_type", AggregateFunctions.count).by("document_id");
     }
+
+    // --- New Test for Large Table Memory Usage ---
+
+    @Test
+    @DisplayName("Measure memory usage for a large simulated join result table")
+    @org.junit.jupiter.api.Disabled("Disabled for regular builds - run manually with sufficient heap") // Disable test
+    public void testLargeTableMemoryUsage() {
+        int targetRowCount = 10_000_000; // 10 Million rows
+        logger.info("===== Measuring memory usage for large Tablesaw Table ({} rows) =====", targetRowCount);
+
+        // Force garbage collection before starting measurements
+        System.gc();
+        long memBefore = getUsedMemory();
+        logger.info("Memory before table creation: {} MB", memBefore / (1024 * 1024));
+
+        Table largeTable = null;
+        long memAfterCreation = memBefore;
+        long creationTime = 0;
+
+        try {
+            // Create and populate the table
+            long start = System.nanoTime();
+            largeTable = createLargeSimulatedJoinTable(targetRowCount);
+            creationTime = System.nanoTime() - start;
+
+            // Measure memory after creation
+            System.gc();
+            memAfterCreation = getUsedMemory();
+            long tableMemory = memAfterCreation - memBefore;
+
+            logger.info("--- Large Table Creation Stats ---");
+            logger.info("Target Rows: {}", targetRowCount);
+            logger.info("Actual Rows: {}", largeTable != null ? largeTable.rowCount() : 0);
+            logger.info("Creation Time: {} ms", TimeUnit.NANOSECONDS.toMillis(creationTime));
+            logger.info("Memory After Creation: {} MB", memAfterCreation / (1024 * 1024));
+            logger.info("Estimated Table Memory Footprint: {} MB", tableMemory / (1024 * 1024));
+            if (largeTable != null && largeTable.rowCount() > 0) {
+                 logger.info("Approx Memory per Row: {} bytes", tableMemory / largeTable.rowCount());
+            }
+            logger.info("---------------------------------");
+
+            // --- Perform Operations ---
+            if (largeTable != null) {
+                 logger.info("Performing operations on large table...");
+                 long opStart, opTime;
+                 long memBeforeOp, memAfterOp;
+
+                 // 1. Filtering
+                 memBeforeOp = getUsedMemory();
+                 opStart = System.nanoTime();
+                 Table filteredTable = largeTable.where(
+                     largeTable.intColumn("left_document_id").isLessThan(targetRowCount / 1000)
+                 );
+                 opTime = System.nanoTime() - opStart;
+                 System.gc();
+                 memAfterOp = getUsedMemory();
+                 logger.info("Filter Operation: Found {} rows, Time: {} ms, Mem Delta: {} MB",
+                             filteredTable.rowCount(), TimeUnit.NANOSECONDS.toMillis(opTime), (memAfterOp - memBeforeOp) / (1024*1024));
+                 filteredTable = null; // Release memory
+
+                 // 2. Sorting (Sort a smaller subset to avoid excessive time/memory in test)
+                 int sortLimit = Math.min(targetRowCount, 100_000); // Limit sorting size for test speed
+                 Table tableToSort = largeTable.first(sortLimit);
+                 memBeforeOp = getUsedMemory();
+                 opStart = System.nanoTime();
+                 Table sortedTable = tableToSort.sortOn("-left_date", "right_document_id");
+                 opTime = System.nanoTime() - opStart;
+                 System.gc();
+                 memAfterOp = getUsedMemory();
+                 logger.info("Sort Operation (on {} rows): Time: {} ms, Mem Delta: {} MB",
+                              sortLimit, TimeUnit.NANOSECONDS.toMillis(opTime), (memAfterOp - memBeforeOp) / (1024*1024));
+                 tableToSort = null;
+                 sortedTable = null; // Release memory
+
+                 // 3. Aggregation
+                 memBeforeOp = getUsedMemory();
+                 opStart = System.nanoTime();
+                 Table aggregatedTable = largeTable.summarize("left_value", AggregateFunctions.countNonMissing)
+                                                  .by("right_source");
+                 opTime = System.nanoTime() - opStart;
+                 System.gc();
+                 memAfterOp = getUsedMemory();
+                 logger.info("Aggregate Operation: Result {} groups, Time: {} ms, Mem Delta: {} MB",
+                              aggregatedTable.rowCount(), TimeUnit.NANOSECONDS.toMillis(opTime), (memAfterOp - memBeforeOp) / (1024*1024));
+                 aggregatedTable = null; // Release memory
+
+                 logger.info("Operations complete.");
+            }
+
+        } catch (OutOfMemoryError oom) {
+             logger.error("!!! OutOfMemoryError occurred during large table test !!!", oom);
+             System.err.println("!!! OutOfMemoryError during test for " + targetRowCount + " rows! Check JVM heap size (-Xmx).");
+             // Log memory state right before OOM if possible (tricky)
+             logger.info("Memory state before OOM (approx): {} MB used.", getUsedMemory() / (1024*1024));
+        } catch (Exception e) {
+             logger.error("An unexpected error occurred during the large table test", e);
+        } finally {
+             // Attempt to release memory
+             largeTable = null;
+             System.gc();
+             long memAfterCleanup = getUsedMemory();
+             logger.info("Memory after cleanup: {} MB", memAfterCleanup / (1024 * 1024));
+             logger.info("===== Large table memory test complete =====");
+        }
+    }
+
+    /** Helper to create a large table simulating join results */
+    private Table createLargeSimulatedJoinTable(int rowCount) {
+        // Define columns similar to TableResultService join output
+        IntColumn leftDocIdCol = IntColumn.create("left_document_id", rowCount);
+        IntColumn rightDocIdCol = IntColumn.create("right_document_id", rowCount);
+        IntColumn leftSentIdCol = IntColumn.create("left_sentence_id", rowCount);
+        IntColumn rightSentIdCol = IntColumn.create("right_sentence_id", rowCount);
+        DateColumn leftDateCol = DateColumn.create("left_date", rowCount);
+        DateColumn rightDateCol = DateColumn.create("right_date", rowCount);
+        StringColumn leftValueCol = StringColumn.create("left_value", rowCount);
+        StringColumn rightValueCol = StringColumn.create("right_value", rowCount);
+        StringColumn leftSourceCol = StringColumn.create("left_source", rowCount); // Example additional column
+        StringColumn rightSourceCol = StringColumn.create("right_source", rowCount); // Example additional column
+
+
+        Random random = new Random(System.currentTimeMillis()); // Use current time for more variability
+
+        logger.info("Generating {} rows for large table...", rowCount);
+        for (int i = 0; i < rowCount; i++) {
+            leftDocIdCol.append(random.nextInt(rowCount / 10)); // Simulate fewer unique left docs
+            rightDocIdCol.append(random.nextInt(rowCount / 5)); // Simulate fewer unique right docs
+            leftSentIdCol.append(random.nextInt(MAX_SENTENCES_PER_DOC));
+            rightSentIdCol.append(random.nextInt(MAX_SENTENCES_PER_DOC));
+
+            LocalDate leftDate = START_DATE.plusDays(random.nextInt(365 * 4));
+            leftDateCol.append(leftDate);
+            // Ensure rightDate is distinct and somewhat related for temporal joins simulation
+            rightDateCol.append(leftDate.plusDays(random.nextInt(180) - 90)); // +/- 3 months
+
+            leftValueCol.append("lval_" + random.nextInt(10000));
+            rightValueCol.append("rval_" + random.nextInt(10000));
+
+            leftSourceCol.append(SOURCES[random.nextInt(SOURCES.length)]);
+            rightSourceCol.append(SOURCES[random.nextInt(SOURCES.length)]);
+
+            if ((i + 1) % (rowCount / 10) == 0) { // Log progress every 10%
+                logger.debug("...generated {} rows ({}%)", i + 1, (int)(((double)(i + 1) / rowCount) * 100));
+            }
+        }
+        logger.info("Row generation complete.");
+
+        return Table.create("LargeJoinSim",
+                leftDocIdCol, rightDocIdCol, leftSentIdCol, rightSentIdCol,
+                leftDateCol, rightDateCol, leftValueCol, rightValueCol,
+                leftSourceCol, rightSourceCol);
+    }
+
+    /** Helper to get currently used memory */
+    private long getUsedMemory() {
+        return Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+    }
+
+    // --- New Test for Large List<JoinedMatch> Memory Usage ---
+
+    @Test
+    @DisplayName("Measure memory usage for a large List<JoinedMatch>")
+    @org.junit.jupiter.api.Disabled("Disabled for regular builds - run manually with sufficient heap") // Disable test
+    public void testLargeJoinedMatchListMemoryUsage() {
+        int targetSize = 10_000_000; // 10 Million objects
+        logger.info("===== Measuring memory usage for large List<JoinedMatch> ({} objects) =====", targetSize);
+
+        System.gc();
+        long memBefore = getUsedMemory();
+        logger.info("Memory before List creation: {} MB", memBefore / (1024 * 1024));
+
+        List<com.example.query.binding.JoinedMatch> joinedMatchesList = null;
+        long memAfterCreation = memBefore;
+        long creationTime = 0;
+
+        try {
+            long start = System.nanoTime();
+            joinedMatchesList = createLargeJoinedMatchList(targetSize);
+            creationTime = System.nanoTime() - start;
+
+            System.gc();
+            memAfterCreation = getUsedMemory();
+            long listMemory = memAfterCreation - memBefore;
+
+            logger.info("--- Large List<JoinedMatch> Creation Stats ---");
+            logger.info("Target Objects: {}", targetSize);
+            logger.info("Actual Objects: {}", joinedMatchesList != null ? joinedMatchesList.size() : 0);
+            logger.info("Creation Time: {} ms", TimeUnit.NANOSECONDS.toMillis(creationTime));
+            logger.info("Memory After Creation: {} MB", memAfterCreation / (1024 * 1024));
+            logger.info("Estimated List Memory Footprint: {} MB", listMemory / (1024 * 1024));
+             if (joinedMatchesList != null && !joinedMatchesList.isEmpty()) {
+                 logger.info("Approx Memory per JoinedMatch object: {} bytes", listMemory / joinedMatchesList.size());
+             }
+            logger.info("-------------------------------------------");
+
+        } catch (OutOfMemoryError oom) {
+            logger.error("!!! OutOfMemoryError occurred during large List<JoinedMatch> test !!!", oom);
+            System.err.println("!!! OutOfMemoryError during test for " + targetSize + " objects! Check JVM heap size (-Xmx).");
+            logger.info("Memory state before OOM (approx): {} MB used.", getUsedMemory() / (1024*1024));
+        } catch (Exception e) {
+            logger.error("An unexpected error occurred during the large list test", e);
+        } finally {
+            joinedMatchesList = null;
+            System.gc();
+            long memAfterCleanup = getUsedMemory();
+            logger.info("Memory after cleanup: {} MB", memAfterCleanup / (1024 * 1024));
+            logger.info("===== Large List<JoinedMatch> memory test complete =====");
+        }
+    }
+
+    /** Helper to create a large list of JoinedMatch objects */
+    private List<com.example.query.binding.JoinedMatch> createLargeJoinedMatchList(int size) {
+        List<com.example.query.binding.JoinedMatch> list = new ArrayList<>(size);
+        Random random = new Random(987); // Yet another seed
+
+        logger.info("Generating {} JoinedMatch objects...", size);
+        for (int i = 0; i < size; i++) {
+            MatchDetail left = createRandomMatchDetail(random, "left");
+            MatchDetail right = createRandomMatchDetail(random, "right");
+            list.add(new com.example.query.binding.JoinedMatch(left, right));
+
+             if ((i + 1) % (size / 10) == 0) { // Log progress every 10%
+                logger.debug("...generated {} JoinedMatch objects ({}%)", i + 1, (int)(((double)(i + 1) / size) * 100));
+            }
+        }
+        logger.info("JoinedMatch object generation complete.");
+        return list;
+    }
+
+    /** Helper to create a single random MatchDetail */
+    private MatchDetail createRandomMatchDetail(Random random, String prefix) {
+        int docId = random.nextInt(NUM_DOCS * 10); // Larger range for variety
+        int sentId = random.nextInt(MAX_SENTENCES_PER_DOC);
+        int begin = random.nextInt(1000);
+        int end = begin + random.nextInt(20) + 1;
+        LocalDate docDate = START_DATE.plus(random.nextInt(365 * 5), ChronoUnit.DAYS);
+        Position pos = new Position(docId, sentId, begin, end, docDate);
+
+        String variableName = random.nextDouble() < 0.1 ? "?" + prefix + "Var" + random.nextInt(3) : null;
+
+        Object value;
+        ValueType valueType;
+        int typeSelector = random.nextInt(3); // TERM, ENTITY, DATE
+        if (typeSelector == 0) {
+            value = prefix + "_term" + random.nextInt(50000);
+            valueType = ValueType.TERM;
+        } else if (typeSelector == 1) {
+            value = prefix + "_ENTITY" + random.nextInt(1000);
+            valueType = ValueType.ENTITY;
+        } else {
+            value = START_DATE.plus(random.nextInt(365 * 2), ChronoUnit.DAYS);
+            valueType = ValueType.DATE;
+        }
+
+        return new MatchDetail(value, valueType, pos, variableName);
+    }
 } 
