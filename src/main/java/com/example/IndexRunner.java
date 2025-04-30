@@ -101,8 +101,8 @@ public class IndexRunner {
     public static void runIndexing(String dbPath, String indexDir, String stopwordsPath,
             int batchSize, String indexType, boolean preserveIndex, Integer limit) throws Exception {
         logger.info("Starting indexing process");
-        logger.info("Database: {}", dbPath);
-        logger.info("Index directory: {}", indexDir);
+        logger.debug("Database: {}", dbPath);
+        logger.debug("Index directory: {}", indexDir);
         
         // Verify the database exists and is not empty
         Path dbFilePath = Path.of(dbPath);
@@ -165,14 +165,13 @@ public class IndexRunner {
         // Connect to database and process indexes
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
             // Determine total number of indexes to generate
-            int totalIndexes = indexType.equals("all") ? 9 : 1;
+            int totalIndexes = indexType.equals("all") ? 10 : 1;
             int currentIndex = 0;
 
             // Create and run generators based on type
             try {
                 if (indexType.equals("all") || indexType.equals("unigram")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "unigram");
                     long count = getAnnotationCount(conn, limit);
                     progress.startIndex("Unigram Index", count);
@@ -192,7 +191,6 @@ public class IndexRunner {
 
                 if (indexType.equals("all") || indexType.equals("bigram")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "bigram");
                     long count = getAnnotationCount(conn, limit);
                     progress.startIndex("Bigram Index", count);
@@ -212,7 +210,6 @@ public class IndexRunner {
 
                 if (indexType.equals("all") || indexType.equals("trigram")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "trigram");
                     long count = getAnnotationCount(conn, limit);
                     progress.startIndex("Trigram Index", count);
@@ -232,7 +229,6 @@ public class IndexRunner {
 
                 if (indexType.equals("all") || indexType.equals("dependency")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "dependency");
                     long count = getDependencyCount(conn, limit);
                     progress.startIndex("Dependency Index", count);
@@ -252,7 +248,6 @@ public class IndexRunner {
 
                 if (indexType.equals("all") || indexType.equals("ner_date")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "ner_date");
                     long count = getNerDateCount(conn, limit);
                     progress.startIndex("NER Date Index", count);
@@ -272,7 +267,6 @@ public class IndexRunner {
 
                 if (indexType.equals("all") || indexType.equals("ner")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "ner");
                     long count = getNerCount(conn, limit);
                     progress.startIndex("NER Index", count);
@@ -292,7 +286,6 @@ public class IndexRunner {
 
                 if (indexType.equals("all") || indexType.equals("pos")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "pos");
                     long count = getAnnotationCount(conn, limit);
                     progress.startIndex("POS Tag Index", count);
@@ -312,7 +305,6 @@ public class IndexRunner {
 
                 if (indexType.equals("all") || indexType.equals("hypernym")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "hypernym");
                     long count = getAnnotationCount(conn, limit);
                     progress.startIndex("Hypernym Index", count);
@@ -332,7 +324,6 @@ public class IndexRunner {
 
                 if (indexType.equals("all") || indexType.equals("stitch")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "stitch");
                     long count = getNerDateCount(conn, limit);
                     progress.startIndex("Stitch Index", count);
@@ -352,7 +343,6 @@ public class IndexRunner {
 
                 if (indexType.equals("all") || indexType.equals("nash")) {
                     currentIndex++;
-                    System.out.printf("%nIndex %d/%d", currentIndex, totalIndexes);
                     metrics.startBatch(batchSize, "nash");
                     long count = getNerDateCount(conn, limit);
                     progress.startIndex("Nash Index", count);

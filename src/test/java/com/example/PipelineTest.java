@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -36,9 +38,16 @@ public class PipelineTest {
     protected Path stopwordsFile;
     protected String projectName;
     protected Connection sqliteConn;
+    private static String originalProgbarSilent;
+
+    @BeforeAll
+    static void storeOriginalProperty() {
+        originalProgbarSilent = System.getProperty("progbar.silent");
+    }
 
     @BeforeEach
     void setUp() throws Exception {
+        System.setProperty("progbar.silent", "true"); // Disable progress bar
         logger.info("Setting up test environment");
         // Create temporary directory
         tempDir = Files.createTempDirectory("pipeline-test-");
@@ -79,6 +88,12 @@ public class PipelineTest {
 
     @AfterEach
     void cleanup() throws IOException {
+        // Restore original system property
+        if (originalProgbarSilent == null) {
+            System.clearProperty("progbar.silent");
+        } else {
+            System.setProperty("progbar.silent", originalProgbarSilent);
+        }
         if (sqliteConn != null) {
             try {
                 sqliteConn.close();
@@ -87,6 +102,16 @@ public class PipelineTest {
             }
         }
         MoreFiles.deleteRecursively(tempDir, RecursiveDeleteOption.ALLOW_INSECURE);
+    }
+
+    @AfterAll
+    static void restoreOriginalPropertyAfterAll() {
+        // Ensure restoration even if @AfterEach fails somehow
+        if (originalProgbarSilent == null) {
+            System.clearProperty("progbar.silent");
+        } else {
+            System.setProperty("progbar.silent", originalProgbarSilent);
+        }
     }
 
     protected Connection createTestDatabase() throws Exception {

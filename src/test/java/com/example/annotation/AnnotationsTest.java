@@ -1,5 +1,8 @@
 package com.example.annotation;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -16,9 +19,16 @@ class AnnotationsTest {
     private Path dbFile;
     private Connection conn;
     private Annotations annotations;
+    private static String originalProgbarSilent;
+    
+    @BeforeAll
+    static void storeOriginalProperty() {
+        originalProgbarSilent = System.getProperty("progbar.silent");
+    }
     
     @BeforeEach
     void setUp(@TempDir Path tempDir) throws SQLException {
+        System.setProperty("progbar.silent", "true"); // Disable progress bar
         dbFile = tempDir.resolve("test.db");
         conn = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
         annotations = new Annotations(dbFile, 1, false, null);  // Initialize with test-appropriate values
@@ -65,6 +75,36 @@ class AnnotationsTest {
                     FOREIGN KEY (document_id) REFERENCES documents(document_id)
                 )
             """);
+        }
+    }
+    
+    @AfterEach
+    void tearDown() {
+        // Restore original system property
+        if (originalProgbarSilent == null) {
+            System.clearProperty("progbar.silent");
+        } else {
+            System.setProperty("progbar.silent", originalProgbarSilent);
+        }
+        // Close connection if needed
+        if (conn != null) {
+            try {
+                if (!conn.isClosed()) {
+                    conn.close();
+                }
+            } catch (SQLException e) {
+                 // log error or ignore
+            }
+        }
+    }
+    
+    @AfterAll
+    static void restoreOriginalPropertyAfterAll() {
+         // Ensure restoration even if @AfterEach fails somehow
+        if (originalProgbarSilent == null) {
+            System.clearProperty("progbar.silent");
+        } else {
+            System.setProperty("progbar.silent", originalProgbarSilent);
         }
     }
     

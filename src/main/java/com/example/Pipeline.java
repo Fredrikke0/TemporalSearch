@@ -7,6 +7,8 @@ import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -16,17 +18,18 @@ import java.util.List;
 import java.util.Map;
 
 public class Pipeline {
+    private static final Logger logger = LoggerFactory.getLogger(Pipeline.class);
     private static final String DEFAULT_PROJECT = "default";
 
     public static void main(String[] args) {
         try {
             runPipeline(args);
         } catch (ArgumentParserException e) {
-            System.err.println(e.getMessage());
+            System.err.println("Argument Error: " + e.getMessage());
             System.exit(1);
         } catch (Exception e) {
+            logger.error("Error running pipeline", e);
             System.err.println("Error running pipeline: " + e.getMessage());
-            e.printStackTrace();
             System.exit(1);
         }
     }
@@ -143,28 +146,26 @@ public class Pipeline {
         
         // Set debug mode
         if (ns.getBoolean("debug")) {
-            
             System.setProperty("DEBUG_MODE", "true");
+            logger.info("DEBUG mode enabled via command line.");
         }
 
         String stage = ns.getString("stage");
         String projectName = ns.getString("project");
-        String dbPath = ns.getString("db");
+        String dbPathStr = ns.getString("db");
         String wikiDumpPath = ns.getString("file");
-        String indexDir = ns.getString("index_dir");
+        String indexDirStr = ns.getString("index_dir");
         
         // Create project directories and resolve paths
         Path projectBasePath = setupProjectDirectories(projectName);
         
-        // If db path not explicitly provided, use the project directory
-        if (dbPath == null) {
-            dbPath = projectBasePath.resolve(projectName + ".db").toString();
-        }
+        // Resolve paths: Use explicit if provided, otherwise default within project dir
+        Path dbPath = (dbPathStr != null) ? Path.of(dbPathStr) : projectBasePath.resolve(projectName + ".db");
+        Path indexDir = (indexDirStr != null) ? Path.of(indexDirStr) : projectBasePath;
         
-        // If index directory not explicitly provided, use the project directory
-        if (indexDir == null) {
-            indexDir = projectBasePath.toString();
-        }
+        logger.info("Starting Pipeline for project '{}' (Stage: {})", projectName, stage);
+        logger.info("Using Database: {}", dbPath.toAbsolutePath());
+        logger.info("Using Index Directory: {}", indexDir.toAbsolutePath());
 
         // Validate required arguments based on stage
         if (stage.equals("convert") || stage.equals("all")) {
@@ -179,25 +180,23 @@ public class Pipeline {
 
         // Run selected pipeline stages
         if (stage.equals("all") || stage.equals("convert")) {
-            System.out.println("Running conversion stage...");
-            System.out.println("Using database path: " + dbPath);
+            logger.info("Running conversion stage...");
             WikiJsonToSqlite.ExtractionResult result = WikiJsonToSqlite.extractToSqlite(
                 Path.of(wikiDumpPath),
-                Path.of(dbPath),
+                dbPath,
                 stage.equals("all") || ns.getBoolean("recreate"),
                 ns.getInt("limit")
             );
-            System.out.printf("Conversion complete. %d entries added to database: %s%n",
+            logger.info("Conversion complete. {} entries added to database: {}",
                 result.totalEntries, result.outputDb);
         }
 
         if (stage.equals("all") || stage.equals("annotate")) {
-            System.out.println("Running annotation stage...");
-            System.out.println("Using database path: " + dbPath);
+            logger.info("Running annotation stage...");
             // Build command arguments list
             List<String> annotationArgs = new ArrayList<>();
             annotationArgs.add("-d");
-            annotationArgs.add(dbPath);
+            annotationArgs.add(dbPath.toString());
             annotationArgs.add("-t");
             annotationArgs.add(ns.getInt("threads").toString());
             
@@ -217,12 +216,10 @@ public class Pipeline {
         }
 
         if (stage.equals("all") || stage.equals("index")) {
-            System.out.println("Running indexing stage...");
-            System.out.println("Using database path: " + dbPath);
-            System.out.println("Using index directory: " + indexDir);
+            logger.info("Running indexing stage...");
             IndexRunner.runIndexing(
-                    dbPath,
-                    indexDir,
+                    dbPath.toString(),
+                    indexDir.toString(),
                     ns.getString("stopwords"),
                     ns.getInt("batch_size"),
                     ns.getString("index_type"),
@@ -231,14 +228,14 @@ public class Pipeline {
         }
 
         if (stage.equals("analyze")) {
-            System.out.println("Running log analysis...");
+            logger.info("Running log analysis...");
             runAnalysis(
                 ns.getString("log_file"),
                 ns.getString("report_dir"),
                 ns.getString("report_format"));
         }
 
-        System.out.println("Pipeline completed successfully!");
+        logger.info("Pipeline completed successfully!");
     }
 
     private static void runAnalysis(String logFile, String reportDir, String format) throws Exception {
@@ -257,30 +254,30 @@ public class Pipeline {
         if (format.equals("text") || format.equals("both")) {
             Path textReport = reportPath.resolve("analysis_report.txt");
             summarizer.generateReport(results, textReport, "text");
-            System.out.println("Generated text report: " + textReport);
+            logger.info("Generated text report: {}", textReport);
         }
         
         if (format.equals("html") || format.equals("both")) {
             Path htmlReport = reportPath.resolve("analysis_report.html");
             summarizer.generateReport(results, htmlReport, "html");
-            System.out.println("Generated HTML report: " + htmlReport);
+            logger.info("Generated HTML report: {}", htmlReport);
         }
 
         // Print summary to console
         @SuppressWarnings("unchecked")
         Map<String, Object> summary = (Map<String, Object>) results.get("processing_summary");
-        System.out.println("\nAnalysis Summary:");
-        System.out.println("----------------");
-        System.out.printf("Total Documents Processed: %d%n", summary.get("total_documents_processed"));
-        System.out.printf("Total N-grams Generated: %d%n", summary.get("total_ngrams_generated"));
+        logger.info("\nAnalysis Summary:");
+        logger.info("----------------");
+        logger.info("Total Documents Processed: {}", summary.get("total_documents_processed"));
+        logger.info("Total N-grams Generated: {}", summary.get("total_ngrams_generated"));
         if (summary.containsKey("avg_ngrams_per_document")) {
-            System.out.printf("Average N-grams per Document: %.2f%n", 
+            logger.info("Average N-grams per Document: {}", 
                 summary.get("avg_ngrams_per_document"));
         }
 
         @SuppressWarnings("unchecked")
         Map<String, Object> errors = (Map<String, Object>) results.get("error_patterns");
-        System.out.printf("Total Errors: %d%n", errors.get("total_errors"));
+        logger.info("Total Errors: {}", errors.get("total_errors"));
     }
 
     /**

@@ -15,6 +15,7 @@ import me.tongfei.progressbar.*;
 import java.nio.file.Path;
 import java.io.PrintStream;
 import java.io.OutputStream;
+import java.time.temporal.ChronoUnit;
 
 public class Annotations {
     private static final Logger logger = LoggerFactory.getLogger(Annotations.class);
@@ -93,10 +94,15 @@ public class Annotations {
                     .setTaskName("Processing documents")
                     .setInitialMax(documentsToProcess); // Use actual count to process
                     
-                // If silent, redirect output to a null stream
+                // If silent, set a consumer that does nothing
                 if (silentProgress) {
                     logger.debug("Progress bar output disabled via system property.");
-                    pbb.setPrintStream(new PrintStream(OutputStream.nullOutputStream()));
+                    // Provide a no-op ProgressBarConsumer
+                    pbb.setConsumer(new ProgressBarConsumer() {
+                        @Override public void accept(String M) { /* No-op */ }
+                        @Override public int getMaxRenderedLength() { return 0; }
+                        @Override public void close() { /* No-op */ }
+                    });
                 }
                 
                 // Build the ProgressBar within the try-with-resources

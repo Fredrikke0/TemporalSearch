@@ -160,42 +160,34 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @param sortedFile The file containing the sorted entries
      */
     protected void writeToLevelDB(File sortedFile) throws IOException {
-        int batchCount = 0;
+        long batchCount = 0;
         long startTime = System.currentTimeMillis();
-        final int MAX_RETRIES = 3;
-        final long RETRY_DELAY_MS = 100; // 100 milliseconds
+        totalNGramsGenerated = 0; // Reset count for this index generation
 
         try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile))) {
+            String line;
             String currentTerm = null;
             PositionList mergedPositions = null;
-            String line;
+            final int MAX_RETRIES = 3;
+            final long RETRY_DELAY_MS = 100;
 
             while ((line = reader.readLine()) != null) {
                 String[] parts = line.split("\t", 2);
-                if (parts.length != 2) {
-                    logger.warn("Invalid line format: {}", line);
-                    continue;
-                }
-
+                if (parts.length != 2) continue;
                 String term = parts[0];
-                byte[] positionData = Base64.getDecoder().decode(parts[1]);
-                PositionList positions = PositionList.deserialize(positionData);
+                PositionList positions = PositionList.deserialize(Base64.getDecoder().decode(parts[1]));
 
-                // First term initialization
                 if (currentTerm == null) {
                     currentTerm = term;
                     mergedPositions = positions;
                     continue;
                 }
 
-                // If we have a new term, write the current one
                 if (!currentTerm.equals(term)) {
-                    // Write current term with retries
                     writeWithRetry(currentTerm, mergedPositions, MAX_RETRIES, RETRY_DELAY_MS);
                     batchCount++;
                     totalNGramsGenerated++;
 
-                    // Collect stats periodically
                     if (totalNGramsGenerated % 100000 == 0) {
                         long elapsed = System.currentTimeMillis() - startTime;
                         logger.debug("Write progress: {} terms, {} terms/sec",
@@ -203,23 +195,20 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                             String.format("%.2f", totalNGramsGenerated * 1000.0 / elapsed));
                     }
 
-                    // Start new term
                     currentTerm = term;
                     mergedPositions = positions;
                 } else {
-                    // Merge positions for same term
                     positions.getPositions().forEach(mergedPositions::add);
                 }
             }
 
-            // Write the last term if we have one
             if (currentTerm != null && mergedPositions != null) {
-                // Write final term with retries
                 writeWithRetry(currentTerm, mergedPositions, MAX_RETRIES, RETRY_DELAY_MS);
                 totalNGramsGenerated++;
             }
 
-            logger.info("Finished writing {} terms to index", totalNGramsGenerated);
+            // Log count here after writing is complete for this method
+            logger.info("Finished writing {} unique terms/keys to index [{}]", totalNGramsGenerated, getIndexName()); 
         }
     }
 
@@ -275,8 +264,12 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         IndexingMetrics metrics = new IndexingMetrics();
         metrics.startBatch(config.getBatchSize(), getIndexName());
         long totalRawEntriesProcessed = 0;
+        totalNGramsGenerated = 0; // Reset for safety, though writeToLevelDB also resets
 
         try {
+            // Initialize progress bar for this specific index
+            long totalCount = getDocumentCountForIndex(config.getLimit()); // Helper to get appropriate count
+
             while (true) {
                 List<T> batch = fetchBatch(offset);
                 if (batch.isEmpty()) {
@@ -284,7 +277,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 }
                 totalRawEntriesProcessed += batch.size();
 
-                // ---> Call processBatch directly with the fetched batch <---
                 ListMultimap<String, PositionList> positions = processBatch(batch);
 
                 if (!positions.isEmpty()) {
@@ -292,31 +284,30 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     tempFiles.add(tempFile);
                 }
 
-                // Update progress based on the batch size processed from DB
                 offset += batch.size();
                 metrics.recordBatchSuccess(batch.size());
-                progress.updateIndex(batch.size());
+                progress.updateIndex(batch.size()); // Update progress based on fetched batch size
             }
 
             logger.info("Finished fetching {} raw entries.", totalRawEntriesProcessed);
 
             if (tempFiles.isEmpty()) {
-                logger.warn("No indexable entries found after filtering. Index will be empty.");
-                return; // Exit early if no temp files were created
+                logger.warn("No indexable entries found after filtering. Index [{}] will be empty.", getIndexName());
+                 progress.completeIndex(); // Ensure progress bar is marked complete even if empty
+                return; 
             }
 
-            // Sort and merge temp files
             File outputFile = new File(tempDir.toFile(), "sorted.tmp");
             logger.info("Merging {} temporary files...", tempFiles.size());
-            ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), true); // Using distinct=true assumes writeBatchToTempFile might produce duplicates per term within a batch
+            ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), true);
 
-            // Write sorted entries to LevelDB
             logger.info("Writing merged entries to LevelDB index...");
-            writeToLevelDB(outputFile);
+            writeToLevelDB(outputFile); // Writes and logs final count
 
-            // Final metrics
+             // Complete the progress bar *after* all writing is done.
+             progress.completeIndex();
+
             metrics.logIndexingMetrics();
-            logger.info("Index generation complete. Total unique terms written: {}", totalNGramsGenerated);
 
         } finally {
             // Cleanup temp files
@@ -330,6 +321,30 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             }
             logger.debug("Temporary file cleanup complete.");
         }
+    }
+
+    /**
+     * Helper method to get the relevant document count for the progress bar.
+     * Specific index types might override this if they process different units.
+     */
+    protected long getDocumentCountForIndex(Integer limit) throws SQLException {
+        String countTable = getTableName(); // Default to the generator's table
+        String countSql = "SELECT COUNT(*) FROM " + countTable;
+        // Apply limit if necessary (though specific generators might need more complex counts)
+        if (limit != null) {
+             // Basic limit application, subclasses might need refinement
+             // countSql += " LIMIT " + limit; 
+             // Limiting the COUNT(*) query itself might not be right. Better to count based on the actual fetch logic.
+             // For now, return total count and let progress bar handle potential overestimation.
+        }
+        
+        try (Statement stmt = sqliteConn.createStatement();
+             ResultSet rs = stmt.executeQuery(countSql)) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        }
+        return 0;
     }
 
     /**

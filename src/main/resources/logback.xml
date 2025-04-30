@@ -40,6 +40,9 @@
     <!-- Suppress LevelDB configuration messages -->
     <logger name="com.example.index.LevelDBConfig" level="WARN"/>
 
+    <!-- Suppress verbose Stanford CoreNLP initialization messages -->
+    <logger name="edu.stanford.nlp" level="WARN"/>
+
     <!-- Root logger -->
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
