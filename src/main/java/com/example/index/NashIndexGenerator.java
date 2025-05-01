@@ -89,8 +89,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                        "a.normalized_ner, d.timestamp " +
                        "FROM annotations a JOIN documents d ON a.document_id = d.document_id " +
                        "WHERE a.ner = 'DATE' " +
-                       "ORDER BY a.document_id, a.sentence_id, a.begin_char" +
-                       (config.getLimit() != null ? " LIMIT " + config.getLimit() : "");
+                       "ORDER BY a.document_id, a.sentence_id, a.begin_char";
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query); ResultSet rs = stmt.executeQuery()) {
 
@@ -157,26 +156,55 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
         // 2. Perform Nash Inversion
         logger.info("Performing Nash inversion for {} unique date intervals...", intervalStrings.size());
+        // Revert: Go back to using Nash.invert as shown in the Nash.java example
         MultiMap<String, Integer> invertedIndex; // Maps Nash Prefix -> List of original interval string indices
+        // Map<String, List<NashDateEntryWithId>> prefixToEntriesMap = new HashMap<>();
+        // int dateIdCounter = 0;
+
         try {
+            // Revert: Call Nash.invert on the list of point interval strings
             invertedIndex = Nash.invert(intervalStrings);
             logger.info("Nash inversion complete. Found {} unique Nash prefixes.", invertedIndex.size());
+            
+            // // Iterate through each unique date and its corresponding entries
+            // for (Map.Entry<Integer, List<NashDateEntryWithId>> dateEntry : listIndexToEntries.entrySet()) {
+            //     int dateId = dateEntry.getKey();
+            //     List<NashDateEntryWithId> entriesForThisDate = dateEntry.getValue();
+            //     LocalDate currentDate = idToDate.get(dateId);
+            //     String pointInterval = String.format("[%s , %s]",
+            //                                     NASH_INTERVAL_FORMATTER.format(currentDate),
+            //                                     NASH_INTERVAL_FORMATTER.format(currentDate));
+
+            //     // Generate prefixes using CONTAINED_BY for this point interval
+            //     String[] indexingPrefixes = Nash.generateTimeHash(pointInterval, Nash.RangePredicate.CONTAINED_BY);
+
+            //     // Map these prefixes to the list of entries for this date
+            //     for (String prefix : indexingPrefixes) {
+            //         prefixToEntriesMap.computeIfAbsent(prefix, k -> new ArrayList<>()).addAll(entriesForThisDate);
+            //     }
+
+            //     dateIdCounter++;
+            //     if (dateIdCounter % 1000 == 0) {
+            //         logger.info("Generated indexing prefixes for {} unique dates...", dateIdCounter);
+            //     }
+            // }
+            //  logger.info("Prefix generation complete. Found {} unique Nash prefixes to store.", prefixToEntriesMap.size());
         } catch (Exception e) {
             logger.error("Failed during Nash.invert call", e);
             throw new IOException("Failed to generate Nash inverted index", e);
         }
 
         // 3. Write to LevelDB
-        logger.info("Writing Nash index data to LevelDB at {} ...", indexAccess.getIndexType()); // Assuming getIndexAccess() is available and configured
+        logger.info("Writing Nash index data to LevelDB at {} ...", indexAccess.getIndexType());
         long termsWritten = 0;
         try {
-            // Write main Nash prefix entries
+            // Revert: Write main Nash prefix entries using the invertedIndex from Nash.invert
             for (String nashPrefix : invertedIndex.keySet()) {
                 List<NashDateEntryWithId> aggregatedEntries = new ArrayList<>();
                 // The indices in invertedIndex.get(nashPrefix) correspond to the original intervalStrings list,
                 // which in our setup correspond directly to the dateId.
                 for (Integer dateIdFromNash : invertedIndex.get(nashPrefix)) {
-                     List<NashDateEntryWithId> entriesForDate = listIndexToEntries.get(dateIdFromNash);
+                    List<NashDateEntryWithId> entriesForDate = listIndexToEntries.get(dateIdFromNash);
                     if (entriesForDate != null) {
                         aggregatedEntries.addAll(entriesForDate);
                     } else {

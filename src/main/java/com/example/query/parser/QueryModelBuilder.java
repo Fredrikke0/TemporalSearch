@@ -541,57 +541,50 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     @Override
     public Object visitVariable(QueryLangParser.VariableContext ctx) {
-        // Return just the identifier text, without '?'
-        return ctx.IDENTIFIER().getText();
+        return ctx.IDENTIFIER().getText(); // Return the plain variable name
     }
 
     public Object visitDateComparisonExpression(QueryLangParser.DateComparisonExpressionContext ctx, String currentScopeAlias) {
         String operator = ctx.comparisonOp().getText();
-        int year = Integer.parseInt(ctx.year.getText());
-        
-        TemporalPredicate predicate = TemporalPredicate.INTERSECT; // Use INTERSECT for all comparisons
-        LocalDateTime queryStart;
-        Optional<LocalDateTime> queryEnd = Optional.empty();
+        // Year parsing is no longer needed here as comparison logic is changing.
+        // int year = Integer.parseInt(ctx.year.getText());
 
-        // Define the interval based on the comparison operator
-        switch (operator.toUpperCase()) {
-            case ">": // Greater than year (e.g., > 2000 means 2001 onwards)
-                queryStart = LocalDateTime.of(year + 1, 1, 1, 0, 0);
-                queryEnd = Optional.of(LocalDateTime.MAX); // Use MAX for unbounded upper end
-                break;
-            case "<": // Less than year (e.g., < 2000 means up to end of 1999)
-                queryStart = LocalDateTime.MIN; 
-                queryEnd = Optional.of(LocalDateTime.of(year - 1, 12, 31, 23, 59, 59));
-                break;
-            case ">=": // Greater than or equal to year (e.g., >= 2000 means 2000 onwards)
-                queryStart = LocalDateTime.of(year, 1, 1, 0, 0);
-                queryEnd = Optional.of(LocalDateTime.MAX); // Use MAX for unbounded upper end
-                break;
-            case "<=": // Less than or equal to year (e.g., <= 2000 means up to end of 2000)
-                queryStart = LocalDateTime.MIN;
-                queryEnd = Optional.of(LocalDateTime.of(year, 12, 31, 23, 59, 59));
-                break;
-            case "=":
-            case "==": // Equal to year (e.g., == 2000 means the full year 2000)
-                queryStart = LocalDateTime.of(year, 1, 1, 0, 0);
-                queryEnd = Optional.of(LocalDateTime.of(year, 12, 31, 23, 59, 59));
-                break;
-            default:
-                throw new IllegalStateException("Invalid comparison operator: " + operator);
-        }
-        
+        // Determine the correct TemporalPredicate based on the operator
+        TemporalPredicate temporalType = mapComparisonOpToPredicate(operator);
+
+        // The date value comes from the variable being compared against,
+        // so startDate and endDate are not set here in the model.
+        // The variable name itself is stored.
+
         String qualifiedVariableName = null;
         if (ctx.BIND() != null && ctx.var != null) {
             String plainVarName = (String) visit(ctx.var);
             qualifiedVariableName = currentScopeAlias + "." + plainVarName; // Qualify
-            logger.debug("Registering producer: {} type: TEMPORAL for TEMPORAL", qualifiedVariableName);
+            logger.debug("Registering producer: {} type: TEMPORAL for TEMPORAL comparison", qualifiedVariableName);
+            // Registering as TEMPORAL, executor needs to handle variable resolution
             variableRegistry.registerProducer(qualifiedVariableName, VariableType.TEMPORAL, "TEMPORAL");
+        } else {
+            // TODO: Handle the case where the comparison target itself might be a variable - Needs grammar change?
+            // For now, assume the comparison is against a property of the current alias scope, e.g., q1.date < 2024
+            // If we need to compare q1.date < q2.another_date, the grammar needs adjustment.
+            // Assuming implicit target is 'date' field of currentScopeAlias if BIND is absent.
+            // This part might need refinement depending on exact semantics desired.
+             logger.warn("DATE comparison without explicit BIND clause. Assuming comparison against implicit 'date' field.");
+             // qualifiedVariableName = currentScopeAlias + ".date"; // Implicit target - Reconsider if this is correct.
+             // For now, let's require BIND for clarity.
+             throw new UnsupportedOperationException("DATE comparison requires an explicit BIND clause specifying the date variable.");
         }
-        
-        // Model updated to store qualified name (as Optional)
-        return new Temporal(queryStart, queryEnd, Optional.ofNullable(qualifiedVariableName), Optional.empty(), predicate); // Pass qualified name
+
+        // Create Temporal model with the specific predicate and variable name
+        return new Temporal(
+            Optional.empty(), // Start date comes from variable resolution later
+            Optional.empty(), // End date is not used for simple comparison predicates
+            Optional.ofNullable(qualifiedVariableName), // The variable being compared
+            Optional.empty(), // Range not applicable here
+            temporalType // Use the specific predicate (BEFORE, AFTER, etc.)
+        );
     }
-    
+
     public Object visitDateOperatorExpression(QueryLangParser.DateOperatorExpressionContext ctx, String currentScopeAlias) {
         String operator = ctx.dateOperator().getText();
         TemporalPredicate type = mapOperatorToTemporal(operator); // Corrected variable name: 'type' not 'dependencyType'
@@ -637,7 +630,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
         
         // Model updated to store qualified name (as Optional)
-        return new Temporal(startDate, endDate, Optional.ofNullable(qualifiedVariableName), range, type); // Pass qualified name
+        // Wrap startDate in Optional.of() to match the updated Temporal constructor
+        return new Temporal(Optional.of(startDate), endDate, Optional.ofNullable(qualifiedVariableName), range, type);
     }
     
     @Override
@@ -1161,107 +1155,37 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     public Object visitDateLiteralComparisonExpression(QueryLangParser.DateLiteralComparisonExpressionContext ctx, String currentScopeAlias) {
         String operator = ctx.comparisonOp().getText();
         String dateText = ctx.date.getText();
-        
-        TemporalPredicate predicate = TemporalPredicate.INTERSECT; // Use INTERSECT for all comparisons
-        LocalDateTime queryStart;
-        Optional<LocalDateTime> queryEnd = Optional.empty();
 
-        // Parse the date literal
-        LocalDateTime parsedDate = parseDateLiteral(dateText);
-        
-        // Define the interval based on the comparison operator (logic remains the same)
-        switch (operator.toUpperCase()) {
-            // Cases for >, <, >=, <=, == remain the same
-            case ">": // Greater than date
-                if (isYearOnly(dateText)) {
-                    LocalDate yearEnd = LocalDate.of(Integer.parseInt(dateText), 12, 31);
-                    queryStart = LocalDateTime.of(yearEnd, java.time.LocalTime.MAX).plusNanos(1);
-                } else if (isYearMonth(dateText)) {
-                    String[] parts = dateText.split("-");
-                    int year = Integer.parseInt(parts[0]);
-                    int month = Integer.parseInt(parts[1]);
-                    LocalDate monthEnd = getLastDayOfMonth(year, month);
-                    queryStart = LocalDateTime.of(monthEnd, java.time.LocalTime.MAX).plusNanos(1);
-                } else {
-                    queryStart = LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MAX).plusNanos(1);
-                }
-                queryEnd = Optional.of(LocalDateTime.MAX);
-                break;
-            case "<": // Less than date
-                 if (isYearOnly(dateText)) {
-                    queryStart = LocalDateTime.MIN;
-                    queryEnd = Optional.of(LocalDateTime.of(Integer.parseInt(dateText), 1, 1, 0, 0));
-                } else if (isYearMonth(dateText)) {
-                    String[] parts = dateText.split("-");
-                    int year = Integer.parseInt(parts[0]);
-                    int month = Integer.parseInt(parts[1]);
-                    queryStart = LocalDateTime.MIN;
-                    queryEnd = Optional.of(LocalDateTime.of(year, month, 1, 0, 0));
-                } else {
-                    queryStart = LocalDateTime.MIN;
-                    queryEnd = Optional.of(LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MIN));
-                }
-                break;
-            case ">=": // Greater than or equal to date
-                 if (isYearOnly(dateText)) {
-                    queryStart = LocalDateTime.of(Integer.parseInt(dateText), 1, 1, 0, 0);
-                } else if (isYearMonth(dateText)) {
-                    String[] parts = dateText.split("-");
-                    queryStart = LocalDateTime.of(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), 1, 0, 0);
-                } else {
-                    queryStart = LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MIN);
-                }
-                queryEnd = Optional.of(LocalDateTime.MAX);
-                break;
-            case "<=": // Less than or equal to date
-                 if (isYearOnly(dateText)) {
-                    queryStart = LocalDateTime.MIN;
-                    LocalDate yearEnd = LocalDate.of(Integer.parseInt(dateText), 12, 31);
-                    queryEnd = Optional.of(LocalDateTime.of(yearEnd, java.time.LocalTime.MAX));
-                } else if (isYearMonth(dateText)) {
-                    String[] parts = dateText.split("-");
-                    int year = Integer.parseInt(parts[0]);
-                    int month = Integer.parseInt(parts[1]);
-                    queryStart = LocalDateTime.MIN;
-                    LocalDate monthEnd = getLastDayOfMonth(year, month);
-                    queryEnd = Optional.of(LocalDateTime.of(monthEnd, java.time.LocalTime.MAX));
-                } else {
-                    queryStart = LocalDateTime.MIN;
-                    queryEnd = Optional.of(LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MAX));
-                }
-                break;
-            case "=":
-            case "==": // Equal to date
-                 if (isYearOnly(dateText)) {
-                    queryStart = LocalDateTime.of(Integer.parseInt(dateText), 1, 1, 0, 0);
-                    LocalDate yearEnd = LocalDate.of(Integer.parseInt(dateText), 12, 31);
-                    queryEnd = Optional.of(LocalDateTime.of(yearEnd, java.time.LocalTime.MAX));
-                } else if (isYearMonth(dateText)) {
-                    String[] parts = dateText.split("-");
-                    int year = Integer.parseInt(parts[0]);
-                    int month = Integer.parseInt(parts[1]);
-                    queryStart = LocalDateTime.of(year, month, 1, 0, 0);
-                    LocalDate monthEnd = getLastDayOfMonth(year, month);
-                    queryEnd = Optional.of(LocalDateTime.of(monthEnd, java.time.LocalTime.MAX));
-                } else {
-                    queryStart = LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MIN);
-                    queryEnd = Optional.of(LocalDateTime.of(parsedDate.toLocalDate(), java.time.LocalTime.MAX));
-                }
-                break;
-            default:
-                throw new IllegalStateException("Invalid comparison operator: " + operator);
-        }
-        
+        // Parse the date literal which acts as the comparison point
+        LocalDateTime literalDateTime = parseDateLiteral(dateText);
+
+        // Determine the correct TemporalPredicate based on the operator
+        TemporalPredicate temporalType = mapComparisonOpToPredicate(operator);
+
         String qualifiedVariableName = null;
         if (ctx.BIND() != null && ctx.var != null) {
             String plainVarName = (String) visit(ctx.var);
             qualifiedVariableName = currentScopeAlias + "." + plainVarName; // Qualify
-            logger.debug("Registering producer: {} type: TEMPORAL for TEMPORAL", qualifiedVariableName);
+            logger.debug("Registering producer: {} type: TEMPORAL for TEMPORAL literal comparison", qualifiedVariableName);
             variableRegistry.registerProducer(qualifiedVariableName, VariableType.TEMPORAL, "TEMPORAL");
+        } else {
+            // If BIND is not present, the condition applies to the documents matched by the current scope.
+            // We still need a way to tell the executor *which* date field to compare.
+            // Assuming an implicit 'date' field for the scope.
+            // This might need to be made more explicit or configurable.
+            logger.warn("DATE literal comparison without explicit BIND clause. Assuming comparison against implicit 'date' field of scope '{}'.", currentScopeAlias);
+            qualifiedVariableName = currentScopeAlias + ".date"; // Implicit target field
+             // No producer registration needed if it's an implicit field comparison
         }
-        
-        // Model updated to store qualified name (as Optional)
-        return new Temporal(queryStart, queryEnd, Optional.ofNullable(qualifiedVariableName), Optional.empty(), predicate); // Pass qualified name
+
+        // Create Temporal model with the specific predicate and the literal date in startDate
+        return new Temporal(
+            Optional.of(literalDateTime), // The literal date being compared against
+            Optional.empty(), // End date is not needed for simple comparison predicates
+            Optional.ofNullable(qualifiedVariableName), // The (potentially implicit) variable/field being compared
+            Optional.empty(), // Range not applicable here
+            temporalType // Use the specific predicate (BEFORE, AFTER, etc.)
+        );
     }
     
     @Override
@@ -1358,4 +1282,17 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     // Helper record to distinguish Variable references in ambiguous contexts (like DEPENDS)
     private record VariableReference(String plainName, String qualifiedName) {}
+
+    // Helper method to map comparison operator string to TemporalPredicate
+    private TemporalPredicate mapComparisonOpToPredicate(String operator) {
+        return switch (operator) {
+            case "<" -> TemporalPredicate.BEFORE;
+            case ">" -> TemporalPredicate.AFTER;
+            case "=" -> TemporalPredicate.EQUAL; // Assuming '=' means exact match for the date granularity
+            case "==" -> TemporalPredicate.EQUAL;
+            case "<=" -> TemporalPredicate.BEFORE_EQUAL;
+            case ">=" -> TemporalPredicate.AFTER_EQUAL;
+            default -> throw new IllegalArgumentException("Unsupported comparison operator for DATE: " + operator);
+        };
+    }
 } 

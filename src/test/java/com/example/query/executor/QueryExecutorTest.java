@@ -29,6 +29,7 @@ import tech.tablesaw.api.StringColumn;
 import tech.tablesaw.api.Table;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -521,8 +522,12 @@ class QueryExecutorTest {
         // Query: SELECT * FROM source q1 JOIN source q2 ON q1.date BEFORE q2.date
         String source = "temporal_source";
         // Use a valid Temporal constructor *with distinct variables* for dummy conditions
-        Temporal cond1 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q1.date"); // Correct constructor
-        Temporal cond2 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q2.date"); // Correct constructor
+        // Temporal cond1 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q1.date"); // Correct constructor
+        // Temporal cond2 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q2.date"); // Correct constructor
+        LocalDateTime dummyDate = LocalDate.of(2023, 1, 1).atStartOfDay();
+        // Use canonical constructor with required Optionals for CONTAINS
+        Temporal cond1 = new Temporal(Optional.of(dummyDate), Optional.of(dummyDate), Optional.of("q1.date"), Optional.empty(), TemporalPredicate.CONTAINS);
+        Temporal cond2 = new Temporal(Optional.of(dummyDate), Optional.of(dummyDate), Optional.of("q2.date"), Optional.empty(), TemporalPredicate.CONTAINS);
 
         // Correct SubquerySpec constructor order: Query, alias
         SubquerySpec sub1 = new SubquerySpec(new Query(source, List.of(cond1)), "q1");
@@ -583,8 +588,12 @@ class QueryExecutorTest {
         // Query: SELECT * FROM source q1 JOIN source q2 ON q1.date AFTER q2.date
         String source = "temporal_source";
         // Use a valid Temporal constructor *with distinct variables* for dummy conditions
-        Temporal cond1 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q1.date"); // Correct constructor
-        Temporal cond2 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q2.date"); // Correct constructor
+        // Temporal cond1 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q1.date"); // Correct constructor
+        // Temporal cond2 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q2.date"); // Correct constructor
+        LocalDateTime dummyDate = LocalDate.of(2023, 1, 1).atStartOfDay();
+        // Use canonical constructor with required Optionals for CONTAINS
+        Temporal cond1 = new Temporal(Optional.of(dummyDate), Optional.of(dummyDate), Optional.of("q1.date"), Optional.empty(), TemporalPredicate.CONTAINS);
+        Temporal cond2 = new Temporal(Optional.of(dummyDate), Optional.of(dummyDate), Optional.of("q2.date"), Optional.empty(), TemporalPredicate.CONTAINS);
 
         // Correct SubquerySpec constructor order: Query, alias
         SubquerySpec sub1 = new SubquerySpec(new Query(source, List.of(cond1)), "q1");

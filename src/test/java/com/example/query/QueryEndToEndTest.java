@@ -33,6 +33,15 @@ import java.util.Map;
 import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.time.temporal.ChronoUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -119,19 +128,57 @@ public class QueryEndToEndTest {
 
         // Create and populate mock Nash index
         mockNashIndex = new MockIndexAccess();
-        // Use the same interval and predicate as the query
-        String interval = "[1100-01-01 , 2025-01-01]"; // Valid Nash interval
-        Nash.RangePredicate predicate = Nash.RangePredicate.INTERSECT;
-        String[] hashPrefixes = Nash.generateTimeHash(interval, predicate);
-        var pos = new com.example.core.Position(30, 1, 0, 10, java.time.LocalDate.parse("2024-01-15"));
-        var entry = new NashDateEntryWithId(pos, 0);
-        var entries = java.util.List.of(entry);
-        byte[] serializedEntries = NashSerializationUtils.serializeNashEntries(entries);
-        for (String hashPrefix : hashPrefixes) {
-            mockNashIndex.put(hashPrefix.getBytes(StandardCharsets.UTF_8), serializedEntries);
+        // --- Corrected Mock Nash Index Setup (using invert logic) ---
+        // 1. Define the point interval for the test data
+        String dataPointInterval = "[2024-01-15 , 2024-01-15]";
+        LocalDate dataPointDate = java.time.LocalDate.parse("2024-01-15");
+        int dataPointDateId = 0; // Corresponds to the lookup table entry
+        var dataPos = new com.example.core.Position(30, 1, 0, 10, dataPointDate);
+        var dataEntry = new NashDateEntryWithId(dataPos, dataPointDateId);
+        var dataEntriesList = java.util.List.of(dataEntry);
+        byte[] serializedDataEntries = NashSerializationUtils.serializeNashEntries(dataEntriesList);
+
+        // 2. Simulate Nash.invert: Get hash and generate all prefixes
+        // Replicate logic from Nash.timeHash directly
+        String dataPointHash = null;
+        try {
+            LocalDate beginDate = dataPointDate;
+            LocalDate endDate = dataPointDate;
+            LocalDate globalLowerBound = LocalDate.parse("1100-01-01");
+            LocalDate globalUpperBound = LocalDate.parse("2100-12-31");
+            de.mpii.gyandb.infra.utils.zorder.ZOrderCurve timeRangeCurve = 
+                new de.mpii.gyandb.infra.utils.zorder.ZOrderCurve(40, new double[] {0, ChronoUnit.YEARS.between(globalLowerBound, globalUpperBound)}, new double[]{0, ChronoUnit.YEARS.between(globalLowerBound, globalUpperBound)});
+
+            boolean withinRange = (beginDate.isAfter(globalLowerBound) || beginDate.equals(globalLowerBound)) && 
+                                  (endDate.isBefore(globalUpperBound) || endDate.equals(globalUpperBound)) && 
+                                  (beginDate.isBefore(endDate) || beginDate.equals(endDate));
+            if (withinRange) {
+                long startDateYears = ChronoUnit.YEARS.between(globalLowerBound, beginDate);
+                long endDateYears = ChronoUnit.YEARS.between(globalLowerBound, endDate);
+                dataPointHash = timeRangeCurve.toBase4(timeRangeCurve.generateHash(startDateYears, endDateYears));
+            }
+        } catch (DateTimeParseException e) {
+            // Handle error - dataPointHash remains null
+            System.err.println("Error parsing date for mock Nash hash generation: " + e.getMessage());
         }
+        // String dataPointHash = no.ntnu.sandbox.internal.NashInternal.timeHash(dataPointInterval); // Use internal directly if possible, or replicate logic
+        
+        if (dataPointHash != null) {
+            String[] indexPrefixes = Nash.generatePrefixes(dataPointHash);
+            
+            // 3. Store the entry under all generated index prefixes
+            for (String prefix : indexPrefixes) {
+                // In a real MultiMap scenario, multiple entries could map to the same prefix.
+                // For mock, we overwrite/put, assuming this is the only entry for these prefixes.
+                mockNashIndex.put(prefix.getBytes(StandardCharsets.UTF_8), serializedDataEntries);
+            }
+            System.out.println("Mock Nash Index: Stored entry for " + dataPointInterval + " under " + indexPrefixes.length + " prefixes (derived from hash: "+ dataPointHash +").");
+        } else {
+            System.err.println("Warning: Could not generate hash for mock Nash data point: " + dataPointInterval);
+        }
+
         // Add the lookup table (with one date)
-        java.util.List<java.time.LocalDate> lookup = java.util.List.of(java.time.LocalDate.parse("2024-01-15"));
+        java.util.List<java.time.LocalDate> lookup = java.util.List.of(dataPointDate);
         byte[] serializedLookup = NashSerializationUtils.serializeDateLookup(lookup);
         mockNashIndex.put(NashSerializationUtils.DATE_LOOKUP_KEY, serializedLookup);
 
@@ -147,6 +194,8 @@ public class QueryEndToEndTest {
         
         // Initialize executor and result service
         factory = new ConditionExecutorFactory();
+        // Set the default strategy before creating the executor, if needed
+        // factory.setTemporalStrategy("naive"); // Example: Set default if not testing Nash
         queryExecutor = new QueryExecutor(factory);
         tableResultService = new TableResultService();
         queryParser = new QueryParser();
@@ -554,7 +603,7 @@ public class QueryEndToEndTest {
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
         assertNotNull(result);
         // Should find the entry we put in the Nash index
-        assertFalse(result.getAllDetails().isEmpty(), "Expected results from Nash index");
+        assertTrue(result.getAllDetails().isEmpty() == false, "Expected results from Nash index");
         assertEquals(1, result.getAllDetails().size());
         assertEquals(30, result.getAllDetails().get(0).getDocumentId());
         assertEquals(java.time.LocalDate.parse("2024-01-15"), result.getAllDetails().get(0).value());

@@ -122,10 +122,12 @@ class QueryParserTest {
         assertTrue(query.conditions().get(0) instanceof Temporal);
         Temporal condition = (Temporal) query.conditions().get(0);
         
-        // Verify the predicate is INTERSECT and the range is correct for < 2000
-        assertEquals(TemporalPredicate.INTERSECT, condition.temporalType());
-        assertEquals(LocalDateTime.MIN, condition.startDate());
-        assertEquals(Optional.of(LocalDateTime.of(2000, 1, 1, 0, 0)), condition.endDate());
+        // Updated Assertions for BEFORE predicate
+        assertEquals(TemporalPredicate.BEFORE, condition.temporalType());
+        assertTrue(condition.startDate().isPresent(), "Start date should be present for literal comparison");
+        assertEquals(LocalDateTime.of(2000, 1, 1, 0, 0), condition.startDate().get());
+        assertFalse(condition.endDate().isPresent(), "End date should not be present for comparison predicate");
+        
         assertNotNull(condition.variableName());
         assertEquals("t1.date", condition.variableName());
         
@@ -143,10 +145,12 @@ class QueryParserTest {
 
         Temporal condition = (Temporal) query.conditions().get(0);
         
-        // Verify the predicate is INTERSECT and the range is correct for > 1980
-        assertEquals(TemporalPredicate.INTERSECT, condition.temporalType());
-        assertEquals(LocalDateTime.of(1981, 1, 1, 0, 0), condition.startDate());
-        assertEquals(Optional.of(LocalDateTime.MAX), condition.endDate());
+        // Updated Assertions for AFTER predicate
+        assertEquals(TemporalPredicate.AFTER, condition.temporalType());
+        assertTrue(condition.startDate().isPresent(), "Start date should be present for literal comparison");
+        assertEquals(LocalDateTime.of(1980, 1, 1, 0, 0), condition.startDate().get()); // Literal date is 1980
+        assertFalse(condition.endDate().isPresent(), "End date should not be present for comparison predicate");
+        
         assertNotNull(condition.variableName());
         assertEquals("t1.founding", condition.variableName());
         
@@ -252,9 +256,12 @@ class QueryParserTest {
         
         // Extract and check the Temporal condition from the outer AND
         Temporal temporalCondition = (Temporal) condition.conditions().get(1);
-        assertEquals(TemporalPredicate.INTERSECT, temporalCondition.temporalType());
+        assertEquals(TemporalPredicate.BEFORE, temporalCondition.temporalType());
         assertEquals("t1.publication", temporalCondition.variableName()); // Expect qualified name
         // Add more detailed checks on the temporal range if necessary
+        assertTrue(temporalCondition.startDate().isPresent());
+        assertEquals(LocalDateTime.of(2000, 1, 1, 0, 0), temporalCondition.startDate().get());
+        assertFalse(temporalCondition.endDate().isPresent());
     }
 
     @Test

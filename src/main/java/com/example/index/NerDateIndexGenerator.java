@@ -12,8 +12,10 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
@@ -55,6 +57,8 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
     private static final Logger logger = LoggerFactory.getLogger(NerDateIndexGenerator.class);
     private static final DateTimeFormatter INPUT_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter KEY_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+    private Set<String> uniqueDatesProcessed = new HashSet<>();
 
     public NerDateIndexGenerator(String levelDbPath, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress) throws IOException {
@@ -124,6 +128,9 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                 entry.getTimestamp()
             );
 
+            // Add to the set for tracking unique dates across the whole run
+            this.uniqueDatesProcessed.add(normalizedDate);
+
             // Get or create position list for this date
             PositionList posList = positionLists.computeIfAbsent(normalizedDate, k -> new PositionList());
             posList.add(position);
@@ -135,6 +142,16 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         }
         
         return index;
+    }
+
+    @Override
+    public void generateIndex() throws SQLException, IOException {
+        this.uniqueDatesProcessed.clear(); // Clear before starting
+        logger.info("Starting NER Date index generation for index: {}", getIndexName());
+        super.generateIndex(); // Execute standard batch processing and writing
+        // Log the final count after super.generateIndex() finishes
+        logger.info("Finished NER Date index generation. Found {} unique dates (YYYYMMDD format).", 
+                    this.uniqueDatesProcessed.size());
     }
 
     /**

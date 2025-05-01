@@ -22,7 +22,7 @@ import no.ntnu.sandbox.Nash;
  * The temporal types are designed to align with Nash predicates for efficient querying.
  */
 public record Temporal(
-    LocalDateTime startDate,
+    Optional<LocalDateTime> startDate,
     Optional<LocalDateTime> endDate,
     Optional<String> qualifiedVariableName,
     Optional<TemporalRange> range,
@@ -52,23 +52,56 @@ public record Temporal(
     
     // Date formatters for Nash interval conversion
     private static final DateTimeFormatter NASH_DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
+    // Define MIN/MAX bounds based on Nash implementation
+    private static final LocalDate MIN_NASH_DATE = LocalDate.parse("1100-01-01");
+    private static final LocalDate MAX_NASH_DATE = LocalDate.parse("2100-12-31");
     
     /**
      * Creates a temporal condition with validation.
      */
     public Temporal {
-        Objects.requireNonNull(startDate, "Start date cannot be null");
-        endDate = endDate != null ? endDate : Optional.empty();
-        qualifiedVariableName = qualifiedVariableName != null ? qualifiedVariableName : Optional.empty();
-        range = range != null ? range : Optional.empty();
+        Objects.requireNonNull(startDate, "Start date Optional cannot be null");
+        Objects.requireNonNull(endDate, "End date Optional cannot be null");
+        Objects.requireNonNull(qualifiedVariableName, "Qualified variable name Optional cannot be null");
+        Objects.requireNonNull(range, "Range Optional cannot be null");
         Objects.requireNonNull(temporalType, "Temporal type cannot be null");
+
+        if (startDate.isPresent() && endDate.isPresent() && startDate.get().isAfter(endDate.get())) {
+            throw new IllegalArgumentException(String.format("Start date (%s) cannot be after end date (%s)", startDate.get(), endDate.get()));
+        }
+        
+        if (isComparisonPredicate(temporalType)) {
+            if (endDate.isPresent()) {
+                throw new IllegalArgumentException("Comparison predicates (BEFORE, AFTER, etc.) should not have an end date.");
+            }
+            if (startDate.isEmpty()) {
+                // Allow empty startDate if it's a variable comparison (e.g., date < ?var)
+                // But require it if it's a literal comparison (e.g., date < 2023-01-01)
+                // This validation might need refinement based on how variable resolution works.
+                // For now, we allow empty startDate, assuming it will be resolved later or is a variable comparison.
+                // logger.debug("Comparison predicate with empty startDate - assuming variable comparison or later resolution.");
+            }
+        } else if (temporalType == TemporalPredicate.CONTAINS || temporalType == TemporalPredicate.CONTAINED_BY || temporalType == TemporalPredicate.INTERSECT) {
+            if (startDate.isEmpty() || endDate.isEmpty()) {
+                throw new IllegalArgumentException("Interval predicates (CONTAINS, CONTAINED_BY, INTERSECT) require both start and end dates.");
+            }
+        }
+    }
+    
+    // Helper to check if a predicate is a simple comparison type
+    private static boolean isComparisonPredicate(TemporalPredicate predicate) {
+        return predicate == TemporalPredicate.BEFORE ||
+               predicate == TemporalPredicate.AFTER ||
+               predicate == TemporalPredicate.BEFORE_EQUAL ||
+               predicate == TemporalPredicate.AFTER_EQUAL ||
+               predicate == TemporalPredicate.EQUAL;
     }
     
     /**
-     * Constructor for simple date comparison.
+     * Constructor for simple date comparison (now expects Optional startDate).
      */
     public Temporal(ComparisonType comparisonType, int year) {
-        this(LocalDateTime.of(year, 1, 1, 0, 0),
+        this(Optional.of(LocalDateTime.of(year, 1, 1, 0, 0)),
              Optional.empty(),
              Optional.empty(),
              Optional.empty(),
@@ -76,10 +109,10 @@ public record Temporal(
     }
     
     /**
-     * Constructor for simple date comparison with a variable.
+     * Constructor for simple date comparison with a variable (now expects Optional startDate).
      */
     public Temporal(ComparisonType comparisonType, int year, String variableName) {
-        this(LocalDateTime.of(year, 1, 1, 0, 0),
+        this(Optional.of(LocalDateTime.of(year, 1, 1, 0, 0)),
              Optional.empty(),
              Optional.of(variableName),
              Optional.empty(),
@@ -87,38 +120,38 @@ public record Temporal(
     }
     
     /**
-     * Constructor for simple temporal condition.
+     * Constructor for simple temporal condition (now expects Optional startDate).
      */
     public Temporal(TemporalPredicate type, LocalDateTime startDate) {
-        this(startDate, Optional.empty(), Optional.empty(), Optional.empty(), type);
+        this(Optional.of(startDate), Optional.empty(), Optional.empty(), Optional.empty(), type);
     }
     
     /**
-     * Constructor for date range condition.
+     * Constructor for date range condition (now expects Optional startDate).
      */
     public Temporal(LocalDateTime startDate, LocalDateTime endDate) {
-        this(startDate, Optional.of(endDate), Optional.empty(), Optional.empty(), TemporalPredicate.CONTAINS);
+        this(Optional.of(startDate), Optional.of(endDate), Optional.empty(), Optional.empty(), TemporalPredicate.CONTAINS);
     }
     
     /**
-     * Constructor for date range condition with specific temporal type.
+     * Constructor for date range condition with specific temporal type (now expects Optional startDate).
      */
     public Temporal(TemporalPredicate type, LocalDateTime startDate, LocalDateTime endDate) {
-        this(startDate, Optional.of(endDate), Optional.empty(), Optional.empty(), type);
+        this(Optional.of(startDate), Optional.of(endDate), Optional.empty(), Optional.empty(), type);
     }
     
     /**
-     * Constructor for temporal condition with range.
+     * Constructor for temporal condition with range (now expects Optional startDate).
      */
     public Temporal(TemporalPredicate type, LocalDateTime date, String range) {
-        this(date, Optional.empty(), Optional.empty(), Optional.of(new TemporalRange(range)), type);
+        this(Optional.of(date), Optional.empty(), Optional.empty(), Optional.of(new TemporalRange(range)), type);
     }
     
     /**
-     * Constructor for temporal condition with range and variable.
+     * Constructor for temporal condition with range and variable (now expects Optional startDate).
      */
     public Temporal(TemporalPredicate type, LocalDateTime date, Optional<TemporalRange> range, String variableName) {
-        this(date, Optional.empty(), Optional.of(variableName), range, type);
+        this(Optional.of(date), Optional.empty(), Optional.of(variableName), range, type);
     }
     
     /**
@@ -136,12 +169,12 @@ public record Temporal(
             throw new IllegalArgumentException("Invalid Nash interval format: " + nashIntervalString);
         }
         
-        LocalDate startDate = LocalDate.parse(parts[0].trim(), NASH_DATE_FORMAT);
-        LocalDate endDate = LocalDate.parse(parts[1].trim(), NASH_DATE_FORMAT);
+        LocalDate startDateVal = LocalDate.parse(parts[0].trim(), NASH_DATE_FORMAT);
+        LocalDate endDateVal = LocalDate.parse(parts[1].trim(), NASH_DATE_FORMAT);
         
         return new Temporal(
-            startDate.atStartOfDay(),
-            Optional.of(endDate.atStartOfDay()),
+            Optional.of(startDateVal.atStartOfDay()),
+            Optional.of(endDateVal.atStartOfDay()),
             Optional.empty(),
             Optional.empty(),
             type
@@ -150,16 +183,64 @@ public record Temporal(
     
     /**
      * Converts this Temporal to a Nash-compatible interval string.
+     * Handles comparison operators by converting them into appropriate ranges
+     * using MIN_NASH_DATE and MAX_NASH_DATE.
      * 
      * @return A string in the format [YYYY-MM-DD , YYYY-MM-DD]
      */
-    public String toNashInterval() {
-        LocalDateTime start = this.startDate();
-        LocalDateTime end = this.endDate().orElse(start);
+    public Optional<String> toNashInterval() {
+        if (isComparisonPredicate(temporalType)) {
+            if (startDate.isEmpty()) {
+                return Optional.empty();
+            }
+            LocalDateTime comparisonDate = startDate.get();
+            LocalDate dateOnly = comparisonDate.toLocalDate();
+
+            return switch (temporalType) {
+                case BEFORE -> Optional.of(String.format("[%s , %s]", 
+                                             NASH_DATE_FORMAT.format(MIN_NASH_DATE), 
+                                             NASH_DATE_FORMAT.format(dateOnly.minusDays(1))));
+                case AFTER -> Optional.of(String.format("[%s , %s]", 
+                                            NASH_DATE_FORMAT.format(dateOnly.plusDays(1)), 
+                                            NASH_DATE_FORMAT.format(MAX_NASH_DATE)));
+                case BEFORE_EQUAL -> Optional.of(String.format("[%s , %s]", 
+                                                  NASH_DATE_FORMAT.format(MIN_NASH_DATE), 
+                                                  NASH_DATE_FORMAT.format(dateOnly)));
+                case AFTER_EQUAL -> Optional.of(String.format("[%s , %s]", 
+                                                 NASH_DATE_FORMAT.format(dateOnly), 
+                                                 NASH_DATE_FORMAT.format(MAX_NASH_DATE)));
+                case EQUAL -> Optional.of(String.format("[%s , %s]", 
+                                           NASH_DATE_FORMAT.format(dateOnly), 
+                                           NASH_DATE_FORMAT.format(dateOnly)));
+                default -> Optional.empty();
+            };
+        }
+
+        if (temporalType == TemporalPredicate.CONTAINS || 
+            temporalType == TemporalPredicate.INTERSECT || 
+            temporalType == TemporalPredicate.CONTAINED_BY) {
+            
+            if (startDate.isPresent() && endDate.isPresent()) {
+                LocalDate start = startDate.get().toLocalDate();
+                LocalDate end = endDate.get().toLocalDate();
+
+                if (start.isBefore(MIN_NASH_DATE)) start = MIN_NASH_DATE;
+                if (end.isAfter(MAX_NASH_DATE)) end = MAX_NASH_DATE;
+                if (end.isBefore(start)) end = start;
+
+                return Optional.of(String.format("[%s , %s]", 
+                                         NASH_DATE_FORMAT.format(start), 
+                                         NASH_DATE_FORMAT.format(end)));
+            } else {
+                return Optional.empty();
+            }
+        }
         
-        return String.format("[%s , %s]", 
-                start.format(NASH_DATE_FORMAT),
-                end.format(NASH_DATE_FORMAT));
+        if (temporalType == TemporalPredicate.PROXIMITY) {
+            return Optional.empty();
+        }
+
+        return Optional.empty();
     }
     
     /**
@@ -229,17 +310,17 @@ public record Temporal(
         StringBuilder sb = new StringBuilder("DATE(");
         
         // Append operator and date value representation
-        if (temporalType == TemporalPredicate.INTERSECT && startDate != null && endDate.isPresent()) {
+        if (temporalType == TemporalPredicate.INTERSECT && startDate.isPresent() && endDate.isPresent()) {
             // Handle date comparison operators by showing the original comparison
             // This requires mapping back from the internal representation, which is complex.
             // For simplicity, show the internal INTERSECT format.
             sb.append(temporalType.name()).append(" ");
-            sb.append("[").append(NASH_DATE_FORMAT.format(startDate));
+            sb.append("[").append(NASH_DATE_FORMAT.format(startDate.get()));
             sb.append(", ").append(NASH_DATE_FORMAT.format(endDate.get())).append("]");
         } else {
             sb.append(temporalType.name());
-            if (startDate != null) {
-                 sb.append(" ").append(NASH_DATE_FORMAT.format(startDate));
+            if (startDate.isPresent()) {
+                 sb.append(" ").append(NASH_DATE_FORMAT.format(startDate.get()));
                  endDate.ifPresent(end -> sb.append(" .. ").append(NASH_DATE_FORMAT.format(end)));
             }
         }

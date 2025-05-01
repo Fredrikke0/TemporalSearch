@@ -2,6 +2,8 @@ package com.example.query.executor;
 
 import com.example.query.binding.MatchDetail;
 import com.example.query.model.Query;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
 import java.util.*;
@@ -13,6 +15,8 @@ import java.util.stream.Collectors;
  * for performance.
  */
 public class QueryResult {
+
+    private static final Logger logger = LoggerFactory.getLogger(QueryResult.class);
 
     private final Query.Granularity granularity;
     private final int granularitySize;
@@ -149,12 +153,12 @@ public class QueryResult {
     private synchronized void initializeDetailsByDocId() {
         if (detailsByDocId != null) return;
 
-         Map<Integer, List<MatchDetail>> tempMap = allDetails.stream()
+        Map<Integer, List<MatchDetail>> tempMap = allDetails.stream()
                 .collect(Collectors.groupingBy(
                         MatchDetail::getDocumentId,
                         Collectors.toList()
                 ));
-                
+        
         this.detailsByDocId = tempMap.entrySet().stream()
                  .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> List.copyOf(e.getValue())));
     }

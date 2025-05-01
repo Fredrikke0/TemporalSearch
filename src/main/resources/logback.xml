@@ -58,7 +58,7 @@
          <appender-ref ref="CONSOLE"/> 
          <appender-ref ref="FILE"/> 
     </logger>
-    <logger name="com.example.query" level="INFO" additivity="false"> 
+    <logger name="com.example.query" level="DEBUG" additivity="false"> 
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
     </logger>

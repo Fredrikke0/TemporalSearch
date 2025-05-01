@@ -1,5 +1,7 @@
 package com.example.index;
 
+import java.util.Objects;
+
 /**
  * Configuration class for index generation settings.
  * Handles settings related to index preservation, safety checks, and performance tuning.
@@ -50,11 +52,6 @@ public class IndexConfig {
                 throw new IllegalArgumentException("Size threshold must be positive");
             }
             this.sizeThresholdForConfirmation = threshold;
-            return this;
-        }
-
-        public Builder withLimit(Integer limit) {
-            this.limit = limit;
             return this;
         }
 

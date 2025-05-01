@@ -61,10 +61,6 @@ public class IndexRunner {
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
                 .help("Keep existing index data if present");
 
-        parser.addArgument("-l", "--limit")
-                .type(Integer.class)
-                .help("Maximum number of documents to process");
-
         try {
             // Parse arguments
             Namespace ns = parser.parseArgs(args);
@@ -80,8 +76,7 @@ public class IndexRunner {
                 ns.getString("stopwords"),
                 ns.getInt("batch_size"),
                 ns.getString("type"),
-                ns.getBoolean("preserve_index"),
-                ns.getInt("limit")
+                ns.getBoolean("preserve_index")
             );
         } catch (ArgumentParserException e) {
             parser.handleError(e);
@@ -95,12 +90,7 @@ public class IndexRunner {
 
     public static void runIndexing(String dbPath, String indexDir, String stopwordsPath,
             int batchSize, String indexType, boolean preserveIndex) throws Exception {
-        runIndexing(dbPath, indexDir, stopwordsPath, batchSize, indexType, preserveIndex, null);
-    }
-
-    public static void runIndexing(String dbPath, String indexDir, String stopwordsPath,
-            int batchSize, String indexType, boolean preserveIndex, Integer limit) throws Exception {
-        logger.info("Starting indexing process");
+        logger.info("Starting indexing process (No Limit Applied)");
         logger.debug("Database: {}", dbPath);
         logger.debug("Index directory: {}", indexDir);
         
@@ -121,10 +111,9 @@ public class IndexRunner {
         IndexingMetrics metrics = new IndexingMetrics();
         ProgressTracker progress = new ProgressTracker();
         
-        // Create index configuration
+        // Create index configuration without limit
         IndexConfig indexConfig = new IndexConfig.Builder()
             .withPreserveExistingIndex(preserveIndex)
-            .withLimit(limit)
             .build();
 
         // Ensure index directory exists
@@ -173,7 +162,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("unigram")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "unigram");
-                    long count = getAnnotationCount(conn, limit);
+                    long count = getAnnotationCount(conn);
                     progress.startIndex("Unigram Index", count);
                     
                     // Get path with proper directory structure
@@ -192,7 +181,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("bigram")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "bigram");
-                    long count = getAnnotationCount(conn, limit);
+                    long count = getAnnotationCount(conn);
                     progress.startIndex("Bigram Index", count);
                     
                     // Get path with proper directory structure
@@ -211,7 +200,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("trigram")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "trigram");
-                    long count = getAnnotationCount(conn, limit);
+                    long count = getAnnotationCount(conn);
                     progress.startIndex("Trigram Index", count);
                     
                     // Get path with proper directory structure
@@ -230,7 +219,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("dependency")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "dependency");
-                    long count = getDependencyCount(conn, limit);
+                    long count = getDependencyCount(conn);
                     progress.startIndex("Dependency Index", count);
                     
                     // Get path with proper directory structure
@@ -249,7 +238,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("ner_date")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "ner_date");
-                    long count = getNerDateCount(conn, limit);
+                    long count = getNerDateCount(conn);
                     progress.startIndex("NER Date Index", count);
                     
                     // Get path with proper directory structure
@@ -268,7 +257,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("ner")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "ner");
-                    long count = getNerCount(conn, limit);
+                    long count = getNerCount(conn);
                     progress.startIndex("NER Index", count);
                     
                     // Get path with proper directory structure
@@ -287,7 +276,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("pos")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "pos");
-                    long count = getAnnotationCount(conn, limit);
+                    long count = getAnnotationCount(conn);
                     progress.startIndex("POS Tag Index", count);
                     
                     // Get path with proper directory structure
@@ -306,7 +295,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("hypernym")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "hypernym");
-                    long count = getAnnotationCount(conn, limit);
+                    long count = getAnnotationCount(conn);
                     progress.startIndex("Hypernym Index", count);
                     
                     // Get path with proper directory structure
@@ -325,7 +314,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("stitch")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "stitch");
-                    long count = getNerDateCount(conn, limit);
+                    long count = getNerDateCount(conn);
                     progress.startIndex("Stitch Index", count);
                     
                     // Get path with proper directory structure
@@ -344,7 +333,7 @@ public class IndexRunner {
                 if (indexType.equals("all") || indexType.equals("nash")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "nash");
-                    long count = getNerDateCount(conn, limit);
+                    long count = getNerDateCount(conn);
                     progress.startIndex("Nash Index", count);
                     
                     // Get path with proper directory structure
@@ -369,7 +358,7 @@ public class IndexRunner {
         logger.info("Index generation completed successfully");
     }
 
-    private static long getAnnotationCount(Connection conn, Integer limit) throws SQLException {
+    private static long getAnnotationCount(Connection conn) throws SQLException {
         // First check if the annotations table exists
         try (Statement checkStmt = conn.createStatement();
              ResultSet checkRs = checkStmt.executeQuery(
@@ -382,9 +371,6 @@ public class IndexRunner {
         }
         
         String sql = "SELECT COUNT(*) FROM annotations";
-        if (limit != null) {
-            sql += " LIMIT " + limit;
-        }
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             if (rs.next()) {
@@ -397,7 +383,7 @@ public class IndexRunner {
         }
     }
 
-    private static long getDependencyCount(Connection conn, Integer limit) throws SQLException {
+    private static long getDependencyCount(Connection conn) throws SQLException {
         // First check if the dependencies table exists
         try (Statement checkStmt = conn.createStatement();
              ResultSet checkRs = checkStmt.executeQuery(
@@ -410,9 +396,6 @@ public class IndexRunner {
         }
         
         String sql = "SELECT COUNT(*) FROM dependencies";
-        if (limit != null) {
-            sql += " LIMIT " + limit;
-        }
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             if (rs.next()) {
@@ -425,7 +408,7 @@ public class IndexRunner {
         }
     }
 
-    private static long getNerDateCount(Connection conn, Integer limit) throws SQLException {
+    private static long getNerDateCount(Connection conn) throws SQLException {
         // First check if the annotations table exists
         try (Statement checkStmt = conn.createStatement();
              ResultSet checkRs = checkStmt.executeQuery(
@@ -438,9 +421,6 @@ public class IndexRunner {
         }
         
         String sql = "SELECT COUNT(*) FROM annotations WHERE ner = 'DATE'";
-        if (limit != null) {
-            sql += " LIMIT " + limit;
-        }
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             if (rs.next()) {
@@ -453,7 +433,7 @@ public class IndexRunner {
         }
     }
 
-    private static long getNerCount(Connection conn, Integer limit) throws SQLException {
+    private static long getNerCount(Connection conn) throws SQLException {
         // First check if the annotations table exists
         try (Statement checkStmt = conn.createStatement();
              ResultSet checkRs = checkStmt.executeQuery(
@@ -466,9 +446,6 @@ public class IndexRunner {
         }
         
         String sql = "SELECT COUNT(*) FROM annotations WHERE ner IS NOT NULL AND ner != '' AND ner != 'DATE' AND ner != 'O'";
-        if (limit != null) {
-            sql += " LIMIT " + limit;
-        }
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             if (rs.next()) {

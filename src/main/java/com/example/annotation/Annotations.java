@@ -378,18 +378,14 @@ public class Annotations {
                 .required(true)
                 .help("SQLite database file path");
 
-        parser.addArgument("-o", "--overwrite")
-                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
-                .help("Overwrite existing annotations (default: False)");
-
         parser.addArgument("-t", "--threads")
                 .setDefault(8)
                 .type(Integer.class)
-                .help("Number of threads for CoreNLP (default: 8)");
+                .help("Number of parallel threads for CoreNLP processing");
 
-        parser.addArgument("-l", "--limit")
-                .type(Integer.class)
-                .help("Limit the number of documents to process (default: None)");
+        parser.addArgument("-o", "--overwrite")
+                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
+                .help("Overwrite existing annotations (default: False)");
 
         try {
             Namespace ns = parser.parseArgs(args);
@@ -399,7 +395,7 @@ public class Annotations {
                 Path.of(ns.getString("db")),
                 ns.getInt("threads"),
                 ns.getBoolean("overwrite"),
-                ns.getInt("limit")
+                null
             );
             
             // Use the instance method instead of static method

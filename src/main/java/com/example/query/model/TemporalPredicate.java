@@ -1,6 +1,7 @@
 package com.example.query.model;
 
 import no.ntnu.sandbox.Nash;
+import java.util.Optional;
 
 /**
  * Unified predicates for temporal relationships between date ranges.
@@ -42,19 +43,21 @@ public enum TemporalPredicate {
     /**
      * Maps this TemporalPredicate to the corresponding Nash.RangePredicate.
      * 
-     * @return The Nash predicate that corresponds to this temporal predicate
+     * @return The Nash predicate that corresponds to this temporal predicate, or Optional.empty() if none directly applies.
      */
-    public Nash.RangePredicate toNashPredicate() {
+    public Optional<Nash.RangePredicate> toNashPredicate() {
         return switch (this) {
-            case CONTAINS -> Nash.RangePredicate.CONTAINS;
-            case CONTAINED_BY -> Nash.RangePredicate.CONTAINED_BY;
-            case INTERSECT -> Nash.RangePredicate.INTERSECT;
-            case PROXIMITY -> Nash.RangePredicate.PROXIMITY;
+            case CONTAINS -> Optional.of(Nash.RangePredicate.CONTAINS);
+            case CONTAINED_BY -> Optional.of(Nash.RangePredicate.CONTAINED_BY);
+            case INTERSECT -> Optional.of(Nash.RangePredicate.INTERSECT);
+            case PROXIMITY -> Optional.of(Nash.RangePredicate.PROXIMITY);
             
-            // For these other temporal types, we map to the most appropriate Nash predicate
-            case BEFORE, BEFORE_EQUAL -> Nash.RangePredicate.INTERSECT;
-            case AFTER, AFTER_EQUAL -> Nash.RangePredicate.INTERSECT;
-            case EQUAL -> Nash.RangePredicate.INTERSECT;
+            // Comparisons define specific intervals. Querying Nash with these intervals
+            // usually involves checking for intersection.
+            case EQUAL, BEFORE_EQUAL, AFTER_EQUAL -> Optional.of(Nash.RangePredicate.INTERSECT);
+            
+            // BEFORE and AFTER are handled differently by NashTemporalStrategy (using CONTAINS)
+            case BEFORE, AFTER -> Optional.empty(); // Return empty; handled specifically in NashTemporalStrategy
         };
     }
     

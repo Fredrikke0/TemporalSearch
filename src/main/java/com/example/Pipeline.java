@@ -200,13 +200,6 @@ public class Pipeline {
             annotationArgs.add("-t");
             annotationArgs.add(ns.getInt("threads").toString());
             
-            // Add global limit if specified
-            Integer limit = ns.getInt("limit");
-            if (limit != null) {
-                annotationArgs.add("-l");
-                annotationArgs.add(limit.toString());
-            }
-            
             // Add overwrite flag if specified or if we're running the 'all' stage
             if (ns.getBoolean("recreate") || stage.equals("all")) {
                 annotationArgs.add("-o");
@@ -223,8 +216,8 @@ public class Pipeline {
                     ns.getString("stopwords"),
                     ns.getInt("batch_size"),
                     ns.getString("index_type"),
-                    ns.getBoolean("preserve_index"),
-                    ns.getInt("limit"));
+                    ns.getBoolean("preserve_index")
+            );
         }
 
         if (stage.equals("analyze")) {

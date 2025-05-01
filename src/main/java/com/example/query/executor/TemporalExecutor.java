@@ -224,32 +224,72 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     return Collections.emptyList();
                 }
                 dateLookup = NashSerializationUtils.deserializeDateLookup(rawLookup.get());
+                 strategyLogger.debug("Nash date lookup table loaded with {} entries.", dateLookup.size());
             } catch (Exception e) {
                 throw new QueryExecutionException("Failed to read Nash date lookup table: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
             }
 
             List<MatchDetail> details = new ArrayList<>();
             Optional<String> variableName = condition.qualifiedVariableName();
-            if (variableName.isEmpty()) {
-                strategyLogger.debug("No variable name found in condition. Nash strategy will return empty result.");
-                return Collections.emptyList();
+            // Get the interval, handling the Optional return type
+            Optional<String> intervalOpt = condition.toNashInterval();
+            if (intervalOpt.isEmpty()) {
+                strategyLogger.warn("Could not generate Nash interval for condition: {}. Skipping Nash query.", condition);
+                return Collections.emptyList(); // Cannot query Nash without an interval
             }
-            String qualifiedVarName = variableName.get();
-            String interval = condition.toNashInterval();
+            String interval = intervalOpt.get(); // Unwrap the Optional
+            
+            // TODO: Review expandYearOnlyInterval - Does it handle non-year-only intervals correctly?
+            // For now, assume it returns the input if not year-only.
             String expandedInterval = Temporal.expandYearOnlyInterval(interval);
-            Nash.RangePredicate nashPredicate = condition.temporalType().toNashPredicate();
+            
+            // Determine Nash predicate: Use CONTAINS for BEFORE/AFTER, otherwise derive from TemporalPredicate
+            // Nash.RangePredicate nashPredicate;
+            // TemporalPredicate originalPredicate = condition.temporalType();
+            // if (originalPredicate == TemporalPredicate.BEFORE || originalPredicate == TemporalPredicate.AFTER) {
+            //     nashPredicate = Nash.RangePredicate.CONTAINS;
+            //     strategyLogger.debug("Using Nash.RangePredicate.CONTAINS for TemporalPredicate: {}", originalPredicate);
+            // } else {
+            //     // Fallback to existing logic for other types (INTERSECT, EQUAL, etc.)
+            //     nashPredicate = originalPredicate.toNashPredicate()
+            //                                     .orElseThrow(() -> new QueryExecutionException(
+            //                                         "Nash strategy called with a TemporalPredicate that does not map to a Nash predicate: " + originalPredicate,
+            //                                         condition.toString(), 
+            //                                         ErrorType.INTERNAL_ERROR));
+            //     strategyLogger.debug("Using Nash predicate {} derived from TemporalPredicate: {}", nashPredicate, originalPredicate);
+            // }
+
+            // --- Revised Strategy: ALWAYS use INTERSECT ---
+            // The specific temporal logic (BEFORE, AFTER, CONTAINS, etc.) is handled by 
+            // the interval generated in Temporal.toNashInterval(). The Nash query 
+            // should find any indexed items intersecting that generated interval.
+            Nash.RangePredicate nashPredicate = Nash.RangePredicate.INTERSECT;
+            strategyLogger.debug("Using Nash predicate INTERSECT for TemporalPredicate: {} (Interval: {})", 
+                                 condition.temporalType(), expandedInterval);
+            // --- End Revised Strategy ---
+
             strategyLogger.debug("Querying Nash index for corpus '{}' with expanded interval: {}, predicate: {}, variable: {}",
-                                 corpusName, expandedInterval, nashPredicate, qualifiedVarName);
+                                 corpusName, expandedInterval, nashPredicate, variableName.isPresent() ? variableName.get() : "none");
             try {
                 String[] hashPrefixes = Nash.generateTimeHash(expandedInterval, nashPredicate);
+                strategyLogger.debug("Generated {} hash prefixes: {}", hashPrefixes.length, java.util.Arrays.toString(hashPrefixes));
                 Set<NashDateEntryWithId> matchingEntries = new HashSet<>();
+                int prefixesWithData = 0;
                 for (String hashPrefix : hashPrefixes) {
                     var rawData = nashIndex.getRaw(hashPrefix.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     if (rawData.isPresent()) {
+                        prefixesWithData++;
                         List<NashDateEntryWithId> entries = NashSerializationUtils.deserializeNashEntries(rawData.get());
                         matchingEntries.addAll(entries);
+                    } else {
+                        // Optionally log prefixes that didn't find data
+                         strategyLogger.trace("No data found for prefix: {}", hashPrefix);
                     }
                 }
+                strategyLogger.debug("Found data for {} out of {} prefixes. Total unique NashDateEntryWithId collected: {}", 
+                                     prefixesWithData, hashPrefixes.length, matchingEntries.size());
+
+                // Process the collected candidate entries
                 for (NashDateEntryWithId entry : matchingEntries) {
                     if (entry.dateId() < 0 || entry.dateId() >= dateLookup.size()) {
                         strategyLogger.error("Invalid dateId {} found in Nash entry for position {}. Max valid ID is {}. Skipping entry.",
@@ -257,7 +297,15 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                         continue;
                     }
                     LocalDate specificDate = dateLookup.get(entry.dateId());
-                    details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), variableName));
+                    
+                    // TODO: Re-enable post-filtering once candidate retrieval is confirmed correct
+                    // Post-filtering: Evaluate the actual date against the original condition
+                    // if (evaluateTemporalCondition(condition.temporalType(), specificDate.atStartOfDay(), condition.startDate(), condition.endDate().orElse(condition.startDate()))) {
+                        details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), variableName));
+                    // } else {
+                        // Optional: Log skipped entries if needed for debugging
+                    //     strategyLogger.trace("Skipping Nash entry (dateId={}) with date {} as it failed post-filtering for condition {}", entry.dateId(), specificDate, condition.temporalType());
+                    // }
                 }
                 return details;
             } catch (Exception e) {
@@ -309,9 +357,19 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
         String conditionId = String.valueOf(condition.hashCode());
             // IndexAccessInterface dateIndex = indexes.get(DATE_INDEX); // Assumes index exists (checked by main executor)
         TemporalPredicate type = condition.temporalType();
-        LocalDateTime queryStart = condition.startDate();
+        Optional<LocalDateTime> queryStartOpt = condition.startDate(); // Get Optional start date
             // Use queryStart if endDate is not present, ensuring queryEnd is never null.
-        LocalDateTime queryEnd = condition.endDate().orElse(queryStart);
+            // If queryStart itself is empty (e.g., variable comparison), evaluation might fail later.
+            // Naive strategy needs a concrete start date to compare against index entries.
+            if (queryStartOpt.isEmpty()) {
+                // This shouldn't happen if the condition requires a literal date for Naive scan,
+                // or if variable resolution happened before calling execute.
+                // Handle gracefully for now.
+                 strategyLogger.error("NaiveTemporalStrategy requires a concrete start date, but it was empty for condition: {}. Returning empty result.", condition);
+                 return Collections.emptyList();
+            }
+            LocalDateTime queryStart = queryStartOpt.get(); // Unwrap start date
+        LocalDateTime queryEnd = condition.endDate().orElse(queryStart); // End date defaults to start date if absent
             Optional<String> variableName = condition.qualifiedVariableName(); // Use qualifiedVariableName()
 
             strategyLogger.debug("Scanning DATE index directly for condition: {} ({}), interval [{} to {}], variable: {}",
