@@ -15,3 +15,4 @@ indexes/**/*
 simplewiki*
 stanford-english-extra-corenlp-models-current/
 .cursor
+sandbox/
