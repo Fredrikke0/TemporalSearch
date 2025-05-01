@@ -49,6 +49,7 @@ import com.example.query.binding.VariableRegistry;
 import com.example.query.model.JoinCondition.JoinType;
 import com.example.query.model.JoinCondition.JoinOperatorType;
 import org.mockito.ArgumentCaptor;
+import com.example.query.binding.JoinedMatch; // Added for Join results
 
 @ExtendWith(MockitoExtension.class)
 class QueryExecutorTest {
@@ -64,8 +65,8 @@ class QueryExecutorTest {
     @Mock private LogicalExecutor mockLogicalExecutor; // Add mock for LogicalExecutor
     @Mock private ContainsExecutor containsExecutor;
     @Mock private NerExecutor nerExecutor;
+    @Mock private TemporalExecutor temporalExecutor; // Mock TemporalExecutor
     @Mock private IndexManager indexManager;
-    @Mock private JoinHandler joinHandler;
 
     // Class under test, inject mocks
     private QueryExecutor queryExecutor;
@@ -81,6 +82,14 @@ class QueryExecutorTest {
         // Use the test constructor to inject mocks
         queryExecutor = new QueryExecutor(factory, mockTableResultService);
         
+        // Mock the factory to return specific executors when needed
+        lenient().doReturn(containsExecutor).when(factory).getExecutor(isA(Contains.class));
+        lenient().doReturn(nerExecutor).when(factory).getExecutor(isA(Ner.class));
+        lenient().doReturn(temporalExecutor).when(factory).getExecutor(isA(Temporal.class));
+        // Mock for Logical and Not might be needed depending on tests
+        lenient().doReturn(mockLogicalExecutor).when(factory).getExecutor(isA(Logical.class));
+        // lenient().doReturn(notExecutor).when(factory).getExecutor(isA(Not.class));
+
         // Mock iterator behavior with lenient mode
         lenient().when(nerIndex.iterator()).thenReturn(nerIterator);
         lenient().when(nerIterator.hasNext()).thenReturn(false);
@@ -497,4 +506,137 @@ class QueryExecutorTest {
         assertEquals(2, ((QueryResult) result).getAllDetails().size()); 
         verify(logicalExecutor, times(1)).execute(any(com.example.query.model.condition.Logical.class), anyMap(), eq(Query.Granularity.DOCUMENT), eq(0), eq("wikipedia"));
     }
+
+    // --- Temporal Join Integration Tests ---
+
+    // Helper to create MatchDetail with LocalDate value for temporal joins
+    private MatchDetail createTemporalMatchDetail(int docId, int sentenceId, LocalDate date, String alias) {
+        Position pos = new Position(docId, sentenceId, 0, 0, date);
+        // Value is the LocalDate, type is DATE, variable name has alias prefix
+        return new MatchDetail(date, ValueType.DATE, pos, Optional.of(alias + ".date"));
+    }
+
+    @Test
+    void testTemporalJoinBefore() throws QueryExecutionException {
+        // Query: SELECT * FROM source q1 JOIN source q2 ON q1.date BEFORE q2.date
+        String source = "temporal_source";
+        // Use a valid Temporal constructor *with distinct variables* for dummy conditions
+        Temporal cond1 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q1.date"); // Correct constructor
+        Temporal cond2 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q2.date"); // Correct constructor
+
+        // Correct SubquerySpec constructor order: Query, alias
+        SubquerySpec sub1 = new SubquerySpec(new Query(source, List.of(cond1)), "q1");
+        SubquerySpec sub2 = new SubquerySpec(new Query(source, List.of(cond2)), "q2");
+
+        JoinCondition joinCond = JoinCondition.createTemporalJoin(
+            "q1.date", "q2.date", JoinType.INNER, TemporalPredicate.BEFORE
+        );
+
+        // Use the full Query constructor for the main query
+        Query mainQuery = new Query(
+            source,                       // Source for main query part (can be same)
+            Collections.emptyList(),      // No main conditions
+            Collections.emptyList(),      // No ORDER BY
+            Optional.empty(),             // No LIMIT
+            Query.Granularity.DOCUMENT,   // Granularity
+            Optional.empty(),             // No granularity size
+            Collections.emptyList(),      // No explicit SELECT (implies *)
+            new VariableRegistry(),       // Default empty registry
+            List.of(sub1, sub2),          // Subqueries
+            Optional.of(joinCond),        // Join condition
+            Optional.empty()              // No explicit main alias
+        );
+
+        // Mock subquery results
+        MatchDetail q1_d1 = createTemporalMatchDetail(1, -1, LocalDate.of(2023, 1, 10), "q1");
+        MatchDetail q1_d2 = createTemporalMatchDetail(2, -1, LocalDate.of(2023, 1, 15), "q1");
+        QueryResult q1Result = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(q1_d1, q1_d2));
+
+        MatchDetail q2_d3 = createTemporalMatchDetail(3, -1, LocalDate.of(2023, 1, 12), "q2");
+        MatchDetail q2_d4 = createTemporalMatchDetail(4, -1, LocalDate.of(2023, 1, 20), "q2");
+        QueryResult q2Result = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(q2_d3, q2_d4));
+
+        // Mock the TemporalExecutor results for each subquery execution
+        // Use lenient() because the order might vary based on internal QueryExecutor logic
+        lenient().when(temporalExecutor.execute(eq(cond1), eq(indexes), any(), anyInt(), eq(source))).thenReturn(q1Result);
+        lenient().when(temporalExecutor.execute(eq(cond2), eq(indexes), any(), anyInt(), eq(source))).thenReturn(q2Result);
+
+        // Execute the main query
+        Object result = queryExecutor.execute(mainQuery, indexes);
+
+        // Verify the result is a List<JoinedMatch>
+        assertTrue(result instanceof List, "Result should be a List");
+        @SuppressWarnings("unchecked")
+        List<JoinedMatch> joinedMatches = (List<JoinedMatch>) result;
+
+        // Assertions: Expect 3 pairs where q1.date < q2.date
+        // (q1_d1, q2_d3), (q1_d1, q2_d4), (q1_d2, q2_d4)
+        assertEquals(3, joinedMatches.size(), "Expected 3 joined pairs for BEFORE");
+        Set<JoinedMatch> resultSet = Set.copyOf(joinedMatches);
+        assertTrue(resultSet.contains(new JoinedMatch(q1_d1, q2_d3)), "Missing pair: q1_d1 < q2_d3");
+        assertTrue(resultSet.contains(new JoinedMatch(q1_d1, q2_d4)), "Missing pair: q1_d1 < q2_d4");
+        assertTrue(resultSet.contains(new JoinedMatch(q1_d2, q2_d4)), "Missing pair: q1_d2 < q2_d4");
+    }
+
+    @Test
+    void testTemporalJoinAfter() throws QueryExecutionException {
+        // Query: SELECT * FROM source q1 JOIN source q2 ON q1.date AFTER q2.date
+        String source = "temporal_source";
+        // Use a valid Temporal constructor *with distinct variables* for dummy conditions
+        Temporal cond1 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q1.date"); // Correct constructor
+        Temporal cond2 = new Temporal(TemporalPredicate.CONTAINS, LocalDate.of(2023, 1, 1).atStartOfDay(), Optional.empty(), "q2.date"); // Correct constructor
+
+        // Correct SubquerySpec constructor order: Query, alias
+        SubquerySpec sub1 = new SubquerySpec(new Query(source, List.of(cond1)), "q1");
+        SubquerySpec sub2 = new SubquerySpec(new Query(source, List.of(cond2)), "q2");
+
+        JoinCondition joinCond = JoinCondition.createTemporalJoin(
+            "q1.date", "q2.date", JoinType.INNER, TemporalPredicate.AFTER
+        );
+
+        // Use the full Query constructor for the main query
+        Query mainQuery = new Query(
+            source,                       // Source for main query part
+            Collections.emptyList(),      // No main conditions
+            Collections.emptyList(),      // No ORDER BY
+            Optional.empty(),             // No LIMIT
+            Query.Granularity.DOCUMENT,   // Granularity
+            Optional.empty(),             // No granularity size
+            Collections.emptyList(),      // No explicit SELECT (implies *)
+            new VariableRegistry(),       // Default empty registry
+            List.of(sub1, sub2),          // Subqueries
+            Optional.of(joinCond),        // Join condition
+            Optional.empty()              // No explicit main alias
+        );
+
+        // Mock subquery results
+        MatchDetail q1_d1 = createTemporalMatchDetail(1, -1, LocalDate.of(2023, 1, 15), "q1");
+        MatchDetail q1_d2 = createTemporalMatchDetail(2, -1, LocalDate.of(2023, 1, 25), "q1");
+        QueryResult q1Result = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(q1_d1, q1_d2));
+
+        MatchDetail q2_d3 = createTemporalMatchDetail(3, -1, LocalDate.of(2023, 1, 10), "q2");
+        MatchDetail q2_d4 = createTemporalMatchDetail(4, -1, LocalDate.of(2023, 1, 20), "q2");
+        QueryResult q2Result = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(q2_d3, q2_d4));
+
+        // Mock the TemporalExecutor results
+        lenient().when(temporalExecutor.execute(eq(cond1), eq(indexes), any(), anyInt(), eq(source))).thenReturn(q1Result);
+        lenient().when(temporalExecutor.execute(eq(cond2), eq(indexes), any(), anyInt(), eq(source))).thenReturn(q2Result);
+
+        // Execute the main query
+        Object result = queryExecutor.execute(mainQuery, indexes);
+
+        // Verify the result
+        assertTrue(result instanceof List, "Result should be a List");
+        @SuppressWarnings("unchecked")
+        List<JoinedMatch> joinedMatches = (List<JoinedMatch>) result;
+
+        // Assertions: Expect 3 pairs where q1.date > q2.date
+        // (q1_d1, q2_d3), (q1_d2, q2_d3), (q1_d2, q2_d4)
+        assertEquals(3, joinedMatches.size(), "Expected 3 joined pairs for AFTER");
+        Set<JoinedMatch> resultSet = Set.copyOf(joinedMatches);
+        assertTrue(resultSet.contains(new JoinedMatch(q1_d1, q2_d3)), "Missing pair: q1_d1 > q2_d3");
+        assertTrue(resultSet.contains(new JoinedMatch(q1_d2, q2_d3)), "Missing pair: q1_d2 > q2_d3");
+        assertTrue(resultSet.contains(new JoinedMatch(q1_d2, q2_d4)), "Missing pair: q1_d2 > q2_d4");
+    }
+
 } 

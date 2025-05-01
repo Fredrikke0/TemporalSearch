@@ -10,9 +10,6 @@ import java.util.Optional;
  * Represents a single detailed match from executing a query condition.
  * Includes the matched value, its type, position, and potentially variable binding info.
  * 
- * TODO: Consider refactoring join results into a separate class (e.g., JoinMatchPair) 
- *       instead of overloading MatchDetail, for better separation of concerns if 
- *       join logic becomes more complex.
  */
 public record MatchDetail(
     Object value,

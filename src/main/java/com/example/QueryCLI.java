@@ -128,7 +128,6 @@ public class QueryCLI {
                     matchCount = result.getAllDetails().size(); 
                     matchUnit = (granularity == Query.Granularity.DOCUMENT) ? "documents (approx details)" : "sentences (approx details)";
                 logger.info("Query executed, found {} matching details (granularity: {})", matchCount, granularity);
-                System.out.println("Total matches: " + matchCount + " " + matchUnit);
 
                     // Generate table from QueryResult
                     logger.debug("Generating result table from QueryResult");
@@ -146,7 +145,6 @@ public class QueryCLI {
                     matchCount = joinedMatches.size();
                     matchUnit = "joined pairs"; // Granularity might not directly apply here
                     logger.info("Join query executed, found {} matching {} (granularity: {})", matchCount, matchUnit, granularity);
-                    System.out.println("Total matches: " + matchCount + " " + matchUnit);
                     
                     // Generate table from List<JoinedMatch>
                     logger.debug("Generating result table from List<JoinedMatch>");
@@ -160,8 +158,7 @@ public class QueryCLI {
                     matchCount = 0;
                     matchUnit = "joined pairs"; 
                     logger.info("Join query executed, found 0 matching {}", matchUnit);
-                    System.out.println("Total matches: 0 " + matchUnit);
-                    
+                     
                     // Create an empty table reflecting the SELECT columns
                     resultTable = tableResultService.generateTableForJoin(
                         query,

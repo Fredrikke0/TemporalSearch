@@ -181,7 +181,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         String fullQualifiedName = alias + "." + fieldName;
         
         // Check if the field name is a known structural field
-        if (Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID").contains(fieldName.toUpperCase())) {
+        if (Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID", "BEGIN", "END").contains(fieldName.toUpperCase())) {
             logger.trace("Identified StructuralColumn from qualifiedIdentifier: {}", fullQualifiedName);
             return new com.example.query.model.StructuralColumn(alias, fieldName);
         } else {
@@ -683,11 +683,13 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
      * @throws IllegalStateException if the operator is invalid
      */
     private TemporalPredicate mapOperatorToTemporal(String operator) {
-        return switch (operator) {
+        return switch (operator.toUpperCase()) {
             case "CONTAINS" -> TemporalPredicate.CONTAINS;
             case "CONTAINED_BY" -> TemporalPredicate.CONTAINED_BY;
             case "INTERSECT" -> TemporalPredicate.INTERSECT;
             case "PROXIMITY" -> TemporalPredicate.PROXIMITY;
+            case "BEFORE" -> TemporalPredicate.BEFORE;
+            case "AFTER" -> TemporalPredicate.AFTER;
             default -> throw new IllegalStateException("Invalid temporal operator: " + operator);
         };
     }

@@ -22,12 +22,18 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import java.util.Comparator;
 
 /**
  * Handles the execution of JOIN operations between subquery QueryResult objects.
  */
 public class JoinHandler {
     private static final Logger logger = LoggerFactory.getLogger(JoinHandler.class);
+
+    /**
+     * Helper record to associate a MatchDetail with its extracted temporal value for sorting.
+     */
+    private record TemporalMatch(LocalDate date, MatchDetail detail) {}
 
     /**
      * Creates a new JoinHandler.
@@ -118,27 +124,69 @@ public class JoinHandler {
         // 3. Execute the join based on JoinCondition and MatchDetail properties.
         List<JoinedMatch> joinedDetails = new ArrayList<>();
         Query.Granularity resultGranularity = query.granularity();
-        // TemporalPredicate predicate = joinCondition.temporalPredicate().orElse(null); // Get predicate if needed later
         JoinCondition.JoinType joinType = joinCondition.type();
         JoinCondition.JoinOperatorType operatorType = joinCondition.operatorType(); // Get operator type
+        Optional<TemporalPredicate> temporalPredicateOpt = joinCondition.temporalPredicate();
         Optional<Integer> proximityWindow = joinCondition.proximityWindow(); // Needed for PROXIMITY
 
         if (joinType == JoinCondition.JoinType.INNER) {
-            logger.debug("Performing INNER JOIN with operator {} on keys: {}.{} {} {}.{}",
-                         operatorType, leftAlias, leftKey, operatorType, rightAlias, rightKey);
+            if (operatorType == JoinCondition.JoinOperatorType.EQUALITY) {
+                logger.debug("Performing INNER EQUALITY JOIN on keys: {}.{} == {}.{}",
+                             leftAlias, leftKey, rightAlias, rightKey);
+                // If both keys are 'date', use the date-specific hash join
+                if (leftKey.equals("date") && rightKey.equals("date")) {
+                     // Check if values are actually LocalDate before calling date-specific join
+                    ValueType leftType = extractTypeForKey(leftDetails.isEmpty() ? null : leftDetails.get(0), leftKey);
+                    ValueType rightType = extractTypeForKey(rightDetails.isEmpty() ? null : rightDetails.get(0), rightKey);
+                    if (leftType == ValueType.DATE && rightType == ValueType.DATE) {
+                        joinedDetails = performHashJoinOnDate(leftDetails, rightDetails, leftKey, rightKey);
+                    } else {
+                        logger.warn("Equality join requested on 'date' keys, but types are not LocalDate ({}={}, {}={}). Falling back to generic hash join.",
+                                    leftKey, leftType, rightKey, rightType);
+                        joinedDetails = performGenericHashJoin(leftDetails, rightDetails, leftKey, rightKey);
+                    }
+                } else {
+                    // Generic hash join for any key type
+                    joinedDetails = performGenericHashJoin(leftDetails, rightDetails, leftKey, rightKey);
+                }
 
-            // --- Always use Hash Join for now ---
-            // If both keys are 'date', use the date-specific hash join
-            if (leftKey.equals("date") && rightKey.equals("date")) {
-                joinedDetails = performHashJoinOnDate(leftDetails, rightDetails, leftKey, rightKey);
+            } else if (operatorType == JoinCondition.JoinOperatorType.TEMPORAL) {
+                TemporalPredicate predicate = temporalPredicateOpt.orElseThrow(() ->
+                    new QueryExecutionException("Temporal predicate is required for TEMPORAL join type",
+                            "join", QueryExecutionException.ErrorType.INTERNAL_ERROR));
+
+                logger.debug("Performing INNER TEMPORAL JOIN with predicate {} on keys: {}.{} {} {}.{}",
+                             predicate, leftAlias, leftKey, predicate, rightAlias, rightKey);
+
+                if (predicate == TemporalPredicate.BEFORE || predicate == TemporalPredicate.AFTER) {
+                    // Use Sort-Merge for BEFORE/AFTER
+                    joinedDetails = performTemporalSortMergeJoin(leftDetails, rightDetails, leftKey, rightKey, predicate);
+                } else if (predicate == TemporalPredicate.INTERSECT || predicate == TemporalPredicate.EQUAL) {
+                    // Use Hash Join for INTERSECT/EQUAL (on dates, this is effectively equality)
+                    logger.debug("Temporal predicate {} identified, using Hash Join strategy.", predicate);
+                    if (leftKey.equals("date") && rightKey.equals("date")) {
+                        // Directly use the date-specific hash join.
+                        // It internally handles filtering details that don't have a LocalDate value.
+                        logger.debug("Joining on 'date' keys using performHashJoinOnDate.");
+                        joinedDetails = performHashJoinOnDate(leftDetails, rightDetails, leftKey, rightKey);
+                    } else {
+                        // If keys are not 'date', use generic hash join for INTERSECT/EQUAL
+                        logger.warn("Temporal join predicate {} used with non-'date' keys ({}={}, {}={}). Using generic hash join.",
+                                    predicate, leftAlias, leftKey, rightAlias, rightKey);
+                        joinedDetails = performGenericHashJoin(leftDetails, rightDetails, leftKey, rightKey);
+                    }
+                } else if (predicate == TemporalPredicate.PROXIMITY) {
+                    logger.warn("Temporal join predicate {} (PROXIMITY) not yet implemented. Returning empty result.", predicate);
+                    // TODO: Implement Proximity Join (likely different algorithm)
+                } else {
+                     // Handle other unimplemented temporal predicates (CONTAINS, CONTAINED_BY, etc.)
+                     logger.warn("Temporal join predicate {} not yet implemented. Returning empty result.", predicate);
+                }
+
             } else {
-                // Generic hash join for any key type
-                joinedDetails = performGenericHashJoin(leftDetails, rightDetails, leftKey, rightKey);
+                // Should not happen due to enum completeness
+                logger.error("Unhandled JoinOperatorType: {}. Returning empty result.", operatorType);
             }
-            //
-            // --- Sort-Merge Join (for future comparison, currently disabled) ---
-            // joinedDetails = performSortMergeJoin(leftDetails, rightDetails, leftKey, rightKey);
-            // --- End Sort-Merge Join ---
 
         } else {
              logger.warn("Join type {} not yet implemented. Returning empty result.", joinType);
@@ -156,8 +204,11 @@ public class JoinHandler {
         Map<LocalDate, List<MatchDetail>> grouped = new HashMap<>();
         for (MatchDetail detail : details) {
             Object val = extractValueForKey(detail, dateKey);
+            // Ensure the value is actually a LocalDate before adding
             if (val instanceof LocalDate dateValue) {
                 grouped.computeIfAbsent(dateValue, k -> new ArrayList<>()).add(detail);
+            } else if (val != null) {
+                 logger.warn("Expected LocalDate for key '{}' but got type {}. Skipping detail: {}", dateKey, val.getClass().getName(), detail);
             }
         }
          logger.trace("Grouped {} details into {} LocalDate groups for key '{}'.", details.size(), grouped.size(), dateKey);
@@ -168,8 +219,15 @@ public class JoinHandler {
             List<MatchDetail> leftDetails, List<MatchDetail> rightDetails, String leftKey, String rightKey)
     {
         Map<LocalDate, List<MatchDetail>> leftGrouped = groupDetailsByDate(leftDetails, leftKey);
-        // Group right details by dateValue only
         Map<LocalDate, List<MatchDetail>> rightGrouped = groupDetailsByDate(rightDetails, rightKey);
+
+        if (logger.isDebugEnabled()) {
+            String rightDates = rightGrouped.keySet().stream()
+                                          .map(LocalDate::toString)
+                                          .sorted()
+                                          .collect(Collectors.joining(", "));
+            logger.debug("Distinct dates found in right details ({} total): {}", rightGrouped.size(), rightDates);
+        }
 
         List<JoinedMatch> joinedDetails = new ArrayList<>();
         // Iterate through the smaller map's keys for efficiency
@@ -247,54 +305,51 @@ public class JoinHandler {
     }
 
     /**
-     * Extracts the value corresponding to a specific key from a MatchDetail object.
-     * Supports variable names (e.g., "?myVar") and common keys like "document_id", "sentence_id".
-     *
-     * @param detail The MatchDetail object
-     * @param key The key to extract (e.g., "?myVar", "document_id")
-     * @return The extracted value, or null if key is not supported or value is null.
+     * Helper to extract a value from a MatchDetail based on a key.
+     * This currently only handles direct variable bindings.
+     * TODO: Extend to handle structural columns like TITLE, TIMESTAMP if needed here.
      */
-    private Object extractValueForKey(Object detailObj, String key) {
-        if (detailObj == null || key == null) {
-            return null;
-        }
-        // Handle JoinedMatch first (might occur in nested joins, though not currently supported)
-        if (detailObj instanceof JoinedMatch joined) {
-             // Simplified: Assume key directly matches intended part for now
-             // A more robust solution might need alias context here too.
-            Object leftVal = extractValueForKey(joined.left(), key);
-            if (leftVal != null) return leftVal;
-            return extractValueForKey(joined.right(), key);
+    private Optional<Object> extractValueForKey(MatchDetail detail, String key) {
+        if (detail == null || key == null) return Optional.empty();
 
-        } else if (detailObj instanceof MatchDetail detail) {
-             // Handle bound variables stored in MatchDetail (e.g., "q1.date")
-            if (detail.variableName().isPresent()) {
-                String storedVarName = detail.variableName().get();
-                // Check if stored variable name has a dot (alias.key format)
-                int dotIndex = storedVarName.indexOf('.');
-                if (dotIndex != -1 && dotIndex < storedVarName.length() - 1) {
-                    String storedBaseKey = storedVarName.substring(dotIndex + 1);
-                    // Compare the requested key with the base key part of the stored variable
-                    if (key.equals(storedBaseKey)) {
-                        return detail.value();
+        // 1. Check if the key matches a bound variable name (base part)
+        if (detail.variableName().isPresent()) {
+            String storedVarName = detail.variableName().get(); // e.g., "q1.date"
+            String baseKey = storedVarName.contains(".") ? storedVarName.substring(storedVarName.indexOf('.') + 1) : storedVarName;
+            
+            if (key.equals(baseKey)) {
+                // Found a match based on variable binding
+                if (detail.valueType() == ValueType.DATE) { 
+                    try {
+                        Object rawValue = detail.value();
+                        if (rawValue instanceof String dateString) {
+                            return Optional.of(LocalDate.parse(dateString)); 
+                        } else if (rawValue instanceof LocalDate localDate) {
+                            return Optional.of(localDate);
+                        } else {
+                            logger.warn("Value for DATE type bound to variable '{}' was not String or LocalDate: {}", storedVarName, rawValue != null ? rawValue.getClass().getName() : "null");
+                            return Optional.empty();
+                        }
+                    } catch (Exception e) {
+                        logger.warn("Could not parse date value '{}' for variable '{}' in detail: {}", detail.value(), storedVarName, detail, e);
+                        return Optional.empty();
                     }
                 } else {
-                    // Handle cases where variable name might not have an alias (shouldn't happen with current parsing?)
-                     if (key.equals(storedVarName)) {
-                         return detail.value();
-                     }
+                    // Return raw value for other types bound to variables
+                    return Optional.ofNullable(detail.value());
                 }
             }
-            // Fallback to check structural keys if no variable matched
-            return switch (key.toLowerCase()) {
-                case "document_id" -> detail.getDocumentId();
-                case "sentence_id" -> detail.getSentenceId() != -1 ? detail.getSentenceId() : null;
-                // Add case for the "date" key specifically if it refers to the document date
-                // case "date" -> detail.getDocumentDate(); // Example - uncomment if needed
-                default -> null; // Key doesn't match variable or known structural key
-            };
         }
-        return null;
+
+        // 2. If no variable match, check common structural keys
+        return switch (key.toLowerCase()) {
+            case "document_id" -> Optional.of(detail.getDocumentId());
+            // Ensure sentence_id is only returned if valid (not -1)
+            case "sentence_id" -> detail.getSentenceId() != -1 ? Optional.of(detail.getSentenceId()) : Optional.empty();
+            // Add other structural keys if needed (e.g., timestamp)
+            // case "timestamp" -> Optional.ofNullable(detail.position().getTimestamp()); 
+            default -> Optional.empty(); // Key doesn't match variable or known structural key
+        };
     }
 
     /**
@@ -306,7 +361,7 @@ public class JoinHandler {
      * @return The extracted type, or null if key is not supported or value is null.
      */
     private ValueType extractTypeForKey(Object detailObj, String key) {
-         if (detailObj == null || key == null) {
+         if (detailObj == null || key == null) { 
             return null;
         }
         // Handle JoinedMatch first
@@ -394,5 +449,120 @@ public class JoinHandler {
         }
         logger.debug("Generic hash join finished, produced {} pairs.", joinedDetails.size());
         return joinedDetails;
+    }
+
+    // --- Temporal Sort-Merge Join Implementation ---
+
+    List<TemporalMatch> extractTemporalMatches(List<MatchDetail> details, String key) {
+        List<TemporalMatch> temporalMatches = new ArrayList<>();
+        for (MatchDetail detail : details) {
+            // Use the class helper method
+            Optional<Object> valueOpt = extractValueForKey(detail, key); 
+            if (valueOpt.isPresent() && valueOpt.get() instanceof LocalDate date) {
+                temporalMatches.add(new TemporalMatch(date, detail));
+            } else {
+                // Log at DEBUG level instead of WARN
+                logger.debug("Temporal join: Skipping detail due to null or non-LocalDate value for key '{}': {}", key, detail);
+            }
+        }
+        return temporalMatches;
+    }
+
+    /**
+     * Performs a sort-merge join for TEMPORAL BEFORE (<) or AFTER (>) predicates.
+     *
+     * @param leftDetails   List of MatchDetail from the left side.
+     * @param rightDetails  List of MatchDetail from the right side.
+     * @param leftKey       The key to extract the temporal value from the left side.
+     * @param rightKey      The key to extract the temporal value from the right side.
+     * @param predicate     The temporal predicate (must be BEFORE or AFTER).
+     * @return A list of JoinedMatch representing the pairs satisfying the temporal condition.
+     * @throws QueryExecutionException If the predicate is not BEFORE or AFTER, or if keys do not yield comparable temporal values.
+     */
+    List<JoinedMatch> performTemporalSortMergeJoin(
+            List<MatchDetail> leftDetails, List<MatchDetail> rightDetails,
+            String leftKey, String rightKey, TemporalPredicate predicate)
+            throws QueryExecutionException
+    {
+        if (predicate != TemporalPredicate.BEFORE && predicate != TemporalPredicate.AFTER) {
+            throw new QueryExecutionException(
+                "performTemporalSortMergeJoin only supports BEFORE and AFTER predicates.",
+                "join", QueryExecutionException.ErrorType.INTERNAL_ERROR
+            );
+        }
+        logger.debug("Performing temporal sort-merge join with predicate: {}", predicate);
+
+        // 1. Extract LocalDate and filter out details without a valid date for the key
+        List<TemporalMatch> leftTemporalList = extractTemporalMatches(leftDetails, leftKey);
+        List<TemporalMatch> rightTemporalList = extractTemporalMatches(rightDetails, rightKey);
+
+        // Check for empty lists after filtering
+        if (leftTemporalList.isEmpty() || rightTemporalList.isEmpty()) {
+             logger.debug("Temporal join: One or both lists are empty after filtering non-LocalDate values. Returning empty result.");
+             return new ArrayList<>(); // No matches possible
+        }
+
+        // 2. Sort both lists by date
+        leftTemporalList.sort(Comparator.comparing(TemporalMatch::date));
+        rightTemporalList.sort(Comparator.comparing(TemporalMatch::date));
+
+        logger.debug("Sorted temporal lists: Left size = {}, Right size = {}\nLeft: {}\nRight: {}",
+                     leftTemporalList.size(), rightTemporalList.size(),
+                     leftTemporalList.stream().map(tm -> tm.date() + "->" + tm.detail().getDocumentId()).collect(Collectors.joining(", ")),
+                     rightTemporalList.stream().map(tm -> tm.date() + "->" + tm.detail().getDocumentId()).collect(Collectors.joining(", ")));
+
+        // 3. Perform the merge comparison based on the predicate
+        List<JoinedMatch> resultList = new ArrayList<>();
+
+        if (predicate == TemporalPredicate.BEFORE) { // Left Date < Right Date
+            int j = 0; // Pointer for right list
+            logger.debug("[Temporal BEFORE] Starting merge. Left size={}, Right size={}", leftTemporalList.size(), rightTemporalList.size());
+            for (int i = 0; i < leftTemporalList.size(); i++) {
+                TemporalMatch left = leftTemporalList.get(i);
+                logger.debug("[Temporal BEFORE] Processing left[{}]: {}", i, left);
+                // Advance j until right date is strictly > left date
+                int initialJ = j;
+                while (j < rightTemporalList.size() && rightTemporalList.get(j).date().compareTo(left.date()) <= 0) {
+                    logger.debug("[Temporal BEFORE] Advancing right pointer j. right[{}]: {} <= left[{}]: {}. j++", j, rightTemporalList.get(j).date(), i, left.date());
+                    j++;
+                }
+                if(j > initialJ) {
+                    logger.debug("[Temporal BEFORE] Advanced right pointer j from {} to {}", initialJ, j);
+                }
+                // All remaining right elements (from index j onwards) satisfy the condition
+                logger.debug("[Temporal BEFORE] Adding pairs for left[{}] starting from right index {}. Loop k from {} to {}", i, j, j, rightTemporalList.size());
+                for (int k = j; k < rightTemporalList.size(); k++) {
+                    TemporalMatch right = rightTemporalList.get(k);
+                    resultList.add(new JoinedMatch(left.detail(), right.detail()));
+                    logger.debug("[Temporal BEFORE] Added match: Left[{}]({}) < Right[{}]({})", i, left.date(), k, right.date());
+                }
+            }
+        } else { // AFTER: Left Date > Right Date
+            int i = 0; // Pointer for left list
+            logger.debug("[Temporal AFTER] Starting merge. Left size={}, Right size={}", leftTemporalList.size(), rightTemporalList.size());
+            for (int j = 0; j < rightTemporalList.size(); j++) {
+                TemporalMatch right = rightTemporalList.get(j);
+                logger.debug("[Temporal AFTER] Processing right[{}]: {}", j, right);
+                // Advance i until left date is strictly > right date
+                 int initialI = i;
+                while (i < leftTemporalList.size() && leftTemporalList.get(i).date().compareTo(right.date()) <= 0) {
+                     logger.debug("[Temporal AFTER] Advancing left pointer i. left[{}]: {} <= right[{}]: {}. i++", i, leftTemporalList.get(i).date(), j, right.date());
+                    i++;
+                }
+                if (i > initialI) {
+                    logger.debug("[Temporal AFTER] Advanced left pointer i from {} to {}", initialI, i);
+                }
+                // All remaining left elements (from index i onwards) satisfy the condition
+                logger.debug("[Temporal AFTER] Adding pairs for right[{}] starting from left index {}. Loop k from {} to {}", j, i, i, leftTemporalList.size());
+                for (int k = i; k < leftTemporalList.size(); k++) {
+                     TemporalMatch left = leftTemporalList.get(k);
+                     resultList.add(new JoinedMatch(left.detail(), right.detail()));
+                     logger.debug("[Temporal AFTER] Added match: Left[{}]({}) > Right[{}]({})", k, left.date(), j, right.date());
+                }
+            }
+        }
+
+        logger.debug("Temporal sort-merge join finished for predicate {}. Produced {} pairs.", predicate, resultList.size());
+        return resultList;
     }
 } 

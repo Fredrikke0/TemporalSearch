@@ -42,6 +42,8 @@ TIMESTAMP: 'TIMESTAMP';
 CONTAINS: 'CONTAINS';
 CONTAINED_BY: 'CONTAINED_BY';
 INTERSECT: 'INTERSECT';
+BEFORE: 'BEFORE';
+AFTER: 'AFTER';
 RADIUS: 'RADIUS';
 AND: 'AND';
 OR: 'OR';
@@ -59,6 +61,8 @@ ON: 'ON';
 INNER: 'INNER';
 LEFT: 'LEFT';
 RIGHT: 'RIGHT';
+BEGIN: 'BEGIN';
+END: 'END';
 
 // NER Entity Type Keywords (Must match VALID_NER_TYPES in validator, case-insensitive)
 PERSON: 'PERSON';
@@ -145,7 +149,7 @@ snippetExpression
     ;
 
 qualifiedStructuralColumn
-    : alias=IDENTIFIER DOT field=(TITLE | TIMESTAMP | DOCUMENT_ID | SENTENCE_ID)
+    : alias=IDENTIFIER DOT field=(TITLE | TIMESTAMP | DOCUMENT_ID | SENTENCE_ID | BEGIN | END)
     ;
 
 countExpression
@@ -201,6 +205,8 @@ dateOperator
     | CONTAINED_BY
     | INTERSECT
     | PROXIMITY
+    | BEFORE
+    | AFTER
     ;
 
 dateValue
@@ -345,6 +351,8 @@ temporalOp
     | CONTAINED_BY
     | INTERSECT
     | PROXIMITY
+    | BEFORE
+    | AFTER
     ;
 
 posExpression

@@ -43,9 +43,27 @@
     <!-- Suppress verbose Stanford CoreNLP initialization messages -->
     <logger name="edu.stanford.nlp" level="WARN"/>
 
-    <!-- Root logger -->
+    <!-- Set root logger level to INFO -->
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
+        <appender-ref ref="METRICS"/>
     </root>
+
+    <!-- Keep specific loggers if needed, otherwise INFO will apply -->
+    <logger name="com.example.performance" level="INFO" additivity="false">
+        <appender-ref ref="PERFORMANCE"/>
+    </logger>
+    <logger name="com.example.index" level="INFO" additivity="false">
+         <appender-ref ref="CONSOLE"/> 
+         <appender-ref ref="FILE"/> 
+    </logger>
+    <logger name="com.example.query" level="INFO" additivity="false"> 
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </logger>
+    <logger name="com.example.core" level="INFO" additivity="false"> 
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </logger>
 </configuration>

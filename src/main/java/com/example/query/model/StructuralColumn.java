@@ -34,6 +34,16 @@ public class StructuralColumn implements SelectColumn {
         return alias + "." + fieldName;
     }
 
+    // --- Add Getters --- 
+    public String getAlias() {
+        return alias;
+    }
+
+    public String getFieldName() {
+        return fieldName;
+    }
+    // --- End Getters --- 
+
     @Override
     public Column<?> createColumn() {
         // Determine column type based on field name
@@ -42,6 +52,8 @@ public class StructuralColumn implements SelectColumn {
             case "TIMESTAMP" -> DateColumn.create(getColumnName());
             case "DOCUMENT_ID" -> IntColumn.create(getColumnName());
             case "SENTENCE_ID" -> IntColumn.create(getColumnName());
+            case "BEGIN" -> IntColumn.create(getColumnName());
+            case "END" -> IntColumn.create(getColumnName());
             default -> {
                  logger.warn("Unknown structural field '{}' for alias '{}'. Defaulting to StringColumn.", fieldName, alias);
                  yield StringColumn.create(getColumnName()); // Default to String
@@ -56,79 +68,16 @@ public class StructuralColumn implements SelectColumn {
 
     @Override
     public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, String source, Map<String, IndexAccessInterface> indexes, Query query) {
-        if (detailsForUnit == null || detailsForUnit.isEmpty()) {
-            logger.warn("StructuralColumn populateColumn received empty details for alias {}. Row: {}", alias, rowIndex);
+        if (detailsForUnit == null || detailsForUnit.isEmpty() || !(detailsForUnit.get(0) instanceof MatchDetail)) {
+            logger.warn("StructuralColumn populateColumn received null, empty, or non-MatchDetail list for alias {}. Row: {}. Setting missing.", alias, rowIndex);
             table.column(getColumnName()).setMissing(rowIndex);
             return;
         }
 
-        MatchDetail relevantDetail = null;
-        boolean isJoinContext = detailsForUnit.size() == 2 && 
-                                detailsForUnit.get(0) instanceof MatchDetail && 
-                                detailsForUnit.get(1) instanceof MatchDetail;
-
-        if (isJoinContext) {
-            // --- Handle JOIN context --- 
-            MatchDetail leftDetail = (MatchDetail) detailsForUnit.get(0);
-            MatchDetail rightDetail = (MatchDetail) detailsForUnit.get(1);
-
-            Optional<String> mainAliasOpt = query.mainAlias();
-            Optional<String> subqueryAliasOpt = (query.subqueries() != null && !query.subqueries().isEmpty())
-                                                ? Optional.of(query.subqueries().get(0).alias())
-                                                : Optional.empty();
-            
-            // Assumption: leftDetail corresponds to the main query alias, rightDetail to the subquery alias.
-            if (mainAliasOpt.isPresent() && this.alias.equals(mainAliasOpt.get())) {
-                relevantDetail = leftDetail;
-                logger.trace("StructuralColumn [Join]: Alias '{}' matches main query alias '{}'. Using left detail.", this.alias, mainAliasOpt.get());
-            } else if (subqueryAliasOpt.isPresent() && this.alias.equals(subqueryAliasOpt.get())) {
-                relevantDetail = rightDetail;
-                logger.trace("StructuralColumn [Join]: Alias '{}' matches subquery alias '{}'. Using right detail.", this.alias, subqueryAliasOpt.get());
-            } else {
-                 logger.warn("StructuralColumn [Join]: Alias '{}' does not match main alias ('{}') or subquery alias ('{}'). Cannot determine relevant detail for row {}.",
-                          this.alias, mainAliasOpt.orElse("N/A"), subqueryAliasOpt.orElse("N/A"), rowIndex);
-            }
-
-        } else if (detailsForUnit.get(0) instanceof MatchDetail) {
-            // --- Handle NON-JOIN context --- 
-            // All details in the list belong to the same document/sentence unit.
-            // Use the first detail to get the necessary context (like document ID).
-            // We still need to ensure this StructuralColumn's alias matches the query's main alias.
-            relevantDetail = (MatchDetail) detailsForUnit.get(0); 
-            Optional<String> mainAliasOpt = query.mainAlias();
-
-            // Validate alias match even in non-join context if main alias exists
-            if (mainAliasOpt.isPresent() && !this.alias.equals(mainAliasOpt.get())) {
-                 logger.warn("StructuralColumn [Non-Join]: Column alias '{}' does not match query main alias '{}'. Row: {}",
-                          this.alias, mainAliasOpt.get(), rowIndex);
-                 relevantDetail = null; // Set relevantDetail to null if aliases don't match
-            } else if (mainAliasOpt.isEmpty() && !this.alias.equals("$main")) {
-                // If no main alias explicitly defined in query, parser defaults to "$main"
-                // Check if this column's alias is the default "$main"
-                logger.trace("StructuralColumn [Non-Join]: No main alias in query, checking against default '$main' for column alias '{}'.", this.alias);
-                if (!this.alias.equals("$main")) {
-                     logger.warn("StructuralColumn [Non-Join]: Column alias '{}' does not match implicit main alias '$main'. Row: {}",
-                              this.alias, rowIndex);
-                     relevantDetail = null;
-                }
-            }
-             // If aliases match (or no main alias to check against the default), relevantDetail remains set.
-            logger.trace("StructuralColumn [Non-Join]: Using first detail for alias '{}'. Row: {}", this.alias, rowIndex);
-
-        } else {
-            // --- Handle unexpected context --- 
-             logger.warn("StructuralColumn populateColumn received unexpected detailsForUnit content type: {} for alias {}. Row: {}", 
-                        detailsForUnit.get(0).getClass().getName(), alias, rowIndex);
-             table.column(getColumnName()).setMissing(rowIndex);
-             return;
-        }
-        
-
-        if (relevantDetail == null) {
-            logger.trace("No relevant detail could be determined for row {} in StructuralColumn {}.{}. Setting missing.", rowIndex, alias, fieldName);
-            table.column(getColumnName()).setMissing(rowIndex);
-            return;
-        }
+        // Assume the single detail passed IS the relevant one.
+        // The caller (TableResultService) is responsible for selecting the correct detail (left/right).
+        MatchDetail relevantDetail = (MatchDetail) detailsForUnit.get(0);
+        logger.trace("Populating StructuralColumn {}.{} at row {} using provided detail", alias, fieldName, rowIndex);
 
         // --- Populate based on relevantDetail --- 
         Column<?> column = table.column(getColumnName());
@@ -137,7 +86,6 @@ public class StructuralColumn implements SelectColumn {
             switch (fieldName.toUpperCase()) {
                 case "TITLE":
                     if (column instanceof StringColumn strCol) {
-                        // Use SqliteAccessor to get the title for the correct document ID
                         String title = SqliteAccessor.getInstance().getMetadata(source, relevantDetail.getDocumentId(), "title");
                         strCol.set(rowIndex, title != null ? title : "");
                         logger.trace("Set TITLE '{}' for {}.{} at row {}", title, alias, fieldName, rowIndex);
@@ -148,7 +96,6 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "TIMESTAMP":
                      if (column instanceof DateColumn dateCol) {
-                         // Get timestamp from Position object of the correct detail
                          dateCol.set(rowIndex, relevantDetail.position().getTimestamp());
                          logger.trace("Set TIMESTAMP '{}' for {}.{} at row {}", relevantDetail.position().getTimestamp(), alias, fieldName, rowIndex);
                      } else {
@@ -173,6 +120,24 @@ public class StructuralColumn implements SelectColumn {
                          logger.error("Expected IntColumn for SENTENCE_ID but got {} for column {}", column.type(), getColumnName());
                          column.setMissing(rowIndex);
                      }
+                    break;
+                case "BEGIN":
+                    if (column instanceof IntColumn intCol) {
+                        intCol.set(rowIndex, relevantDetail.position().getBeginPosition());
+                        logger.trace("Set BEGIN '{}' for {}.{} at row {}", relevantDetail.position().getBeginPosition(), alias, fieldName, rowIndex);
+                    } else {
+                         logger.error("Expected IntColumn for BEGIN but got {} for column {}", column.type(), getColumnName());
+                         column.setMissing(rowIndex);
+                    }
+                    break;
+                case "END":
+                    if (column instanceof IntColumn intCol) {
+                        intCol.set(rowIndex, relevantDetail.position().getEndPosition());
+                        logger.trace("Set END '{}' for {}.{} at row {}", relevantDetail.position().getEndPosition(), alias, fieldName, rowIndex);
+                    } else {
+                         logger.error("Expected IntColumn for END but got {} for column {}", column.type(), getColumnName());
+                         column.setMissing(rowIndex);
+                    }
                     break;
                 default:
                     logger.warn("Unhandled structural field '{}' in populateColumn. Setting missing for column {}.", fieldName, getColumnName());
