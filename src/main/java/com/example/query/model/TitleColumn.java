@@ -32,7 +32,9 @@ public class TitleColumn implements SelectColumn {
     
     @Override
     public Column<?> createColumn() {
-        return StringColumn.create(getColumnName());
+        Column<?> col = StringColumn.create(getColumnName());
+        logger.debug("TitleColumn creating column named '{}' of type {}", getColumnName(), col.type());
+        return col;
     }
     
     @Override

@@ -114,43 +114,32 @@ public class TableResultService {
              // Ensure default columns if SELECT * or no SELECT clause
             if (selectColumns == null || selectColumns.isEmpty() || selectColumns.stream().anyMatch(sc -> "*".equals(sc.getColumnName()))) {
                 logger.debug("No specific columns selected or * found, using default columns.");
-                selectColumns = createDefaultSelectColumns(result); // Create default based on QueryResult content
+                selectColumns = createDefaultSelectColumns(query, result); 
             }
 
-            // Create table structure based on select columns
-            for (SelectColumn selectColumn : selectColumns) {
-                columns.add(selectColumn.createColumn());
+            // If, after default generation, there are still no columns to select, return an empty table.
+            if (selectColumns.isEmpty()) {
+                logger.warn("Query resulted in matches, but no columns were selected (explicitly or by default). Returning empty table.");
+                return Table.create("EmptyQueryResults_NoColumns");
             }
-            
-            // Always include document_id and sentence_id based on join status and granularity
-            // Use IntColumn for IDs
-            if (granularity == Query.Granularity.SENTENCE) {
-                if (columns.stream().noneMatch(c -> c.name().equalsIgnoreCase(LEFT_SENT_ID_COL))) {
-                     columns.add(2, IntColumn.create(LEFT_SENT_ID_COL)); // Add after doc IDs
-                }
-                if (columns.stream().noneMatch(c -> c.name().equalsIgnoreCase(RIGHT_SENT_ID_COL))) {
-                     columns.add(3, IntColumn.create(RIGHT_SENT_ID_COL)); // Add after left sentence ID
-                }
-            } else { // Not a JOIN query
-                 if (columns.stream().noneMatch(c -> c.name().equalsIgnoreCase(DEFAULT_DOC_ID_COL))) {
-                     columns.add(0, IntColumn.create(DEFAULT_DOC_ID_COL)); // Add at the beginning
-                 }
-                 if (granularity == Query.Granularity.SENTENCE && columns.stream().noneMatch(c -> c.name().equalsIgnoreCase(DEFAULT_SENT_ID_COL))) {
-                     columns.add(1, IntColumn.create(DEFAULT_SENT_ID_COL)); // Add after doc ID
-                 }
-            }
-            
+
             // Create the table
             Table table = Table.create("QueryResults");
             Map<String, Column<?>> columnMap = new HashMap<>();
-            for (Column<?> column : columns) {
-                if (!table.columnNames().contains(column.name())) { // Avoid adding duplicates if defaults overlap
-                     table.addColumns(column);
-                     columnMap.put(column.name(), column); // Store for easy access
-                }
-            }
             
-            // Validate order by columns
+            // Create and add columns directly to the table
+            for (SelectColumn selectColumn : selectColumns) {
+                 if (!table.columnNames().contains(selectColumn.getColumnName())) {
+                      Column<?> newColumn = selectColumn.createColumn();
+                      logger.debug("Created column '{}' of type {}. Adding to table.", newColumn.name(), newColumn.type());
+                      table.addColumns(newColumn); // Add directly
+                      columnMap.put(newColumn.name(), newColumn); // Store for easy access during population
+                 } else {
+                     logger.warn("Duplicate column name detected: {}. Skipping addition.", selectColumn.getColumnName());
+                 }
+             }
+             
+             // Validate order by columns
             for (String orderColumn : query.orderBy()) {
                 String columnName = orderColumn.startsWith("-") ? orderColumn.substring(1) : orderColumn;
                 if (!table.columnNames().contains(columnName)) {
@@ -204,24 +193,6 @@ public class TableResultService {
                         selectColumn.populateColumn(table, rowIndex, detailsForUnit, source, indexes, query);
                     } else {
                         logger.warn("Column '{}' defined in SelectColumn but not found in table structure?", selectColumn.getColumnName());
-                    }
-                }
-                
-                // Set document_id and sentence_id (if columns exist) based on join status
-                if (granularity == Query.Granularity.SENTENCE) {
-                    Column<?> leftSentIdCol = columnMap.get(LEFT_SENT_ID_COL);
-                    if (leftSentIdCol instanceof IntColumn ic) { ic.set(rowIndex, representativeDetail.getSentenceId()); }
-                    
-                    Column<?> rightSentIdCol = columnMap.get(RIGHT_SENT_ID_COL);
-                    if (rightSentIdCol instanceof IntColumn ic) { ic.set(rowIndex, representativeDetail.getSentenceId()); }
-                } else { // Not a JOIN query
-                    // Populate default ID columns
-                    Column<?> docIdCol = columnMap.get(DEFAULT_DOC_ID_COL);
-                    if (docIdCol instanceof IntColumn ic) { ic.set(rowIndex, representativeDetail.getDocumentId()); }
-                    
-                    if (granularity == Query.Granularity.SENTENCE) {
-                         Column<?> sentIdCol = columnMap.get(DEFAULT_SENT_ID_COL);
-                         if (sentIdCol instanceof IntColumn ic) { ic.set(rowIndex, representativeDetail.getSentenceId()); }
                     }
                 }
             }
@@ -362,52 +333,17 @@ public class TableResultService {
      * Creates default SelectColumn list based on QueryResult content.
      * Includes document_id, sentence_id (if applicable), and any variables found.
      */
-     private List<SelectColumn> createDefaultSelectColumns(QueryResult result) {
+     private List<SelectColumn> createDefaultSelectColumns(Query query, QueryResult result) {
          List<SelectColumn> defaultColumns = new ArrayList<>();
 
-         // Always add document_id
-         defaultColumns.add(new com.example.query.model.SelectColumn() {
-             @Override
-             public String getColumnName() { return "document_id"; }
-             @Override
-             public tech.tablesaw.columns.Column<?> createColumn() { return tech.tablesaw.api.IntColumn.create("document_id"); }
-             @Override
-             public void populateColumn(tech.tablesaw.api.Table table, int rowIndex, java.util.List<?> detailsForUnit, String source, java.util.Map<String, com.example.core.IndexAccessInterface> indexes) {
-                 if (detailsForUnit != null && !detailsForUnit.isEmpty()) {
-                     com.example.query.binding.MatchDetail detail = (com.example.query.binding.MatchDetail) detailsForUnit.get(0);
-                     ((tech.tablesaw.api.IntColumn) table.column("document_id")).set(rowIndex, detail.getDocumentId());
-                 }
-             }
-         });
-
-         // Add sentence_id if any detail has a valid sentence id (>=0)
-         boolean hasSentence = result.getAllDetails().stream().anyMatch(d -> d.getSentenceId() >= 0);
-         if (hasSentence) {
-             defaultColumns.add(new com.example.query.model.SelectColumn() {
-                 @Override
-                 public String getColumnName() { return "sentence_id"; }
-                 @Override
-                 public tech.tablesaw.columns.Column<?> createColumn() { return tech.tablesaw.api.IntColumn.create("sentence_id"); }
-                 @Override
-                 public void populateColumn(tech.tablesaw.api.Table table, int rowIndex, java.util.List<?> detailsForUnit, String source, java.util.Map<String, com.example.core.IndexAccessInterface> indexes) {
-                     if (detailsForUnit != null && !detailsForUnit.isEmpty()) {
-                         com.example.query.binding.MatchDetail detail = (com.example.query.binding.MatchDetail) detailsForUnit.get(0);
-                         ((tech.tablesaw.api.IntColumn) table.column("sentence_id")).set(rowIndex, detail.getSentenceId());
-                     }
-                 }
-             });
-         }
-
-         // Add variable columns
-         Set<String> variableNames = result.getAllDetails().stream()
-             .filter(Objects::nonNull)
-             .map(com.example.query.binding.MatchDetail::variableName)
-             .filter(Optional::isPresent)
-             .map(Optional::get)
-             .collect(Collectors.toSet());
+         // Add variable columns based on the query's variable registry
+         Set<String> variableNames = query.variableRegistry().getAllVariableNames(); // Get all defined vars
 
          for (String varName : variableNames) {
-              defaultColumns.add(new VariableColumn(varName));
+              // Only add variables from the main scope ($main) that are actually produced
+              if (varName.startsWith(query.mainAlias().orElse("$main") + ".") && query.variableRegistry().isProduced(varName)) {
+                  defaultColumns.add(new VariableColumn(varName));
+              }
          }
          logger.debug("Created default select columns: {}", defaultColumns.stream().map(SelectColumn::getColumnName).toList());
          return defaultColumns;
@@ -436,42 +372,25 @@ public class TableResultService {
 
         try {
             List<SelectColumn> selectColumns = query.selectColumns();
-            boolean useDefaultIdColumnsOnly = false;
+            boolean isSelectStarOrEmpty = selectColumns == null || selectColumns.isEmpty() || selectColumns.stream().anyMatch(sc -> "*".equals(sc.getColumnName()));
 
-            // Check if we should use default ID columns only
-            if (selectColumns == null || selectColumns.isEmpty() || selectColumns.stream().anyMatch(sc -> "*".equals(sc.getColumnName()))) {
-                logger.debug("No specific columns selected or * found for JOIN. Defaulting to ID columns only.");
-                useDefaultIdColumnsOnly = true;
-                selectColumns = Collections.emptyList(); // Clear selectColumns if defaulting
+            // Check if we should use default columns (SELECT * or empty)
+            if (isSelectStarOrEmpty) {
+                logger.debug("No specific columns selected or * found for JOIN. Defaulting to all variables and structural columns.");
+                // Create default columns for JOIN
+                selectColumns = createDefaultJoinSelectColumns(query); 
             }
 
             Table table = Table.create("JoinQueryResults");
             Map<String, Column<?>> columnMap = new HashMap<>();
 
-            // Always add mandatory ID columns first, regardless of SELECT clause
-            IntColumn leftDocIdCol = IntColumn.create(LEFT_DOC_ID_COL);
-            IntColumn rightDocIdCol = IntColumn.create(RIGHT_DOC_ID_COL);
-            table.addColumns(leftDocIdCol, rightDocIdCol);
-            columnMap.put(LEFT_DOC_ID_COL, leftDocIdCol);
-            columnMap.put(RIGHT_DOC_ID_COL, rightDocIdCol);
-
-            if (query.granularity() == Query.Granularity.SENTENCE) {
-                IntColumn leftSentIdCol = IntColumn.create(LEFT_SENT_ID_COL);
-                IntColumn rightSentIdCol = IntColumn.create(RIGHT_SENT_ID_COL);
-                table.addColumns(leftSentIdCol, rightSentIdCol);
-                columnMap.put(LEFT_SENT_ID_COL, leftSentIdCol);
-                columnMap.put(RIGHT_SENT_ID_COL, rightSentIdCol);
-            }
-
-            // Create and add columns based ONLY on the *explicit* SELECT clause (if not defaulting)
-            if (!useDefaultIdColumnsOnly) {
-                for (SelectColumn selectColumn : selectColumns) {
-                    // Avoid re-adding ID columns if explicitly selected (though unlikely needed now)
-                    if (!columnMap.containsKey(selectColumn.getColumnName().toLowerCase())) {
-                        Column<?> tableCol = selectColumn.createColumn();
-                        table.addColumns(tableCol);
-                        columnMap.put(tableCol.name(), tableCol);
-                    }
+            // Create and add columns based on the *effective* SELECT clause (explicit or default)
+            for (SelectColumn selectColumn : selectColumns) {
+                // Avoid re-adding columns if somehow duplicated (shouldn't happen with proper defaults)
+                if (!table.columnNames().contains(selectColumn.getColumnName())) {
+                    Column<?> tableCol = selectColumn.createColumn();
+                    table.addColumns(tableCol);
+                    columnMap.put(tableCol.name(), tableCol);
                 }
             }
 
@@ -483,44 +402,33 @@ public class TableResultService {
                 int rowIndex = table.rowCount();
                 table.appendRow(); // Append empty row first
 
-                // Always populate mandatory ID columns
-                leftDocIdCol.set(rowIndex, joinedMatch.left().getDocumentId());
-                rightDocIdCol.set(rowIndex, joinedMatch.right().getDocumentId());
-                if (query.granularity() == Query.Granularity.SENTENCE) {
-                    ((IntColumn) columnMap.get(LEFT_SENT_ID_COL)).set(rowIndex, joinedMatch.left().getSentenceId()); 
-                    ((IntColumn) columnMap.get(RIGHT_SENT_ID_COL)).set(rowIndex, joinedMatch.right().getSentenceId());
-                }
+                // Populate columns based ONLY on the *effective* SELECT clause (explicit or default)
+                for (SelectColumn selectColumn : selectColumns) {
+                    Column<?> tableCol = columnMap.get(selectColumn.getColumnName());
+                    if (tableCol != null) {
+                        String qualifiedName = selectColumn.getColumnName(); 
+                        String alias = qualifiedName.contains(".") ? qualifiedName.substring(0, qualifiedName.indexOf(".")) : "";
+                        
+                        MatchDetail relevantDetail = null;
+                        if (alias.equals(query.mainAlias().orElse("$main"))) { 
+                            relevantDetail = joinedMatch.left();
+                        } else if (!query.subqueries().isEmpty() && alias.equals(query.subqueries().get(0).alias())) {
+                            relevantDetail = joinedMatch.right();
+                        } else if (query.subqueries().isEmpty() && !qualifiedName.contains(".")) {
+                            relevantDetail = joinedMatch.left(); 
+                        } else {
+                            logger.warn("Could not determine alias match for column: {}", qualifiedName);
+                            // relevantDetail remains null
+                        }
 
-                // Populate columns based ONLY on the *explicit* SELECT clause (if not defaulting)
-                if (!useDefaultIdColumnsOnly) {
-                    for (SelectColumn selectColumn : selectColumns) {
-                        Column<?> tableCol = columnMap.get(selectColumn.getColumnName());
-                        if (tableCol != null) {
-                           // ... (same logic as before to determine relevantDetail and call populateColumn) ...
-                            String qualifiedName = selectColumn.getColumnName(); 
-                            String alias = qualifiedName.contains(".") ? qualifiedName.substring(0, qualifiedName.indexOf(".")) : "";
-                            
-                            MatchDetail relevantDetail = null;
-                            if (alias.equals(query.mainAlias().orElse("$main"))) { 
-                                relevantDetail = joinedMatch.left();
-                            } else if (!query.subqueries().isEmpty() && alias.equals(query.subqueries().get(0).alias())) {
-                                relevantDetail = joinedMatch.right();
-                            } else if (query.subqueries().isEmpty() && !qualifiedName.contains(".")) {
-                                relevantDetail = joinedMatch.left(); 
-                            } else {
-                                logger.warn("Could not determine alias match for column: {}", qualifiedName);
-                                // relevantDetail remains null
-                            }
-
-                            if (relevantDetail != null) {
-                                // Delegate population to the SelectColumn implementation
-                                List<MatchDetail> detailList = List.of(relevantDetail);
-                                selectColumn.populateColumn(table, rowIndex, detailList, source, indexes, query);
-                            } else {
-                                // Handle cases where the alias didn't match / no relevant detail
-                                logger.trace("No relevant detail found for column {} at row {}. Setting missing.", qualifiedName, rowIndex);
-                                tableCol.setMissing(rowIndex);
-                            }
+                        if (relevantDetail != null) {
+                            // Delegate population to the SelectColumn implementation
+                            List<MatchDetail> detailList = List.of(relevantDetail);
+                            selectColumn.populateColumn(table, rowIndex, detailList, source, indexes, query);
+                        } else {
+                            // Handle cases where the alias didn't match / no relevant detail
+                            logger.trace("No relevant detail found for column {} at row {}. Setting missing.", qualifiedName, rowIndex);
+                            tableCol.setMissing(rowIndex);
                         }
                     }
                 }
@@ -533,5 +441,43 @@ public class TableResultService {
             logger.error("Error generating table for join results", e);
             throw new ResultGenerationException("Failed to generate table for join results: " + e.getMessage(), e, "table_result_service", ResultGenerationException.ErrorType.INTERNAL_ERROR);
         }
+    }
+
+    // --- Helper method to create default select columns for JOIN ---
+    private List<SelectColumn> createDefaultJoinSelectColumns(Query query) {
+        List<SelectColumn> defaultColumns = new ArrayList<>();
+        String mainAlias = query.mainAlias().orElse("$main");
+        
+        // 1. Add all produced variables from the main query registry
+        query.variableRegistry().getAllVariableNames().stream() // Get all defined vars
+            .filter(varName -> varName.startsWith(mainAlias + ".")) // Ensure it belongs to main scope
+            .filter(varName -> query.variableRegistry().isProduced(varName)) // Ensure it is produced
+            .map(VariableColumn::new)
+            .forEach(defaultColumns::add);
+
+        // 2. Add default structural columns for the main query
+        defaultColumns.add(new com.example.query.model.StructuralColumn(mainAlias, "DOCUMENT_ID"));
+        defaultColumns.add(new com.example.query.model.StructuralColumn(mainAlias, "SENTENCE_ID")); // Add even if doc granularity, populate handles it
+        defaultColumns.add(new com.example.query.model.StructuralColumn(mainAlias, "TIMESTAMP"));
+        // Add BEGIN/END if needed by default? Probably not.
+
+        // 3. Add variables and structural columns for each subquery
+        for (com.example.query.model.SubquerySpec subquerySpec : query.subqueries()) {
+            String subAlias = subquerySpec.alias();
+            // Add produced variables from subquery registry
+            subquerySpec.subquery().variableRegistry().getAllVariableNames().stream() // Get all defined vars
+                 // No need to filter by alias here, subquery registry already contains qualified names like 'subAlias.var'
+                 .filter(varName -> subquerySpec.subquery().variableRegistry().isProduced(varName)) // Ensure it is produced
+                 .map(VariableColumn::new)
+                 .forEach(defaultColumns::add);
+
+            // Add default structural columns for the subquery
+            defaultColumns.add(new com.example.query.model.StructuralColumn(subAlias, "DOCUMENT_ID"));
+            defaultColumns.add(new com.example.query.model.StructuralColumn(subAlias, "SENTENCE_ID"));
+            defaultColumns.add(new com.example.query.model.StructuralColumn(subAlias, "TIMESTAMP"));
+        }
+
+        logger.debug("Created default JOIN select columns: {}", defaultColumns.stream().map(SelectColumn::getColumnName).toList());
+        return defaultColumns;
     }
 } 

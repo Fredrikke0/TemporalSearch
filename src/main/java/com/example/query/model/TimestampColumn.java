@@ -33,7 +33,9 @@ public class TimestampColumn implements SelectColumn {
     
     @Override
     public Column<?> createColumn() {
-        return StringColumn.create(getColumnName());
+        Column<?> col = StringColumn.create(getColumnName());
+        logger.debug("TimestampColumn creating column named '{}' of type {}", getColumnName(), col.type());
+        return col;
     }
     
     @Override

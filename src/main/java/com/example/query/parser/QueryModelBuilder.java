@@ -153,22 +153,33 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     // Helper method to dispatch select column visits with qualification context
     // Note: We now visit qualifiedIdentifier directly, so no specific visitQualifiedColumn needed here.
     private Object visitSelectColumn(QueryLangParser.SelectColumnContext ctx, boolean qualificationRequired) {
-        if (ctx instanceof QueryLangParser.VariableColumnContext vcc) {
-            return visitVariableColumn(vcc, qualificationRequired);
-        } else if (ctx.getChild(0) instanceof QueryLangParser.QualifiedIdentifierContext qic) { 
-            // If the child is a QualifiedIdentifierContext, visit it
-            return visitQualifiedIdentifier(qic); 
+        // PRIORITIZE specific structural types FIRST using instanceof
+        if (ctx instanceof QueryLangParser.UnqualifiedTitleColumnContext utcc) {
+            return visitUnqualifiedTitleColumn(utcc);
+        } else if (ctx instanceof QueryLangParser.UnqualifiedTimestampColumnContext utsc) {
+            return visitUnqualifiedTimestampColumn(utsc);
+        } else if (ctx instanceof QueryLangParser.UnqualifiedDocumentIdColumnContext udicc) {
+            return visitUnqualifiedDocumentIdColumn(udicc);
+        } else if (ctx instanceof QueryLangParser.UnqualifiedSentenceIdColumnContext usicc) {
+            return visitUnqualifiedSentenceIdColumn(usicc);
+        } 
+        // Then handle other specific types
+        else if (ctx instanceof QueryLangParser.QualifiedIdentifierColumnContext qicc) {
+            return visitQualifiedIdentifier(qicc.qualifiedIdentifier());
         } else if (ctx instanceof QueryLangParser.SnippetColumnContext scc) { 
             return visitSnippetColumn(scc, qualificationRequired);
         } else if (ctx instanceof QueryLangParser.StructColumnContext scc) {
             return visitStructColumn(scc);
-        } else if (ctx instanceof QueryLangParser.UnqualifiedTitleColumnContext utcc) {
-            return visitUnqualifiedTitleColumn(utcc);
-        } else if (ctx instanceof QueryLangParser.UnqualifiedTimestampColumnContext utsc) {
-            return visitUnqualifiedTimestampColumn(utsc);
         } else if (ctx instanceof QueryLangParser.CountColumnContext ccc) {
-            return visitCountColumn(ccc, qualificationRequired); // Pass flag for COUNT(UNIQUE var)
-        } else {
+            return visitCountColumn(ccc, qualificationRequired);
+        } 
+        // THEN handle the generic VariableColumn as a fallback
+        else if (ctx instanceof QueryLangParser.VariableColumnContext vcc) {
+            logger.trace("Dispatching to visitVariableColumn for: {}", vcc.getText());
+            return visitVariableColumn(vcc, qualificationRequired);
+        } 
+        // If none of the above match
+        else {
             throw new IllegalStateException("Unknown SelectColumnContext type: " + ctx.getClass().getName());
         }
     }
@@ -193,7 +204,27 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     // Overload visitVariableColumn
     public Object visitVariableColumn(QueryLangParser.VariableColumnContext ctx, boolean qualificationRequired) {
-        String variableName = (String) visit(ctx.variable()); // Gets plain name
+        String variableName = ctx.variable().getText(); // FIX: Use ctx here, not vCtx
+        logger.debug("Visiting VariableColumnContext for: {}", variableName);
+
+        // *** CORRECTION LOGIC ***
+        // Check if a keyword was mistakenly parsed as a variable.
+        // If so, create the correct StructuralColumn instead.
+        String upperVarName = variableName.toUpperCase();
+        if (Set.of("DOCUMENT_ID", "SENTENCE_ID", "TIMESTAMP", "TITLE").contains(upperVarName)) {
+             logger.warn("Keyword '{}' was parsed as a variable. Correcting to StructuralColumn.", variableName);
+             if (qualificationRequired) {
+                 // This case shouldn't happen if grammar/dispatch is correct, but handle defensively.
+                 throw new IllegalStateException(
+                     String.format("Unqualified structural keyword '%s' used where qualification is required. Use 'alias.%s'.",
+                                   variableName, variableName));
+             }
+             // Create the correct StructuralColumn using the default alias
+             return new StructuralColumn(DEFAULT_MAIN_ALIAS, upperVarName); 
+        }
+        // *** END CORRECTION LOGIC ***
+
+        // If it wasn't a keyword, proceed as a normal variable
         if (qualificationRequired) {
             throw new IllegalStateException(
                 String.format("Unqualified variable '%s' used in SELECT where qualification is required (due to ALIAS or JOIN). Use 'alias.%s'.",
@@ -203,6 +234,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
         // If qualification is not required, implicitly qualify with default alias
         String qualifiedName = DEFAULT_MAIN_ALIAS + "." + variableName;
+        logger.debug("Creating VariableColumn for implicitly qualified variable: {}", qualifiedName);
         return new VariableColumn(qualifiedName);
     }
     
@@ -236,6 +268,19 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     // Handle standalone TIMESTAMP (implicitly $main.TIMESTAMP)
     public Object visitUnqualifiedTimestampColumn(QueryLangParser.UnqualifiedTimestampColumnContext ctx) {
         return new com.example.query.model.StructuralColumn(DEFAULT_MAIN_ALIAS, "TIMESTAMP");
+    }
+
+    // Handle standalone DOCUMENT_ID (implicitly $main.DOCUMENT_ID)
+    public Object visitUnqualifiedDocumentIdColumn(QueryLangParser.UnqualifiedDocumentIdColumnContext ctx) {
+        // Previously was creating VariableColumn incorrectly? Let's ensure it's Structural.
+        logger.debug("Visiting UnqualifiedDocumentIdColumn. Creating StructuralColumn.");
+        return new StructuralColumn(DEFAULT_MAIN_ALIAS, "DOCUMENT_ID");
+    }
+
+    // Handle standalone SENTENCE_ID (implicitly $main.SENTENCE_ID)
+    public Object visitUnqualifiedSentenceIdColumn(QueryLangParser.UnqualifiedSentenceIdColumnContext ctx) {
+        logger.debug("Visiting UnqualifiedSentenceIdColumn. Creating StructuralColumn.");
+        return new StructuralColumn(DEFAULT_MAIN_ALIAS, "SENTENCE_ID");
     }
 
     // Overload visitCountColumn

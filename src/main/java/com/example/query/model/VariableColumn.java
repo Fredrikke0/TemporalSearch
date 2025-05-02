@@ -56,7 +56,9 @@ public class VariableColumn implements SelectColumn {
     @Override
     public Column<?> createColumn() {
         // Use the qualified name for the Tablesaw column name to ensure uniqueness
-        return StringColumn.create(qualifiedVariableName);
+        Column<?> col = StringColumn.create(qualifiedVariableName);
+        logger.debug("VariableColumn creating column named '{}' of type {}", qualifiedVariableName, col.type());
+        return col;
     }
     
     @SuppressWarnings("unchecked")

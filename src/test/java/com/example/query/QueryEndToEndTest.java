@@ -74,6 +74,10 @@ public class QueryEndToEndTest {
         File indexBasePath = tempDir.resolve("testIndexes").toFile();
         indexBasePath.mkdirs();
         
+        // Ensure the 'source' subdirectory exists as expected by SqliteAccessor
+        File sourceIndexPath = tempDir.resolve("testIndexes/source").toFile();
+        sourceIndexPath.mkdirs();
+        
         // Initialize SqliteAccessor before creating indexes that might need it
         SqliteAccessor.initialize(indexBasePath.getAbsolutePath());
         
@@ -210,7 +214,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testSimpleContainsQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"apple\")";
+        String queryString = "SELECT t1.DOCUMENT_ID, t1.TITLE FROM source ALIAS t1 WHERE CONTAINS(\"apple\")";
         Query query = queryParser.parse(queryString);
 
         // Execute query
@@ -229,15 +233,15 @@ public class QueryEndToEndTest {
         assertNotNull(resultTable);
         assertEquals(2, resultTable.rowCount());
         // Check default columns (document_id)
-        assertTrue(resultTable.columnNames().contains("document_id")); // Use literal string
+        assertTrue(resultTable.columnNames().contains("t1.DOCUMENT_ID"));
         // Access as IntColumn and compare integer values
-        assertEquals(1, resultTable.intColumn("document_id").get(0)); 
-        assertEquals(2, resultTable.intColumn("document_id").get(1));
+        assertEquals(1, resultTable.intColumn("t1.DOCUMENT_ID").get(0)); 
+        assertEquals(2, resultTable.intColumn("t1.DOCUMENT_ID").get(1));
     }
     
-     @Test
+    @Test
     public void testContainsNoMatchQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"nonexistent\")";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE CONTAINS(\"nonexistent\")";
         Query query = queryParser.parse(queryString);
         
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
@@ -252,7 +256,7 @@ public class QueryEndToEndTest {
     
     @Test
     public void testContainsSingleQuote() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE CONTAINS('grape')";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE CONTAINS('grape')";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -260,12 +264,17 @@ public class QueryEndToEndTest {
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'grape'");
         assertEquals(1, result.getAllDetails().size());
         assertEquals(3, result.getAllDetails().get(0).getDocumentId());
+        
+        Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
+        assertEquals(1, resultTable.rowCount());
+        assertTrue(resultTable.columnNames().contains("$main.DOCUMENT_ID"));
+        assertEquals(3, resultTable.intColumn("$main.DOCUMENT_ID").get(0));
     }
 
     @Test
     public void testContainsBigramWithSpace() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Assumes index contains lemmatized "read\0monkey"
-        String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"read monkey\")";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE CONTAINS(\"read monkey\")";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -273,12 +282,17 @@ public class QueryEndToEndTest {
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'read monkey'");
         assertEquals(1, result.getAllDetails().size());
         assertEquals(3, result.getAllDetails().get(0).getDocumentId());
+        
+        Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
+        assertEquals(1, resultTable.rowCount());
+        assertTrue(resultTable.columnNames().contains("$main.DOCUMENT_ID"));
+        assertEquals(3, resultTable.intColumn("$main.DOCUMENT_ID").get(0));
     }
     
     @Test
     public void testContainsBigramWithComma() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Assumes index contains lemmatized "read\0monkey"
-        String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"read\", \"monkey\")";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE CONTAINS(\"read\", \"monkey\")";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -286,12 +300,17 @@ public class QueryEndToEndTest {
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'read, monkey'");
         assertEquals(1, result.getAllDetails().size());
         assertEquals(3, result.getAllDetails().get(0).getDocumentId());
+        
+        Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
+        assertEquals(1, resultTable.rowCount());
+        assertTrue(resultTable.columnNames().contains("$main.DOCUMENT_ID"));
+        assertEquals(3, resultTable.intColumn("$main.DOCUMENT_ID").get(0));
     }
     
     @Test
     public void testContainsTrigramWithSpace() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Assumes index contains lemmatized "the\0quick\0fox"
-        String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"the quick fox\")";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE CONTAINS(\"the quick fox\")";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -299,12 +318,17 @@ public class QueryEndToEndTest {
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'the quick fox'");
         assertEquals(1, result.getAllDetails().size());
         assertEquals(5, result.getAllDetails().get(0).getDocumentId());
+        
+        Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
+        assertEquals(1, resultTable.rowCount());
+        assertTrue(resultTable.columnNames().contains("$main.DOCUMENT_ID"));
+        assertEquals(5, resultTable.intColumn("$main.DOCUMENT_ID").get(0));
     }
     
     @Test
     public void testContainsTrigramWithComma() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Assumes index contains lemmatized "the\0quick\0fox"
-        String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"the\", \"quick\", \"fox\")";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE CONTAINS(\"the\", \"quick\", \"fox\")";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -312,6 +336,11 @@ public class QueryEndToEndTest {
         assertFalse(result.getAllDetails().isEmpty(), "Expected results for 'the, quick, fox'");
         assertEquals(1, result.getAllDetails().size());
         assertEquals(5, result.getAllDetails().get(0).getDocumentId());
+        
+        Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
+        assertEquals(1, resultTable.rowCount());
+        assertTrue(resultTable.columnNames().contains("$main.DOCUMENT_ID"));
+        assertEquals(5, resultTable.intColumn("$main.DOCUMENT_ID").get(0));
     }
 
     // Add more end-to-end tests for different conditions, granularity, joins etc.
@@ -320,7 +349,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testNerSimpleTypeQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE NER(PERSON)";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE NER(PERSON)";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -331,12 +360,15 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(3, resultTable.rowCount()); // Corrected: Grouped by document (3 unique docs)
+        assertTrue(resultTable.columnNames().contains("$main.DOCUMENT_ID"));
+        Set<Integer> tableDocIds = Set.copyOf(resultTable.intColumn("$main.DOCUMENT_ID").asList());
+        assertEquals(Set.of(6, 7, 12), tableDocIds);
     }
     
     @Test
     public void testNerTypeWithTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Test exact match still works (case-insensitive)
-        String queryString = "SELECT TITLE FROM source WHERE NER(PERSON, 'albert einstein')"; // Use full name 
+        String queryString = "SELECT DOCUMENT_ID, TITLE FROM source WHERE NER(PERSON, 'albert einstein')"; // Use full name 
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -347,12 +379,12 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount()); 
-        assertEquals(6, resultTable.intColumn("document_id").get(0));
+        assertEquals(6, resultTable.intColumn("$main.DOCUMENT_ID").get(0));
     }
     
     @Test
     public void testNerTypeWithTargetNoMatchQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE NER(PERSON, 'Non Existent')";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE NER(PERSON, 'Non Existent')";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -387,7 +419,7 @@ public class QueryEndToEndTest {
     @Test
     public void testNerVariableBindingWithTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Test partial match with binding
-        String queryString = "SELECT t1.org FROM source ALIAS t1 WHERE NER(ORGANIZATION, 'corp') BIND org";
+        String queryString = "SELECT t1.org, t1.DOCUMENT_ID FROM source ALIAS t1 WHERE NER(ORGANIZATION, 'corp') BIND org";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -398,7 +430,7 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount()); 
-        assertEquals(11, resultTable.intColumn("document_id").get(0));
+        assertEquals(11, resultTable.intColumn("t1.DOCUMENT_ID").get(0));
         assertEquals("microsoft corporation", resultTable.stringColumn("t1.org").get(0));
     }
     
@@ -439,7 +471,7 @@ public class QueryEndToEndTest {
         // Wildcard is not fully implemented for search/binding yet, only validation
         // This test assumes it might become valid later, or checks current behavior.
         // Modify based on expected behavior of wildcard in executor.
-        String queryString = "SELECT TITLE FROM source WHERE NER(*)"; 
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE NER(*)";
         
         // For now, expect validation error if wildcard isn't handled by executor
         // If executor handles it by searching all NER index entries:
@@ -459,7 +491,7 @@ public class QueryEndToEndTest {
     @Test
     public void testNerPartialTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Test partial match (case-insensitive)
-        String queryString = "SELECT TITLE FROM source WHERE NER(PERSON, 'Albrecht')"; // Use partial name 
+        String queryString = "SELECT DOCUMENT_ID, TITLE FROM source WHERE NER(PERSON, 'Albrecht')"; // Use partial name 
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -470,13 +502,13 @@ public class QueryEndToEndTest {
         
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertEquals(1, resultTable.rowCount()); 
-        assertEquals(12, resultTable.intColumn("document_id").get(0));
+        assertEquals(12, resultTable.intColumn("$main.DOCUMENT_ID").get(0));
     }
 
     @Test
     public void testOrQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Query for documents containing either "apple" or "banana"
-        String queryString = "SELECT TITLE FROM source WHERE CONTAINS(\"apple\") OR CONTAINS(\"banana\")";
+        String queryString = "SELECT DOCUMENT_ID, TITLE FROM source WHERE CONTAINS(\"apple\") OR CONTAINS(\"banana\")";
         Query query = queryParser.parse(queryString);
 
         // Execute query
@@ -493,15 +525,15 @@ public class QueryEndToEndTest {
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
         assertNotNull(resultTable);
         assertEquals(2, resultTable.rowCount(), "Table should have 2 rows (docs 1 and 2)");
-        assertTrue(resultTable.columnNames().contains("document_id")); 
+        assertTrue(resultTable.columnNames().contains("$main.DOCUMENT_ID")); 
         // Check that both document IDs are present (order might vary)
-        Set<Integer> tableDocIds = Set.copyOf(resultTable.intColumn("document_id").asList());
+        Set<Integer> tableDocIds = Set.copyOf(resultTable.intColumn("$main.DOCUMENT_ID").asList());
         assertEquals(Set.of(1, 2), tableDocIds);
     }
 
     @Test
     public void testDateYearFormat() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE DATE(< 1990)";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE DATE(< 1990)";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -516,7 +548,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testDateYearMonthFormat() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE DATE(> 1998-05)";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE DATE(> 1998-05)";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -531,7 +563,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testDateYearMonthDayFormat() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE DATE(== 2005-07-04)";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE DATE(== 2005-07-04)";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -546,7 +578,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testDateRangeWithDateLiterals() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE DATE(CONTAINS [1995-01-01, 2000-12-31])";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE DATE(CONTAINS [1995-01-01, 2000-12-31])";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -581,7 +613,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testCompoundDateQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT TITLE FROM source WHERE DATE(> 1990) AND DATE(< 2000)";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE DATE(> 1990) AND DATE(< 2000)";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -598,7 +630,7 @@ public class QueryEndToEndTest {
     public void testNashTemporalQuery() throws Exception {
         // Set the temporal strategy to Nash for this test
         factory.setTemporalStrategy("nash");
-        String queryString = "SELECT TITLE FROM source WHERE DATE(< 2025) BIND date";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE DATE(< 2025) BIND date";
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
         assertNotNull(result);
@@ -607,5 +639,10 @@ public class QueryEndToEndTest {
         assertEquals(1, result.getAllDetails().size());
         assertEquals(30, result.getAllDetails().get(0).getDocumentId());
         assertEquals(java.time.LocalDate.parse("2024-01-15"), result.getAllDetails().get(0).value());
+        
+        Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
+        assertEquals(1, resultTable.rowCount());
+        assertTrue(resultTable.columnNames().contains("$main.DOCUMENT_ID"));
+        assertEquals(30, resultTable.intColumn("$main.DOCUMENT_ID").get(0));
     }
 } 

@@ -47,10 +47,17 @@ public class StructuralColumn implements SelectColumn {
     @Override
     public Column<?> createColumn() {
         // Determine column type based on field name
-        return switch (fieldName.toUpperCase()) {
+        // Log the field name being switched on
+        String upperFieldName = fieldName.toUpperCase();
+        logger.debug("Switching on upperFieldName: '{}'", upperFieldName);
+
+        Column<?> createdCol = switch (upperFieldName) {
             case "TITLE" -> StringColumn.create(getColumnName());
             case "TIMESTAMP" -> DateColumn.create(getColumnName());
-            case "DOCUMENT_ID" -> IntColumn.create(getColumnName());
+            case "DOCUMENT_ID" -> {
+                 logger.debug("Creating IntColumn for {}", getColumnName());
+                 yield IntColumn.create(getColumnName());
+            }
             case "SENTENCE_ID" -> IntColumn.create(getColumnName());
             case "BEGIN" -> IntColumn.create(getColumnName());
             case "END" -> IntColumn.create(getColumnName());
@@ -59,6 +66,9 @@ public class StructuralColumn implements SelectColumn {
                  yield StringColumn.create(getColumnName()); // Default to String
             }
         };
+        // Log the type right after the switch expression completes
+        logger.debug("Switch expression yielded column '{}' of type {}", createdCol.name(), createdCol.type());
+        return createdCol;
     }
 
     @Override

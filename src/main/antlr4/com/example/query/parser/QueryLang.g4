@@ -134,14 +134,16 @@ selectList
     ;
 
 selectColumn
-    : variable                                  # VariableColumn           // myVar (implicitly $main.myVar if no alias/join)
-    | qualifiedIdentifier                       # QualifiedIdentifierColumn // alias.myVar or alias.TITLE (handled by visitor)
-    | qualifiedStructuralColumn                 # StructColumn             // alias.TITLE, alias.TIMESTAMP, etc.
-    | TITLE                                     # UnqualifiedTitleColumn   // TITLE (implicitly $main.TITLE)
-    | TIMESTAMP                                 # UnqualifiedTimestampColumn // TIMESTAMP (implicitly $main.TIMESTAMP)
-    // TODO: Add DOCUMENT_ID, SENTENCE_ID here if needed standalone?
-    | snippetExpression                         # SnippetColumn
-    | countExpression                           # CountColumn
+    // Prioritize specific structural keywords before generic variable/identifier rules
+    : TITLE                               # UnqualifiedTitleColumn
+    | TIMESTAMP                           # UnqualifiedTimestampColumn
+    | DOCUMENT_ID                         # UnqualifiedDocumentIdColumn 
+    | SENTENCE_ID                         # UnqualifiedSentenceIdColumn
+    | qualifiedStructuralColumn           # StructColumn             // alias.TITLE, alias.TIMESTAMP, etc.
+    | countExpression                     # CountColumn              // COUNT(*), COUNT(UNIQUE var), etc.
+    | snippetExpression                   # SnippetColumn            // SNIPPET(var), SNIPPET(alias.var)
+    | qualifiedIdentifier                 # QualifiedIdentifierColumn // alias.myVar (handled by visitor as Var or Struct)
+    | variable                            # VariableColumn           // myVar (implicitly $main.myVar)
     ;
 
 snippetExpression
