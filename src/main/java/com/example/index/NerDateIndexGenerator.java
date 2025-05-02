@@ -111,36 +111,91 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
     @Override
     protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        Map<String, PositionList> positionLists = new HashMap<>();
-        
+        if (batch.isEmpty()) {
+            return index;
+        }
+
+        // State for tracking the current merged date mention
+        int currentDocId = -1;
+        int currentSentId = -1;
+        String currentRawNormalizedDate = null; // Store the original YYYY-MM-DD
+        int currentStartChar = -1;
+        int currentEndChar = -1;
+        LocalDate currentTimestamp = null;
+
         for (AnnotationEntry entry : batch) {
-            String normalizedDate = normalizeDate(entry.getLemma());
-            if (normalizedDate == null) {
-                logger.debug("Skipping invalid date format: {}", entry.getLemma());
-                continue;
+            // Basic validation (redundant with fetchBatch, but safe)
+            String rawNormalizedDate = entry.getLemma(); // YYYY-MM-DD
+            if (rawNormalizedDate == null || !rawNormalizedDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                logger.debug("Skipping invalid raw date format in processBatch: {}", rawNormalizedDate);
+                continue; // Should not happen if fetchBatch filtering is correct
             }
 
-            Position position = new Position(
-                entry.getDocumentId(), 
-                entry.getSentenceId(), 
-                entry.getBeginChar(), 
-                entry.getEndChar(), 
-                entry.getTimestamp()
-            );
+            if (entry.getDocumentId() == currentDocId &&
+                entry.getSentenceId() == currentSentId &&
+                rawNormalizedDate.equals(currentRawNormalizedDate)) {
+                // --- Part of the same logical mention ---
+                // Extend the end character offset
+                currentEndChar = entry.getEndChar();
+            } else {
+                // --- Start of a new mention (or the very first one) ---
+                // 1. Finalize the *previous* mention (if there was one)
+                if (currentDocId != -1) {
+                    String normalizedDateKey = normalizeDate(currentRawNormalizedDate); // Convert to YYYYMMDD for key
+                    if (normalizedDateKey != null) {
+                        Position finalizedPosition = new Position(
+                                currentDocId,
+                                currentSentId,
+                                currentStartChar,
+                                currentEndChar,
+                                currentTimestamp
+                        );
+                        // Add to the set for tracking unique dates across the whole run
+                        this.uniqueDatesProcessed.add(normalizedDateKey);
+                        // Add finalized position to the index map for this batch
+                        PositionList posListForMention = new PositionList();
+                        posListForMention.add(finalizedPosition);
+                        index.put(normalizedDateKey, posListForMention);
+                        // Note: We aggregate PositionLists later in the IndexGenerator superclass
+                    } else {
+                         logger.warn("Could not normalize the date key for the finalized mention: {}", currentRawNormalizedDate);
+                    }
+                }
 
-            // Add to the set for tracking unique dates across the whole run
-            this.uniqueDatesProcessed.add(normalizedDate);
+                // 2. Start tracking the new mention
+                currentDocId = entry.getDocumentId();
+                currentSentId = entry.getSentenceId();
+                currentRawNormalizedDate = rawNormalizedDate;
+                currentStartChar = entry.getBeginChar();
+                currentEndChar = entry.getEndChar();
+                currentTimestamp = entry.getTimestamp();
+            }
+        }
 
-            // Get or create position list for this date
-            PositionList posList = positionLists.computeIfAbsent(normalizedDate, k -> new PositionList());
-            posList.add(position);
+        // Finalize the very last mention in the batch
+        if (currentDocId != -1) {
+             String normalizedDateKey = normalizeDate(currentRawNormalizedDate); // Convert to YYYYMMDD for key
+             if (normalizedDateKey != null) {
+                 Position finalizedPosition = new Position(
+                         currentDocId,
+                         currentSentId,
+                         currentStartChar,
+                         currentEndChar,
+                         currentTimestamp
+                 );
+                 this.uniqueDatesProcessed.add(normalizedDateKey);
+                 PositionList posListForFinalMention = new PositionList();
+                 posListForFinalMention.add(finalizedPosition);
+                 index.put(normalizedDateKey, posListForFinalMention);
+             } else {
+                 logger.warn("Could not normalize the date key for the final mention in batch: {}", currentRawNormalizedDate);
+             }
         }
-        
-        // Add all position lists to result
-        for (Map.Entry<String, PositionList> entry : positionLists.entrySet()) {
-            index.put(entry.getKey(), entry.getValue());
-        }
-        
+
+        // Note: The superclass's writeSortedSegment and mergeSegments will handle
+        // the aggregation of PositionLists for the same normalizedDateKey across batches.
+        // We are returning ListMultimap<String, PositionList> where each PositionList
+        // currently holds just one merged Position from this batch.
         return index;
     }
 

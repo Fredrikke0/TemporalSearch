@@ -83,6 +83,15 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
         int intervalIndexCounter = 0;
         long rawAnnotationsProcessed = 0;
 
+        // State for merging consecutive annotations
+        int currentDocId = -1;
+        int currentSentId = -1;
+        String currentNormalizedNer = null;
+        int currentStartChar = -1;
+        int currentEndChar = -1;
+        LocalDate currentTimestamp = null;
+        int currentDateId = -1; // Track the dateId for the current mention
+
         // 1. Fetch ALL relevant annotations (potentially memory-intensive)
         logger.info("Fetching all DATE annotations from database...");
         String query = "SELECT a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
@@ -95,48 +104,84 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
             while (rs.next()) {
                 rawAnnotationsProcessed++;
-                String normalizedDateStr = rs.getString("normalized_ner");
-                LocalDate docDate = parseNormalizedDate(normalizedDateStr);
-                if (docDate == null) {
-                    logger.trace("Skipping invalid/unparseable normalized_ner date: {}", normalizedDateStr);
-                    continue;
-                }
+                int docId = rs.getInt("document_id");
+                int sentId = rs.getInt("sentence_id");
+                int beginChar = rs.getInt("begin_char");
+                int endChar = rs.getInt("end_char");
+                String normalizedNer = rs.getString("normalized_ner");
                 LocalDate timestamp = LocalDate.parse(rs.getString("timestamp").substring(0, 10)); // Assuming timestamp is valid
 
-                // Get or create Date ID
-                int dateId = dateToId.computeIfAbsent(docDate, date -> {
-                    idToDate.add(date);
-                    return idToDate.size() - 1; // 0-based ID
-                });
+                if (docId == currentDocId && sentId == currentSentId && normalizedNer.equals(currentNormalizedNer)) {
+                    // --- Part of the same logical mention ---
+                    currentEndChar = endChar; // Extend the span
+                } else {
+                    // --- Start of a new mention (or the first one) ---
+                    // 1. Finalize the *previous* mention (if valid)
+                    if (currentDocId != -1 && currentNormalizedNer != null && currentDateId != -1) {
+                        // Create finalized Position for the previous mention
+                        Position finalizedPosition = new Position(
+                                currentDocId,
+                                currentSentId,
+                                currentStartChar,
+                                currentEndChar,
+                                currentTimestamp // Use timestamp from the start of the mention
+                        );
+                        // Add the entry (finalized position + dateId) to the list associated with its dateId
+                        listIndexToEntries.get(currentDateId).add(new NashDateEntryWithId(finalizedPosition, currentDateId));
+                    }
 
-                // Create Position
-                Position position = new Position(
-                        rs.getInt("document_id"),
-                        rs.getInt("sentence_id"),
-                        rs.getInt("begin_char"),
-                        rs.getInt("end_char"),
-                        timestamp // Use document timestamp for Position
-                );
+                    // 2. Start tracking the new mention
+                    currentDocId = docId;
+                    currentSentId = sentId;
+                    currentNormalizedNer = normalizedNer;
+                    currentStartChar = beginChar;
+                    currentEndChar = endChar;
+                    currentTimestamp = timestamp;
+                    currentDateId = -1; // Reset dateId, will be set below if date is valid
 
-                // Create interval string *only if* this is the first time we see this dateId
-                // Store mapping from interval index -> entries for that date
-                if (!listIndexToEntries.containsKey(dateId)) {
-                    String interval = String.format("[%s , %s]",
-                            NASH_INTERVAL_FORMATTER.format(docDate),
-                            NASH_INTERVAL_FORMATTER.format(docDate));
-                    intervalStrings.add(interval); // Add interval string
-                    listIndexToEntries.put(dateId, new ArrayList<>()); // Initialize list for this date ID
-                    // Important: The index in intervalStrings corresponds to dateId here because we add
-                    // intervalString only when dateId is first seen.
+                    // Process the date for the new mention
+                    LocalDate docDate = parseNormalizedDate(normalizedNer);
+                    if (docDate != null) {
+                        // Get or create Date ID for the new mention
+                        final LocalDate finalDocDate = docDate; // Final for lambda
+                        currentDateId = dateToId.computeIfAbsent(docDate, date -> {
+                            idToDate.add(date);
+                            int newId = idToDate.size() - 1; // 0-based ID
+
+                            // Create interval string *only if* this is the first time we see this dateId
+                            String interval = String.format("[%s , %s]",
+                                    NASH_INTERVAL_FORMATTER.format(finalDocDate),
+                                    NASH_INTERVAL_FORMATTER.format(finalDocDate));
+                            intervalStrings.add(interval); // Add interval string
+                            listIndexToEntries.put(newId, new ArrayList<>()); // Initialize entry list
+
+                            return newId;
+                        });
+                    } else {
+                        logger.trace("Skipping invalid/unparseable normalized_ner date: {}", normalizedNer);
+                        // Invalidate the current mention so it's not finalized on the next iteration
+                        currentDocId = -1;
+                        currentNormalizedNer = null;
+                    }
                 }
-
-                // Add the entry (position + dateId) to the list associated with this dateId
-                listIndexToEntries.get(dateId).add(new NashDateEntryWithId(position, dateId));
 
                 if (rawAnnotationsProcessed % 50000 == 0) {
-                    logger.info("Fetched {} raw DATE annotations...", rawAnnotationsProcessed);
+                    logger.info("Processed {} raw DATE annotations for merging...", rawAnnotationsProcessed);
                 }
             }
+
+            // --- Finalize the very last mention after the loop ---
+            if (currentDocId != -1 && currentNormalizedNer != null && currentDateId != -1) {
+                Position finalizedPosition = new Position(
+                        currentDocId,
+                        currentSentId,
+                        currentStartChar,
+                        currentEndChar,
+                        currentTimestamp
+                );
+                 listIndexToEntries.get(currentDateId).add(new NashDateEntryWithId(finalizedPosition, currentDateId));
+            }
+
         } catch (SQLException e) {
             logger.error("Database error fetching annotations for Nash index", e);
             throw e;
@@ -151,44 +196,18 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
              } catch (IndexAccessException | IOException e) {
                  logger.error("Failed to write empty date lookup table", e);
              }
-            return; // Nothing more to do
+            return;
         }
 
         // 2. Perform Nash Inversion
         logger.info("Performing Nash inversion for {} unique date intervals...", intervalStrings.size());
-        // Revert: Go back to using Nash.invert as shown in the Nash.java example
         MultiMap<String, Integer> invertedIndex; // Maps Nash Prefix -> List of original interval string indices
-        // Map<String, List<NashDateEntryWithId>> prefixToEntriesMap = new HashMap<>();
-        // int dateIdCounter = 0;
+
 
         try {
-            // Revert: Call Nash.invert on the list of point interval strings
             invertedIndex = Nash.invert(intervalStrings);
             logger.info("Nash inversion complete. Found {} unique Nash prefixes.", invertedIndex.size());
-            
-            // // Iterate through each unique date and its corresponding entries
-            // for (Map.Entry<Integer, List<NashDateEntryWithId>> dateEntry : listIndexToEntries.entrySet()) {
-            //     int dateId = dateEntry.getKey();
-            //     List<NashDateEntryWithId> entriesForThisDate = dateEntry.getValue();
-            //     LocalDate currentDate = idToDate.get(dateId);
-            //     String pointInterval = String.format("[%s , %s]",
-            //                                     NASH_INTERVAL_FORMATTER.format(currentDate),
-            //                                     NASH_INTERVAL_FORMATTER.format(currentDate));
 
-            //     // Generate prefixes using CONTAINED_BY for this point interval
-            //     String[] indexingPrefixes = Nash.generateTimeHash(pointInterval, Nash.RangePredicate.CONTAINED_BY);
-
-            //     // Map these prefixes to the list of entries for this date
-            //     for (String prefix : indexingPrefixes) {
-            //         prefixToEntriesMap.computeIfAbsent(prefix, k -> new ArrayList<>()).addAll(entriesForThisDate);
-            //     }
-
-            //     dateIdCounter++;
-            //     if (dateIdCounter % 1000 == 0) {
-            //         logger.info("Generated indexing prefixes for {} unique dates...", dateIdCounter);
-            //     }
-            // }
-            //  logger.info("Prefix generation complete. Found {} unique Nash prefixes to store.", prefixToEntriesMap.size());
         } catch (Exception e) {
             logger.error("Failed during Nash.invert call", e);
             throw new IOException("Failed to generate Nash inverted index", e);
@@ -198,7 +217,6 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
         logger.info("Writing Nash index data to LevelDB at {} ...", indexAccess.getIndexType());
         long termsWritten = 0;
         try {
-            // Revert: Write main Nash prefix entries using the invertedIndex from Nash.invert
             for (String nashPrefix : invertedIndex.keySet()) {
                 List<NashDateEntryWithId> aggregatedEntries = new ArrayList<>();
                 // The indices in invertedIndex.get(nashPrefix) correspond to the original intervalStrings list,
@@ -257,7 +275,4 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             return null;
         }
     }
-
-    // Helper method inherited from IndexGenerator
-    // protected static byte[] bytes(String str)
 } 

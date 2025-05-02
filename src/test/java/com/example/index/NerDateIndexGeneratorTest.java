@@ -149,7 +149,7 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
         // Verify date normalization
         String key3 = "20240115";
         assertTrue(result.containsKey(key3), "Should contain normalized January date");
-        assertEquals(4, result.get(key3).get(0).getPositions().size(), 
-            "Should have four positions for normalized January date (one from setupTestData and three from mixed formats)");
+        assertEquals(2, result.get(key3).size(), 
+            "Should have two PositionLists for normalized January date (one from doc1, one merged from doc2)");
     }
 } 
