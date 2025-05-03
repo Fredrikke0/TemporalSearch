@@ -193,31 +193,45 @@ public class Pipeline {
 
         if (stage.equals("all") || stage.equals("annotate")) {
             logger.info("Running annotation stage...");
-            // Build command arguments list
-            List<String> annotationArgs = new ArrayList<>();
-            annotationArgs.add("-d");
-            annotationArgs.add(dbPath.toString());
-            annotationArgs.add("-t");
-            annotationArgs.add(ns.getInt("threads").toString());
-            
-            // Add overwrite flag if specified or if we're running the 'all' stage
-            if (ns.getBoolean("recreate") || stage.equals("all")) {
-                annotationArgs.add("-o");
+            int threads = ns.getInt("threads");
+            int batchSize = ns.getInt("batch_size");
+            boolean force = ns.getBoolean("recreate"); // treat --recreate as force for annotation
+            Integer limit = ns.getInt("limit"); // Get limit arg
+            Annotations.AnnotationStatus status = Annotations.getAnnotationStatus(dbPath);
+            if (force || status.needsProcessing) {
+                int startId = force ? 1 : status.startDocumentId;
+                logger.info("Starting annotation at document_id {} (force: {})", startId, force);
+                Annotations.runAnnotation(dbPath, startId, threads, batchSize, limit); // Pass limit
+            } else {
+                logger.info("Annotation already complete. Skipping.");
             }
-            
-            Annotations.main(annotationArgs.toArray(new String[0]));
         }
 
         if (stage.equals("all") || stage.equals("index")) {
             logger.info("Running indexing stage...");
-            IndexRunner.runIndexing(
+            String indexType = ns.getString("index_type");
+            boolean force = !ns.getBoolean("preserve_index");
+            Path typeDir = indexDir.resolve(indexType);
+            boolean indexExists = Files.exists(typeDir);
+            if (force || !indexExists) {
+                if (force && indexExists) {
+                    // Remove existing index directory
+                    Files.walk(typeDir)
+                        .sorted((a, b) -> b.compareTo(a))
+                        .forEach(path -> {
+                            try { Files.deleteIfExists(path); } catch (Exception e) { logger.warn("Could not delete {}: {}", path, e.getMessage()); }
+                        });
+                }
+                IndexRunner.runIndexing(
                     dbPath.toString(),
                     indexDir.toString(),
                     ns.getString("stopwords"),
                     ns.getInt("batch_size"),
-                    ns.getString("index_type"),
-                    ns.getBoolean("preserve_index")
-            );
+                    indexType
+                );
+            } else {
+                logger.info("Index for type '{}' already exists. Skipping.", indexType);
+            }
         }
 
         if (stage.equals("analyze")) {

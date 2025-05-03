@@ -37,6 +37,7 @@ class NashPredicateTest {
             "[2010-04-05 , 2010-04-05]", // 3: Late Point
             "[2004-12-31 , 2004-12-31]", // 4: Point just before Range 2
             "[2006-01-01 , 2006-01-01]"  // 5: Point just after Range 2
+
         );
 
         // Build the inverted index using Nash.invert (mimics current indexing)
@@ -68,9 +69,9 @@ class NashPredicateTest {
                 }
             }
             System.out.println("  Predicate: " + String.format("%-12s", predicate) + 
-                               " | Prefixes: (Gen:" + queryPrefixes.length + 
-                               " Chk:" + prefixesChecked + 
-                               " Fnd:" + prefixesFound + ")" + 
+                               " | Prefixes: (Generated:" + queryPrefixes.length + 
+                               " Checked:" + prefixesChecked + 
+                               " Found:" + prefixesFound + ")" + 
                                " | Matched Indices: " + 
                                (matchedIndices.isEmpty() ? "[]" : matchedIndices.stream().sorted().map(Object::toString).collect(Collectors.joining(", ", "[", "]"))));
             if (!matchedIndices.isEmpty()) {
@@ -78,7 +79,7 @@ class NashPredicateTest {
             }
         }
          System.out.println("-------------------------------------------------------------");
-         // Commented out assertion as we only want to observe for now.
+
     }
 
     // --- Test Cases Start Here ---

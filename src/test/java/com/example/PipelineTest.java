@@ -277,6 +277,88 @@ public class PipelineTest {
         }
 
         @Test
+        @DisplayName("Annotation stage resumes correctly after partial completion")
+        void testAnnotationResumesCorrectly() throws Exception {
+            // First run conversion
+            System.setProperty("user.dir", tempDir.toString());
+            Pipeline.runPipeline(new String[]{
+                "-s", "convert",
+                "-f", jsonFile.toString(),
+                "-p", projectName,
+                "--recreate"
+            });
+
+            // Run annotation with a limit (partially annotate)
+            final int initialLimit = 10;
+            Pipeline.runPipeline(new String[]{
+                "-s", "annotate",
+                "-p", projectName,
+                "-b", "5",
+                "-t", "2",
+                "-l", String.valueOf(initialLimit) // Limit annotation to 10 docs
+            });
+
+            // Verify only limited docs are annotated initially
+            sqliteConn = createTestDatabase();
+            verifyAnnotationStage(initialLimit); // Check only 10 docs annotated
+
+            // Close connection before next run
+            if (sqliteConn != null) sqliteConn.close();
+
+            // Run annotation again without limit (should resume)
+            // No --recreate or --limit flag
+            Pipeline.runPipeline(new String[]{
+                "-s", "annotate",
+                "-p", projectName,
+                "-b", "5",
+                "-t", "2"
+            });
+
+            // Verify all documents are now annotated
+            sqliteConn = createTestDatabase();
+            verifyAnnotationStage(TOTAL_DOCS); // Check all 20 docs annotated
+        }
+
+        @Test
+        @DisplayName("Annotation stage forces re-annotation with --recreate")
+        void testAnnotationForceRecreates() throws Exception {
+            // First run conversion and full annotation
+             System.setProperty("user.dir", tempDir.toString());
+             Pipeline.runPipeline(new String[]{
+                 "-s", "convert",
+                 "-f", jsonFile.toString(),
+                 "-p", projectName,
+                 "--recreate"
+             });
+             Pipeline.runPipeline(new String[]{
+                 "-s", "annotate",
+                 "-p", projectName,
+                 "-b", "5",
+                 "-t", "2"
+             });
+
+             // Verify all documents annotated
+             sqliteConn = createTestDatabase();
+             verifyAnnotationStage(TOTAL_DOCS);
+             
+             // Close connection before next run
+             if (sqliteConn != null) sqliteConn.close();
+
+             // Run annotation again with --recreate (should force re-run)
+             Pipeline.runPipeline(new String[]{
+                 "-s", "annotate",
+                 "-p", projectName,
+                 "-b", "5",
+                 "-t", "2",
+                 "--recreate" // Force re-annotation
+             });
+
+             // Verify all documents are still annotated (confirms forced run completed)
+             sqliteConn = createTestDatabase();
+             verifyAnnotationStage(TOTAL_DOCS);
+        }
+
+        @Test
         @DisplayName("Indexing stage creates all index types")
         void testIndexingStage() throws Exception {
             // Run conversion and annotation first
@@ -341,6 +423,75 @@ public class PipelineTest {
                     "Unigram index should exist");
                 assertFalse(indexDir.resolve("bigram").toFile().exists(),
                     "Bigram index should not exist");
+            } finally {
+                System.setProperty("user.dir", originalUserDir);
+            }
+        }
+
+        @Test
+        @DisplayName("Indexing stage skips if index exists and --preserve-index is used")
+        void testIndexingSkipsWhenPreserve() throws Exception {
+            // Run conversion, annotation, and initial indexing
+            setupConversionAndAnnotation();
+            String originalUserDir = System.getProperty("user.dir");
+            try {
+                System.setProperty("user.dir", tempDir.toString());
+                
+                // Initial index run (unigram)
+                Path unigramDir = indexDir.resolve("unigram");
+                Pipeline.runPipeline(new String[]{
+                    "-s", "index", "-p", projectName, "-y", "unigram", "--stopwords", stopwordsFile.toString()
+                });
+                assertTrue(Files.exists(unigramDir), "Unigram index should exist after first run");
+                long initialSize = Files.walk(unigramDir).mapToLong(p -> {
+                    try { return Files.size(p); } catch (IOException e) { return 0L; }
+                }).sum(); // Get initial size/state
+
+                // Run indexing again with --preserve-index (force=false)
+                 Pipeline.runPipeline(new String[]{
+                    "-s", "index", "-p", projectName, "-y", "unigram", "--stopwords", stopwordsFile.toString(),
+                    "--preserve-index" 
+                });
+                
+                // Verify index still exists (and ideally hasn't changed, though size check is basic)
+                assertTrue(Files.exists(unigramDir), "Unigram index should still exist after second run with preserve");
+                long finalSize = Files.walk(unigramDir).mapToLong(p -> {
+                    try { return Files.size(p); } catch (IOException e) { return 0L; }
+                }).sum();
+                assertEquals(initialSize, finalSize, "Index size should not change when preserved"); // Basic check
+
+            } finally {
+                System.setProperty("user.dir", originalUserDir);
+            }
+        }
+
+        @Test
+        @DisplayName("Indexing stage forces recreation without --preserve-index")
+        void testIndexingForceRecreates() throws Exception {
+             // Run conversion, annotation, and initial indexing
+            setupConversionAndAnnotation();
+            String originalUserDir = System.getProperty("user.dir");
+            try {
+                System.setProperty("user.dir", tempDir.toString());
+                
+                // Initial index run (unigram)
+                Path unigramDir = indexDir.resolve("unigram");
+                Pipeline.runPipeline(new String[]{
+                    "-s", "index", "-p", projectName, "-y", "unigram", "--stopwords", stopwordsFile.toString()
+                });
+                assertTrue(Files.exists(unigramDir), "Unigram index should exist after first run");
+                // We could capture modification times here if needed for a stronger check
+
+                // Run indexing again WITHOUT --preserve-index (force=true)
+                 Pipeline.runPipeline(new String[]{
+                    "-s", "index", "-p", projectName, "-y", "unigram", "--stopwords", stopwordsFile.toString()
+                    // No --preserve-index means force=true
+                });
+                
+                // Verify index still exists (confirms forced run completed)
+                assertTrue(Files.exists(unigramDir), "Unigram index should still exist after forced recreation");
+                // A more robust test could check modification times before/after the second run.
+
             } finally {
                 System.setProperty("user.dir", originalUserDir);
             }

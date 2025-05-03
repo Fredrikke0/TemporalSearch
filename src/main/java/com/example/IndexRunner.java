@@ -26,57 +26,29 @@ public class IndexRunner {
     private static final Logger logger = LoggerFactory.getLogger(IndexRunner.class);
 
     public static void main(String[] args) {
-        // Create focused argument parser for indexing
         ArgumentParser parser = ArgumentParsers.newFor("IndexRunner").build()
                 .defaultHelp(true)
                 .description("Create indexes from annotated database");
-
-        parser.addArgument("-d", "--db")
-                .required(true)
-                .help("SQLite database file path");
-
-        parser.addArgument("--index-dir")
-                .setDefault("indexes")
-                .help("Directory for storing indexes (default: 'indexes')");
-
-        parser.addArgument("--stopwords")
-                .setDefault("stopwords.txt")
-                .help("Path to stopwords file (default: stopwords.txt)");
-
-        parser.addArgument("--batch-size")
-                .setDefault(1000)
-                .type(Integer.class)
-                .help("Batch size for processing (default: 1000)");
-
+        parser.addArgument("-d", "--db").required(true).help("SQLite database file path");
+        parser.addArgument("--index-dir").setDefault("indexes").help("Directory for storing indexes (default: 'indexes')");
+        parser.addArgument("--stopwords").setDefault("stopwords.txt").help("Path to stopwords file (default: stopwords.txt)");
+        parser.addArgument("--batch-size").setDefault(1000).type(Integer.class).help("Batch size for processing (default: 1000)");
         parser.addArgument("-t", "--type")
                 .choices("all", "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch", "nash")
                 .setDefault("all")
                 .help("Type of index to generate");
-
-        parser.addArgument("--debug")
-                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
-                .help("Enable debug logging to console");
-
-        parser.addArgument("-k", "--preserve-index")
-                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
-                .help("Keep existing index data if present");
-
+        parser.addArgument("--debug").action(net.sourceforge.argparse4j.impl.Arguments.storeTrue()).help("Enable debug logging to console");
         try {
-            // Parse arguments
             Namespace ns = parser.parseArgs(args);
-            
-            // Set debug mode
             if (ns.getBoolean("debug")) {
                 System.setProperty("DEBUG_MODE", "true");
             }
-
             runIndexing(
                 ns.getString("db"),
                 ns.getString("index_dir"),
                 ns.getString("stopwords"),
                 ns.getInt("batch_size"),
-                ns.getString("type"),
-                ns.getBoolean("preserve_index")
+                ns.getString("type")
             );
         } catch (ArgumentParserException e) {
             parser.handleError(e);
@@ -87,10 +59,9 @@ public class IndexRunner {
         }
     }
 
-
     public static void runIndexing(String dbPath, String indexDir, String stopwordsPath,
-            int batchSize, String indexType, boolean preserveIndex) throws Exception {
-        logger.info("Starting indexing process (No Limit Applied)");
+            int batchSize, String indexType) throws Exception {
+        logger.info("Starting indexing process");
         logger.debug("Database: {}", dbPath);
         logger.debug("Index directory: {}", indexDir);
         
@@ -99,73 +70,25 @@ public class IndexRunner {
         if (!Files.exists(dbFilePath)) {
             throw new FileNotFoundException("Database file not found: " + dbPath);
         }
-        
-        // Check if the database file has content
         if (Files.size(dbFilePath) == 0) {
-            throw new IOException("Database file is empty. Please run the conversion and annotation stages first.");
+            throw new IOException("Database file is empty. Please run the annotation stage first.");
         }
-        
-        // Create all index subdirectories
+        // Only create the requested index directory
         setupIndexDirectories(indexDir, indexType);
-        
         IndexingMetrics metrics = new IndexingMetrics();
         ProgressTracker progress = new ProgressTracker();
-        
-        // Create index configuration without limit
-        IndexConfig indexConfig = new IndexConfig.Builder()
-            .withPreserveExistingIndex(preserveIndex)
-            .build();
-
-        // Ensure index directory exists
+        IndexConfig indexConfig = new IndexConfig.Builder().build();
         Path indexPath = Paths.get(indexDir);
-        if (!preserveIndex) {
-            // Only clean up the index directories, not the database file
-            Path[] indexDirectories = {
-                indexPath.resolve("unigram"),
-                indexPath.resolve("bigram"),
-                indexPath.resolve("entity"),
-                indexPath.resolve("dependency"),
-                indexPath.resolve("nerdate"),
-                indexPath.resolve("ner"),
-                indexPath.resolve("pos"),
-                indexPath.resolve("hypernym"),
-                indexPath.resolve("stitch")
-            };
-            
-            for (Path dir : indexDirectories) {
-                if (Files.exists(dir)) {
-                    logger.debug("Cleaning existing index directory: {}", dir);
-                    Files.walk(dir)
-                         .sorted((a, b) -> b.compareTo(a))
-                         .forEach(path -> {
-                             try {
-                                 Files.deleteIfExists(path);
-                             } catch (IOException e) {
-                                 logger.warn("Could not delete: {} ({})", path, e.getMessage());
-                             }
-                         });
-                }
-            }
-        }
-        
-        // Make sure only the index directories are created, not overwriting the database
         Files.createDirectories(indexPath);
-        
-        // Connect to database and process indexes
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
-            // Determine total number of indexes to generate
             int totalIndexes = indexType.equals("all") ? 10 : 1;
             int currentIndex = 0;
-
-            // Create and run generators based on type
             try {
                 if (indexType.equals("all") || indexType.equals("unigram")) {
                     currentIndex++;
                     metrics.startBatch(batchSize, "unigram");
                     long count = getAnnotationCount(conn);
                     progress.startIndex("Unigram Index", count);
-                    
-                    // Get path with proper directory structure
                     Path unigramPath = Path.of(indexDir).resolve("unigram");
                     try (UnigramIndexGenerator gen = new UnigramIndexGenerator(
                             unigramPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
@@ -354,7 +277,6 @@ public class IndexRunner {
                 progress.close();
             }
         }
-
         logger.info("Index generation completed successfully");
     }
 
@@ -465,10 +387,7 @@ public class IndexRunner {
      * @throws IOException If directory creation fails
      */
     private static void setupIndexDirectories(String indexDir, String indexType) throws IOException {
-        // Ensure the base directory exists
         Files.createDirectories(Path.of(indexDir));
-        
-        // Determine which subdirectories to create
         if (indexType.equals("all") || indexType.equals("unigram")) {
             Files.createDirectories(Path.of(indexDir, "unigram"));
         }

@@ -16,6 +16,26 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.*;
 
+/**
+ * Standalone tool to convert Wikipedia JSON dumps (in Elasticsearch bulk format)
+ * into an SQLite database suitable for input into the NLP Pipeline (`Pipeline.java`).
+ *
+ * <p>This serves as an example converter. Users processing different data sources
+ * should create similar dedicated converters.</p>
+ *
+ * <p>Input Format: Expects a JSON file where each line is a JSON object,
+ * typically obtained from Wikimedia CirrusSearch dumps:
+ * <a href="https://dumps.wikimedia.org/other/cirrussearch/">https://dumps.wikimedia.org/other/cirrussearch/</a>.
+ * The tool extracts 'title', 'text', and 'timestamp' fields from objects containing text.</p>
+ *
+ * <p>Output Schema: Creates an SQLite database with a 'documents' table containing:
+ * <ul>
+ *   <li>document_id INTEGER PRIMARY KEY</li>
+ *   <li>title TEXT</li>
+ *   <li>text TEXT</li>
+ *   <li>timestamp TEXT</li>
+ * </ul></p>
+ */
 public class WikiJsonToSqlite {
     private static final Logger logger = LoggerFactory.getLogger(WikiJsonToSqlite.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -37,9 +57,10 @@ public class WikiJsonToSqlite {
      * @param recreate Whether to recreate the table
      * @param limit Maximum number of entries to extract
      * @return Extraction result with output path and count
-     * @throws Exception If extraction fails
+     * @throws SQLException If database operations fail
+     * @throws IOException If file reading fails
      */
-    public static ExtractionResult extractToSqlite(Path inputFile, Path outputDbPath, boolean recreate, Integer limit) throws Exception {
+    public static ExtractionResult extractToSqlite(Path inputFile, Path outputDbPath, boolean recreate, Integer limit) throws SQLException, IOException {
         // Generate output database name based on input file if not specified
         Path outputDb = outputDbPath;
         if (outputDb == null) {
@@ -65,6 +86,9 @@ public class WikiJsonToSqlite {
                     logger.error("Error counting line: {}", e.getMessage());
                 }
             }
+        } catch (IOException e) {
+            logger.error("Failed to read input file for line count: {}", inputFile, e);
+            throw e; // Re-throw IOExceptions
         }
         logger.info("Found {} lines in input file{}", totalLines,
             limit != null ? String.format(" (will process up to %d entries)", limit) : "");
@@ -101,7 +125,7 @@ public class WikiJsonToSqlite {
                  BufferedReader reader = new BufferedReader(
                      new InputStreamReader(new FileInputStream(inputFile.toFile()), StandardCharsets.UTF_8));
                  ProgressBar pb = new ProgressBarBuilder()
-                    .setTaskName("Processing Wikipedia dump")
+                    .setTaskName("Converting Wiki Dump")
                     .setInitialMax(limit != null ? limit : totalLines)
                     .build()) {
 
@@ -169,7 +193,8 @@ public class WikiJsonToSqlite {
                 .help("Input JSON file path");
 
         parser.addArgument("-d", "--db")
-                .help("Output database file path");
+                .required(true)
+                .help("Output SQLite database file path");
 
         parser.addArgument("-r", "--recreate")
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
@@ -182,7 +207,7 @@ public class WikiJsonToSqlite {
         try {
             Namespace ns = parser.parseArgs(args);
             Path inputFile = Path.of(ns.getString("file"));
-            Path outputDb = ns.getString("db") != null ? Path.of(ns.getString("db")) : null;
+            Path outputDb = Path.of(ns.getString("db")); // Now required
             boolean recreate = ns.getBoolean("recreate");
             Integer limit = ns.getInt("limit");
 

@@ -412,4 +412,104 @@ public class Annotations {
             System.exit(1);
         }
     }
+
+    /**
+     * Returns annotation status for the given project DB path.
+     * Checks for annotation columns/tables, finds max_annotated_id and max_doc_id.
+     * Returns a status object: { needsProcessing: boolean, startDocumentId: int }
+     */
+    public static class AnnotationStatus {
+        public final boolean needsProcessing;
+        public final int startDocumentId;
+        public AnnotationStatus(boolean needsProcessing, int startDocumentId) {
+            this.needsProcessing = needsProcessing;
+            this.startDocumentId = startDocumentId;
+        }
+    }
+
+    public static AnnotationStatus getAnnotationStatus(Path projectDbPath) throws SQLException {
+        String url = "jdbc:sqlite:" + projectDbPath;
+        try (Connection conn = DriverManager.getConnection(url)) {
+            // Check if annotation table exists
+            boolean hasAnnotations = false;
+            try (ResultSet rs = conn.createStatement().executeQuery(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='annotations'")) {
+                if (rs.next()) hasAnnotations = true;
+            }
+            if (!hasAnnotations) {
+                // No annotation table, needs full processing
+                int maxDocId = 0;
+                try (ResultSet rs = conn.createStatement().executeQuery("SELECT MAX(document_id) FROM documents")) {
+                    if (rs.next()) maxDocId = rs.getInt(1);
+                }
+                return new AnnotationStatus(true, 1);
+            }
+            // Find max_annotated_id (where at least one annotation exists)
+            int maxAnnotatedId = 0;
+            try (ResultSet rs = conn.createStatement().executeQuery(
+                    "SELECT MAX(document_id) FROM annotations")) {
+                if (rs.next()) maxAnnotatedId = rs.getInt(1);
+            }
+            // Find max_doc_id
+            int maxDocId = 0;
+            try (ResultSet rs = conn.createStatement().executeQuery("SELECT MAX(document_id) FROM documents")) {
+                if (rs.next()) maxDocId = rs.getInt(1);
+            }
+            boolean needsProcessing = maxAnnotatedId < maxDocId;
+            int startDocumentId = (needsProcessing && maxAnnotatedId > 0) ? maxAnnotatedId : 1;
+            return new AnnotationStatus(needsProcessing, startDocumentId);
+        }
+    }
+
+    /**
+     * Runs annotation from a specific document ID, deleting any existing annotation/dependency rows for each doc before inserting new ones.
+     * Removes internal overwrite logic. Processes documents from startDocumentId onward.
+     * Respects an optional limit on the number of documents to process in this run.
+     */
+    public static void runAnnotation(Path projectDbPath, int startDocumentId, int threads, int batchSize, Integer limit) throws Exception {
+        String url = "jdbc:sqlite:" + projectDbPath;
+        try (Connection conn = DriverManager.getConnection(url)) {
+            conn.setAutoCommit(false);
+            createTables(conn, false); // Don't drop tables
+
+            // Query documents to process
+            String query = "SELECT document_id, text FROM documents WHERE document_id >= ? AND LENGTH(text) <= 15000 ORDER BY document_id ASC";
+            try (PreparedStatement stmt = conn.prepareStatement(query)) {
+                stmt.setInt(1, startDocumentId);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    StanfordCoreNLP pipeline = new Annotations(projectDbPath, threads, false, null).pipeline;
+                    int processed = 0;
+                    int batch = 0;
+                    while (rs.next()) {
+                        // Check if limit has been reached for this run
+                        if (limit != null && processed >= limit) {
+                            logger.info("Reached processing limit ({}) for this run.", limit);
+                            break;
+                        }
+                        int documentId = rs.getInt("document_id");
+                        String text = rs.getString("text");
+                        // Delete any existing annotation/dependency rows for this document
+                        try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?")) {
+                            delAnn.setInt(1, documentId);
+                            delAnn.executeUpdate();
+                        }
+                        try (PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
+                            delDep.setInt(1, documentId);
+                            delDep.executeUpdate();
+                        }
+                        // Process and insert new annotation/dependency rows
+                        AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
+                        insertData(conn, result.annotations, result.dependencies);
+                        processed++;
+                        batch++;
+                        if (batch >= batchSize) {
+                            conn.commit();
+                            batch = 0;
+                        }
+                    }
+                    if (batch > 0) conn.commit();
+                }
+            }
+        }
+    }
 }
