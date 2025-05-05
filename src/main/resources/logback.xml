@@ -43,7 +43,7 @@
     <!-- Suppress verbose Stanford CoreNLP initialization messages -->
     <logger name="edu.stanford.nlp" level="WARN"/>
 
-    <!-- Set root logger level to INFO -->
+    <!-- Root logger configuration -->
     <root level="DEBUG">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
