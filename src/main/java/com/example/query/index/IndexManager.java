@@ -43,17 +43,19 @@ public class IndexManager implements AutoCloseable {
      * @param temporalStrategy The name of the temporal strategy ("nash" or "naive")
      * @throws IndexAccessException if the base index directory doesn't exist
      */
-    public IndexManager(Path baseDir, String indexSetName, Query query, String temporalStrategy) throws IndexAccessException {
-        this.indexBaseDir = baseDir.resolve(indexSetName);
-        this.indexSetName = indexSetName;
+    public IndexManager(Path projectBaseDir, String indexSetName, Query query, String temporalStrategy) throws IndexAccessException {
+        // Resolve the specific index directory *within* the project directory
+        this.indexBaseDir = projectBaseDir.resolve("indexes"); 
+        this.indexSetName = indexSetName; // Still needed for context/potential future use?
         this.indexes = new HashMap<>();
         this.levelDbOptions = new Options();
         this.levelDbOptions.createIfMissing(false); // Don't create if missing
         this.levelDbOptions.cacheSize(64 * 1024 * 1024); // 64MB cache
         
+        // Check existence of the resolved index base directory (e.g., project/indexes)
         if (!Files.exists(this.indexBaseDir)) {
             throw new IndexAccessException(
-                "Index set directory does not exist: " + this.indexBaseDir,
+                "Base index directory does not exist within the project: " + this.indexBaseDir,
                 "index_manager",
                 IndexAccessException.ErrorType.INITIALIZATION_ERROR
             );

@@ -31,7 +31,7 @@ class AnnotationsTest {
         System.setProperty("progbar.silent", "true"); // Disable progress bar
         dbFile = tempDir.resolve("test.db");
         conn = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
-        annotations = new Annotations(dbFile, 1, false, null);  // Initialize with test-appropriate values
+        annotations = new Annotations(dbFile, 1, null);  // Updated constructor: (Path, int, Integer)
         
         // Create required tables
         try (Statement stmt = conn.createStatement()) {

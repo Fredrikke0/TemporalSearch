@@ -50,7 +50,7 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
     private void setupTestData() throws SQLException {
         // Insert documents with timestamps
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO documents (document_id, timestamp) VALUES (?, ?)")) {
+                "INSERT INTO documents (document_id, timestamp) VALUES (?, ?) ")) {
             pstmt.setInt(1, 1);
             pstmt.setString(2, "2024-01-28");
             pstmt.executeUpdate();
@@ -60,40 +60,40 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
             pstmt.executeUpdate();
         }
 
-        // Insert test sentences:
+        // Insert test sentences: (Removed lemma column index 5)
         // Doc 1: "The black cat sits quietly."
         // Doc 1: "It purrs softly."
         // Doc 2: "The black dog barks loudly."
         String[][] testWords = {
                 // Document 1, Sentence 1
-                { "1", "0", "0", "3", "The", "the", "DET" },
-                { "1", "0", "4", "9", "black", "black", "ADJ" },
-                { "1", "0", "10", "13", "cat", "cat", "NOUN" },
-                { "1", "0", "14", "18", "sits", "sit", "VERB" },
-                { "1", "0", "19", "26", "quietly", "quietly", "ADV" },
+                { "1", "0", "0", "3", "The", "DET" },        // Removed "the"
+                { "1", "0", "4", "9", "black", "ADJ" },       // Removed "black"
+                { "1", "0", "10", "13", "cat", "NOUN" },      // Removed "cat"
+                { "1", "0", "14", "18", "sits", "VERB" },     // Removed "sit"
+                { "1", "0", "19", "26", "quietly", "ADV" },   // Removed "quietly"
                 // Document 1, Sentence 2
-                { "1", "1", "27", "29", "It", "it", "PRON" },
-                { "1", "1", "30", "35", "purrs", "purr", "VERB" },
-                { "1", "1", "36", "42", "softly", "softly", "ADV" },
+                { "1", "1", "27", "29", "It", "PRON" },        // Removed "it"
+                { "1", "1", "30", "35", "purrs", "VERB" },     // Removed "purr"
+                { "1", "1", "36", "42", "softly", "ADV" },    // Removed "softly"
                 // Document 2, Sentence 1
-                { "2", "0", "0", "3", "The", "the", "DET" },
-                { "2", "0", "4", "9", "black", "black", "ADJ" },
-                { "2", "0", "10", "13", "dog", "dog", "NOUN" },
-                { "2", "0", "14", "19", "barks", "bark", "VERB" },
-                { "2", "0", "20", "26", "loudly", "loudly", "ADV" }
+                { "2", "0", "0", "3", "The", "DET" },        // Removed "the"
+                { "2", "0", "4", "9", "black", "ADJ" },       // Removed "black"
+                { "2", "0", "10", "13", "dog", "NOUN" },      // Removed "dog"
+                { "2", "0", "14", "19", "barks", "VERB" },     // Removed "bark"
+                { "2", "0", "20", "26", "loudly", "ADV" }     // Removed "loudly"
         };
 
+        // Updated INSERT statement to exclude lemma
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos) " +
+                "VALUES (?, ?, ?, ?, ?, ?) ")) {
             for (String[] word : testWords) {
                 pstmt.setInt(1, Integer.parseInt(word[0]));
                 pstmt.setInt(2, Integer.parseInt(word[1]));
                 pstmt.setInt(3, Integer.parseInt(word[2]));
                 pstmt.setInt(4, Integer.parseInt(word[3]));
-                pstmt.setString(5, word[4]);
-                pstmt.setString(6, word[5]);
-                pstmt.setString(7, word[6]);
+                pstmt.setString(5, word[4]); // Token
+                pstmt.setString(6, word[5]); // POS
                 pstmt.executeUpdate();
             }
         }
@@ -133,17 +133,17 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
         Options options = new Options();
         indexAccess = new IndexAccess(indexBaseDir.toPath(), "bigram", options);
 
-        // Test bigrams with stopwords
+        // Test bigrams with stopwords (using tokens)
         verifyBigram("the" + IndexGenerator.DELIMITER + "black", 1, 0, 0, 9, 2); // Appears in both documents
 
-        // Test regular bigrams
+        // Test regular bigrams (using tokens: "cat" + "sits", "sits" + "quietly")
         verifyBigram("black" + IndexGenerator.DELIMITER + "cat", 1, 0, 4, 13, 1);
-        verifyBigram("cat" + IndexGenerator.DELIMITER + "sit", 1, 0, 10, 18, 1);
-        verifyBigram("sit" + IndexGenerator.DELIMITER + "quietly", 1, 0, 14, 26, 1);
+        verifyBigram("cat" + IndexGenerator.DELIMITER + "sits", 1, 0, 10, 18, 1); // Use token "sits"
+        verifyBigram("sits" + IndexGenerator.DELIMITER + "quietly", 1, 0, 14, 26, 1); // Use token "sits"
 
-        // Test bigrams in second document
+        // Test bigrams in second document (using tokens: "black" + "dog", "dog" + "barks")
         verifyBigram("black" + IndexGenerator.DELIMITER + "dog", 2, 0, 4, 13, 1);
-        verifyBigram("dog" + IndexGenerator.DELIMITER + "bark", 2, 0, 10, 19, 1);
+        verifyBigram("dog" + IndexGenerator.DELIMITER + "barks", 2, 0, 10, 19, 1); // Use token "barks"
     }
 
     @Test
@@ -158,7 +158,7 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
         Options options = new Options();
         indexAccess = new IndexAccess(indexBaseDir.toPath(), "bigram", options);
 
-        // Verify no bigrams cross sentence boundaries
+        // Verify no bigrams cross sentence boundaries (using tokens)
         Optional<PositionList> quietly = indexAccess.get(bytes("quietly" + IndexGenerator.DELIMITER + "it"));
         Optional<PositionList> softly = indexAccess.get(bytes("softly" + IndexGenerator.DELIMITER + "the"));
         assertTrue(quietly.isEmpty(), "Bigram should not cross sentence boundary");

@@ -38,7 +38,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
     @Override
     protected List<AnnotationEntry> fetchBatch(int offset) throws SQLException {
         List<AnnotationEntry> batch = new ArrayList<>();
-        String query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.lemma, a.pos, d.timestamp " +
+        String query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
                       "FROM annotations a " +
                       "JOIN documents d ON a.document_id = d.document_id " +
                       "ORDER BY a.document_id, a.sentence_id, a.begin_char LIMIT ? OFFSET ?";
@@ -55,7 +55,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
-                        rs.getString("lemma"),
+                        rs.getString("token"),
                         rs.getString("pos"),
                         LocalDate.parse(rs.getString("timestamp").substring(0, 10))
                     );
@@ -69,27 +69,24 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
 
     @Override
     protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
-        // ---> Filter the batch here <---
         List<AnnotationEntry> filteredBatch = batch.stream()
-             .filter(entry -> entry != null && entry.getLemma() != null && !entry.getLemma().isEmpty() &&
-                              entry.getLemma().chars().anyMatch(Character::isLetterOrDigit))
+             .filter(entry -> entry != null && entry.getToken() != null && !entry.getToken().isEmpty() &&
+                              entry.getToken().chars().anyMatch(Character::isLetterOrDigit))
              .collect(Collectors.toList());
 
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
         Map<String, PositionList> positionLists = new HashMap<>();
 
-        // Operate on filteredBatch
         for (int i = 0; i < filteredBatch.size() - 1; i++) {
             AnnotationEntry firstEntry = filteredBatch.get(i);
             AnnotationEntry secondEntry = filteredBatch.get(i + 1);
 
-            // Check sentence/doc ID
             if (firstEntry.getDocumentId() == secondEntry.getDocumentId() &&
                 firstEntry.getSentenceId() == secondEntry.getSentenceId()) {
 
                 String key = String.format("%s%s%s",
-                    firstEntry.getLemma().toLowerCase(), DELIMITER,
-                    secondEntry.getLemma().toLowerCase());
+                    firstEntry.getToken().toLowerCase(), DELIMITER,
+                    secondEntry.getToken().toLowerCase());
 
                 Position position = new Position(secondEntry.getDocumentId(), secondEntry.getSentenceId(),
                     firstEntry.getBeginChar(), secondEntry.getEndChar(), secondEntry.getTimestamp());

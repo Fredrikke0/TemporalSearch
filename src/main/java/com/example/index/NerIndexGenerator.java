@@ -69,8 +69,8 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
-                        entityText.toLowerCase(), // Store entity text in lemma field (lowercased)
-                        nerType, // Store NER type in pos field
+                        entityText.toLowerCase(), // Entity text (lowercased token)
+                        nerType,                 // NER type
                         LocalDate.parse(rs.getString("timestamp").substring(0, 10))
                     ));
                 }
@@ -101,8 +101,8 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             AnnotationEntry entry = batch.get(i);
             int docId = entry.getDocumentId();
             int sentenceId = entry.getSentenceId();
-            String entityType = entry.getPos(); // NER type
-            String token = entry.getLemma(); // Entity text (token)
+            String entityType = entry.getPos(); // NER type stored in pos field
+            String token = entry.getToken(); // Entity text (token) stored in token field
             int beginChar = entry.getBeginChar();
             int endChar = entry.getEndChar();
             int annotationId = entry.getAnnotationId(); // Get the annotation ID

@@ -1,8 +1,6 @@
 package com.example;
 
 import com.example.annotation.Annotations;
-import com.example.logging.analysis.LogAnalyzer;
-import com.example.logging.analysis.LogSummarizer;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
@@ -13,19 +11,28 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.nio.file.InvalidPathException;
+import java.util.stream.Stream;
 
 public class Pipeline {
     private static final Logger logger = LoggerFactory.getLogger(Pipeline.class);
-    private static final String DEFAULT_PROJECT = "default";
 
     public static void main(String[] args) {
         try {
             runPipeline(args);
         } catch (ArgumentParserException e) {
             System.err.println("Argument Error: " + e.getMessage());
+            System.exit(1);
+        } catch (InvalidPathException e) {
+            logger.error("Invalid path provided: {}", e.getMessage(), e);
+            System.err.println("Error: Invalid path specified - " + e.getMessage());
+            System.exit(1);
+        } catch (IOException e) {
+            logger.error("File operation failed: {}", e.getMessage(), e);
+            System.err.println("Error during file operation: " + e.getMessage());
             System.exit(1);
         } catch (Exception e) {
             logger.error("Error running pipeline", e);
@@ -38,277 +45,248 @@ public class Pipeline {
         // Create argument parser
         ArgumentParser parser = ArgumentParsers.newFor("Pipeline").build()
                 .defaultHelp(true)
-                .description("Process and index text data through multiple pipeline stages: conversion, annotation, indexing, and analysis.")
-                .usage("${prog} [-h] <stage-specific-arguments>\n\n" +
-                       "Example usage for each stage:\n" +
-                       "  Convert:   ${prog} -s convert -f wiki.json -p project_name\n" +
-                       "  Annotate:  ${prog} -s annotate -p project_name -b 1000 -t 8\n" +
-                       "  Index:     ${prog} -s index -p project_name -y all\n" +
-                       "  Analyze:   ${prog} -s analyze -g pipeline.log -o reports\n" +
-                       "  All:       ${prog} -s all -f wiki.json -p project_name");
+                .description("Process and index text data through annotation and indexing stages using a project-based workflow.")
+                .usage("${prog} -p <project_path> -s <stage> [-d <source_db>] [--force] [--limit N] [stage-specific-options]\n\n" + 
+                       "Example usage:\n" +
+                       "  Create Project & Run All: ${prog} -p path/to/my_project -d source.db -s all\n" +
+                       "  Annotate Existing Project: ${prog} -p path/to/my_project -s annotate -b 1000 -t 8\n" +
+                       "  Index Existing Project (force): ${prog} -p path/to/my_project -s index -y bigram --force");
 
-        // Common arguments group
-        var commonGroup = parser.addArgumentGroup("Common arguments");
-        commonGroup.addArgument("-s", "--stage")
-                .choices("all", "convert", "annotate", "index", "analyze")
-                .setDefault("all")
-                .help("Pipeline stage to run:\n" +
-                      "  all      - Run all stages (conversion, annotation, indexing)\n" +
-                      "  convert  - Convert Wikipedia dump to SQLite database\n" +
-                      "  annotate - Add linguistic annotations to documents\n" +
-                      "  index    - Generate searchable indexes\n" +
-                      "  analyze  - Analyze processing logs");
+        // Stage argument (moved higher as it dictates required args)
+        parser.addArgument("-s", "--stage")
+                .choices("all", "annotate", "index")
+                .required(true) // Stage is now mandatory
+                .help("Pipeline stage(s) to run:" +
+                      "  all      - Run annotation and indexing" +
+                      "  annotate - Annotate documents" +
+                      "  index    - Generate indexes from annotationsp");
 
-        commonGroup.addArgument("-p", "--project")
-                .setDefault(DEFAULT_PROJECT)
-                .help("Project name for organizing indexes and database (default: '" + DEFAULT_PROJECT + "')");
+        // Project arguments group
+        var projectGroup = parser.addArgumentGroup("Project arguments");
+        projectGroup.addArgument("-p", "--project")
+                .dest("project_path") // Store in 'project_path'
+                .required(true)
+                .help("Path to the project directory. Will be created if it doesn't exist.");
 
-        commonGroup.addArgument("-d", "--db")
-                .required(false)
-                .help("Path to SQLite database file (optional: auto-generated within project directory)");
+        projectGroup.addArgument("-d", "--database")
+                .dest("source_db_path") // Store in 'source_db_path'
+                .required(false) // Required only if project dir doesn't exist (validated later)
+                .help("Path to the pre-converted source SQLite database. Required only if the project directory needs to be created. Will be copied into the project directory.");
 
-        commonGroup.addArgument("--debug")
+        // Common optional arguments
+        var commonOptsGroup = parser.addArgumentGroup("Common optional arguments");
+        commonOptsGroup.addArgument("--force")
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
-                .help("Enable detailed debug logging to console");
+                .help("Force re-running the requested stages, overwriting existing artifacts (annotations, indexes).");
 
-        commonGroup.addArgument("-l", "--limit")
+        commonOptsGroup.addArgument("-l", "--limit")
                 .type(Integer.class)
-                .help("Maximum documents to process in ANY stage (applies globally)");
-
-        // Conversion stage group
-        var convertGroup = parser.addArgumentGroup("Conversion stage arguments (required for 'convert' stage)");
-        convertGroup.addArgument("-f", "--file")
-                .help("Path to Wikipedia dump file");
-
-        convertGroup.addArgument("-r", "--recreate")
-                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
-                .help("Drop and recreate the documents table if it exists");
+                .help("Maximum documents to process in the ANNOTATION stage per run (does not count already annotated documents).");
 
         // Annotation stage group
-        var annotateGroup = parser.addArgumentGroup("Annotation stage arguments (used in 'annotate' stage)");
+        var annotateGroup = parser.addArgumentGroup("Annotation stage arguments (used in 'annotate' or 'all' stage)");
         annotateGroup.addArgument("-b", "--batch-size")
-                .setDefault(1000)
+                .setDefault(1000) // Keep batch size for annotation commit frequency
                 .type(Integer.class)
-                .help("Number of documents to process in each batch (default: 1000)");
+                .help("Number of documents to commit per transaction during annotation (default: 1000)");
 
         annotateGroup.addArgument("-t", "--threads")
-                .setDefault(8)
+                .setDefault(Runtime.getRuntime().availableProcessors()) // Default to available processors
                 .type(Integer.class)
-                .help("Number of parallel threads for CoreNLP processing (default: 8)");
+                .help("Number of parallel threads for CoreNLP processing (default: available processors)");
 
         // Index stage group
-        var indexGroup = parser.addArgumentGroup("Index stage arguments (used in 'index' stage)");
-        indexGroup.addArgument("-i", "--index-dir")
-                .help("Directory for storing generated indexes (optional: auto-generated within project directory)");
-
+        var indexGroup = parser.addArgumentGroup("Index stage arguments (used in 'index' or 'all' stage)");
         indexGroup.addArgument("-w", "--stopwords")
                 .setDefault("stopwords.txt")
                 .help("Path to file containing stopwords to exclude (default: stopwords.txt)");
 
         indexGroup.addArgument("-y", "--index-type")
-                .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch", "all")
+                .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch", "nash", "all") // Added 'nash'
                 .setDefault("all")
-                .help("Type of index to generate:\n" +
-                      "  unigram    - Single word index\n" +
-                      "  bigram     - Two word phrases\n" +
-                      "  trigram    - Three word phrases\n" +
-                      "  dependency - Grammatical dependencies\n" +
-                      "  ner_date   - Named entity dates\n" +
-                      "  ner        - Named entity recognition\n" +
-                      "  pos        - Part-of-speech tagging\n" +
-                      "  hypernym   - Word hypernyms\n" +
-                      "  stitch     - Connects unigrams with their associated dates\n" +
-                      "  all        - Generate all index types (default)");
-
-        indexGroup.addArgument("-k", "--preserve-index")
-                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
-                .help("Keep existing index data instead of regenerating");
-
-        // Analysis stage group
-        var analysisGroup = parser.addArgumentGroup("Analysis stage arguments (required for 'analyze' stage)");
-        analysisGroup.addArgument("-g", "--log-file")
-                .help("Path to log file to analyze");
-
-        analysisGroup.addArgument("-o", "--report-dir")
-                .setDefault("reports")
-                .help("Directory for storing analysis reports (default: 'reports')");
-
-        analysisGroup.addArgument("-m", "--report-format")
-                .choices("text", "html", "both")
-                .setDefault("both")
-                .help("Format for analysis reports:\n" +
-                      "  text - Plain text report\n" +
-                      "  html - HTML formatted report\n" +
-                      "  both - Generate both formats (default)");
+                .help("Type of index to generate:" +
+                      "  unigram    - Single word index" +
+                      "  bigram     - Two word phrases" +
+                      "  trigram    - Three word phrases" +
+                      "  dependency - Grammatical dependencies" +
+                      "  ner_date   - Named entity dates" +
+                      "  ner        - Named entity recognition" +
+                      "  pos        - Part-of-speech tagging" +
+                      "  hypernym   - Word hypernyms" +
+                      "  stitch     - Connects unigrams with their associated dates" +
+                      "  nash       - Specific index type (adjust description if needed)" + // Added nash
+                      "  all        - Generate all available index types (default)");
 
         // Parse arguments
         Namespace ns = parser.parseArgs(args);
         
-        // Set debug mode
-        if (ns.getBoolean("debug")) {
-            System.setProperty("DEBUG_MODE", "true");
-            logger.info("DEBUG mode enabled via command line.");
-        }
-
+        // --- Argument Processing and Validation ---
         String stage = ns.getString("stage");
-        String projectName = ns.getString("project");
-        String dbPathStr = ns.getString("db");
-        String wikiDumpPath = ns.getString("file");
-        String indexDirStr = ns.getString("index_dir");
+        Path projectPath = Path.of(ns.getString("project_path")).toAbsolutePath(); // Ensure absolute path
+        String projectName = projectPath.getFileName().toString(); // Derive project name from path
+        Path projectDbPath = projectPath.resolve(projectName + ".db");
+        Path indexBasePath = projectPath.resolve("indexes");
+        String sourceDbPathStr = ns.getString("source_db_path");
+        boolean force = ns.getBoolean("force");
+        Integer limit = ns.getInt("limit");
         
-        // Create project directories and resolve paths
-        Path projectBasePath = setupProjectDirectories(projectName);
-        
-        // Resolve paths: Use explicit if provided, otherwise default within project dir
-        Path dbPath = (dbPathStr != null) ? Path.of(dbPathStr) : projectBasePath.resolve(projectName + ".db");
-        Path indexDir = (indexDirStr != null) ? Path.of(indexDirStr) : projectBasePath;
-        
-        logger.info("Starting Pipeline for project '{}' (Stage: {})", projectName, stage);
-        logger.info("Using Database: {}", dbPath.toAbsolutePath());
-        logger.info("Using Index Directory: {}", indexDir.toAbsolutePath());
+        logger.info("Starting Pipeline for project '{}' at '{}' (Stage: {})", projectName, projectPath, stage);
 
-        // Validate required arguments based on stage
-        if (stage.equals("convert") || stage.equals("all")) {
-            if (wikiDumpPath == null) {
-                throw new ArgumentParserException("--file is required for conversion stage", parser);
+        // --- Project Initialization ---
+        boolean projectExists = Files.exists(projectPath);
+        if (!projectExists) {
+            logger.info("Project directory '{}' does not exist. Creating...", projectPath.toAbsolutePath());
+            if (sourceDbPathStr == null) {
+                throw new ArgumentParserException("Source database path (--database / -d) is required when creating a new project.", parser);
+            }
+            Path sourceDbPath = Path.of(sourceDbPathStr);
+            logger.info("Source DB to copy: {}", sourceDbPath.toAbsolutePath());
+            if (!Files.exists(sourceDbPath)) {
+                throw new IOException("Source database file not found: " + sourceDbPath);
+            }
+
+            // Create project directory and indexes subdirectory
+            Files.createDirectories(projectPath);
+            Files.createDirectories(indexBasePath);
+
+            // Copy source database to project database path
+            logger.info("Copying source database from '{}' to '{}'", sourceDbPath.toAbsolutePath(), projectDbPath.toAbsolutePath());
+            Files.copy(sourceDbPath, projectDbPath, StandardCopyOption.REPLACE_EXISTING);
+            logger.info("Project '{}' created successfully. Project DB at: {}", projectName, projectDbPath.toAbsolutePath());
+        } else {
+            logger.info("Using existing project directory '{}'", projectPath.toAbsolutePath());
+            if (sourceDbPathStr != null) {
+                logger.warn("Source database path (--database / -d) provided but project directory already exists. Ignoring source database argument. Project dir: {}", projectPath.toAbsolutePath());
+            }
+            if (!Files.exists(projectDbPath)) {
+                 // If project dir exists but DB is missing (and not creating), it's an error
+                 logger.error("Project directory exists, but the project database file is missing: {}", projectDbPath.toAbsolutePath());
+                 throw new IOException("Project directory exists, but the project database file is missing: " + projectDbPath.toAbsolutePath());
+            }
+             // Ensure indexes directory exists even for existing projects
+            if (!Files.exists(indexBasePath)) {
+                 logger.warn("Indexes directory missing in existing project. Creating '{}'", indexBasePath.toAbsolutePath());
+                 Files.createDirectories(indexBasePath);
             }
         }
 
-        if (stage.equals("analyze") && ns.getString("log_file") == null) {
-            throw new ArgumentParserException("--log-file is required for analysis stage", parser);
-        }
+        // Log final paths being used
+        logger.debug("Using Project Database: {}", projectDbPath.toAbsolutePath());
+        logger.debug("Using Index Base Directory: {}", indexBasePath.toAbsolutePath());
 
-        // Run selected pipeline stages
-        if (stage.equals("all") || stage.equals("convert")) {
-            logger.info("Running conversion stage...");
-            WikiJsonToSqlite.ExtractionResult result = WikiJsonToSqlite.extractToSqlite(
-                Path.of(wikiDumpPath),
-                dbPath,
-                stage.equals("all") || ns.getBoolean("recreate"),
-                ns.getInt("limit")
-            );
-            logger.info("Conversion complete. {} entries added to database: {}",
-                result.totalEntries, result.outputDb);
-        }
 
+        // --- Stage Execution ---
+
+        // Run annotation stage if requested ('all' or 'annotate')
         if (stage.equals("all") || stage.equals("annotate")) {
-            logger.info("Running annotation stage...");
+            logger.info("--- Annotation Stage ---");
+            logger.debug("About to run annotation on DB: {}", projectDbPath.toAbsolutePath());
             int threads = ns.getInt("threads");
-            int batchSize = ns.getInt("batch_size");
-            boolean force = ns.getBoolean("recreate"); // treat --recreate as force for annotation
-            Integer limit = ns.getInt("limit"); // Get limit arg
-            Annotations.AnnotationStatus status = Annotations.getAnnotationStatus(dbPath);
+            int batchSize = ns.getInt("batch_size"); // Used for commit frequency
+
+            Annotations.AnnotationStatus status = Annotations.getAnnotationStatus(projectDbPath);
+
             if (force || status.needsProcessing) {
-                int startId = force ? 1 : status.startDocumentId;
-                logger.info("Starting annotation at document_id {} (force: {})", startId, force);
-                Annotations.runAnnotation(dbPath, startId, threads, batchSize, limit); // Pass limit
+                int startId = force ? 1 : status.startDocumentId; // Start from 1 if forcing
+                logger.info("Starting annotation (startDocumentId={}, force={}, limit={}, threads={}, batchSize={})",
+                            startId, force, limit == null ? "none" : limit, threads, batchSize);
+                // Ensure limit is passed correctly
+                Annotations.runAnnotation(projectDbPath, startId, threads, batchSize, limit);
+                logger.info("Annotation stage completed.");
             } else {
-                logger.info("Annotation already complete. Skipping.");
+                logger.info("Annotation already complete according to status check. Skipping. Use --force to re-annotate.");
             }
         }
 
+        // Run indexing stage if requested ('all' or 'index')
         if (stage.equals("all") || stage.equals("index")) {
-            logger.info("Running indexing stage...");
+            logger.info("--- Indexing Stage ---");
+            logger.debug("About to run indexing on DB: {}", projectDbPath.toAbsolutePath());
             String indexType = ns.getString("index_type");
-            boolean force = !ns.getBoolean("preserve_index");
-            Path typeDir = indexDir.resolve(indexType);
-            boolean indexExists = Files.exists(typeDir);
-            if (force || !indexExists) {
-                if (force && indexExists) {
-                    // Remove existing index directory
-                    Files.walk(typeDir)
-                        .sorted((a, b) -> b.compareTo(a))
-                        .forEach(path -> {
-                            try { Files.deleteIfExists(path); } catch (Exception e) { logger.warn("Could not delete {}: {}", path, e.getMessage()); }
-                        });
+            String stopwordsPath = ns.getString("stopwords");
+            int indexBatchSize = 1000; // Default batch size for indexer internal operations, if needed by IndexRunner later.
+
+            // Determine the specific index directory path
+            Path specificIndexDir = indexBasePath.resolve(indexType.equals("all") ? "" : indexType); // Base path if 'all'
+
+             // Check if the specific index type needs processing
+            boolean needsIndexing = true; // Assume yes unless we check
+            if (!force) {
+                if (indexType.equals("all")) {
+                    logger.info("Index type 'all' selected without --force. Existing individual indexes might be regenerated by the indexer if it doesn't skip internally.");
+                    needsIndexing = true; // Proceed with the call
+                } else {
+                    if (Files.exists(specificIndexDir)) {
+                       logger.info("Index directory for type '{}' already exists: '{}'. Skipping. Use --force to regenerate.", indexType, specificIndexDir.toAbsolutePath());
+                       needsIndexing = false;
+                    } else {
+                       logger.info("Index directory for type '{}' does not exist. Proceeding with generation.", indexType);
+                       needsIndexing = true;
+                    }
                 }
-                IndexRunner.runIndexing(
-                    dbPath.toString(),
-                    indexDir.toString(),
-                    ns.getString("stopwords"),
-                    ns.getInt("batch_size"),
-                    indexType
-                );
             } else {
-                logger.info("Index for type '{}' already exists. Skipping.", indexType);
+                 logger.info("--force specified. Indexing will proceed and overwrite existing data.");
+                 needsIndexing = true;
+                 if (!indexType.equals("all") && Files.exists(specificIndexDir)) {
+                     logger.warn("Deleting existing index directory due to --force: {}", specificIndexDir.toAbsolutePath());
+                     try (Stream<Path> walk = Files.walk(specificIndexDir)) {
+                         walk.sorted((a, b) -> b.compareTo(a)) // Reverse order for deletion
+                             .forEach(path -> {
+                                 try {
+                                     Files.deleteIfExists(path);
+                                 } catch (IOException e) {
+                                     logger.error("Could not delete path '{}': {}", path.toAbsolutePath(), e.getMessage(), e);
+                                 }
+                             });
+                         logger.info("Successfully deleted existing index directory: {}", specificIndexDir.toAbsolutePath());
+                     } catch (IOException e) {
+                          logger.error("Error walking directory tree for deletion '{}': {}", specificIndexDir.toAbsolutePath(), e.getMessage(), e);
+                          throw new IOException("Failed to delete existing index directory before forced regeneration: " + specificIndexDir.toAbsolutePath(), e);
+                     }
+                 } else if (indexType.equals("all") && Files.exists(indexBasePath)) {
+                     logger.warn("Deleting all contents of index base directory due to --force: {}", indexBasePath.toAbsolutePath());
+                     try (Stream<Path> walk = Files.list(indexBasePath)) { // Only list immediate children
+                          walk.forEach(path -> {
+                              try {
+                                  if (Files.isDirectory(path)) {
+                                       try (Stream<Path> subWalk = Files.walk(path)) {
+                                            subWalk.sorted((a, b) -> b.compareTo(a))
+                                                 .forEach(subPath -> {
+                                                     try { Files.deleteIfExists(subPath); }
+                                                     catch (IOException e) { logger.error("Could not delete path '{}': {}", subPath.toAbsolutePath(), e.getMessage(), e); }
+                                                 });
+                                       }
+                                  } else {
+                                      Files.deleteIfExists(path); // Delete files directly
+                                  }
+                                  logger.info("Deleted existing index artifact: {}", path.toAbsolutePath());
+                              } catch (IOException e) {
+                                  logger.error("Could not delete path '{}': {}", path.toAbsolutePath(), e.getMessage(), e);
+                              }
+                          });
+                          logger.info("Successfully deleted contents of index base directory: {}", indexBasePath.toAbsolutePath());
+                     } catch (IOException e) {
+                         logger.error("Error clearing index base directory '{}': {}", indexBasePath.toAbsolutePath(), e.getMessage(), e);
+                         throw new IOException("Failed to clear index base directory before forced 'all' regeneration: " + indexBasePath.toAbsolutePath(), e);
+                     }
+                 }
+            }
+
+
+            if (needsIndexing) {
+                 logger.info("Running Indexer (type={}, stopwords='{}', batchSize={})",
+                             indexType, stopwordsPath, indexBatchSize);
+                 IndexRunner.runIndexing(
+                     projectDbPath.toString(),
+                     indexBasePath.toString(), // Pass base index dir
+                     stopwordsPath,
+                     indexBatchSize, // Pass default/parsed batch size
+                     indexType // Pass specific type ('all' or single)
+                 );
+                 logger.info("Indexing stage completed.");
             }
         }
 
-        if (stage.equals("analyze")) {
-            logger.info("Running log analysis...");
-            runAnalysis(
-                ns.getString("log_file"),
-                ns.getString("report_dir"),
-                ns.getString("report_format"));
-        }
-
-        logger.info("Pipeline completed successfully!");
-    }
-
-    private static void runAnalysis(String logFile, String reportDir, String format) throws Exception {
-        // Create report directory if it doesn't exist
-        Path reportPath = Path.of(reportDir);
-        if (!reportPath.toFile().exists()) {
-            reportPath.toFile().mkdirs();
-        }
-
-        // Analyze logs
-        LogAnalyzer analyzer = new LogAnalyzer();
-        Map<String, Object> results = analyzer.analyzeLogs(Path.of(logFile));
-
-        // Generate reports
-        LogSummarizer summarizer = new LogSummarizer();
-        if (format.equals("text") || format.equals("both")) {
-            Path textReport = reportPath.resolve("analysis_report.txt");
-            summarizer.generateReport(results, textReport, "text");
-            logger.info("Generated text report: {}", textReport);
-        }
-        
-        if (format.equals("html") || format.equals("both")) {
-            Path htmlReport = reportPath.resolve("analysis_report.html");
-            summarizer.generateReport(results, htmlReport, "html");
-            logger.info("Generated HTML report: {}", htmlReport);
-        }
-
-        // Print summary to console
-        @SuppressWarnings("unchecked")
-        Map<String, Object> summary = (Map<String, Object>) results.get("processing_summary");
-        logger.info("\nAnalysis Summary:");
-        logger.info("----------------");
-        logger.info("Total Documents Processed: {}", summary.get("total_documents_processed"));
-        logger.info("Total N-grams Generated: {}", summary.get("total_ngrams_generated"));
-        if (summary.containsKey("avg_ngrams_per_document")) {
-            logger.info("Average N-grams per Document: {}", 
-                summary.get("avg_ngrams_per_document"));
-        }
-
-        @SuppressWarnings("unchecked")
-        Map<String, Object> errors = (Map<String, Object>) results.get("error_patterns");
-        logger.info("Total Errors: {}", errors.get("total_errors"));
-    }
-
-    /**
-     * Sets up the project directory structure and returns the base path
-     * @param projectName Name of the project
-     * @return Path to the project directory
-     * @throws IOException If directory creation fails
-     */
-    private static Path setupProjectDirectories(String projectName) throws IOException {
-        // Create main project structure
-        Path currentDir = Path.of(System.getProperty("user.dir"));
-        Path indexesDir = currentDir.resolve("indexes");
-        Path projectDir = indexesDir.resolve(projectName);
-        
-        // Ensure indexes directory exists
-        if (!Files.exists(indexesDir)) {
-            Files.createDirectories(indexesDir);
-        }
-        
-        // Ensure project directory exists
-        if (!Files.exists(projectDir)) {
-            Files.createDirectories(projectDir);
-        }
-        
-        return projectDir;
+        logger.info("Pipeline completed successfully for project '{}'!", projectName);
     }
 }

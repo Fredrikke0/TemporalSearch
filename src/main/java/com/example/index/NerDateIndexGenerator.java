@@ -125,7 +125,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
 
         for (AnnotationEntry entry : batch) {
             // Basic validation (redundant with fetchBatch, but safe)
-            String rawNormalizedDate = entry.getLemma(); // YYYY-MM-DD
+            String rawNormalizedDate = entry.getToken(); // YYYY-MM-DD
             if (rawNormalizedDate == null || !rawNormalizedDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
                 logger.debug("Skipping invalid raw date format in processBatch: {}", rawNormalizedDate);
                 continue; // Should not happen if fetchBatch filtering is correct

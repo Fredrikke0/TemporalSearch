@@ -52,7 +52,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     private void setupTestData() throws SQLException {
         // Insert documents with timestamps
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO documents (document_id, timestamp) VALUES (?, ?)")) {
+                "INSERT INTO documents (document_id, timestamp) VALUES (?, ?) ")) {
             pstmt.setInt(1, 1);
             pstmt.setString(2, "2024-01-28");
             pstmt.executeUpdate();
@@ -62,44 +62,44 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
             pstmt.executeUpdate();
         }
 
-        // Insert test sentences:
-        // Doc 1: "The black cat sits quietly."
-        // Doc 1: "It purrs softly."
-        // Doc 2: "The black dog barks loudly."
+        // Insert test sentences: (Removed lemma column index 5)
+        // Doc 1: "The black cat sits quietly now."
+        // Doc 1: "It purrs very softly today."
+        // Doc 2: "The black cat runs quickly away."
         String[][] testWords = {
                 // Document 1, Sentence 1
-                { "1", "0", "0", "3", "The", "the", "DET" },
-                { "1", "0", "4", "9", "black", "black", "ADJ" },
-                { "1", "0", "10", "13", "cat", "cat", "NOUN" },
-                { "1", "0", "14", "18", "sits", "sit", "VERB" },
-                { "1", "0", "19", "26", "quietly", "quietly", "ADV" },
-                { "1", "0", "27", "30", "now", "now", "ADV" },
+                { "1", "0", "0", "3", "The", "DET" },         // Removed "the"
+                { "1", "0", "4", "9", "black", "ADJ" },       // Removed "black"
+                { "1", "0", "10", "13", "cat", "NOUN" },      // Removed "cat"
+                { "1", "0", "14", "18", "sits", "VERB" },     // Removed "sit"
+                { "1", "0", "19", "26", "quietly", "ADV" },   // Removed "quietly"
+                { "1", "0", "27", "30", "now", "ADV" },       // Removed "now"
                 // Document 1, Sentence 2
-                { "1", "1", "31", "33", "It", "it", "PRON" },
-                { "1", "1", "34", "39", "purrs", "purr", "VERB" },
-                { "1", "1", "40", "44", "very", "very", "ADV" },
-                { "1", "1", "45", "51", "softly", "softly", "ADV" },
-                { "1", "1", "52", "57", "today", "today", "ADV" },
+                { "1", "1", "31", "33", "It", "PRON" },        // Removed "it"
+                { "1", "1", "34", "39", "purrs", "VERB" },     // Removed "purr"
+                { "1", "1", "40", "44", "very", "ADV" },       // Removed "very"
+                { "1", "1", "45", "51", "softly", "ADV" },    // Removed "softly"
+                { "1", "1", "52", "57", "today", "ADV" },     // Removed "today"
                 // Document 2, Sentence 1
-                { "2", "0", "0", "3", "The", "the", "DET" },
-                { "2", "0", "4", "9", "black", "black", "ADJ" },
-                { "2", "0", "10", "13", "cat", "cat", "NOUN" },
-                { "2", "0", "14", "18", "runs", "run", "VERB" },
-                { "2", "0", "19", "26", "quickly", "quickly", "ADV" },
-                { "2", "0", "27", "31", "away", "away", "ADV" }
+                { "2", "0", "0", "3", "The", "DET" },         // Removed "the"
+                { "2", "0", "4", "9", "black", "ADJ" },       // Removed "black"
+                { "2", "0", "10", "13", "cat", "NOUN" },      // Removed "cat"
+                { "2", "0", "14", "18", "runs", "VERB" },     // Removed "run"
+                { "2", "0", "19", "26", "quickly", "ADV" },   // Removed "quickly"
+                { "2", "0", "27", "31", "away", "ADV" }       // Removed "away"
         };
 
+        // Updated INSERT statement to exclude lemma
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos) " +
+                "VALUES (?, ?, ?, ?, ?, ?) ")) {
             for (String[] word : testWords) {
                 pstmt.setInt(1, Integer.parseInt(word[0]));
                 pstmt.setInt(2, Integer.parseInt(word[1]));
                 pstmt.setInt(3, Integer.parseInt(word[2]));
                 pstmt.setInt(4, Integer.parseInt(word[3]));
-                pstmt.setString(5, word[4]);
-                pstmt.setString(6, word[5]);
-                pstmt.setString(7, word[6]);
+                pstmt.setString(5, word[4]); // Token
+                pstmt.setString(6, word[5]); // POS
                 pstmt.executeUpdate();
             }
         }
@@ -108,35 +108,36 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     private void setupPunctuationTestData() throws SQLException {
         // Insert document 3
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO documents (document_id, timestamp) VALUES (?, ?)")) {
+                "INSERT INTO documents (document_id, timestamp) VALUES (?, ?) ")) {
             pstmt.setInt(1, 3);
             pstmt.setString(2, "2024-01-29");
             pstmt.executeUpdate();
         }
 
-        // Insert test sentence for Doc 3: "Anne Waldman ( born 1945 ) ."
+        // Insert test sentence for Doc 3: (Removed lemma column index 5)
+        // "Anne Waldman ( born 1945 ) ."
         String[][] punctuationWords = {
                 // Document 3, Sentence 0
-                { "3", "0", "0", "4", "Anne", "anne", "PROPN" },
-                { "3", "0", "5", "12", "Waldman", "waldman", "PROPN" },
-                { "3", "0", "13", "14", "(", "(", "PUNCT" }, // Punctuation
-                { "3", "0", "15", "19", "born", "born", "VERB" },
-                { "3", "0", "20", "24", "1945", "1945", "NUM" },
-                { "3", "0", "25", "26", ")", ")", "PUNCT" }, // Punctuation
-                { "3", "0", "27", "28", ".", ".", "PUNCT" }  // Punctuation
+                { "3", "0", "0", "4", "Anne", "PROPN" },     // Removed "anne"
+                { "3", "0", "5", "12", "Waldman", "PROPN" },  // Removed "waldman"
+                { "3", "0", "13", "14", "(", "PUNCT" },      // Removed "("
+                { "3", "0", "15", "19", "born", "VERB" },     // Removed "born"
+                { "3", "0", "20", "24", "1945", "NUM" },      // Removed "1945"
+                { "3", "0", "25", "26", ")", "PUNCT" },      // Removed ")"
+                { "3", "0", "27", "28", ".", "PUNCT" }       // Removed "."
         };
 
+        // Updated INSERT statement to exclude lemma
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos) " +
+                "VALUES (?, ?, ?, ?, ?, ?) ")) {
             for (String[] word : punctuationWords) {
                 pstmt.setInt(1, Integer.parseInt(word[0]));
                 pstmt.setInt(2, Integer.parseInt(word[1]));
                 pstmt.setInt(3, Integer.parseInt(word[2]));
                 pstmt.setInt(4, Integer.parseInt(word[3]));
-                pstmt.setString(5, word[4]);
-                pstmt.setString(6, word[5]); // Use lemma for indexing
-                pstmt.setString(7, word[6]);
+                pstmt.setString(5, word[4]); // Token
+                pstmt.setString(6, word[5]); // POS
                 pstmt.executeUpdate();
             }
         }
@@ -176,17 +177,17 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         Options options = new Options();
         indexAccess = new IndexAccess(indexBaseDir.toPath(), "trigram", options);
 
-        // Test trigrams with stopwords
+        // Test trigrams with stopwords (using tokens)
         verifyTrigram("the" + IndexGenerator.DELIMITER + "black" + 
             IndexGenerator.DELIMITER + "cat", 1, 0, 0, 13, 2);
 
-        // Test regular trigrams in first document
+        // Test regular trigrams in first document (using tokens: "black" + "cat" + "sits", etc.)
         verifyTrigram("black" + IndexGenerator.DELIMITER + "cat" + 
-            IndexGenerator.DELIMITER + "sit", 1, 0, 4, 18, 1);
-        verifyTrigram("cat" + IndexGenerator.DELIMITER + "sit" + 
-            IndexGenerator.DELIMITER + "quietly", 1, 0, 10, 26, 1);
-        verifyTrigram("sit" + IndexGenerator.DELIMITER + "quietly" + 
-            IndexGenerator.DELIMITER + "now", 1, 0, 14, 30, 1);
+            IndexGenerator.DELIMITER + "sits", 1, 0, 4, 18, 1); // Use token "sits"
+        verifyTrigram("cat" + IndexGenerator.DELIMITER + "sits" + 
+            IndexGenerator.DELIMITER + "quietly", 1, 0, 10, 26, 1); // Use token "sits"
+        verifyTrigram("sits" + IndexGenerator.DELIMITER + "quietly" + 
+            IndexGenerator.DELIMITER + "now", 1, 0, 14, 30, 1); // Use token "sits"
     }
 
     @Test
@@ -201,11 +202,11 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         Options options = new Options();
         indexAccess = new IndexAccess(indexBaseDir.toPath(), "trigram", options);
 
-        // Verify no trigrams cross sentence boundaries
+        // Verify no trigrams cross sentence boundaries (using tokens)
         Optional<PositionList> quietly = indexAccess.get(bytes("quietly" + IndexGenerator.DELIMITER + "now" + 
             IndexGenerator.DELIMITER + "it"));
         Optional<PositionList> now = indexAccess.get(bytes("now" + IndexGenerator.DELIMITER + "it" + 
-            IndexGenerator.DELIMITER + "purr"));
+            IndexGenerator.DELIMITER + "purrs")); // Use token "purrs"
         assertTrue(quietly.isEmpty(), "Trigram should not cross sentence boundary");
         assertTrue(now.isEmpty(), "Trigram should not cross sentence boundary");
     }
@@ -225,11 +226,11 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         Options options = new Options();
         indexAccess = new IndexAccess(indexBaseDir.toPath(), "trigram", options);
 
-        // Expected trigrams (skipping punctuation)
-        // "Anne Waldman born" -> spans from 'Anne' start to 'born' end
+        // Expected trigrams (using tokens)
+        // "Anne Waldman born" 
         verifyTrigram("anne" + IndexGenerator.DELIMITER + "waldman" +
             IndexGenerator.DELIMITER + "born", 3, 0, 0, 19, 1);
-        // "Waldman born 1945" -> spans from 'Waldman' start to '1945' end
+        // "Waldman born 1945" 
         verifyTrigram("waldman" + IndexGenerator.DELIMITER + "born" +
             IndexGenerator.DELIMITER + "1945", 3, 0, 5, 24, 1);
 
@@ -263,10 +264,5 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     private void verifyTrigramAbsent(String trigram, String message) throws IOException, IndexAccessException {
         Optional<PositionList> positions = indexAccess.get(bytes(trigram));
         assertTrue(positions.isEmpty(), message + " - Found unexpected trigram: '" + trigram + "'");
-    }
-
-    @Test
-    public void testTrigramIndexing() throws Exception {
-        // ... existing code ...
     }
 } 

@@ -295,7 +295,6 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>3.6.0</version>
                 <!-- Common configuration for all shaded JARs -->
                 <configuration>
                     <createDependencyReducedPom>false</createDependencyReducedPom>
@@ -345,6 +344,7 @@
                                     <mainClass>com.example.QueryCLI</mainClass>
                                     <manifestEntries>
                                         <Add-Opens>java.base/java.lang=ALL-UNNAMED</Add-Opens>
+                                        <Add-Opens>java.base/sun.misc=ALL-UNNAMED</Add-Opens>
                                     </manifestEntries>
                                 </transformer>
                             </transformers>
@@ -417,6 +417,10 @@
                                     <transformers>
                                         <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                             <mainClass>com.example.Pipeline</mainClass>
+                                            <manifestEntries>
+                                                <Add-Opens>java.base/java.lang=ALL-UNNAMED</Add-Opens>
+                                                <Add-Opens>java.base/sun.misc=ALL-UNNAMED</Add-Opens>
+                                            </manifestEntries>
                                         </transformer>
                                     </transformers>
                                 </configuration>
@@ -433,6 +437,22 @@
                                     <transformers>
                                         <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                             <mainClass>com.example.LevelDBBrowser</mainClass>
+                                        </transformer>
+                                    </transformers>
+                                </configuration>
+                            </execution>
+                            <!-- WikiJsonToSqlite JAR -->
+                            <execution>
+                                <id>wiki-converter-jar</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>shade</goal>
+                                </goals>
+                                <configuration>
+                                    <finalName>wiki-json-to-sqlite</finalName>
+                                    <transformers>
+                                        <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                            <mainClass>com.example.WikiJsonToSqlite</mainClass>
                                         </transformer>
                                     </transformers>
                                 </configuration>

@@ -20,21 +20,19 @@ import java.time.temporal.ChronoUnit;
 public class Annotations {
     private static final Logger logger = LoggerFactory.getLogger(Annotations.class);
     private final Path dbFile;
-    private final boolean overwrite;
     private final Integer limit;
     private final StanfordCoreNLP pipeline;
     
-    public Annotations(Path dbFile, int threads, boolean overwrite, Integer limit) {
+    public Annotations(Path dbFile, int threads, Integer limit) {
         this.dbFile = dbFile;
-        this.overwrite = overwrite;
         this.limit = limit;
         
         // Create optimized CoreNLP configuration
         this.pipeline = createCoreNLPPipeline(threads);
-        logger.info("Created CoreNLP pipeline with optimized configuration");
+        logger.debug("Created CoreNLP pipeline with optimized configuration");
     }
 
-    private StanfordCoreNLP createCoreNLPPipeline(int threads) {
+    private static StanfordCoreNLP createCoreNLPPipeline(int threads) {
         CoreNLPConfig config = new CoreNLPConfig(threads);
         return config.createPipeline();
     }
@@ -46,18 +44,15 @@ public class Annotations {
             conn = DriverManager.getConnection(url);
             conn.setAutoCommit(false);
             
-            createTables(conn, overwrite);
+            createTables(conn, false);
             
-            // Build base query conditions (handling overwrite and length limit)
+            // Build base query conditions (handling length limit)
             List<String> conditions = new ArrayList<>();
-            if (!overwrite) {
-                conditions.add("document_id NOT IN (SELECT DISTINCT document_id FROM annotations)");
-            }
             conditions.add("LENGTH(text) <= 15000"); // Always filter by length
 
             // Build count query for documents that will actually be processed
             StringBuilder countQueryBuilder = new StringBuilder("SELECT COUNT(*) FROM documents");
-            if (!conditions.isEmpty()) { // Apply conditions (length filter, potentially NOT IN)
+            if (!conditions.isEmpty()) { // Apply conditions (length filter)
                 countQueryBuilder.append(" WHERE ").append(String.join(" AND ", conditions));
             }
             if (limit != null) {
@@ -74,16 +69,17 @@ public class Annotations {
                 }
             }
             
-            logger.info("Found {} documents matching criteria (length <= 15000, overwrite={}, limit={}) to process.",
-                        documentsToProcess, overwrite, limit != null ? limit : "none");
+            logger.info("Found {} documents matching criteria (length <= 15000, limit={}) to process.",
+                        documentsToProcess, limit != null ? limit : "none");
             
             // Build the main processing query
-            String query = buildQuery(overwrite, limit, true); // Pass flag to include length filter
+            String query = buildQuery(limit, true); // Pass flag to include length filter
             
             final int commitBatchSize = 100;
             int documentsInBatch = 0;
             int totalProcessed = 0;
             
+            logger.debug("Executing query to fetch documents...");
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(query)) {
                 
@@ -107,6 +103,7 @@ public class Annotations {
                 
                 // Build the ProgressBar within the try-with-resources
                 try (ProgressBar pb = pbb.build()) {
+                    logger.debug("Starting document processing loop...");
                     while (rs.next()) {
                         int documentId = rs.getInt("document_id");
                         String text = rs.getString("text");
@@ -236,7 +233,6 @@ public class Annotations {
         List<Map<String, Object>> annotations = new ArrayList<>();
         List<Map<String, Object>> dependencies = new ArrayList<>();
         
-        logger.debug("Processing document {}", documentId);
         
         // Process the document directly without chunking
         CoreDocument document = new CoreDocument(text);
@@ -345,17 +341,11 @@ public class Annotations {
     }
 
     // Overload buildQuery to optionally include the length filter in the WHERE clause
-    private static String buildQuery(boolean overwrite, Integer limit, boolean filterLength) {
+    private static String buildQuery(Integer limit, boolean filterLength) {
         StringBuilder query = new StringBuilder("SELECT document_id, text FROM documents");
         List<String> conditions = new ArrayList<>();
 
-        if (!overwrite) {
-            conditions.add("document_id NOT IN (SELECT DISTINCT document_id FROM annotations)");
-        }
-
-        if (filterLength) {
-            conditions.add("LENGTH(text) <= 15000");
-        }
+        conditions.add("LENGTH(text) <= 15000");
 
         if (!conditions.isEmpty()) {
             query.append(" WHERE ").append(String.join(" AND ", conditions));
@@ -366,51 +356,6 @@ public class Annotations {
         }
 
         return query.toString();
-    }
-
-    public static void main(String[] args) {
-        // Create parser with required and optional flags
-        ArgumentParser parser = ArgumentParsers.newFor("Annotations").build()
-                .defaultHelp(true)
-                .description("Annotate existing SQLite database with CoreNLP");
-
-        parser.addArgument("-d", "--db")
-                .required(true)
-                .help("SQLite database file path");
-
-        parser.addArgument("-t", "--threads")
-                .setDefault(8)
-                .type(Integer.class)
-                .help("Number of parallel threads for CoreNLP processing");
-
-        parser.addArgument("-o", "--overwrite")
-                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
-                .help("Overwrite existing annotations (default: False)");
-
-        try {
-            Namespace ns = parser.parseArgs(args);
-            
-            // Create a single instance of Annotations with the pipeline
-            Annotations annotations = new Annotations(
-                Path.of(ns.getString("db")),
-                ns.getInt("threads"),
-                ns.getBoolean("overwrite"),
-                null
-            );
-            
-            // Use the instance method instead of static method
-            annotations.processDocuments();
-
-            System.out.printf("Processing complete. Data stored in database: %s%n", ns.getString("db"));
-
-        } catch (ArgumentParserException e) {
-            parser.handleError(e);
-            System.exit(1);
-        } catch (Exception e) {
-            System.err.println("Error processing database: " + e.getMessage());
-            e.printStackTrace();
-            System.exit(1);
-        }
     }
 
     /**
@@ -463,8 +408,8 @@ public class Annotations {
 
     /**
      * Runs annotation from a specific document ID, deleting any existing annotation/dependency rows for each doc before inserting new ones.
-     * Removes internal overwrite logic. Processes documents from startDocumentId onward.
-     * Respects an optional limit on the number of documents to process in this run.
+     * Processes up to 'limit' documents in this run (limit is per run, not total).
+     * Respects resumability: resumes from the last annotated document.
      */
     public static void runAnnotation(Path projectDbPath, int startDocumentId, int threads, int batchSize, Integer limit) throws Exception {
         String url = "jdbc:sqlite:" + projectDbPath;
@@ -472,41 +417,91 @@ public class Annotations {
             conn.setAutoCommit(false);
             createTables(conn, false); // Don't drop tables
 
+            // --- Calculate total documents to process (respecting limit and startId) ---
+            long totalDocumentsInDb = 0;
+            String countQuery = "SELECT COUNT(*) FROM documents WHERE document_id >= ? AND LENGTH(text) <= 15000";
+            try (PreparedStatement countStmt = conn.prepareStatement(countQuery)) {
+                countStmt.setInt(1, startDocumentId);
+                try (ResultSet countRs = countStmt.executeQuery()) {
+                    if (countRs.next()) {
+                        totalDocumentsInDb = countRs.getLong(1);
+                    }
+                }
+            }
+
+            // Determine the actual number to process in this run based on the limit
+            long totalDocumentsToProcessThisRun = (limit != null && limit < totalDocumentsInDb) ? limit : totalDocumentsInDb;
+
+            logger.info("Found {} documents remaining to potentially process (startId={}). This run will process up to {}.",
+                        totalDocumentsInDb, startDocumentId, totalDocumentsToProcessThisRun);
+
             // Query documents to process
-            String query = "SELECT document_id, text FROM documents WHERE document_id >= ? AND LENGTH(text) <= 15000 ORDER BY document_id ASC";
+            String queryBase = "SELECT document_id, text FROM documents WHERE document_id >= ? AND LENGTH(text) <= 15000 ORDER BY document_id ASC";
+            String query = (limit != null) ? queryBase + " LIMIT ?" : queryBase;
+            
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
                 stmt.setInt(1, startDocumentId);
+                if (limit != null) {
+                    stmt.setInt(2, limit); // Set the limit parameter
+                }
+                // Add log before executing the query
+                logger.debug("Executing query to fetch documents...");
                 try (ResultSet rs = stmt.executeQuery()) {
-                    StanfordCoreNLP pipeline = new Annotations(projectDbPath, threads, false, null).pipeline;
+                    // Add log after query execution starts (inside result set try)
+                    logger.debug("Starting document processing loop...");
+                    // Initialize the pipeline *once* before the loop
+                    StanfordCoreNLP pipeline = createCoreNLPPipeline(threads);
+                    logger.debug("CoreNLP pipeline initialized for processing.");
+
                     int processed = 0;
                     int batch = 0;
-                    while (rs.next()) {
-                        // Check if limit has been reached for this run
-                        if (limit != null && processed >= limit) {
-                            logger.info("Reached processing limit ({}) for this run.", limit);
-                            break;
+
+                    // Setup progress bar
+                    ProgressBarBuilder pbb = new ProgressBarBuilder()
+                        .setTaskName("Annotating")
+                        .setInitialMax(totalDocumentsToProcessThisRun) // Use count for this run
+                        .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
+                        .setUpdateIntervalMillis(200)
+                        .showSpeed();
+
+                    try (ProgressBar pb = pbb.build()) {
+                        logger.debug("CoreNLP pipeline initialized. Starting annotation...");
+                        while (rs.next()) {
+                            // Check if limit has been reached for this run
+                            if (limit != null && processed >= limit) {
+                                logger.info("Reached processing limit ({}) for this run.", limit);
+                                break;
+                            }
+
+                            int documentId = rs.getInt("document_id");
+                            String text = rs.getString("text");
+
+                            // Delete any existing annotation/dependency rows for this document
+                            try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?")) {
+                                delAnn.setInt(1, documentId);
+                                delAnn.executeUpdate();
+                            }
+                            try (PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
+                                delDep.setInt(1, documentId);
+                                delDep.executeUpdate();
+                            }
+
+                            // Process and insert new annotation/dependency rows
+                            AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
+                            insertData(conn, result.annotations, result.dependencies);
+
+                            processed++;
+                            pb.step(); // Always step
+                            batch++;
+
+                            if (batch >= batchSize) {
+                                conn.commit();
+                                logger.debug("Committed batch of {} documents", batch);
+                                batch = 0;
+                            }
                         }
-                        int documentId = rs.getInt("document_id");
-                        String text = rs.getString("text");
-                        // Delete any existing annotation/dependency rows for this document
-                        try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?")) {
-                            delAnn.setInt(1, documentId);
-                            delAnn.executeUpdate();
-                        }
-                        try (PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
-                            delDep.setInt(1, documentId);
-                            delDep.executeUpdate();
-                        }
-                        // Process and insert new annotation/dependency rows
-                        AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
-                        insertData(conn, result.annotations, result.dependencies);
-                        processed++;
-                        batch++;
-                        if (batch >= batchSize) {
-                            conn.commit();
-                            batch = 0;
-                        }
-                    }
+                    } // ProgressBar closes here
+
                     if (batch > 0) conn.commit();
                 }
             }

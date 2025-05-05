@@ -121,14 +121,15 @@ public class WikiJsonToSqlite {
             long lineCount = 0;
 
             String insertSql = "INSERT INTO documents (title, text, timestamp) VALUES (?, ?, ?)";
+
             try (PreparedStatement pstmt = conn.prepareStatement(insertSql);
                  BufferedReader reader = new BufferedReader(
                      new InputStreamReader(new FileInputStream(inputFile.toFile()), StandardCharsets.UTF_8));
                  ProgressBar pb = new ProgressBarBuilder()
-                    .setTaskName("Converting Wiki Dump")
-                    .setInitialMax(limit != null ? limit : totalLines)
-                    .build()) {
-
+                         .setTaskName("Converting Wiki Dump")
+                         .setInitialMax(limit != null ? limit : totalLines)
+                         .build())
+            {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     try {

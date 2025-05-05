@@ -28,7 +28,7 @@ import java.util.Map;
  */
 public class QueryCLI {
     private static final Logger logger = LoggerFactory.getLogger(QueryCLI.class);
-    private final Path indexBaseDir;
+    private final Path projectsDir;
     
     // Core components
     private final QueryParser parser;
@@ -40,12 +40,12 @@ public class QueryCLI {
     /**
      * Creates a new QueryCLI instance.
      *
-     * @param indexBaseDir The base directory for all index sets
+     * @param projectsDir The base directory containing project folders.
      * @param temporalStrategy The desired temporal execution strategy ("nash" or "naive")
      * @param joinStrategy The desired join execution strategy ("independent" or "dependent")
      */
-    public QueryCLI(Path indexBaseDir, String temporalStrategy, JoinOptimizationStrategy joinStrategy) {
-        this.indexBaseDir = indexBaseDir;
+    public QueryCLI(Path projectsDir, String temporalStrategy, JoinOptimizationStrategy joinStrategy) {
+        this.projectsDir = projectsDir;
         this.parser = new QueryParser();
         this.validator = new QuerySemanticValidator();
         this.executorFactory = new ConditionExecutorFactory();
@@ -53,9 +53,8 @@ public class QueryCLI {
         this.executor = new QueryExecutor(this.executorFactory);
         this.executor.setJoinOptimizationStrategy(joinStrategy);
         this.joinStrategy = joinStrategy;
-        SqliteAccessor.initialize(indexBaseDir.toString());
-        logger.info("Initialized QueryCLI with base directory: {}", indexBaseDir);
-        logger.info("Using database structure: {}/[CORPUS_NAME]/[CORPUS_NAME].db", indexBaseDir);
+        logger.info("Initialized QueryCLI with base projects directory: {}", projectsDir);
+        logger.info("Project structure expected: {}/[PROJECT_NAME]/[PROJECT_NAME].db and {}/[PROJECT_NAME]/indexes/", projectsDir, projectsDir);
     }
     
     /**
@@ -78,40 +77,53 @@ public class QueryCLI {
             // Check for date queries and display helpful information
             checkAndDisplayDateQueryHelp(queryStr, query);
             
-            // 3. Get index path from FROM clause
-            String indexSetName = query.source();
-            logger.debug("Using index set: {}", indexSetName);
-            
-            // Update database path to match the corpus name from FROM clause
-            String corpusDbPath = Path.of(indexBaseDir.toString(), indexSetName, indexSetName + ".db").toString();
-            logger.debug("Using database path based on corpus: {}", corpusDbPath);
-            
-            // Check if corpus-specific database exists
+            // 3. Get project name from FROM clause
+            String projectName = query.source();
+            logger.debug("Using project name from FROM clause: {}", projectName);
+
+            // Construct paths based on projectsDir and projectName
+            Path projectPath = projectsDir.resolve(projectName);
+            String corpusDbPath = projectPath.resolve(projectName + ".db").toString();
+            Path indexBasePath = projectPath.resolve("indexes"); // Path object for IndexManager
+            String indexBasePathStr = indexBasePath.toString(); // String for logging/legacy if needed
+
+            logger.debug("Resolved project path: {}", projectPath);
+            logger.debug("Using database path for project '{}': {}", projectName, corpusDbPath);
+            logger.debug("Using index base path for project '{}': {}", projectName, indexBasePath);
+
+            // Check if project-specific database exists
             if (!new java.io.File(corpusDbPath).exists()) {
-                String errorMessage = String.format("Database file not found: %s. Each corpus must have a database in [index-dir]/%s/%s.db", 
-                                                   corpusDbPath, indexSetName, indexSetName);
+                String errorMessage = String.format(
+                    "Database file not found for project '%s': %s. Expected location: %s/%s/%s.db",
+                    projectName, corpusDbPath, projectsDir, projectName, projectName);
                 logger.error(errorMessage);
                 System.err.println("Error: " + errorMessage);
-                System.err.println(String.format("Expected database location: %s/%s/%s.db", indexBaseDir, indexSetName, indexSetName));
-                return; // Early return to avoid further processing
+                System.err.println("Ensure the project directory and its corresponding database exist.");
+                return; // Early return
             }
-            
-            // Initialize Nash temporal index for this corpus
-            logger.debug("Initializing Nash temporal index (if applicable) for corpus: {}", indexSetName);
 
-            // Create a new TableResultService with the corpus-specific database path
+            // Initialize SqliteAccessor for this specific database *before* TableResultService or IndexManager might need it.
+            // This assumes SqliteAccessor needs initialization per DB. If it's truly global or managed differently, adjust this.
+            SqliteAccessor.initialize(corpusDbPath);
+            logger.debug("Initialized SqliteAccessor for database: {}", corpusDbPath);
+
+            // Initialize Nash temporal index for this corpus (project) - conceptually the same
+            logger.debug("Initializing Nash temporal index (if applicable) for project: {}", projectName);
+
+            // Create a new TableResultService with the project-specific database path
             TableResultService tableResultService = new TableResultService(corpusDbPath);
-            logger.info("Using corpus-specific database at: {}", corpusDbPath);
+            logger.info("Using project-specific database at: {}", corpusDbPath);
             
-            // 4. Create IndexManager for the resolved path, passing the query and strategy
-            try (IndexManager indexManager = new IndexManager(indexBaseDir, indexSetName, query, this.executorFactory.getTemporalStrategy())) {
-                logger.debug("Created IndexManager for index set: {}", indexSetName);
+            // 4. Create IndexManager for the resolved paths, passing the query and strategy
+            // Pass the projectPath, IndexManager will resolve its own indexBaseDir
+            try (IndexManager indexManager = new IndexManager(projectPath, projectName, query, this.executorFactory.getTemporalStrategy())) {
+                logger.debug("Created IndexManager for project: {} using project path: {}", projectName, projectPath);
                 
                 // Initialize Nash index with the index manager
-                executor.initializeNashIndex(indexSetName, indexManager);
+                executor.initializeNashIndex(projectName, indexManager); // Pass projectName
                 
                 // 5. Execute query using QueryExecutor
-                logger.debug("Executing query against index set: {}", indexSetName);
+                logger.debug("Executing query against project: {}", projectName);
                 Query.Granularity granularity = query.granularity();
                 int windowSize = query.granularitySize().orElse(0); // Use 0 if not present
                 logger.info("Query granularity: {} with size: {}", granularity, windowSize);
@@ -248,11 +260,11 @@ public class QueryCLI {
         // Set up argument parser
         ArgumentParser parser = ArgumentParsers.newFor("QueryCLI").build()
                 .defaultHelp(true)
-                .description("Execute queries against indexed corpus. Supports extracting text snippets with SNIPPET(variableName) in SELECT clause.");
+                .description("Execute queries against indexed projects. Queries specify the project via the FROM clause.");
         
-        parser.addArgument("-d", "--index-dir")
-                .setDefault("indexes")
-                .help("Base directory for index sets");
+        parser.addArgument("-pd", "--projects-dir")
+                .setDefault("projects")
+                .help("Base directory containing project folders (default: projects)");
         
         parser.addArgument("--export")
                 .help("Export results to a file in the specified format: csv:filename.csv, json:filename.json, or html:filename.html");
@@ -276,7 +288,7 @@ public class QueryCLI {
         try {
             // Parse arguments
             Namespace ns = parser.parseArgs(args);
-            String indexDir = ns.getString("index_dir");
+            String projectsDirStr = ns.getString("projects_dir");
             String query = ns.getString("query");
             String exportArg = ns.getString("export");
             String temporalStrategy = ns.getString("temporal_strategy"); // Get the strategy name
@@ -306,7 +318,7 @@ public class QueryCLI {
             // Create and run CLI, passing the chosen strategies
             logger.info("Configuring temporal strategy: {}", temporalStrategy);
             logger.info("Configuring join strategy: {}", joinStrategy);
-            QueryCLI cli = new QueryCLI(Path.of(indexDir), temporalStrategy, joinStrategy);
+            QueryCLI cli = new QueryCLI(Path.of(projectsDirStr), temporalStrategy, joinStrategy);
             
             if (query != null) {
                 // Execute the provided query
@@ -315,8 +327,10 @@ public class QueryCLI {
                 // Interactive mode
                 Scanner scanner = new Scanner(System.in);
                 System.out.println("Query CLI - Enter queries or 'exit' to quit");
-                System.out.println("Using index directory: " + indexDir);
-                System.out.println("Database structure: " + indexDir + "/[CORPUS_NAME]/[CORPUS_NAME].db");
+                System.out.println("Using base projects directory: " + projectsDirStr);
+                System.out.println("Project structure expected: " + projectsDirStr + "/[PROJECT_NAME]/[PROJECT_NAME].db");
+                System.out.println("Index structure expected: " + projectsDirStr + "/[PROJECT_NAME]/indexes/");
+                System.out.println("Specify project in query using: FROM [PROJECT_NAME]");
                 System.out.println("Temporal Strategy: " + temporalStrategy + " (Use --temporal-strategy nash|naive to change at startup)");
                 System.out.println("Join Strategy: " + joinStrategy.name().toLowerCase() + " (Use --join-strategy independent|dependent to change at startup)");
                 System.out.println("Snippet support is enabled. Use SNIPPET(variable) in SELECT clause to show text context.");

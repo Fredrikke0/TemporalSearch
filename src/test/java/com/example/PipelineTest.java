@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import static com.example.WikiJsonToSqlite.extractToSqlite;
 
 @DisplayName("Pipeline Integration Tests")
 public class PipelineTest {
@@ -38,6 +39,7 @@ public class PipelineTest {
     protected Path stopwordsFile;
     protected String projectName;
     protected Connection sqliteConn;
+    protected Path sourceDb;
     private static String originalProgbarSilent;
 
     @BeforeAll
@@ -49,40 +51,16 @@ public class PipelineTest {
     void setUp() throws Exception {
         System.setProperty("progbar.silent", "true"); // Disable progress bar
         logger.info("Setting up test environment");
-        // Create temporary directory
         tempDir = Files.createTempDirectory("pipeline-test-");
-        
-        // Setup paths
         jsonFile = createTestData(tempDir);
         projectName = "test-project";
-        
-        // Project-based paths for verification
-        Path indexesDir = tempDir.resolve("indexes");
-        Path projectDir = indexesDir.resolve(projectName);
+        Path projectDir = tempDir.resolve(projectName);
         dbFile = projectDir.resolve(projectName + ".db");
-        indexDir = projectDir;
-        
-        // Ensure the indexes directory exists before tests run
-        Files.createDirectories(indexesDir);
-        
-        // Clean up any index files from previous test runs
-        if (indexDir.toFile().exists()) {
-            File[] files = indexDir.toFile().listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    if (file.isDirectory()) {
-                        MoreFiles.deleteRecursively(file.toPath(), RecursiveDeleteOption.ALLOW_INSECURE);
-                    } else {
-                        file.delete();
-                    }
-                }
-            }
-        }
-        
+        indexDir = projectDir.resolve("indexes");
         stopwordsFile = createStopwordsFile(tempDir);
-        
-        // Create database connection (will be established later)
         sqliteConn = null;
+        sourceDb = tempDir.resolve("source.db");
+        extractToSqlite(jsonFile, sourceDb, true, TOTAL_DOCS);
         logger.info("Test environment ready with temp dir: {}", tempDir);
     }
 
@@ -151,26 +129,19 @@ public class PipelineTest {
             String originalUserDir = System.getProperty("user.dir");
             try {
                 System.setProperty("user.dir", tempDir.toString());
-                
-                // Run full pipeline with explicit database and index paths
+                Files.createDirectories(dbFile.getParent());
+                // Create DB from JSON using converter
+                extractToSqlite(jsonFile, dbFile, true, TOTAL_DOCS);
+                // Run full pipeline (all stages except conversion)
                 String[] args = {
                     "-s", "all",
-                    "-f", jsonFile.toString(),
                     "-p", projectName,
-                    "-d", dbFile.toAbsolutePath().toString(),
-                    "-i", indexDir.toAbsolutePath().toString(),
-                    "--stopwords", stopwordsFile.toString(),
-                    "--preserve-index"  // Add flag to preserve existing index data
+                    "-d", sourceDb.toString(),
+                    "--stopwords", stopwordsFile.toString()
                 };
-                
-                // Ensure directories exist before running
-                Files.createDirectories(dbFile.getParent());
-                
                 Pipeline.runPipeline(args);
-                
                 // Connect to the database for verification
                 sqliteConn = createTestDatabase();
-                
                 verifyConversionStage(TOTAL_DOCS);
                 verifyAnnotationStage(TOTAL_DOCS);
                 verifyIndexingStage();
@@ -185,27 +156,19 @@ public class PipelineTest {
             String originalUserDir = System.getProperty("user.dir");
             try {
                 System.setProperty("user.dir", tempDir.toString());
-                
-                // Run pipeline with limit and explicit database and index paths
+                Files.createDirectories(dbFile.getParent());
+                // Create DB from JSON using converter
+                extractToSqlite(jsonFile, dbFile, true, TOTAL_DOCS);
+                // Run pipeline with limit
                 String[] args = {
                     "-s", "all",
-                    "-f", jsonFile.toString(),
                     "-p", projectName,
-                    "-d", dbFile.toAbsolutePath().toString(),
-                    "-i", indexDir.toAbsolutePath().toString(),
+                    "-d", sourceDb.toString(),
                     "--stopwords", stopwordsFile.toString(),
-                    "--preserve-index",  // Add flag to preserve existing index data
                     "--limit", "5"
                 };
-                
-                // Ensure directories exist before running
-                Files.createDirectories(dbFile.getParent());
-                
                 Pipeline.runPipeline(args);
-                
-                // Connect to the database for verification
                 sqliteConn = createTestDatabase();
-                
                 verifyConversionStage(5);
                 verifyAnnotationStage(5);
                 verifyIndexingStage();
@@ -219,58 +182,21 @@ public class PipelineTest {
     @DisplayName("Individual Stage Tests")
     class StageTests {
         @Test
-        @DisplayName("Conversion stage creates database correctly")
-        void testConversionStage() throws Exception {
-            String[] args = {
-                "-s", "convert",
-                "-f", jsonFile.toString(),
-                "-p", projectName,
-                "--recreate"
-            };
-            
-            // Set working directory for the test
-            String originalUserDir = System.getProperty("user.dir");
-            try {
-                System.setProperty("user.dir", tempDir.toString());
-                Pipeline.runPipeline(args);
-                
-                // Connect to the database for verification
-                sqliteConn = createTestDatabase();
-                
-                verifyConversionStage(TOTAL_DOCS);
-                verifyNoAnnotations();
-                verifyNoIndexes();
-            } finally {
-                // Restore original working directory
-                System.setProperty("user.dir", originalUserDir);
-            }
-        }
-
-        @Test
         @DisplayName("Annotation stage processes documents correctly")
         void testAnnotationStage() throws Exception {
-            // First run conversion
-            System.setProperty("user.dir", tempDir.toString());
-            
-            Pipeline.runPipeline(new String[]{
-                "-s", "convert",
-                "-f", jsonFile.toString(),
-                "-p", projectName,
-                "--recreate"
-            });
-
-            // Then run annotation
+            Path projectDir = tempDir.resolve(projectName);
+            if (Files.exists(projectDir)) {
+                MoreFiles.deleteRecursively(projectDir, RecursiveDeleteOption.ALLOW_INSECURE);
+            }
             String[] args = {
                 "-s", "annotate",
-                "-p", projectName,
+                "-p", projectDir.toString(),
+                "-d", sourceDb.toString(),
                 "-b", "5",
                 "-t", "2"
             };
             Pipeline.runPipeline(args);
-
-            // Connect to the database for verification
             sqliteConn = createTestDatabase();
-            
             verifyConversionStage(TOTAL_DOCS);
             verifyAnnotationStage(TOTAL_DOCS);
             verifyNoIndexes();
@@ -279,222 +205,185 @@ public class PipelineTest {
         @Test
         @DisplayName("Annotation stage resumes correctly after partial completion")
         void testAnnotationResumesCorrectly() throws Exception {
-            // First run conversion
-            System.setProperty("user.dir", tempDir.toString());
-            Pipeline.runPipeline(new String[]{
-                "-s", "convert",
-                "-f", jsonFile.toString(),
-                "-p", projectName,
-                "--recreate"
-            });
-
-            // Run annotation with a limit (partially annotate)
-            final int initialLimit = 10;
-            Pipeline.runPipeline(new String[]{
+            Path projectDir = tempDir.resolve(projectName);
+            if (Files.exists(projectDir)) {
+                MoreFiles.deleteRecursively(projectDir, RecursiveDeleteOption.ALLOW_INSECURE);
+            }
+            String[] args1 = {
                 "-s", "annotate",
-                "-p", projectName,
+                "-p", projectDir.toString(),
+                "-d", sourceDb.toString(),
                 "-b", "5",
                 "-t", "2",
-                "-l", String.valueOf(initialLimit) // Limit annotation to 10 docs
-            });
-
-            // Verify only limited docs are annotated initially
+                "-l", "10"
+            };
+            Pipeline.runPipeline(args1);
             sqliteConn = createTestDatabase();
-            verifyAnnotationStage(initialLimit); // Check only 10 docs annotated
-
-            // Close connection before next run
+            verifyAnnotationStage(10);
             if (sqliteConn != null) sqliteConn.close();
-
             // Run annotation again without limit (should resume)
-            // No --recreate or --limit flag
-            Pipeline.runPipeline(new String[]{
+            String[] args2 = {
                 "-s", "annotate",
-                "-p", projectName,
+                "-p", projectDir.toString(),
                 "-b", "5",
                 "-t", "2"
-            });
-
-            // Verify all documents are now annotated
+            };
+            Pipeline.runPipeline(args2);
             sqliteConn = createTestDatabase();
-            verifyAnnotationStage(TOTAL_DOCS); // Check all 20 docs annotated
+            verifyAnnotationStage(TOTAL_DOCS);
         }
 
         @Test
-        @DisplayName("Annotation stage forces re-annotation with --recreate")
+        @DisplayName("Annotation stage forces re-annotation with --force")
         void testAnnotationForceRecreates() throws Exception {
-            // First run conversion and full annotation
-             System.setProperty("user.dir", tempDir.toString());
-             Pipeline.runPipeline(new String[]{
-                 "-s", "convert",
-                 "-f", jsonFile.toString(),
-                 "-p", projectName,
-                 "--recreate"
-             });
-             Pipeline.runPipeline(new String[]{
-                 "-s", "annotate",
-                 "-p", projectName,
-                 "-b", "5",
-                 "-t", "2"
-             });
-
-             // Verify all documents annotated
-             sqliteConn = createTestDatabase();
-             verifyAnnotationStage(TOTAL_DOCS);
-             
-             // Close connection before next run
-             if (sqliteConn != null) sqliteConn.close();
-
-             // Run annotation again with --recreate (should force re-run)
-             Pipeline.runPipeline(new String[]{
-                 "-s", "annotate",
-                 "-p", projectName,
-                 "-b", "5",
-                 "-t", "2",
-                 "--recreate" // Force re-annotation
-             });
-
-             // Verify all documents are still annotated (confirms forced run completed)
-             sqliteConn = createTestDatabase();
-             verifyAnnotationStage(TOTAL_DOCS);
+            Path projectDir = tempDir.resolve(projectName);
+            if (Files.exists(projectDir)) {
+                MoreFiles.deleteRecursively(projectDir, RecursiveDeleteOption.ALLOW_INSECURE);
+            }
+            String[] args1 = {
+                "-s", "annotate",
+                "-p", projectDir.toString(),
+                "-d", sourceDb.toString(),
+                "-b", "5",
+                "-t", "2"
+            };
+            Pipeline.runPipeline(args1);
+            sqliteConn = createTestDatabase();
+            verifyAnnotationStage(TOTAL_DOCS);
+            if (sqliteConn != null) sqliteConn.close();
+            // Run annotation again with --force
+            String[] args2 = {
+                "-s", "annotate",
+                "-p", projectDir.toString(),
+                "-b", "5",
+                "-t", "2",
+                "--force"
+            };
+            Pipeline.runPipeline(args2);
+            sqliteConn = createTestDatabase();
+            verifyAnnotationStage(TOTAL_DOCS);
         }
 
         @Test
         @DisplayName("Indexing stage creates all index types")
         void testIndexingStage() throws Exception {
-            // Run conversion and annotation first
-            setupConversionAndAnnotation();
-            
-            String originalUserDir = System.getProperty("user.dir");
-            try {
-                System.setProperty("user.dir", tempDir.toString());
-                
-                // Test indexing with all types and explicitly specify database path
-                String[] args = {
-                    "-s", "index",
-                    "-p", projectName,
-                    "-d", dbFile.toAbsolutePath().toString(),
-                    "-i", indexDir.toAbsolutePath().toString(),
-                    "--stopwords", stopwordsFile.toString(),
-                    "-y", "all",
-                    "--preserve-index"  // Add flag to preserve existing index data
-                };
-                
-                // Verify database path exists before running indexing
-                logger.info("Indexing with database: {}", dbFile.toAbsolutePath());
-                assertTrue(dbFile.toFile().exists(), "Database file should exist before indexing");
-                
-                Pipeline.runPipeline(args);
-                
-                verifyIndexingStage();
-            } finally {
-                System.setProperty("user.dir", originalUserDir);
+            Path projectDir = tempDir.resolve(projectName);
+            if (Files.exists(projectDir)) {
+                MoreFiles.deleteRecursively(projectDir, RecursiveDeleteOption.ALLOW_INSECURE);
             }
+            // Ensure annotation is run before indexing
+            String[] annotateArgs = {
+                "-s", "annotate",
+                "-p", projectDir.toString(),
+                "-d", sourceDb.toString(),
+                "-b", "5",
+                "-t", "2"
+            };
+            Pipeline.runPipeline(annotateArgs);
+            String[] args = {
+                "-s", "index",
+                "-p", projectDir.toString(),
+                "-d", sourceDb.toString(),
+                "--stopwords", stopwordsFile.toString(),
+                "-y", "all"
+            };
+            assertTrue(dbFile.toFile().exists(), "Database file should exist before indexing");
+            Pipeline.runPipeline(args);
+            verifyIndexingStage();
         }
 
         @Test
         @DisplayName("Indexing stage creates specific index type")
         void testSpecificIndexType() throws Exception {
-            // Run conversion and annotation first
-            setupConversionAndAnnotation();
-            
-            String originalUserDir = System.getProperty("user.dir");
-            try {
-                System.setProperty("user.dir", tempDir.toString());
-                
-                // Test specific index type and explicitly specify database path
-                String[] args = {
-                    "-s", "index",
-                    "-p", projectName,
-                    "-d", dbFile.toAbsolutePath().toString(),
-                    "-i", indexDir.toAbsolutePath().toString(),
-                    "--stopwords", stopwordsFile.toString(),
-                    "-y", "unigram",
-                    "--preserve-index"  // Add flag to preserve existing index data
-                };
-                
-                // Verify database path exists before running indexing
-                logger.info("Indexing with database: {}", dbFile.toAbsolutePath());
-                assertTrue(dbFile.toFile().exists(), "Database file should exist before indexing");
-                
-                Pipeline.runPipeline(args);
-                
-                // Verify only unigram index exists
-                assertTrue(indexDir.resolve("unigram").toFile().exists(),
-                    "Unigram index should exist");
-                assertFalse(indexDir.resolve("bigram").toFile().exists(),
-                    "Bigram index should not exist");
-            } finally {
-                System.setProperty("user.dir", originalUserDir);
+            Path projectDir = tempDir.resolve(projectName);
+            if (Files.exists(projectDir)) {
+                MoreFiles.deleteRecursively(projectDir, RecursiveDeleteOption.ALLOW_INSECURE);
             }
+            // Ensure annotation is run before indexing
+            String[] annotateArgs = {
+                "-s", "annotate",
+                "-p", projectDir.toString(),
+                "-d", sourceDb.toString(),
+                "-b", "5",
+                "-t", "2"
+            };
+            Pipeline.runPipeline(annotateArgs);
+            String[] args = {
+                "-s", "index",
+                "-p", projectDir.toString(),
+                "-d", sourceDb.toString(),
+                "--stopwords", stopwordsFile.toString(),
+                "-y", "unigram"
+            };
+            assertTrue(dbFile.toFile().exists(), "Database file should exist before indexing");
+            Pipeline.runPipeline(args);
+            assertTrue(indexDir.resolve("unigram").toFile().exists(),
+                "Unigram index should exist");
+            assertFalse(indexDir.resolve("bigram").toFile().exists(),
+                "Bigram index should not exist");
         }
 
         @Test
-        @DisplayName("Indexing stage skips if index exists and --preserve-index is used")
+        @DisplayName("Indexing stage skips if index exists and --force is not used")
         void testIndexingSkipsWhenPreserve() throws Exception {
-            // Run conversion, annotation, and initial indexing
-            setupConversionAndAnnotation();
-            String originalUserDir = System.getProperty("user.dir");
-            try {
-                System.setProperty("user.dir", tempDir.toString());
-                
-                // Initial index run (unigram)
-                Path unigramDir = indexDir.resolve("unigram");
-                Pipeline.runPipeline(new String[]{
-                    "-s", "index", "-p", projectName, "-y", "unigram", "--stopwords", stopwordsFile.toString()
-                });
-                assertTrue(Files.exists(unigramDir), "Unigram index should exist after first run");
-                long initialSize = Files.walk(unigramDir).mapToLong(p -> {
-                    try { return Files.size(p); } catch (IOException e) { return 0L; }
-                }).sum(); // Get initial size/state
-
-                // Run indexing again with --preserve-index (force=false)
-                 Pipeline.runPipeline(new String[]{
-                    "-s", "index", "-p", projectName, "-y", "unigram", "--stopwords", stopwordsFile.toString(),
-                    "--preserve-index" 
-                });
-                
-                // Verify index still exists (and ideally hasn't changed, though size check is basic)
-                assertTrue(Files.exists(unigramDir), "Unigram index should still exist after second run with preserve");
-                long finalSize = Files.walk(unigramDir).mapToLong(p -> {
-                    try { return Files.size(p); } catch (IOException e) { return 0L; }
-                }).sum();
-                assertEquals(initialSize, finalSize, "Index size should not change when preserved"); // Basic check
-
-            } finally {
-                System.setProperty("user.dir", originalUserDir);
+            Path projectDir = tempDir.resolve(projectName);
+            if (Files.exists(projectDir)) {
+                MoreFiles.deleteRecursively(projectDir, RecursiveDeleteOption.ALLOW_INSECURE);
             }
+            // Ensure annotation is run before indexing
+            String[] annotateArgs = {
+                "-s", "annotate",
+                "-p", projectDir.toString(),
+                "-d", sourceDb.toString(),
+                "-b", "5",
+                "-t", "2"
+            };
+            Pipeline.runPipeline(annotateArgs);
+            Path unigramDir = indexDir.resolve("unigram");
+            Pipeline.runPipeline(new String[]{
+                "-s", "index", "-p", projectDir.toString(), "-d", sourceDb.toString(), "-y", "unigram", "--stopwords", stopwordsFile.toString()
+            });
+            assertTrue(Files.exists(unigramDir), "Unigram index should exist after first run");
+            long initialSize = Files.walk(unigramDir).mapToLong(p -> {
+                try { return Files.size(p); } catch (IOException e) { return 0L; }
+            }).sum();
+            // Run indexing again with --force false (default)
+            Pipeline.runPipeline(new String[]{
+                "-s", "index", "-p", projectDir.toString(), "-d", sourceDb.toString(), "-y", "unigram", "--stopwords", stopwordsFile.toString()
+            });
+            assertTrue(Files.exists(unigramDir), "Unigram index should still exist after second run");
+            long finalSize = Files.walk(unigramDir).mapToLong(p -> {
+                try { return Files.size(p); } catch (IOException e) { return 0L; }
+            }).sum();
+            assertEquals(initialSize, finalSize, "Index size should not change when preserved");
         }
 
         @Test
-        @DisplayName("Indexing stage forces recreation without --preserve-index")
+        @DisplayName("Indexing stage forces recreation with --force")
         void testIndexingForceRecreates() throws Exception {
-             // Run conversion, annotation, and initial indexing
-            setupConversionAndAnnotation();
-            String originalUserDir = System.getProperty("user.dir");
-            try {
-                System.setProperty("user.dir", tempDir.toString());
-                
-                // Initial index run (unigram)
-                Path unigramDir = indexDir.resolve("unigram");
-                Pipeline.runPipeline(new String[]{
-                    "-s", "index", "-p", projectName, "-y", "unigram", "--stopwords", stopwordsFile.toString()
-                });
-                assertTrue(Files.exists(unigramDir), "Unigram index should exist after first run");
-                // We could capture modification times here if needed for a stronger check
-
-                // Run indexing again WITHOUT --preserve-index (force=true)
-                 Pipeline.runPipeline(new String[]{
-                    "-s", "index", "-p", projectName, "-y", "unigram", "--stopwords", stopwordsFile.toString()
-                    // No --preserve-index means force=true
-                });
-                
-                // Verify index still exists (confirms forced run completed)
-                assertTrue(Files.exists(unigramDir), "Unigram index should still exist after forced recreation");
-                // A more robust test could check modification times before/after the second run.
-
-            } finally {
-                System.setProperty("user.dir", originalUserDir);
+            Path projectDir = tempDir.resolve(projectName);
+            if (Files.exists(projectDir)) {
+                MoreFiles.deleteRecursively(projectDir, RecursiveDeleteOption.ALLOW_INSECURE);
             }
+            // Ensure annotation is run before indexing
+            String[] annotateArgs = {
+                "-s", "annotate",
+                "-p", projectDir.toString(),
+                "-d", sourceDb.toString(),
+                "-b", "5",
+                "-t", "2"
+            };
+            Pipeline.runPipeline(annotateArgs);
+            Path unigramDir = indexDir.resolve("unigram");
+            Pipeline.runPipeline(new String[]{
+                "-s", "index", "-p", projectDir.toString(), "-d", sourceDb.toString(), "-y", "unigram", "--stopwords", stopwordsFile.toString()
+            });
+            assertTrue(Files.exists(unigramDir), "Unigram index should exist after first run");
+            // Run indexing again WITH --force
+            Pipeline.runPipeline(new String[]{
+                "-s", "index", "-p", projectDir.toString(), "-d", sourceDb.toString(), "-y", "unigram", "--stopwords", stopwordsFile.toString(), "--force"
+            });
+            assertTrue(Files.exists(unigramDir), "Unigram index should still exist after forced recreation");
         }
     }
 
@@ -504,13 +393,9 @@ public class PipelineTest {
         @Test
         @DisplayName("Pipeline handles missing input file")
         void testMissingInputFile() {
-            String[] args = {
-                "-s", "convert",
-                "-f", "nonexistent.json",
-                "-p", projectName
-            };
-            Exception exception = assertThrows(FileNotFoundException.class, 
-                () -> Pipeline.runPipeline(args));
+            // Now, missing input file means the converter fails, not the pipeline
+            Exception exception = assertThrows(IOException.class, 
+                () -> extractToSqlite(Path.of("nonexistent.json"), dbFile, true, null));
             assertTrue(exception.getMessage().contains("nonexistent.json"));
         }
 
@@ -519,7 +404,6 @@ public class PipelineTest {
         void testInvalidStage() {
             String[] args = {
                 "-s", "invalid",
-                "-f", jsonFile.toString(),
                 "-p", projectName
             };
             ArgumentParserException exception = assertThrows(ArgumentParserException.class, 
@@ -530,8 +414,8 @@ public class PipelineTest {
         @Test
         @DisplayName("Pipeline handles missing required arguments")
         void testMissingRequiredArgs() {
-            // For the convert stage, input file is required
-            String[] args = {"-s", "convert", "-p", projectName};
+            // For annotation, project is required
+            String[] args = {"-s", "annotate"};
             ArgumentParserException exception = assertThrows(ArgumentParserException.class, 
                 () -> Pipeline.runPipeline(args));
             assertTrue(exception.getMessage().contains("required"));
@@ -541,38 +425,21 @@ public class PipelineTest {
         @DisplayName("Pipeline creates project directories")
         void testProjectDirectoryCreation() throws Exception {
             String testProject = "new-test-project";
+            Path sourceDbForTest = tempDir.resolve("source-" + testProject + ".db");
+            extractToSqlite(jsonFile, sourceDbForTest, true, TOTAL_DOCS);
             String[] args = {
-                "-s", "convert",
-                "-f", jsonFile.toString(),
-                "-p", testProject,
-                "--recreate"
+                "-s", "annotate",
+                "-p", tempDir.resolve(testProject).toString(),
+                "-d", sourceDbForTest.toString()
             };
-            
-            // Set working directory for the test and capture original
-            String originalUserDir = System.getProperty("user.dir");
-            try {
-                System.setProperty("user.dir", tempDir.toString());
-                logger.info("Setting working directory to: {}", tempDir);
-                
-                Pipeline.runPipeline(args);
-                
-                // Verify project directory structure - log actual paths for debugging
-                Path indexesDir = tempDir.resolve("indexes");
-                Path projectDir = indexesDir.resolve(testProject);
-                Path dbPath = projectDir.resolve(testProject + ".db");
-                
-                logger.info("Checking for project dir: {}", projectDir);
-                logger.info("Project dir exists: {}", projectDir.toFile().exists());
-                logger.info("Checking for db file: {}", dbPath);
-                logger.info("DB file exists: {}", dbPath.toFile().exists());
-                
-                assertTrue(indexesDir.toFile().exists(), "Indexes directory should be created");
-                assertTrue(projectDir.toFile().exists(), "Project directory should be created");
-                assertTrue(dbPath.toFile().exists(), "Database file should be created");
-            } finally {
-                // Restore original working directory
-                System.setProperty("user.dir", originalUserDir);
-            }
+            Pipeline.runPipeline(args);
+            // Verify project directory structure
+            Path projectDir = tempDir.resolve(testProject);
+            Path indexesDir = projectDir.resolve("indexes");
+            Path dbPath = projectDir.resolve(testProject + ".db");
+            assertTrue(projectDir.toFile().exists(), "Project directory should be created");
+            assertTrue(indexesDir.toFile().exists(), "Indexes directory should be created");
+            assertTrue(dbPath.toFile().exists(), "Database file should be created");
         }
     }
 
@@ -596,54 +463,6 @@ public class PipelineTest {
             }
         }
         return jsonFile;
-    }
-
-    private void setupConversionAndAnnotation() throws Exception {
-        String originalUserDir = System.getProperty("user.dir");
-        try {
-            System.setProperty("user.dir", tempDir.toString());
-            
-            // Ensure parent directories exist
-            Files.createDirectories(dbFile.getParent());
-            String absoluteDbPath = dbFile.toAbsolutePath().toString();
-            logger.info("Using database path: {}", absoluteDbPath);
-            
-            // Run conversion with explicit database path
-            Pipeline.runPipeline(new String[]{
-                "-s", "convert",
-                "-f", jsonFile.toString(),
-                "-p", projectName,
-                "-d", absoluteDbPath,
-                "--recreate"
-            });
-            
-            // Run annotation with explicit database path
-            Pipeline.runPipeline(new String[]{
-                "-s", "annotate",
-                "-p", projectName,
-                "-d", absoluteDbPath,
-                "-b", "5",
-                "-t", "2"
-            });
-            
-            // Connect to the database for verification
-            sqliteConn = createTestDatabase();
-            
-            // Verify annotations table exists before proceeding
-            try (Statement stmt = sqliteConn.createStatement()) {
-                ResultSet rs = stmt.executeQuery(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='annotations'");
-                assertTrue(rs.next(), "Annotations table should exist");
-                assertTrue(rs.getInt(1) > 0, "Annotations table should exist");
-                
-                // Double check that we have annotations
-                rs = stmt.executeQuery("SELECT COUNT(*) FROM annotations");
-                assertTrue(rs.next(), "Should have annotations");
-                assertTrue(rs.getInt(1) > 0, "Should have annotations");
-            }
-        } finally {
-            System.setProperty("user.dir", originalUserDir);
-        }
     }
 
     private void verifyConversionStage(int expectedCount) throws SQLException {

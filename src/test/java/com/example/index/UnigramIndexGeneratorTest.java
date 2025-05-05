@@ -66,10 +66,10 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
     private void insertBasicTestData() throws SQLException {
         try (Statement stmt = sqliteConn.createStatement()) {
             stmt.execute("INSERT INTO documents (document_id, timestamp) VALUES (1, '2024-03-20')");
-            stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos) " +
-                        "VALUES (1, 1, 0, 4, 'test', 'test', 'NN')");
-            stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos) " +
-                        "VALUES (1, 1, 5, 9, 'word', 'word', 'NN')");
+            stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos) " +
+                        "VALUES (1, 1, 0, 4, 'test', 'NN')");
+            stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos) " +
+                        "VALUES (1, 1, 5, 9, 'word', 'NN')");
         }
     }
 
@@ -89,7 +89,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         assertEquals(1, first.getSentenceId());
         assertEquals(0, first.getBeginChar());
         assertEquals(4, first.getEndChar());
-        assertEquals("test", first.getLemma());
+        assertEquals("test", first.getToken());
         assertEquals("NN", first.getPos());
         assertEquals(LocalDate.parse("2024-03-20"), first.getTimestamp());
 
@@ -98,7 +98,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         assertEquals(1, second.getSentenceId());
         assertEquals(5, second.getBeginChar());
         assertEquals(9, second.getEndChar());
-        assertEquals("word", second.getLemma());
+        assertEquals("word", second.getToken());
         assertEquals("NN", second.getPos());
         assertEquals(LocalDate.parse("2024-03-20"), second.getTimestamp());
     }

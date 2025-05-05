@@ -10,30 +10,35 @@ import java.time.LocalDate;
 class AnnotationEntryTest extends BaseIndexTest {
 
     @Test
-    void testBasicIndexing() throws Exception {
+    void testBasicConstructionAndGetters() throws Exception {
         // Insert test document
         LocalDate timestamp = LocalDate.now();
         TestData.insertDocument(sqliteConn, 1, timestamp);
 
-        // Insert test annotations
+        // Insert test annotations (assuming TestData.insertBasicAnnotations uses token)
         TestData.insertBasicAnnotations(sqliteConn);
 
-        // Create and verify an annotation entry
-        AnnotationEntry entry = TestData.createAnnotation(1, "cat", "NOUN");
+        // Create and verify an annotation entry directly
+        int annotationId = 101;
+        String token = "cat";
+        String pos = "NOUN";
+        AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, token, pos, timestamp);
+        
+        assertEquals(annotationId, entry.getAnnotationId());
         assertEquals(1, entry.getDocumentId());
         assertEquals(1, entry.getSentenceId());
         assertEquals(0, entry.getBeginChar());
         assertEquals(3, entry.getEndChar());
-        assertEquals("cat", entry.getLemma());
-        assertEquals("NOUN", entry.getPos());
-        assertNotNull(entry.getTimestamp());
+        assertEquals(token, entry.getToken()); // Check token
+        assertEquals(pos, entry.getPos());
+        assertEquals(timestamp, entry.getTimestamp());
     }
 
     @Test
     void testNullHandling() {
-        // Test with null lemma and POS
+        // Test with null token and POS
         AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, null, null, LocalDate.now());
-        assertNull(entry.getLemma());
+        assertNull(entry.getToken()); // Check token
         assertNull(entry.getPos());
     }
 
@@ -41,7 +46,7 @@ class AnnotationEntryTest extends BaseIndexTest {
     void testEmptyStrings() {
         // Test with empty strings
         AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, "", "", LocalDate.now());
-        assertEquals("", entry.getLemma());
+        assertEquals("", entry.getToken()); // Check token
         assertEquals("", entry.getPos());
     }
 
