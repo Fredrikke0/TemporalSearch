@@ -12,13 +12,61 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.nio.file.InvalidPathException;
 import java.util.stream.Stream;
 
 public class Pipeline {
     private static final Logger logger = LoggerFactory.getLogger(Pipeline.class);
+
+    // Method to validate the database schema
+    private static void validateSourceDatabaseSchema(Path dbPath, ArgumentParser parser) throws IOException, SQLException, ArgumentParserException {
+        logger.debug("Validating database schema for: {}", dbPath.toAbsolutePath());
+        String connectionUrl = "jdbc:sqlite:" + dbPath.toAbsolutePath().toString();
+        try (Connection conn = DriverManager.getConnection(connectionUrl)) {
+            DatabaseMetaData meta = conn.getMetaData();
+            ResultSet tables = meta.getTables(null, null, "documents", null);
+            if (!tables.next()) {
+                String errorMsg = String.format("Required 'documents' table not found in database: %s", dbPath.toAbsolutePath());
+                logger.error(errorMsg);
+                // Using ArgumentParserException to provide context and potentially halt execution cleanly
+                throw new ArgumentParserException(errorMsg, parser);
+            }
+            tables.close();
+
+            List<String> requiredColumns = Arrays.asList("document_id", "title", "text", "timestamp");
+            HashSet<String> foundColumns = new HashSet<>();
+            ResultSet columns = meta.getColumns(null, null, "documents", null);
+            while (columns.next()) {
+                foundColumns.add(columns.getString("COLUMN_NAME").toLowerCase());
+            }
+            columns.close();
+
+            for (String col : requiredColumns) {
+                if (!foundColumns.contains(col.toLowerCase())) {
+                    String errorMsg = String.format("Required column '%s' not found in 'documents' table in database: %s", col, dbPath.toAbsolutePath());
+                    logger.error(errorMsg);
+                    throw new ArgumentParserException(errorMsg, parser);
+                }
+            }
+            // Basic type check for title and text (can be expanded)
+            // This is a simplified check; SQLite types are flexible. We mainly care they exist.
+            // More specific type validation can be complex due to SQLite's type affinity.
+            logger.info("Database schema validation successful for: {}", dbPath.toAbsolutePath());
+        } catch (SQLException e) {
+            logger.error("SQL error during database schema validation for {}: {}", dbPath.toAbsolutePath(), e.getMessage(), e);
+            throw e; // Re-throw SQLException
+        }
+    }
 
     public static void main(String[] args) {
         try {
@@ -152,6 +200,10 @@ public class Pipeline {
             // Copy source database to project database path
             logger.info("Copying source database from '{}' to '{}'", sourceDbPath.toAbsolutePath(), projectDbPath.toAbsolutePath());
             Files.copy(sourceDbPath, projectDbPath, StandardCopyOption.REPLACE_EXISTING);
+            
+            // Validate the newly copied project database
+            validateSourceDatabaseSchema(projectDbPath, parser);
+
             logger.info("Project '{}' created successfully. Project DB at: {}", projectName, projectDbPath.toAbsolutePath());
         } else {
             logger.info("Using existing project directory '{}'", projectPath.toAbsolutePath());
@@ -163,6 +215,9 @@ public class Pipeline {
                  logger.error("Project directory exists, but the project database file is missing: {}", projectDbPath.toAbsolutePath());
                  throw new IOException("Project directory exists, but the project database file is missing: " + projectDbPath.toAbsolutePath());
             }
+            // Validate the existing project database
+            validateSourceDatabaseSchema(projectDbPath, parser);
+
              // Ensure indexes directory exists even for existing projects
             if (!Files.exists(indexBasePath)) {
                  logger.warn("Indexes directory missing in existing project. Creating '{}'", indexBasePath.toAbsolutePath());
