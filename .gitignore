@@ -16,3 +16,5 @@ simplewiki*
 stanford-english-extra-corenlp-models-current/
 .cursor
 sandbox/
+dump/
+projects/

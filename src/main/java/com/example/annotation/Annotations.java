@@ -85,7 +85,7 @@ public class Annotations {
             try (PreparedStatement countStmt = conn.prepareStatement(countQuery)) {
                 countStmt.setInt(1, startDocumentId);
                 try (ResultSet countRs = countStmt.executeQuery()) {
-                    if (countRs.next()) {
+                if (countRs.next()) {
                         totalDocumentsInDb = countRs.getLong(1);
                     }
                 }
@@ -109,14 +109,30 @@ public class Annotations {
                 logger.debug("Executing query to fetch documents...");
                 try (ResultSet rs = stmt.executeQuery()) {
                     logger.debug("Starting document processing loop...");
-                    final int corenlpInternalThreads = 2;
-                    int executorThreads = Math.max(1, threads / corenlpInternalThreads);
+                    
+                    int totalUserThreads = threads; // From -t argument
+                    int numCoreNLPInternalThreads;
+                    int numExecutorThreads;
 
-                    StanfordCoreNLP pipeline = createCoreNLPPipeline(corenlpInternalThreads);
-                    logger.debug("CoreNLP pipeline initialized for processing with {} internal threads.", corenlpInternalThreads);
-                    logger.debug("ExecutorService configured for {} parallel document tasks.", executorThreads);
+                    if (totalUserThreads <= 1) {
+                        numCoreNLPInternalThreads = 1;
+                        numExecutorThreads = 1;
+                    } else {
+                        // Prioritize executor threads slightly if rounding is an issue, ensure CoreNLP gets at least 1
+                        numExecutorThreads = Math.max(1, (int) Math.ceil(totalUserThreads * 0.6));
+                        numCoreNLPInternalThreads = Math.max(1, totalUserThreads - numExecutorThreads);
+                        // If coreNLP threads ended up 0 due to the above, give it at least 1 and adjust executor
+                        if (numCoreNLPInternalThreads == 0) { // Should not happen with Math.max(1, ...) above but as a safeguard
+                            numCoreNLPInternalThreads = 1;
+                            numExecutorThreads = Math.max(1, totalUserThreads - 1);
+                        }
+                    }
 
-                    ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(executorThreads);
+                    StanfordCoreNLP pipeline = createCoreNLPPipeline(numCoreNLPInternalThreads);
+                    logger.debug("CoreNLP pipeline initialized for processing with {} internal threads.", numCoreNLPInternalThreads);
+                    logger.debug("ExecutorService configured for {} parallel document tasks.", numExecutorThreads);
+
+                    ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(numExecutorThreads);
                     List<java.util.concurrent.Future<AnnotationResult>> futures = new ArrayList<>();
                     List<Integer> docIds = new ArrayList<>();
                     List<AnnotationResult> batchResults = new ArrayList<>();
@@ -131,14 +147,14 @@ public class Annotations {
                         .showSpeed();
 
                     try (ProgressBar pb = pbb.build()) {
-                        while (rs.next()) {
+                    while (rs.next()) {
                             if (limit != null && processed >= limit) {
                                 logger.info("Reached processing limit ({}) for this run.", limit);
                                 break;
                             }
-                            int documentId = rs.getInt("document_id");
-                            String text = rs.getString("text");
-
+                        int documentId = rs.getInt("document_id");
+                        String text = rs.getString("text");
+                        
                             // Delete any existing annotation/dependency rows for this document (sequential, safe)
                             try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?")) {
                                 delAnn.setInt(1, documentId);
@@ -150,7 +166,7 @@ public class Annotations {
                             }
 
                             java.util.concurrent.Future<AnnotationResult> future = executor.submit(() -> {
-                                AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
+                        AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
                                 return result;
                             });
                             futures.add(future);
@@ -174,11 +190,11 @@ public class Annotations {
                                 for (int i = 0; i < batchResults.size(); i++) {
                                     int docId = docIds.get(i);
                                     AnnotationResult result = batchResults.get(i);
-                                    insertData(conn, result.annotations, result.dependencies);
+                        insertData(conn, result.annotations, result.dependencies);
                                     batch++;
-                                    pb.step();
+                        pb.step();
                                 }
-                                conn.commit();
+                            conn.commit();
                                 batch = 0;
                                 batchResults.clear();
                                 futures.clear();
@@ -205,7 +221,7 @@ public class Annotations {
                             pb.step();
                         }
                         if (batch > 0) {
-                            conn.commit();
+                        conn.commit();
                         }
                     } finally {
                         executor.shutdown();
@@ -390,4 +406,4 @@ public class Annotations {
             dependencyStmt.executeBatch();
         }
     }
-}   
+}
