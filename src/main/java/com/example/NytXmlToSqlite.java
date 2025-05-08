@@ -320,4 +320,4 @@ public class NytXmlToSqlite {
             System.exit(1);
         }
     }
-}
+} 

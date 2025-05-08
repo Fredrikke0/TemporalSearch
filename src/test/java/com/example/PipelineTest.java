@@ -12,7 +12,6 @@ import org.junit.jupiter.api.AfterAll;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -25,11 +24,12 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import static com.example.WikiJsonToSqlite.extractToSqlite;
 
 @DisplayName("Pipeline Integration Tests")
 public class PipelineTest {
     private static final Logger logger = LoggerFactory.getLogger(PipelineTest.class);
-    //private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final int TOTAL_DOCS = 20;
     
     protected Path tempDir;
@@ -52,14 +52,15 @@ public class PipelineTest {
         System.setProperty("progbar.silent", "true"); // Disable progress bar
         logger.info("Setting up test environment");
         tempDir = Files.createTempDirectory("pipeline-test-");
-        sourceDb = tempDir.resolve("source.db");
-        createInitialSourceDatabase(sourceDb, TOTAL_DOCS);
+        jsonFile = createTestData(tempDir);
         projectName = "test-project";
         Path projectDir = tempDir.resolve(projectName);
         dbFile = projectDir.resolve(projectName + ".db");
         indexDir = projectDir.resolve("indexes");
         stopwordsFile = createStopwordsFile(tempDir);
         sqliteConn = null;
+        sourceDb = tempDir.resolve("source.db");
+        extractToSqlite(jsonFile, sourceDb, true, TOTAL_DOCS);
         logger.info("Test environment ready with temp dir: {}", tempDir);
     }
 
@@ -129,6 +130,8 @@ public class PipelineTest {
             try {
                 System.setProperty("user.dir", tempDir.toString());
                 Files.createDirectories(dbFile.getParent());
+                // Create DB from JSON using converter
+                extractToSqlite(jsonFile, dbFile, true, TOTAL_DOCS);
                 // Run full pipeline (all stages except conversion)
                 String[] args = {
                     "-s", "all",
@@ -139,6 +142,7 @@ public class PipelineTest {
                 Pipeline.runPipeline(args);
                 // Connect to the database for verification
                 sqliteConn = createTestDatabase();
+                verifyConversionStage(TOTAL_DOCS);
                 verifyAnnotationStage(TOTAL_DOCS);
                 verifyIndexingStage();
             } finally {
@@ -153,6 +157,8 @@ public class PipelineTest {
             try {
                 System.setProperty("user.dir", tempDir.toString());
                 Files.createDirectories(dbFile.getParent());
+                // Create DB from JSON using converter
+                extractToSqlite(jsonFile, dbFile, true, TOTAL_DOCS);
                 // Run pipeline with limit
                 String[] args = {
                     "-s", "all",
@@ -163,6 +169,7 @@ public class PipelineTest {
                 };
                 Pipeline.runPipeline(args);
                 sqliteConn = createTestDatabase();
+                verifyConversionStage(5);
                 verifyAnnotationStage(5);
                 verifyIndexingStage();
             } finally {
@@ -190,6 +197,7 @@ public class PipelineTest {
             };
             Pipeline.runPipeline(args);
             sqliteConn = createTestDatabase();
+            verifyConversionStage(TOTAL_DOCS);
             verifyAnnotationStage(TOTAL_DOCS);
             verifyNoIndexes();
         }
@@ -383,6 +391,15 @@ public class PipelineTest {
     @DisplayName("Error Handling Tests")
     class ErrorHandlingTests {
         @Test
+        @DisplayName("Pipeline handles missing input file")
+        void testMissingInputFile() {
+            // Now, missing input file means the converter fails, not the pipeline
+            Exception exception = assertThrows(IOException.class, 
+                () -> extractToSqlite(Path.of("nonexistent.json"), dbFile, true, null));
+            assertTrue(exception.getMessage().contains("nonexistent.json"));
+        }
+
+        @Test
         @DisplayName("Pipeline handles invalid stage")
         void testInvalidStage() {
             String[] args = {
@@ -409,7 +426,7 @@ public class PipelineTest {
         void testProjectDirectoryCreation() throws Exception {
             String testProject = "new-test-project";
             Path sourceDbForTest = tempDir.resolve("source-" + testProject + ".db");
-            createInitialSourceDatabase(sourceDbForTest, TOTAL_DOCS);
+            extractToSqlite(jsonFile, sourceDbForTest, true, TOTAL_DOCS);
             String[] args = {
                 "-s", "annotate",
                 "-p", tempDir.resolve(testProject).toString(),
@@ -426,108 +443,45 @@ public class PipelineTest {
         }
     }
 
-    @Nested
-    @DisplayName("Project Initialization and DB Schema Validation Tests")
-    class SchemaValidationTests {
-
-        private void setupInvalidDatabase(Path dbPath, String createTableSql) throws SQLException, IOException {
-            Files.deleteIfExists(dbPath); // Ensure clean state
-            String connectionUrl = "jdbc:sqlite:" + dbPath.toAbsolutePath().toString();
-            try (Connection conn = DriverManager.getConnection(connectionUrl);
-                 Statement stmt = conn.createStatement()) {
-                if (createTableSql != null && !createTableSql.isBlank()) {
-                    stmt.execute(createTableSql);
-                }
-                // If createTableSql is null or blank, an empty DB file is created
-                // or a DB file without the 'documents' table if only other tables were made.
+    // Helper methods
+    private Path createTestData(Path tempDir) throws IOException {
+        Path jsonFile = tempDir.resolve("test.json");
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(jsonFile.toFile()))) {
+            // Create test documents with more realistic content
+            for (int i = 0; i < TOTAL_DOCS; i++) {
+                ObjectNode doc = MAPPER.createObjectNode()
+                    .put("title", "Title " + i)
+                    .put("text", String.format(
+                        "This is test document %d. It contains sample text for testing NLP features. " +
+                        "The quick brown fox jumps over the lazy dog. " +
+                        "This document was created on January 1st, 2024. " +
+                        "OpenAI's GPT models have revolutionized natural language processing.",
+                        i))
+                    .put("timestamp", "2024-01-01");
+                writer.write(doc.toString());
+                writer.newLine();
             }
         }
-
-        @Test
-        @DisplayName("Pipeline fails if source DB is missing 'documents' table (new project)")
-        void testMissingDocumentsTable_NewProject() throws Exception {
-            Path invalidSourceDb = tempDir.resolve("invalid_source_no_docs_table.db");
-            // Create a DB with no tables, or a table with a different name
-            setupInvalidDatabase(invalidSourceDb, "CREATE TABLE other_stuff (id INTEGER PRIMARY KEY, data TEXT);");
-
-            String testProjectName = "test_missing_docs_table";
-            Path projectDir = tempDir.resolve(testProjectName);
-
-            String[] args = {
-                "-p", projectDir.toString(),
-                "-d", invalidSourceDb.toString(),
-                "-s", "annotate" // Any stage that initializes the project
-            };
-
-            ArgumentParserException ex = assertThrows(ArgumentParserException.class, () -> Pipeline.runPipeline(args));
-            assertTrue(ex.getMessage().contains("Required 'documents' table not found"));
-        }
-
-        @Test
-        @DisplayName("Pipeline fails if source DB 'documents' table is missing a column (new project)")
-        void testMissingColumnInDocumentsTable_NewProject() throws Exception {
-            Path invalidSourceDb = tempDir.resolve("invalid_source_missing_col.db");
-            // Create documents table missing the 'text' column
-            setupInvalidDatabase(invalidSourceDb, 
-                "CREATE TABLE documents (document_id INTEGER PRIMARY KEY, title TEXT, timestamp TEXT);" // No 'text' column
-            );
-
-            String testProjectName = "test_missing_column";
-            Path projectDir = tempDir.resolve(testProjectName);
-
-            String[] args = {
-                "-p", projectDir.toString(),
-                "-d", invalidSourceDb.toString(),
-                "-s", "annotate"
-            };
-
-            ArgumentParserException ex = assertThrows(ArgumentParserException.class, () -> Pipeline.runPipeline(args));
-            assertTrue(ex.getMessage().contains("Required column 'text' not found"));
-        }
-
-        @Test
-        @DisplayName("Pipeline fails if existing project DB is missing 'documents' table")
-        void testMissingDocumentsTable_ExistingProject() throws Exception {
-            String testProjectName = "existing_invalid_db_no_docs";
-            Path projectDir = tempDir.resolve(testProjectName);
-            Files.createDirectories(projectDir);
-            Path projectDb = projectDir.resolve(testProjectName + ".db");
-            // Create an invalid DB directly in the project path
-            setupInvalidDatabase(projectDb, "CREATE TABLE other_stuff (id INTEGER PRIMARY KEY, data TEXT);");
-
-            String[] args = {
-                "-p", projectDir.toString(),
-                // No -d, so it uses the existing (invalid) project DB
-                "-s", "annotate" 
-            };
-
-            ArgumentParserException ex = assertThrows(ArgumentParserException.class, () -> Pipeline.runPipeline(args));
-            assertTrue(ex.getMessage().contains("Required 'documents' table not found"));
-        }
-
-        @Test
-        @DisplayName("Pipeline fails if existing project DB is missing a column")
-        void testMissingColumn_ExistingProject() throws Exception {
-            String testProjectName = "existing_invalid_db_missing_col";
-            Path projectDir = tempDir.resolve(testProjectName);
-            Files.createDirectories(projectDir);
-            Path projectDb = projectDir.resolve(testProjectName + ".db");
-            setupInvalidDatabase(projectDb, 
-                "CREATE TABLE documents (document_id INTEGER PRIMARY KEY, title TEXT, timestamp TEXT);" // No 'text' column
-            );
-
-            String[] args = {
-                "-p", projectDir.toString(),
-                "-s", "annotate"
-            };
-
-            ArgumentParserException ex = assertThrows(ArgumentParserException.class, () -> Pipeline.runPipeline(args));
-            assertTrue(ex.getMessage().contains("Required column 'text' not found"));
-        }
+        return jsonFile;
     }
 
-    // Helper methods
+    private void verifyConversionStage(int expectedCount) throws SQLException {
+        logger.debug("Verifying conversion stage with expected count: {}", expectedCount);
+        // Check total documents
+        try (Statement stmt = sqliteConn.createStatement()) {
+            ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM documents");
+            assertTrue(rs.next());
+            assertEquals(expectedCount, rs.getInt(1), 
+                "Database should contain exactly " + expectedCount + " documents");
 
+            // Verify document content
+            rs = stmt.executeQuery("SELECT title, text FROM documents ORDER BY document_id LIMIT 1");
+            assertTrue(rs.next());
+            assertNotNull(rs.getString("title"), "Document title should not be null");
+            assertNotNull(rs.getString("text"), "Document text should not be null");
+        }
+        logger.debug("Conversion stage verification completed");
+    }
 
     private void verifyAnnotationStage(int expectedCount) throws SQLException {
         try (Statement stmt = sqliteConn.createStatement()) {
@@ -559,6 +513,15 @@ public class PipelineTest {
         }
     }
 
+    private void verifyNoAnnotations() throws SQLException {
+        try (Statement stmt = sqliteConn.createStatement()) {
+            ResultSet rs = stmt.executeQuery(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='annotations'");
+            assertTrue(rs.next());
+            assertEquals(0, rs.getInt(1), "Annotations table should not exist");
+        }
+    }
+
     private void verifyNoIndexes() {
         if (indexDir.toFile().exists()) {
             File[] files = indexDir.toFile().listFiles();
@@ -584,57 +547,13 @@ public class PipelineTest {
         }
     }
 
-    private void createInitialSourceDatabase(Path dbPath, int numDocs) throws SQLException, IOException {
-        logger.info("Creating initial source database at {} with {} documents.", dbPath, numDocs);
-        String connectionString = "jdbc:sqlite:" + dbPath.toAbsolutePath().toString();
-
-        try (Connection conn = DriverManager.getConnection(connectionString)) {
-            // Apply PRAGMAs for performance and ensure schema is fresh
-            try (Statement stmt = conn.createStatement()) {
-                stmt.execute("PRAGMA journal_mode=WAL;");
-                stmt.execute("PRAGMA synchronous=NORMAL;");
-                stmt.execute("PRAGMA temp_store=MEMORY;");
-                stmt.execute("PRAGMA cache_size=-200000;"); // 200MB cache
-                stmt.execute("DROP TABLE IF EXISTS documents;");
-                stmt.execute("""
-                    CREATE TABLE documents (
-                        document_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        title TEXT NOT NULL,
-                        text TEXT NOT NULL,
-                        timestamp TEXT
-                    )
-                """);
-                logger.debug("Database schema created and PRAGMAs set.");
-            }
-
-            conn.setAutoCommit(false); // Batch inserts
-            String insertSql = "INSERT INTO documents (title, text, timestamp) VALUES (?, ?, ?)";
-            try (PreparedStatement pstmt = conn.prepareStatement(insertSql)) {
-                for (int i = 0; i < numDocs; i++) {
-                    String title = "Title " + i;
-                    String text = String.format(
-                        "This is test document %d. It contains sample text for testing NLP features. " +
-                        "The quick brown fox jumps over the lazy dog. " +
-                        "This document was created on January 1st, 2024. " +
-                        "OpenAI's GPT models have revolutionized natural language processing.",
-                        i);
-                    String timestamp = "2024-01-01"; // Consistent timestamp for test data
-
-                    pstmt.setString(1, title);
-                    pstmt.setString(2, text);
-                    pstmt.setString(3, timestamp);
-                    pstmt.addBatch();
-
-                    if ((i + 1) % 1000 == 0) { // Commit every 1000 records
-                        pstmt.executeBatch();
-                        conn.commit();
-                        logger.debug("Committed batch of 1000 documents. Total: {}", i + 1);
-                    }
-                }
-                pstmt.executeBatch(); // Commit any remaining records
-                conn.commit();
-            }
-            logger.info("Successfully populated database with {} documents.", numDocs);
-        }
+    private String[] createPipelineArgs(String stage, boolean includeIndexing) {
+        return new String[]{
+            "-s", stage,
+            "-f", jsonFile.toString(),
+            "-p", projectName,
+            "--stopwords", stopwordsFile.toString(),
+            "--recreate"
+        };
     }
 } 

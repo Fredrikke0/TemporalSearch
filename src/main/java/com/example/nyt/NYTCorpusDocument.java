@@ -252,249 +252,238 @@ public class NYTCorpusDocument {
 	protected List<String> names = new ArrayList<String>();
 
 	/**
-	 * The �news desk� field is the section of the New York Times newspaper
-	 * organization responsible for the article. This field applies primarily to
-	 * news articles.
-	 * <p>
-	 * Examples Include:
-	 * <ol>
-	 * <li>Foreign
-	 * <li>Business
-	 * <li>National
-	 * </ol>
+	 * This field specifies the news desk that assigned and edited the article.
 	 */
 	protected String newsDesk;
 
 	/**
-	 * This field specifies a normalized version of the byline. Generally, this
-	 * normalization consists of converting the byline to uppercase and removing
-	 * prefixes such as 'By'.
-	 * <p>
-	 * Sample Normalized Bylines:
-	 * <p>
-	 * <ul>
-	 * <li>JAMES RESTON
-	 * <li>JAMES GLANZ; WILLIAM J. BROAD CONTRIBUTED REPORTING FOR THIS ARTICLE.
-	 * <li>ADAM NAGOURNEY AND JEFF ZELENY
-	 * </ul>
+	 * This field is the byline of the article normalized to the form (last name,
+	 * first name).
 	 */
 	protected String normalizedByline;
 
 	/**
-	 * The �online descriptors� field specifies a list of descriptive terms
-	 * corresponding to subjects mentioned in the article that is geared towards
-	 * publication on the nytimes.com website. These tags are algorithmically
-	 * assigned and manually verified by nytimes.com production staff.
+	 * The �online descriptors� field specifies a list of descriptors assigned by
+	 * nytimes.com production staff. Many but not all of these descriptors are
+	 * drawn from the same controlled vocabulary used by the library scientists
+	 * who assigned descriptors. These tags are algorithmically assigned and
+	 * manually verified by nytimes.com production staff.
 	 * <p>
 	 * Examples Include:
 	 * <ol>
-	 * <li>Baseball
-	 * <li>Terrorism
-	 * <li>Flags
+	 * <li>Disasters
+	 * <li>College Basketball
+	 * <li>Politics
 	 * </ol>
 	 */
 	protected List<String> onlineDescriptors = new ArrayList<String>();
 
 	/**
-	 * This field specifies the headline of the article as it appeared on the
-	 * nytimes.com website.
+	 * This field specifies the headline assigned to the article for online
+	 * publication.
 	 */
 	protected String onlineHeadline;
 
 	/**
-	 * The online lead paragraph field is the lead paragraph of the article as it
-	 * appeared on the nytimes.com website.
+	 * This field specifies the lead paragraph of the article as constructed by
+	 * nytimes.com production staff for use online.
 	 */
 	protected String onlineLeadParagraph;
 
 	/**
-	 * The �online locations� field specifies a list of geographic descriptors
-	 * corresponding to places mentioned in the article that is geared towards
-	 * publication on the nytimes.com website. These tags are algorithmically
-	 * assigned and manually verified by nytimes.com production staff.
+	 * The �online locations� field specifies a list of locations that correspond
+	 * to subjects mentioned in the article. These tags are algorithmically
+	 * assigned and manually verified by nytimes.com production staff. Many but
+	 * not all of these descriptors are drawn from the same controlled vocabulary
+	 * used by the library scientists who assigned the locations field.
 	 * <p>
 	 * Examples Include:
 	 * <ol>
-	 * <li>Washington (DC)
-	 * <li>Florida Keys (Fla)
-	 * <li>San Joaquin Valley (Calif)
+	 * <li>Middle East
+	 * <li>Baghdad (Iraq)
+	 * <li>Florida
 	 * </ol>
 	 */
 	protected List<String> onlineLocations = new ArrayList<String>();
 
 	/**
-	 * The �online organizations� field specifies a list of organizations
-	 * mentioned in the article that is geared towards publication on the
-	 * nytimes.com website. These tags are algorithmically assigned and manually
-	 * verified by nytimes.com production staff.
+	 * The �online organizations� field specifies a list of organizations that
+	 * correspond to subjects mentioned in the article. These tags are
+	 * algorithmically assigned and manually verified by nytimes.com production
+	 * staff. Many but not all of these descriptors are drawn from the same
+	 * controlled vocabulary used by the library scientists who assigned the
+	 * organizations field.
 	 * <p>
 	 * Examples Include:
 	 * <ol>
-	 * <li>TIAA-CREF
-	 * <li>Wal-Mart Stores Inc
-	 * <li>Republican Party
+	 * <li>Microsoft Corp
+	 * <li>Chicago Symphony Orchestra
+	 * <li>Yankees (Baseball Team)
 	 * </ol>
 	 */
 	protected List<String> onlineOrganizations = new ArrayList<String>();
 
 	/**
-	 * The �online people� field specifies a list of people mentioned in the
-	 * article that is geared towards publication on the nytimes.com website.
-	 * These tags are algorithmically assigned and manually verified by
-	 * nytimes.com production staff.
+	 * The �online people� field specifies a list of people who correspond to
+	 * subjects mentioned in the article. These tags are algorithmically assigned
+	 * and manually verified by nytimes.com production staff. Many but not all of
+	 * these descriptors are drawn from the same controlled vocabulary used by the
+	 * library scientists who assigned the people field.
 	 * <p>
 	 * Examples Include:
 	 * <ol>
-	 * <li>Ashcroft, John D
-	 * <li>Clemens, Roger
-	 * <li>Rice, Condoleezza
+	 * <li>Clinton, Hillary Rodham
+	 * <li>Woods, Tiger
+	 * <li>Shakespeare, William
 	 * </ol>
 	 */
 	protected List<String> onlinePeople = new ArrayList<String>();
 
 	/**
-	 * This field specifies the section on the nytimes.com website under which
-	 * the article appeared.
-	 * <p>
-	 * Examples Include:
-	 * <ol>
-	 * <li>Health&gt;Fitness & Nutrition
-	 * <li>Arts&gt;Art & Design
-	 * <li>Sports&gt;Pro Football
-	 * </ol>
+	 * This field specifies the major section in which the article appeared online.
 	 */
 	protected String onlineSection;
 
 	/**
-	 * The �online titles� field specifies a list of titles mentioned in the
-	 * article that is geared towards publication on the nytimes.com website.
-	 * This field is generally used to capture titles of works of art,
-	 * legislation, court cases etc. These tags are algorithmically assigned and
-	 * manually verified by nytimes.com production staff.
+	 * The �online titles� field specifies a list of titles that correspond to
+	 * subjects mentioned in the article. These tags are algorithmically assigned
+	 * and manually verified by nytimes.com production staff. Many but not all of
+	 * these descriptors are drawn from the same controlled vocabulary used by the
+	 * library scientists who assigned the titles field.
 	 * <p>
 	 * Examples Include:
 	 * <ol>
-	 * <li>Harry Potter and the Deathly Hallows (Book)
-	 * <li>Rush Hour 3 (Movie)
-	 * <li>Hamlet (Play)
+	 * <li>Academy Awards (Oscars)
+	 * <li>Sopranos (TV Program)
+	 * <li>Sicko (Movie)
 	 * </ol>
 	 */
 	protected List<String> onlineTitles = new ArrayList<String>();
 
 	/**
-	 * The �organizations� field specifies a list of descriptors drawn from a
-	 * normalized controlled vocabulary corresponding to organizations mentioned
-	 * in the article. These tags are hand-assigned by a team of library
-	 * scientists working for the New York Times Indexing service.
+	 * The �organizations� field specifies a list of organizations drawn from a
+	 * normalized controlled vocabulary that corresponds to subjects mentioned in
+	 * the article. These tags are hand-assigned by a team of library scientists
+	 * working in the New York Times Indexing service.
 	 * <p>
 	 * Examples Include:
 	 * <ol>
-	 * <li>National Football League
-	 * <li>Starbucks Corporation
-	 * <li>Metropolitan Opera
+	 * <li>AT&T Corp
+	 * <li>METROPOLITAN OPERA
+	 * <li>Internal Revenue Service
 	 * </ol>
 	 */
 	protected List<String> organizations = new ArrayList<String>();
 
 	/**
-	 * This field specifies the page on which the article starts in the print
-	 * paper.
+	 * This field specifies the page number in the print edition of the paper on
+	 * which the article appeared.
 	 */
 	protected Integer page;
 
 	/**
-	 * The �people� field specifies a list of descriptors drawn from a normalized
-	 * controlled vocabulary corresponding to people mentioned in the article.
-	 * These tags are hand-assigned by a team of library scientists working for
-	 * the New York Times Indexing service.
+	 * The �people� field specifies a list of people drawn from a normalized
+	 * controlled vocabulary that correspond to individuals mentioned in the
+	 * article. These tags are hand-assigned by a team of library scientists
+	 * working in the New York Times Indexing service.
 	 * <p>
 	 * Examples Include:
 	 * <ol>
+	 * <li>BUSH, GEORGE W (PRES)
 	 * <li>OBAMA, BARACK
-	 * <li>BUSH, GEORGE W
-	 * <li>CLINTON, HILLARY RODHAM
+	 * <li>MADONNA (SINGER)
 	 * </ol>
 	 */
 	protected List<String> people = new ArrayList<String>();
 
 	/**
-	 * This field specifies the date on which the article was published.
+	 * The date on which the article was published.
 	 */
 	protected Date publicationDate;
 
 	/**
 	 * This field specifies the day of the month on which the article was
-	 * published.
+	 * published. This field is an integer in the range 1-31.
 	 */
 	protected Integer publicationDayOfMonth;
 
 	/**
-	 * This field specifies the month in which the article was published.
+	 * This field specifies the month in which the article was published. This
+	 * field is an integer in the range 1-12.
 	 */
 	protected Integer publicationMonth;
 
 	/**
-	 * This field specifies the year in which the article was published.
+	 * This field specifies the year in which the article was published. This
+	 * field is an integer in the range 1987-2007.
 	 */
 	protected Integer publicationYear;
 
 	/**
-	 * This field specifies the section in which the article was published in the
-	 * print edition.
+	 * This field specifies the section in which the article appeared in the
+	 * print edition of the paper.
 	 */
 	protected String section;
 
 	/**
-	 * If the article is part of a regular series, this field specifies the name
-	 * of that series.
+	 * This field specifies the name of the series to which this article belongs.
 	 */
 	protected String seriesName;
 
 	/**
-	 * The slug is a short string that is used internally by the New York Times
-	 * news desk to identify the article.
+	 * This field is a unique identifier assigned by the New York Times indexing
+	 * service to identify unique articles. You may find it useful as a foreign
+	 * key should you choose to merge this dataset with other New York Times
+	 * datasets.
 	 */
 	protected String slug;
 
-	/** This field is added by the parser and contains the source file. */
+	/** The File from which this document was parsed. */
 	protected File sourceFile;
 
 	/**
-	 * The taxonomic classifiers field specifies a hierarchy of categories that
-	 * characterize the document. These are hand-assigned by a team of library
-	 * scientists working in the New York Times Indexing service. The first line
-	 * of the taxonomic classifier represents the most general category and
-	 * subsequent lines represent successively more specific categories.
-	 * <p>
-	 * Sample Taxonomic Classifiers:
-	 * <ul>
-	 * <li>Top/News/Sports/Pro Basketball
-	 * <li>Top/Features/Travel/Guides/Destinations/North America/United
-	 * States/New York/New York City
-	 * <li>Top/Opinion
-	 * </ul>
+	 * The �taxonomic Classifiers� field specifies a hierarchy of terms that
+	 * broadly classify the article. These classifiers are generally assigned to
+	 * all articles published in the print paper. The taxonomic classifiers form
+	 * a tree with the following branches as roots:
+	 * <ol>
+	 * <li>Top - Articles related to top news stories <li>Business - Articles
+	 * related to business <li>Foreign - Articles related to foreign countries
+	 * <li>National - Articles related to the U.S. national government or events
+	 * <li>New York and Region - Articles related to the New York City area <li>Obits -
+	 * Obituaries <li>Opinion - Editorials and Op-Eds <li>Culture - Articles
+	 * related to arts and entertainment <li>Sports - Articles related to sports
+	 * <li>Style - Articles related to fashion and lifestyles <li>Week in Review -
+	 * Articles from the Sunday Week in Review section <li>Magazine - Articles
+	 * from the Sunday Magazine section <li>Paid Death Notices - Death notices
+	 * that have been paid for <li>Archives - Articles from the archives <li>Real
+	 * Estate - Articles related to real estate
+	 * </ol>
+	 * Taxonomic classifiers are hand-assigned by a team of library scientists
+	 * working for the New York Times Indexing service.
 	 */
 	protected List<String> taxonomicClassifiers = new ArrayList<String>();
 
 	/**
-	 * The �titles� field specifies a list of titles mentioned in the article
-	 * that is geared towards publication on the nytimes.com website. This field
-	 * is generally used to capture titles of works of art, legislation, court
-	 * cases etc. These tags are hand-assigned by a team of library scientists
-	 * working for the New York Times Indexing service.
+	 * The �titles� field specifies a list of titles drawn from a normalized
+	 * controlled vocabulary that correspond to creative works mentioned in the
+	 * article. These tags are hand-assigned by a team of library scientists
+	 * working in the New York Times Indexing service.
 	 * <p>
 	 * Examples Include:
 	 * <ol>
-	 * <li>HARRY POTTER AND THE DEATHLY HALLOWS (BOOK)
-	 * <li>RUSH HOUR 3 (MOVIE)
-	 * <li>HAMLET (PLAY)
+	 * <li>HARRY POTTER AND THE PRISONER OF AZKABAN (MOVIE)
+	 * <li>MACBETH (PLAY)
+	 * <li>WEBSTER'S NEW WORLD DICTIONARY
 	 * </ol>
 	 */
 	protected List<String> titles = new ArrayList<String>();
 
 	/**
-	 * The �types of material� field specifies the general category into which
-	 * the document falls.
+	 * The �types of Material� field specifies a description drawn from a
+	 * controlled vocabulary of the general editorial category of the article.
+	 * These tags are hand-assigned by a team of library scientists working for
+	 * the New York Times Indexing service.
 	 * <p>
 	 * Examples Include:
 	 * <ol>
@@ -506,13 +495,12 @@ public class NYTCorpusDocument {
 	protected List<String> typesOfMaterial = new ArrayList<String>();
 
 	/**
-	 * This field specifies the location on nytimes.com of the article. This URL
-	 * should be used for all articles published before April 02, 2006.
+	 * This field specifies the location on nytimes.com of the article.
 	 */
 	protected URL url;
 
 	/**
-	 * The number of words in the article.
+	 * This field specifies the number of words in the article.
 	 */
 	protected Integer wordCount;
 
@@ -860,140 +848,156 @@ public class NYTCorpusDocument {
 	}
 
 	/**
-	 * Pads a string on the right with spaces to the desired length.
+	 * Left pads the input string with spaces up to the specified length
 	 *
-	 * @param s String to pad.
-	 * @param length Target length.
-	 * @return Padded string.
+	 * @param s
+	 * @param length
+	 * @return
 	 */
 	private String ljust(String s, Integer length) {
-	    if (s == null) {
-	        s = ""; // Handle null input string gracefully
-	    }
-	    if (length == null || s.length() >= length) {
-	        return s; // Return original string if length is null or already sufficient
-	    }
-	    StringBuilder sb = new StringBuilder(s);
-	    while (sb.length() < length) {
-	        sb.append(' ');
-	    }
-	    return sb.toString();
+		if (s == null)
+			s = "";
+
+		StringBuffer sb = new StringBuffer();
+		for (int i = 0; i < length - s.length(); i++) {
+			sb.append(' ');
+		}
+		sb.append(s);
+
+		return sb.toString();
 	}
 
 	/**
-	 * @param alternateURL the alternateURL to set
+	 * @param alternateURL
+	 *            the alternateURL to set
 	 */
 	public void setAlternateURL(URL alternateURL) {
 		this.alternateURL = alternateURL;
 	}
 
 	/**
-	 * @param articleAbstract the articleAbstract to set
+	 * @param articleAbstract
+	 *            the articleAbstract to set
 	 */
 	public void setArticleAbstract(String articleAbstract) {
 		this.articleAbstract = articleAbstract;
 	}
 
 	/**
-	 * @param authorBiography the authorBiography to set
+	 * @param authorBiography
+	 *            the authorBiography to set
 	 */
 	public void setAuthorBiography(String authorBiography) {
 		this.authorBiography = authorBiography;
 	}
 
 	/**
-	 * @param banner the banner to set
+	 * @param banner
+	 *            the banner to set
 	 */
 	public void setBanner(String banner) {
 		this.banner = banner;
 	}
 
 	/**
-	 * @param biographicalCategories the biographicalCategories to set
+	 * @param biographicalCategories
+	 *            the biographicalCategories to set
 	 */
 	public void setBiographicalCategories(List<String> biographicalCategories) {
 		this.biographicalCategories = biographicalCategories;
 	}
 
 	/**
-	 * @param body the body to set
+	 * @param body
+	 *            the body to set
 	 */
 	public void setBody(String body) {
 		this.body = body;
 	}
 
 	/**
-	 * @param byline the byline to set
+	 * @param byline
+	 *            the byline to set
 	 */
 	public void setByline(String byline) {
 		this.byline = byline;
 	}
 
 	/**
-	 * @param columnName the columnName to set
+	 * @param columnName
+	 *            the columnName to set
 	 */
 	public void setColumnName(String columnName) {
 		this.columnName = columnName;
 	}
 
 	/**
-	 * @param columnNumber the columnNumber to set
+	 * @param columnNumber
+	 *            the columnNumber to set
 	 */
 	public void setColumnNumber(Integer columnNumber) {
 		this.columnNumber = columnNumber;
 	}
 
 	/**
-	 * @param correctionDate the correctionDate to set
+	 * @param correctionDate
+	 *            the correctionDate to set
 	 */
 	public void setCorrectionDate(Date correctionDate) {
 		this.correctionDate = correctionDate;
 	}
 
 	/**
-	 * @param correctionText the correctionText to set
+	 * @param correctionText
+	 *            the correctionText to set
 	 */
 	public void setCorrectionText(String correctionText) {
 		this.correctionText = correctionText;
 	}
 
 	/**
-	 * @param credit the credit to set
+	 * @param credit
+	 *            the credit to set
 	 */
 	public void setCredit(String credit) {
 		this.credit = credit;
 	}
 
 	/**
-	 * @param dateline the dateline to set
+	 * @param dateline
+	 *            the dateline to set
 	 */
 	public void setDateline(String dateline) {
 		this.dateline = dateline;
 	}
 
 	/**
-	 * @param dayOfWeek the dayOfWeek to set
+	 * @param dayOfWeek
+	 *            the dayOfWeek to set
 	 */
 	public void setDayOfWeek(String dayOfWeek) {
 		this.dayOfWeek = dayOfWeek;
 	}
 
 	/**
-	 * @param descriptors the descriptors to set
+	 * @param descriptors
+	 *            the descriptors to set
 	 */
 	public void setDescriptors(List<String> descriptors) {
 		this.descriptors = descriptors;
 	}
 
 	/**
-	 * @param featurePage the featurePage to set
+	 * @param featurePage
+	 *            the featurePage to set
 	 */
 	public void setFeaturePage(String featurePage) {
 		this.featurePage = featurePage;
 	}
 
 	/**
-	 * @param generalOnlineDescriptors the generalOnlineDescriptors to set
+	 * @param generalOnlineDescriptors
+	 *            the generalOnlineDescriptors to set
 	 */
 	public void setGeneralOnlineDescriptors(
 			List<String> generalOnlineDescriptors) {
@@ -1001,224 +1005,256 @@ public class NYTCorpusDocument {
 	}
 
 	/**
-	 * @param guid the guid to set
+	 * @param guid
+	 *            the guid to set
 	 */
 	public void setGuid(int guid) {
 		this.guid = guid;
 	}
 
 	/**
-	 * @param headline the headline to set
+	 * @param headline
+	 *            the headline to set
 	 */
 	public void setHeadline(String headline) {
 		this.headline = headline;
 	}
 
 	/**
-	 * @param kicker the kicker to set
+	 * @param kicker
+	 *            the kicker to set
 	 */
 	public void setKicker(String kicker) {
 		this.kicker = kicker;
 	}
 
 	/**
-	 * @param leadParagraph the leadParagraph to set
+	 * @param leadParagraph
+	 *            the leadParagraph to set
 	 */
 	public void setLeadParagraph(String leadParagraph) {
 		this.leadParagraph = leadParagraph;
 	}
 
 	/**
-	 * @param locations the locations to set
+	 * @param locations
+	 *            the locations to set
 	 */
 	public void setLocations(List<String> locations) {
 		this.locations = locations;
 	}
 
 	/**
-	 * @param names the names to set
+	 * @param names
+	 *            the names to set
 	 */
 	public void setNames(List<String> names) {
 		this.names = names;
 	}
 
 	/**
-	 * @param newsDesk the newsDesk to set
+	 * @param newsDesk
+	 *            the newsDesk to set
 	 */
 	public void setNewsDesk(String newsDesk) {
 		this.newsDesk = newsDesk;
 	}
 
 	/**
-	 * @param normalizedByline the normalizedByline to set
+	 * @param normalizedByline
+	 *            the normalizedByline to set
 	 */
 	public void setNormalizedByline(String normalizedByline) {
 		this.normalizedByline = normalizedByline;
 	}
 
 	/**
-	 * @param onlineDescriptors the onlineDescriptors to set
+	 * @param onlineDescriptors
+	 *            the onlineDescriptors to set
 	 */
 	public void setOnlineDescriptors(List<String> onlineDescriptors) {
 		this.onlineDescriptors = onlineDescriptors;
 	}
 
 	/**
-	 * @param onlineHeadline the onlineHeadline to set
+	 * @param onlineHeadline
+	 *            the onlineHeadline to set
 	 */
 	public void setOnlineHeadline(String onlineHeadline) {
 		this.onlineHeadline = onlineHeadline;
 	}
 
 	/**
-	 * @param onlineLeadParagraph the onlineLeadParagraph to set
+	 * @param onlineLeadParagraph
+	 *            the onlineLeadParagraph to set
 	 */
 	public void setOnlineLeadParagraph(String onlineLeadParagraph) {
 		this.onlineLeadParagraph = onlineLeadParagraph;
 	}
 
 	/**
-	 * @param onlineLocations the onlineLocations to set
+	 * @param onlineLocations
+	 *            the onlineLocations to set
 	 */
 	public void setOnlineLocations(List<String> onlineLocations) {
 		this.onlineLocations = onlineLocations;
 	}
 
 	/**
-	 * @param onlineOrganizations the onlineOrganizations to set
+	 * @param onlineOrganizations
+	 *            the onlineOrganizations to set
 	 */
 	public void setOnlineOrganizations(List<String> onlineOrganizations) {
 		this.onlineOrganizations = onlineOrganizations;
 	}
 
 	/**
-	 * @param onlinePeople the onlinePeople to set
+	 * @param onlinePeople
+	 *            the onlinePeople to set
 	 */
 	public void setOnlinePeople(List<String> onlinePeople) {
 		this.onlinePeople = onlinePeople;
 	}
 
 	/**
-	 * @param onlineSection the onlineSection to set
+	 * @param onlineSection
+	 *            the onlineSection to set
 	 */
 	public void setOnlineSection(String onlineSection) {
 		this.onlineSection = onlineSection;
 	}
 
 	/**
-	 * @param onlineTitles the onlineTitles to set
+	 * @param onlineTitles
+	 *            the onlineTitles to set
 	 */
 	public void setOnlineTitles(List<String> onlineTitles) {
 		this.onlineTitles = onlineTitles;
 	}
 
 	/**
-	 * @param organizations the organizations to set
+	 * @param organizations
+	 *            the organizations to set
 	 */
 	public void setOrganizations(List<String> organizations) {
 		this.organizations = organizations;
 	}
 
 	/**
-	 * @param page the page to set
+	 * @param page
+	 *            the page to set
 	 */
 	public void setPage(Integer page) {
 		this.page = page;
 	}
 
 	/**
-	 * @param people the people to set
+	 * @param people
+	 *            the people to set
 	 */
 	public void setPeople(List<String> people) {
 		this.people = people;
 	}
 
 	/**
-	 * @param publicationDate the publicationDate to set
+	 * @param publicationDate
+	 *            the publicationDate to set
 	 */
 	public void setPublicationDate(Date publicationDate) {
 		this.publicationDate = publicationDate;
 	}
 
 	/**
-	 * @param publicationDayOfMonth the publicationDayOfMonth to set
+	 * @param publicationDayOfMonth
+	 *            the publicationDayOfMonth to set
 	 */
 	public void setPublicationDayOfMonth(Integer publicationDayOfMonth) {
 		this.publicationDayOfMonth = publicationDayOfMonth;
 	}
 
 	/**
-	 * @param publicationMonth the publicationMonth to set
+	 * @param publicationMonth
+	 *            the publicationMonth to set
 	 */
 	public void setPublicationMonth(Integer publicationMonth) {
 		this.publicationMonth = publicationMonth;
 	}
 
 	/**
-	 * @param publicationYear the publicationYear to set
+	 * @param publicationYear
+	 *            the publicationYear to set
 	 */
 	public void setPublicationYear(Integer publicationYear) {
 		this.publicationYear = publicationYear;
 	}
 
 	/**
-	 * @param section the section to set
+	 * @param section
+	 *            the section to set
 	 */
 	public void setSection(String section) {
 		this.section = section;
 	}
 
 	/**
-	 * @param seriesName the seriesName to set
+	 * @param seriesName
+	 *            the seriesName to set
 	 */
 	public void setSeriesName(String seriesName) {
 		this.seriesName = seriesName;
 	}
 
 	/**
-	 * @param slug the slug to set
+	 * @param slug
+	 *            the slug to set
 	 */
 	public void setSlug(String slug) {
 		this.slug = slug;
 	}
 
 	/**
-	 * @param sourceFile the sourceFile to set
+	 * @param sourceFile
+	 *            the sourceFile to set
 	 */
 	public void setSourceFile(File sourceFile) {
 		this.sourceFile = sourceFile;
 	}
 
 	/**
-	 * @param taxonomicClassifiers the taxonomicClassifiers to set
+	 * @param taxonomicClassifiers
+	 *            the taxonomicClassifiers to set
 	 */
 	public void setTaxonomicClassifiers(List<String> taxonomicClassifiers) {
 		this.taxonomicClassifiers = taxonomicClassifiers;
 	}
 
 	/**
-	 * @param titles the titles to set
+	 * @param titles
+	 *            the titles to set
 	 */
 	public void setTitles(List<String> titles) {
 		this.titles = titles;
 	}
 
 	/**
-	 * @param typesOfMaterial the typesOfMaterial to set
+	 * @param typesOfMaterial
+	 *            the typesOfMaterial to set
 	 */
 	public void setTypesOfMaterial(List<String> typesOfMaterial) {
 		this.typesOfMaterial = typesOfMaterial;
 	}
 
 	/**
-	 * @param url the url to set
+	 * @param url
+	 *            the url to set
 	 */
 	public void setUrl(URL url) {
 		this.url = url;
 	}
 
 	/**
-	 * @param wordCount the wordCount to set
+	 * @param wordCount
+	 *            the wordCount to set
 	 */
 	public void setWordCount(Integer wordCount) {
 		this.wordCount = wordCount;
@@ -1229,72 +1265,64 @@ public class NYTCorpusDocument {
 	 *
 	 * @see java.lang.Object#toString()
 	 */
-	@Override
 	public String toString() {
 		StringBuffer sb = new StringBuffer();
-		appendProperty(sb, "GUID", this.guid);
-		appendProperty(sb, "Source File", this.sourceFile);
-		appendProperty(sb, "Headline", this.headline);
-		appendProperty(sb, "Byline", this.byline);
-		appendProperty(sb, "Dateline", this.dateline);
-		appendProperty(sb, "Publication Date", this.publicationDate);
-		appendProperty(sb, "Word Count", this.wordCount);
-		appendProperty(sb, "Alternate URL", this.alternateURL);
-		appendProperty(sb, "Article Abstract", this.articleAbstract);
-		appendProperty(sb, "Author Biography", this.authorBiography);
-		appendProperty(sb, "Banner", this.banner);
-		appendProperty(sb, "Biographical Categories", this.biographicalCategories);
-		appendProperty(sb, "Body", this.body);
-		appendProperty(sb, "Column Name", this.columnName);
-		appendProperty(sb, "Column Number", this.columnNumber);
-		appendProperty(sb, "Correction Date", this.correctionDate);
-		appendProperty(sb, "Correction Text", this.correctionText);
-		appendProperty(sb, "Credit", this.credit);
-		appendProperty(sb, "Day of Week", this.dayOfWeek);
-		appendProperty(sb, "Descriptors", this.descriptors);
-		appendProperty(sb, "Feature Page", this.featurePage);
-		appendProperty(sb, "General Online Descriptors",
-				this.generalOnlineDescriptors);
-		appendProperty(sb, "Kicker", this.kicker);
-		appendProperty(sb, "Lead Paragraph", this.leadParagraph);
-		appendProperty(sb, "Locations", this.locations);
-		appendProperty(sb, "Names", this.names);
-		appendProperty(sb, "News Desk", this.newsDesk);
-		appendProperty(sb, "Normalized Byline", this.normalizedByline);
-		appendProperty(sb, "Online Descriptors", this.onlineDescriptors);
-		appendProperty(sb, "Online Headline", this.onlineHeadline);
-		appendProperty(sb, "Online Lead Paragraph", this.onlineLeadParagraph);
-		appendProperty(sb, "Online Locations", this.onlineLocations);
-		appendProperty(sb, "Online Organizations", this.onlineOrganizations);
-		appendProperty(sb, "Online People", this.onlinePeople);
-		appendProperty(sb, "Online Section", this.onlineSection);
-		appendProperty(sb, "Online Titles", this.onlineTitles);
-		appendProperty(sb, "Organizations", this.organizations);
-		appendProperty(sb, "Page", this.page);
-		appendProperty(sb, "People", this.people);
-		appendProperty(sb, "Publication Day Of Month",
-				this.publicationDayOfMonth);
-		appendProperty(sb, "Publication Month", this.publicationMonth);
-		appendProperty(sb, "Publication Year", this.publicationYear);
-		appendProperty(sb, "Section", this.section);
-		appendProperty(sb, "Series Name", this.seriesName);
-		appendProperty(sb, "Slug", this.slug);
-		appendProperty(sb, "Taxonomic Classifiers", this.taxonomicClassifiers);
-		appendProperty(sb, "Titles", this.titles);
-		appendProperty(sb, "Types of Material", this.typesOfMaterial);
-		appendProperty(sb, "URL", this.url);
+
+		appendProperty(sb, "GUID", guid);
+		appendProperty(sb, "URL", url);
+		appendProperty(sb, "Alternate URL", alternateURL);
+		appendProperty(sb, "Column Number", columnNumber);
+		appendProperty(sb, "Correction Date", correctionDate);
+		appendProperty(sb, "Page", page);
+		appendProperty(sb, "Publication Day of Month", publicationDayOfMonth);
+		appendProperty(sb, "Publication Month", publicationMonth);
+		appendProperty(sb, "Publication Year", publicationYear);
+		appendProperty(sb, "Word Count", wordCount);
+		appendProperty(sb, "Abstract", articleAbstract);
+		appendProperty(sb, "Author Biography", authorBiography);
+		appendProperty(sb, "Banner", banner);
+		appendProperty(sb, "Byline", byline);
+		appendProperty(sb, "Column Name", columnName);
+		appendProperty(sb, "Correction Text", correctionText);
+		appendProperty(sb, "Credit", credit);
+		appendProperty(sb, "Dateline", dateline);
+		appendProperty(sb, "Day of Week", dayOfWeek);
+		appendProperty(sb, "Feature Page", featurePage);
+		appendProperty(sb, "Headline", headline);
+		appendProperty(sb, "Kicker", kicker);
+		appendProperty(sb, "Lead Paragraph", leadParagraph);
+		appendProperty(sb, "News Desk", newsDesk);
+		appendProperty(sb, "Normalized Byline", normalizedByline);
+		appendProperty(sb, "Online Headline", onlineHeadline);
+		appendProperty(sb, "Online Lead Paragraph", onlineLeadParagraph);
+		appendProperty(sb, "Online Section", onlineSection);
+		appendProperty(sb, "Section", section);
+		appendProperty(sb, "Series Name", seriesName);
+		appendProperty(sb, "Slug", slug);
+		appendProperty(sb, "Biographical Categories", biographicalCategories);
+		appendProperty(sb, "Descriptors", descriptors);
+		appendProperty(sb, "General Online Descriptors", generalOnlineDescriptors);
+		appendProperty(sb, "Locations", locations);
+		appendProperty(sb, "Names", names);
+		appendProperty(sb, "Online Descriptors", onlineDescriptors);
+		appendProperty(sb, "Online Locations", onlineLocations);
+		appendProperty(sb, "Online Organizations", onlineOrganizations);
+		appendProperty(sb, "Online People", onlinePeople);
+		appendProperty(sb, "Online Titles", onlineTitles);
+		appendProperty(sb, "Organizations", organizations);
+		appendProperty(sb, "People", people);
+		appendProperty(sb, "Taxonomic Classifiers", taxonomicClassifiers);
+		appendProperty(sb, "Titles", titles);
+		appendProperty(sb, "Types of Material", typesOfMaterial);
 
 		return sb.toString();
 	}
 
 	private void appendProperty(StringBuffer sb, String propertyName,
 			Object propertyValue) {
-		sb.append(ljust(propertyName, 30));
-		sb.append(": ");
 		if (propertyValue != null) {
-			sb.append(propertyValue.toString());
+			sb.append(propertyName + ": " + propertyValue.toString() + "\n");
 		}
-		sb.append("\n");
 	}
 
 } 
