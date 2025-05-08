@@ -18,7 +18,6 @@ import static org.junit.jupiter.api.Assertions.*;
 class AnnotationsTest {
     private Path dbFile;
     private Connection conn;
-    private Annotations annotations;
     private static String originalProgbarSilent;
     
     @BeforeAll
@@ -31,7 +30,6 @@ class AnnotationsTest {
         System.setProperty("progbar.silent", "true"); // Disable progress bar
         dbFile = tempDir.resolve("test.db");
         conn = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
-        annotations = new Annotations(dbFile, 1, null);  // Updated constructor: (Path, int, Integer)
         
         // Create required tables
         try (Statement stmt = conn.createStatement()) {
@@ -275,8 +273,8 @@ class AnnotationsTest {
         insertTestDocument(documentText);
         
         try {
-            // Skip test if document exceeds size limit (15000 characters)
-            if (documentText.length() > 15000) {
+            // Skip test if document exceeds size limit (20000 characters)
+            if (documentText.length() > 20000) {
                 // Run annotation process
                 runAnnotations();
                 
@@ -336,7 +334,7 @@ class AnnotationsTest {
         
         // Create a document with some consistent patterns
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < 50; i++) {  // Reduced from 500 to stay under 15000 chars
+        for (int i = 0; i < 50; i++) {
             sb.append("Sentence ").append(i).append(": This tests character positions. ");
         }
         String documentText = sb.toString();
@@ -344,8 +342,8 @@ class AnnotationsTest {
         // Insert the test document
         insertTestDocument(documentText);
         
-        // Skip test if document exceeds size limit (15000 characters)
-        if (documentText.length() > 15000) {
+        // Skip test if document exceeds size limit (20000 characters)
+        if (documentText.length() > 20000) {
             // Run annotation process
             runAnnotations();
             
@@ -517,7 +515,8 @@ class AnnotationsTest {
     }
     
     private void runAnnotations() throws Exception {
-        annotations.processDocuments();
+        // Use the new parallel annotation method with 1 thread for deterministic test behavior
+        Annotations.runAnnotation(dbFile, 1, 1, 10, null);
     }
     
     private void clearDatabase() throws SQLException {

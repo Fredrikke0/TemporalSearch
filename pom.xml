@@ -373,7 +373,7 @@
                 <version>3.5.0</version>
                 <configuration>
                     <mainClass>com.example.QueryCLI</mainClass>
-                    <vmArgs>-Xss16m -XX:MaxRAMPercentage=70 --add-opens=java.base/sun.misc=ALL-UNNAMED</vmArgs>
+                    <vmArgs>-Xss16m -XX:MaxRAMPercentage=80 --add-opens=java.base/sun.misc=ALL-UNNAMED</vmArgs>
                 </configuration>
             </plugin>
 

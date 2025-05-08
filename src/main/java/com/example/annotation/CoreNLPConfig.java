@@ -33,7 +33,7 @@ public class CoreNLPConfig {
      */
     public CoreNLPConfig(int threads) {
         this.properties = createOptimizedProperties(threads);
-        logger.info("Initialized CoreNLP configuration with {} threads", threads);
+        logger.debug("Initialized CoreNLP configuration with {} threads", threads);
     }
     
     /**
