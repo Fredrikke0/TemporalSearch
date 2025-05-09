@@ -66,10 +66,10 @@ public class JoinHandler {
         // 1. Extract left/right subquery aliases AND the main query source alias from joinCondition columns.
         //    The left alias should correspond to the source of the mainResult.
         //    The right alias corresponds to the subquery result needed from the context.
-        String leftAlias = extractAliasFromColumnName(joinCondition.leftColumn()); 
-        String rightAlias = extractAliasFromColumnName(joinCondition.rightColumn());
-        String leftKey = extractKeyFromColumnName(joinCondition.leftColumn());
-        String rightKey = extractKeyFromColumnName(joinCondition.rightColumn());
+        String leftAlias = JoinHandler.extractAliasFromColumnName(joinCondition.leftColumn()); 
+        String rightAlias = JoinHandler.extractAliasFromColumnName(joinCondition.rightColumn());
+        String leftKey = JoinHandler.extractKeyFromColumnName(joinCondition.leftColumn());
+        String rightKey = JoinHandler.extractKeyFromColumnName(joinCondition.rightColumn());
 
         // TODO: Validate that leftAlias actually matches the alias (if any) used for the main query part.
         // This might require passing the main query alias explicitly or inferring it.
@@ -203,7 +203,7 @@ public class JoinHandler {
     private Map<LocalDate, List<MatchDetail>> groupDetailsByDate(List<MatchDetail> details, String dateKey) {
         Map<LocalDate, List<MatchDetail>> grouped = new HashMap<>();
         for (MatchDetail detail : details) {
-            Object val = extractValueForKey(detail, dateKey);
+            Object val = JoinHandler.extractValueForKey(detail, dateKey).orElse(null);
             // Ensure the value is actually a LocalDate before adding
             if (val instanceof LocalDate dateValue) {
                 grouped.computeIfAbsent(dateValue, k -> new ArrayList<>()).add(detail);
@@ -273,8 +273,9 @@ public class JoinHandler {
      * @return The alias part (e.g., "subAlias")
      * @throws QueryExecutionException if the format is invalid
      */
-    private String extractAliasFromColumnName(String columnName) throws QueryExecutionException {
-        if (columnName == null || !columnName.contains(".")) {
+    public static String extractAliasFromColumnName(String columnName) throws QueryExecutionException {
+        Objects.requireNonNull(columnName, "Column name cannot be null");
+        if (!columnName.contains(".")) {
             throw new QueryExecutionException(
                 String.format("Join column name '%s' must be in the format 'alias.key'", columnName),
                 "join", QueryExecutionException.ErrorType.INVALID_CONDITION);
@@ -289,8 +290,9 @@ public class JoinHandler {
      * @return The key part (e.g., "document_id")
      * @throws QueryExecutionException if the format is invalid
      */
-    private String extractKeyFromColumnName(String columnName) throws QueryExecutionException {
-        if (columnName == null || !columnName.contains(".")) {
+    public static String extractKeyFromColumnName(String columnName) throws QueryExecutionException {
+        Objects.requireNonNull(columnName, "Column name cannot be null");
+        if (!columnName.contains(".")) {
             throw new QueryExecutionException(
                 String.format("Join column name '%s' must be in the format 'alias.key'", columnName),
                 "join", QueryExecutionException.ErrorType.INVALID_CONDITION);
@@ -309,8 +311,11 @@ public class JoinHandler {
      * This currently only handles direct variable bindings.
      * TODO: Extend to handle structural columns like TITLE, TIMESTAMP if needed here.
      */
-    private Optional<Object> extractValueForKey(MatchDetail detail, String key) {
-        if (detail == null || key == null) return Optional.empty();
+    public static Optional<Object> extractValueForKey(MatchDetail detail, String key) {
+        if (detail == null || key == null) {
+            logger.warn("MatchDetail or key is null. Cannot extract value.");
+            return Optional.empty();
+        }
 
         // 1. Check if the key matches a bound variable name (base part)
         if (detail.variableName().isPresent()) {
@@ -462,7 +467,7 @@ public class JoinHandler {
                 temporalMatches.add(new TemporalMatch(date, detail));
             } else {
                 // Log at DEBUG level instead of WARN
-                logger.debug("Temporal join: Skipping detail due to null or non-LocalDate value for key '{}': {}", key, detail);
+                //logger.debug("Temporal join: Skipping detail due to null or non-LocalDate value for key '{}': {}", key, detail);
             }
         }
         return temporalMatches;
@@ -506,58 +511,58 @@ public class JoinHandler {
         leftTemporalList.sort(Comparator.comparing(TemporalMatch::date));
         rightTemporalList.sort(Comparator.comparing(TemporalMatch::date));
 
-        logger.debug("Sorted temporal lists: Left size = {}, Right size = {}\nLeft: {}\nRight: {}",
-                     leftTemporalList.size(), rightTemporalList.size(),
-                     leftTemporalList.stream().map(tm -> tm.date() + "->" + tm.detail().getDocumentId()).collect(Collectors.joining(", ")),
-                     rightTemporalList.stream().map(tm -> tm.date() + "->" + tm.detail().getDocumentId()).collect(Collectors.joining(", ")));
+        //logger.debug("Sorted temporal lists: Left size = {}, Right size = {}\nLeft: {}\nRight: {}",
+        //             leftTemporalList.size(), rightTemporalList.size(),
+        //             leftTemporalList.stream().map(tm -> tm.date() + "->" + tm.detail().getDocumentId()).collect(Collectors.joining(", ")),
+        //             rightTemporalList.stream().map(tm -> tm.date() + "->" + tm.detail().getDocumentId()).collect(Collectors.joining(", ")));
 
         // 3. Perform the merge comparison based on the predicate
         List<JoinedMatch> resultList = new ArrayList<>();
 
         if (predicate == TemporalPredicate.BEFORE) { // Left Date < Right Date
             int j = 0; // Pointer for right list
-            logger.debug("[Temporal BEFORE] Starting merge. Left size={}, Right size={}", leftTemporalList.size(), rightTemporalList.size());
+            //logger.debug("[Temporal BEFORE] Starting merge. Left size={}, Right size={}", leftTemporalList.size(), rightTemporalList.size());
             for (int i = 0; i < leftTemporalList.size(); i++) {
                 TemporalMatch left = leftTemporalList.get(i);
-                logger.debug("[Temporal BEFORE] Processing left[{}]: {}", i, left);
+                //logger.debug("[Temporal BEFORE] Processing left[{}]: {}", i, left);
                 // Advance j until right date is strictly > left date
                 int initialJ = j;
                 while (j < rightTemporalList.size() && rightTemporalList.get(j).date().compareTo(left.date()) <= 0) {
-                    logger.debug("[Temporal BEFORE] Advancing right pointer j. right[{}]: {} <= left[{}]: {}. j++", j, rightTemporalList.get(j).date(), i, left.date());
+                    //logger.debug("[Temporal BEFORE] Advancing right pointer j. right[{}]: {} <= left[{}]: {}. j++", j, rightTemporalList.get(j).date(), i, left.date());
                     j++;
                 }
                 if(j > initialJ) {
-                    logger.debug("[Temporal BEFORE] Advanced right pointer j from {} to {}", initialJ, j);
+                    //logger.debug("[Temporal BEFORE] Advanced right pointer j from {} to {}", initialJ, j);
                 }
                 // All remaining right elements (from index j onwards) satisfy the condition
-                logger.debug("[Temporal BEFORE] Adding pairs for left[{}] starting from right index {}. Loop k from {} to {}", i, j, j, rightTemporalList.size());
+                //logger.debug("[Temporal BEFORE] Adding pairs for left[{}] starting from right index {}. Loop k from {} to {}", i, j, j, rightTemporalList.size());
                 for (int k = j; k < rightTemporalList.size(); k++) {
                     TemporalMatch right = rightTemporalList.get(k);
                     resultList.add(new JoinedMatch(left.detail(), right.detail()));
-                    logger.debug("[Temporal BEFORE] Added match: Left[{}]({}) < Right[{}]({})", i, left.date(), k, right.date());
+                    //logger.debug("[Temporal BEFORE] Added match: Left[{}]({}) < Right[{}]({})", i, left.date(), k, right.date());
                 }
             }
         } else { // AFTER: Left Date > Right Date
             int i = 0; // Pointer for left list
-            logger.debug("[Temporal AFTER] Starting merge. Left size={}, Right size={}", leftTemporalList.size(), rightTemporalList.size());
+            //logger.debug("[Temporal AFTER] Starting merge. Left size={}, Right size={}", leftTemporalList.size(), rightTemporalList.size());
             for (int j = 0; j < rightTemporalList.size(); j++) {
                 TemporalMatch right = rightTemporalList.get(j);
-                logger.debug("[Temporal AFTER] Processing right[{}]: {}", j, right);
+                //logger.debug("[Temporal AFTER] Processing right[{}]: {}", j, right);
                 // Advance i until left date is strictly > right date
                  int initialI = i;
                 while (i < leftTemporalList.size() && leftTemporalList.get(i).date().compareTo(right.date()) <= 0) {
-                     logger.debug("[Temporal AFTER] Advancing left pointer i. left[{}]: {} <= right[{}]: {}. i++", i, leftTemporalList.get(i).date(), j, right.date());
+                    //logger.debug("[Temporal AFTER] Advancing left pointer i. left[{}]: {} <= right[{}]: {}. i++", i, leftTemporalList.get(i).date(), j, right.date());
                     i++;
                 }
                 if (i > initialI) {
-                    logger.debug("[Temporal AFTER] Advanced left pointer i from {} to {}", initialI, i);
+                    //logger.debug("[Temporal AFTER] Advanced left pointer i from {} to {}", initialI, i);
                 }
                 // All remaining left elements (from index i onwards) satisfy the condition
-                logger.debug("[Temporal AFTER] Adding pairs for right[{}] starting from left index {}. Loop k from {} to {}", j, i, i, leftTemporalList.size());
+                //logger.debug("[Temporal AFTER] Adding pairs for right[{}] starting from left index {}. Loop k from {} to {}", j, i, i, leftTemporalList.size());
                 for (int k = i; k < leftTemporalList.size(); k++) {
                      TemporalMatch left = leftTemporalList.get(k);
                      resultList.add(new JoinedMatch(left.detail(), right.detail()));
-                     logger.debug("[Temporal AFTER] Added match: Left[{}]({}) > Right[{}]({})", k, left.date(), j, right.date());
+                     //logger.debug("[Temporal AFTER] Added match: Left[{}]({}) > Right[{}]({})", k, left.date(), j, right.date());
                 }
             }
         }

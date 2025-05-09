@@ -26,8 +26,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.Optional;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 import tech.tablesaw.api.Table;
+
+import com.example.query.model.JoinCondition.JoinOperatorType;
+import com.example.query.model.JoinCondition.JoinType;
+import com.example.query.model.TemporalPredicate;
+import com.example.query.model.condition.Temporal;
 
 /**
  * Executes queries against the provided indexes.
@@ -150,7 +158,9 @@ public class QueryExecutor {
             JoinCondition joinCondition = query.joinCondition().get();
             String mainAlias = query.mainAlias().orElse("$main");
             subqueryContext.addQueryResult(mainAlias, mainConditionsResult);
-            if (this.joinStrategy == JoinOptimizationStrategy.DEPENDENT && joinCondition.type() == JoinCondition.JoinType.INNER) {
+            if (this.joinStrategy == JoinOptimizationStrategy.DEPENDENT && 
+                joinCondition.type() == JoinCondition.JoinType.INNER &&
+                joinCondition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL) {
                 logger.info("Using DEPENDENT join strategy flow.");
                 return executeDependentJoin(query, indexes, subqueryContext, mainAlias, mainConditionsResult);
             } else {
@@ -285,25 +295,265 @@ public class QueryExecutor {
     /**
      * Executes the current (independent) join logic.
      */
-    private Object executeIndependentJoin(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext) throws QueryExecutionException {
-        // Execute all subqueries and store results in context
-        if (query.hasSubqueries()) {
-            logger.debug("Executing {} subqueries", query.subqueries().size());
-            executeSubqueries(query.subqueries(), indexes, subqueryContext);
-        }
-        logger.debug("Delegating JOIN execution to JoinHandler.");
+    Object executeIndependentJoin(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext) throws QueryExecutionException {
+        logger.debug("Executing independent join for query: {}", query);
+        // Ensure all subqueries defined in the query are executed and their results are in the context
+        executeSubqueries(query.subqueries(), indexes, subqueryContext);
+    
+        // Now, perform the join using JoinHandler
         JoinHandler joinHandler = new JoinHandler();
-        List<com.example.query.binding.JoinedMatch> joinResults = joinHandler.handleJoin(query, subqueryContext);
-        logger.debug("Join completed. Returning List<JoinedMatch> with {} pairs.", joinResults.size());
-        return joinResults;
+        try {
+            return joinHandler.handleJoin(query, subqueryContext);
+        } catch (Exception e) { // Catch a broader exception if handleJoin throws something not QueryExecutionException
+            logger.error("Error during independent join execution: {}", e.getMessage(), e);
+            throw new QueryExecutionException("Failed to execute independent join", e, query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
     }
 
     /**
      * Stub for dependent join strategy. To be implemented.
      */
-    private Object executeDependentJoin(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext, String mainAlias, QueryResult mainConditionsResult) throws QueryExecutionException {
-        logger.warn("Dependent join strategy is not yet implemented. Falling back to independent join.");
-        return executeIndependentJoin(query, indexes, subqueryContext);
+    Object executeDependentJoin(Query query, 
+                                    Map<String, IndexAccessInterface> indexes, 
+                                    SubqueryContext subqueryContext, 
+                                    String mainAlias, 
+                                    QueryResult mainConditionsResult) 
+            throws QueryExecutionException {
+        logger.info("Attempting DEPENDENT join strategy for query: {}", query.toString());
+        JoinCondition joinCondition = query.joinCondition().orElseThrow(() -> 
+            new QueryExecutionException("Dependent join called without a JoinCondition.", query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR)
+        );
+
+        try {
+            // 1. Identify Sides and Keys
+            String leftColumn = joinCondition.leftColumn();
+            String rightColumn = joinCondition.rightColumn();
+
+            String leadingAlias;
+            String dependentAlias;
+            String leadingDateKeyName;
+            String dependentDateKeyName;
+
+            String leftColAlias = JoinHandler.extractAliasFromColumnName(leftColumn);
+            // If the left column's alias in the JoinCondition matches the mainAlias, then mainConditionsResult is the leading side.
+            if (leftColAlias.equals(mainAlias)) {
+                leadingAlias = mainAlias; // mainConditionsResult is the leading side
+                dependentAlias = JoinHandler.extractAliasFromColumnName(rightColumn);
+                leadingDateKeyName = JoinHandler.extractKeyFromColumnName(leftColumn);
+                dependentDateKeyName = JoinHandler.extractKeyFromColumnName(rightColumn);
+            } else {
+                // This means mainAlias was from the right side of the join condition
+                leadingAlias = mainAlias; // mainConditionsResult is still the leading side (it's the one already executed)
+                dependentAlias = JoinHandler.extractAliasFromColumnName(leftColumn); // dependent is the other one
+                leadingDateKeyName = JoinHandler.extractKeyFromColumnName(rightColumn); // leading key from main
+                dependentDateKeyName = JoinHandler.extractKeyFromColumnName(leftColumn); // dependent key from the other subquery
+            }
+            logger.debug("Dependent Join: Leading Alias='{}', Dependent Alias='{}', Leading Date Key='{}', Dependent Date Key='{}'", 
+                         leadingAlias, dependentAlias, leadingDateKeyName, dependentDateKeyName);
+
+            // 2. Extract Date Range from Leading Results (mainConditionsResult)
+            List<LocalDate> leadingDates = new ArrayList<>();
+            for (MatchDetail detail : mainConditionsResult.getAllDetails()) {
+                Optional<Object> dateValOpt = JoinHandler.extractValueForKey(detail, leadingDateKeyName);
+                if (dateValOpt.isPresent() && dateValOpt.get() instanceof LocalDate) {
+                    leadingDates.add((LocalDate) dateValOpt.get());
+                } else if (dateValOpt.isPresent()) {
+                    logger.warn("Extracted value for key '{}' is not a LocalDate: {} for detail with doc ID {}", leadingDateKeyName, dateValOpt.get().getClass().getName(), detail.getDocumentId());
+                }
+            }
+
+            if (leadingDates.isEmpty()) {
+                logger.info("Leading side for dependent join resulted in no usable dates (or was empty). INNER JOIN will yield no results. Main alias: {}, Key: {}", leadingAlias, leadingDateKeyName);
+                return Collections.emptyList(); // Empty list of JoinedMatch
+            }
+
+            LocalDate minLeadingDate = Collections.min(leadingDates);
+            LocalDate maxLeadingDate = Collections.max(leadingDates);
+            logger.debug("Leading date range for dependent filter: {} to {}", minLeadingDate, maxLeadingDate);
+
+            // 3. Construct New Temporal Filter for Dependent Query
+            TemporalPredicate originalPredicate = joinCondition.temporalPredicate().orElseThrow(() ->
+                new QueryExecutionException("Temporal predicate missing in a temporal join for dependent strategy.", query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR)
+            );
+            
+            Temporal newFilterCondition;
+            // LHS is leading (mainConditionsResult), RHS is dependent (subquery to be filtered)
+            switch (originalPredicate) {
+                case BEFORE: // LHS.date BEFORE RHS.date  =>  RHS.date AFTER minLeadingDate
+                    newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.empty(), Optional.empty(), Optional.empty(), TemporalPredicate.AFTER);
+                    break;
+                case AFTER:  // LHS.date AFTER RHS.date   =>  RHS.date BEFORE maxLeadingDate
+                    newFilterCondition = new Temporal(Optional.of(maxLeadingDate.atStartOfDay()), Optional.empty(), Optional.empty(), Optional.empty(), TemporalPredicate.BEFORE);
+                    break;
+                case EQUAL:
+                    // For EQUAL, treat as INTERSECT with the same start and end date for the dependent side.
+                    newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.of(maxLeadingDate.atStartOfDay()), Optional.empty(), Optional.empty(), TemporalPredicate.INTERSECT);
+                    break;
+                case INTERSECT: // LHS.date INTERSECT RHS.date_range (or date)
+                    newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.of(maxLeadingDate.atStartOfDay()), Optional.empty(), Optional.empty(), TemporalPredicate.INTERSECT);
+                    break;
+                // For CONTAINS/CONTAINED_BY, the design doc suggests INTERSECT with the leading side's overall min/max.
+                case CONTAINS: // LHS.date_range CONTAINS RHS.date_range
+                case CONTAINED_BY: // LHS.date_range CONTAINED_BY RHS.date_range
+                     newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.of(maxLeadingDate.atStartOfDay()), Optional.empty(), Optional.empty(), TemporalPredicate.INTERSECT);
+                     logger.debug("Mapped original predicate {} to INTERSECT for dependent filter.", originalPredicate);
+                     break;
+                case BEFORE_EQUAL: // LHS.date <= RHS.date => RHS.date AFTER_EQUAL minLeadingDate
+                    newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.empty(), Optional.empty(), Optional.empty(), TemporalPredicate.AFTER_EQUAL);
+                    break;
+                case AFTER_EQUAL: // LHS.date >= RHS.date => RHS.date BEFORE_EQUAL maxLeadingDate
+                    newFilterCondition = new Temporal(Optional.of(maxLeadingDate.atStartOfDay()), Optional.empty(), Optional.empty(), Optional.empty(), TemporalPredicate.BEFORE_EQUAL);
+                    break;
+                case PROXIMITY: // Fallback for PROXIMITY as per design doc
+                default:
+                    logger.warn("Dependent join strategy does not support temporal predicate '{}' for precise pre-filtering. Falling back to independent join.", originalPredicate);
+                    return executeIndependentJoin(query, indexes, subqueryContext);
+            }
+            logger.debug("Constructed new temporal filter for dependent subquery: {}", newFilterCondition);
+
+
+            // 4. Modify and Execute Dependent Subquery
+            SubquerySpec dependentSubquerySpec = query.subqueries().stream()
+                .filter(sq -> sq.alias().equals(dependentAlias))
+                .findFirst()
+                .orElseThrow(() -> new QueryExecutionException("Dependent subquery spec not found for alias: " + dependentAlias, query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR));
+
+            Query originalDependentQuery = dependentSubquerySpec.subquery();
+            List<Condition> newConditions = new ArrayList<>(originalDependentQuery.conditions());
+            boolean merged = false;
+
+            String dependentBaseKey = JoinHandler.extractKeyFromColumnName(dependentAlias + "." + dependentDateKeyName);
+
+            for (int i = 0; i < newConditions.size(); i++) {
+                Condition currentCond = newConditions.get(i);
+
+                if (currentCond instanceof Temporal existingTemporalCond) {
+                    Optional<String> existingVarNameOpt = existingTemporalCond.qualifiedVariableName();
+                    if (existingVarNameOpt.isPresent()) {
+                        String existingQualifiedVar = existingVarNameOpt.get();
+                        String existingBaseKey = existingQualifiedVar.contains(".")
+                                               ? existingQualifiedVar.substring(existingQualifiedVar.indexOf('.') + 1)
+                                               : existingQualifiedVar;
+
+                        if (dependentBaseKey.equals(existingBaseKey)) {
+                            logger.debug("Attempting to merge with top-level Temporal: existingBaseKey='{}', dependentBaseKey='{}'", existingBaseKey, dependentBaseKey);
+                            logger.debug("Existing Temporal for merge: {}", existingTemporalCond.toString());
+                            logger.debug("Filter Temporal for merge: {}", newFilterCondition.toString());
+                            Optional<Temporal> mergedTemporalOpt = existingTemporalCond.intersectWith(newFilterCondition);
+                            logger.debug("Top-level merge attempt result: {}", mergedTemporalOpt.isPresent() ? "Success (" + mergedTemporalOpt.get().toString() + ")" : "Failed or no merge");
+                            if (mergedTemporalOpt.isPresent()) {
+                                newConditions.set(i, mergedTemporalOpt.get());
+                                merged = true;
+                                break; 
+                            }
+                        }
+                    }
+                } else if (currentCond instanceof Logical logicalCond && logicalCond.operator() == Logical.LogicalOperator.AND) {
+                    List<Condition> subConditions = new ArrayList<>(logicalCond.conditions()); // Modifiable copy
+                    boolean subMerged = false;
+                    for (int j = 0; j < subConditions.size(); j++) {
+                        Condition subCond = subConditions.get(j);
+                        if (subCond instanceof Temporal existingSubTemporalCond) {
+                            Optional<String> existingVarNameOpt = existingSubTemporalCond.qualifiedVariableName();
+                            if (existingVarNameOpt.isPresent()) {
+                                String existingQualifiedVar = existingVarNameOpt.get();
+                                String existingBaseKey = existingQualifiedVar.contains(".")
+                                                       ? existingQualifiedVar.substring(existingQualifiedVar.indexOf('.') + 1)
+                                                       : existingQualifiedVar;
+
+                                if (dependentBaseKey.equals(existingBaseKey)) {
+                                    logger.debug("Attempting to merge with nested Temporal: existingBaseKey='{}', dependentBaseKey='{}'", existingBaseKey, dependentBaseKey);
+                                    logger.debug("Nested Existing Temporal for merge: {}", existingSubTemporalCond.toString());
+                                    logger.debug("Filter Temporal for merge: {}", newFilterCondition.toString());
+                                    Optional<Temporal> mergedTemporalOpt = existingSubTemporalCond.intersectWith(newFilterCondition);
+                                    logger.debug("Nested merge attempt result: {}", mergedTemporalOpt.isPresent() ? "Success (" + mergedTemporalOpt.get().toString() + ")" : "Failed or no merge");
+                                    if (mergedTemporalOpt.isPresent()) {
+                                        subConditions.set(j, mergedTemporalOpt.get());
+                                        newConditions.set(i, new Logical(Logical.LogicalOperator.AND, subConditions));
+                                        merged = true;
+                                        subMerged = true;
+                                        break; 
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (subMerged) {
+                        break; 
+                    }
+                }
+            }
+
+            if (!merged) {
+                newConditions.add(newFilterCondition); // Add as a separate AND condition if no merge occurred
+                logger.debug("Adding new temporal filter as a separate AND condition: {}", newFilterCondition);
+            }
+
+            Query modifiedDependentQuery = new Query(
+                originalDependentQuery.source(),
+                newConditions,
+                originalDependentQuery.orderBy(),
+                originalDependentQuery.limit(),
+                originalDependentQuery.granularity(),
+                originalDependentQuery.granularitySize(),
+                originalDependentQuery.selectColumns(),
+                originalDependentQuery.variableRegistry(), // Preserve original variable registry
+                originalDependentQuery.subqueries(),
+                originalDependentQuery.joinCondition(),
+                originalDependentQuery.mainAlias()
+            );
+            
+            QueryResult modifiedSubqueryResult;
+            try {
+                logger.debug("Executing modified dependent subquery for alias '{}': {}", dependentAlias, modifiedDependentQuery.toString());
+                // Execute with a *new* SubqueryContext to avoid interference if this subquery itself has joins
+                // that might try to use the main subqueryContext prematurely.
+                Object result = this.executeWithContext(modifiedDependentQuery, indexes, new SubqueryContext());
+                if (result instanceof QueryResult) {
+                    modifiedSubqueryResult = (QueryResult) result;
+                    logger.info("Modified dependent subquery for alias '{}' executed. Found {} details.", dependentAlias, modifiedSubqueryResult.getAllDetails().size());
+                } else {
+                     logger.error("Execution of modified dependent subquery for alias '{}' did not return a QueryResult. Got: {}. Falling back.", dependentAlias, result != null ? result.getClass().getName() : "null");
+                     return executeIndependentJoin(query, indexes, subqueryContext); // Fallback
+                }
+            } catch (Exception e) {
+                logger.error("Error executing modified dependent subquery for alias '{}'. Falling back. Error: {}", dependentAlias, e.getMessage(), e);
+                return executeIndependentJoin(query, indexes, subqueryContext); // Fallback
+            }
+
+            // 5. Update Main Subquery Context with the filtered result for the dependent side
+            subqueryContext.addQueryResult(dependentAlias, modifiedSubqueryResult);
+            logger.debug("Updated main subquery context with filtered results for dependent alias '{}'.", dependentAlias);
+
+            // 6. Execute Other Subqueries (if any)
+            // Collect subqueries that are NOT the dependentAlias (which we just processed)
+            // and also not the mainAlias (which was processed before this method).
+            List<SubquerySpec> remainingSubquerySpecs = query.subqueries().stream()
+                .filter(sq -> !sq.alias().equals(dependentAlias) && !sq.alias().equals(mainAlias))
+                .collect(Collectors.toList());
+
+            if (!remainingSubquerySpecs.isEmpty()) {
+                logger.debug("Executing remaining {} subqueries after dependent filtering.", remainingSubquerySpecs.size());
+                executeSubqueries(remainingSubquerySpecs, indexes, subqueryContext);
+            } else {
+                 logger.debug("No other subqueries to execute after dependent filtering.");
+            }
+            
+            // 7. Final Join
+            logger.debug("Proceeding to final join with JoinHandler using (potentially) filtered dependent results.");
+            return new JoinHandler().handleJoin(query, subqueryContext);
+
+        } catch (QueryExecutionException e) {
+            logger.warn("QueryExecutionException during dependent join for query {}. Error: {}. Falling back to independent join.", query.toString(), e.getMessage(), e);
+            // Ensure the original mainConditionsResult is in the context if we fall back
+            subqueryContext.addQueryResult(mainAlias, mainConditionsResult); 
+            return executeIndependentJoin(query, indexes, subqueryContext);
+        } catch (Exception e) { // Catch broader exceptions to ensure fallback
+            logger.error("Unexpected exception during dependent join for query {}. Error: {}. Falling back to independent join.", query.toString(), e.getMessage(), e);
+            // Ensure the original mainConditionsResult is in the context if we fall back
+            subqueryContext.addQueryResult(mainAlias, mainConditionsResult);
+            return executeIndependentJoin(query, indexes, subqueryContext);
+        }
     }
     
     /**

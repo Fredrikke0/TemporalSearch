@@ -148,10 +148,14 @@ public class QueryEndToEndTest {
         try {
             LocalDate beginDate = dataPointDate;
             LocalDate endDate = dataPointDate;
-            LocalDate globalLowerBound = LocalDate.parse("1100-01-01");
-            LocalDate globalUpperBound = LocalDate.parse("2100-12-31");
+            // Use Nash's actual bounds for consistency
+            LocalDate globalLowerBound = Nash.GLOBAL_LOWER_BOUND; 
+            LocalDate globalUpperBound = Nash.GLOBAL_UPPER_BOUND;
+            long yearRange = ChronoUnit.YEARS.between(globalLowerBound, globalUpperBound);
             de.mpii.gyandb.infra.utils.zorder.ZOrderCurve timeRangeCurve = 
-                new de.mpii.gyandb.infra.utils.zorder.ZOrderCurve(40, new double[] {0, ChronoUnit.YEARS.between(globalLowerBound, globalUpperBound)}, new double[]{0, ChronoUnit.YEARS.between(globalLowerBound, globalUpperBound)});
+                new de.mpii.gyandb.infra.utils.zorder.ZOrderCurve(Nash.TIME_RANGE_CURVE_PRECISION, 
+                                                                  new double[] {0, yearRange}, 
+                                                                  new double[]{0, yearRange});
 
             boolean withinRange = (beginDate.isAfter(globalLowerBound) || beginDate.equals(globalLowerBound)) && 
                                   (endDate.isBefore(globalUpperBound) || endDate.equals(globalUpperBound)) && 

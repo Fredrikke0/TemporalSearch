@@ -158,6 +158,25 @@ class QueryExecutorTest {
         return new MatchDetail(value, ValueType.TERM, pos, (String) null);
     }
 
+    // Helper to create MatchDetail with a specific LocalDate value for a key
+    private MatchDetail createMatchDetailWithDate(int docId, int sentenceId, String keyNameForDate, LocalDate date, String alias) {
+        Position pos = new Position(docId, sentenceId, 0, 5, date); // Assuming some length and using date as timestamp
+        // Store the date as the value, and keyNameForDate in the variableName for easy extraction in mocks/tests if needed.
+        // Actual MatchDetail from NerDateIndex would have the date as part of its structured value or specific field.
+        // For testing JoinHandler.extractValueForKey, it expects the key to match a variable or structural key.
+        // If `keyNameForDate` is intended to be a variable, it should be prefixed (e.g. "?dateVar").
+        // Here, we assume `keyNameForDate` is the key that will be used with `extractValueForKey`.
+        // Let's use the alias.keyName format for the variableName if an alias is provided.
+        String mockVariableName = alias != null ? alias + "." + keyNameForDate : keyNameForDate;
+        return new MatchDetail(date, ValueType.DATE, pos, Optional.of(mockVariableName));
+    }
+
+    private MatchDetail createMatchDetailWithDate(int docId, String keyNameForDate, LocalDate date, String alias) {
+        Position pos = new Position(docId, -1, 0, 5, date); // Document level
+        String mockVariableName = alias != null ? alias + "." + keyNameForDate : keyNameForDate;
+        return new MatchDetail(date, ValueType.DATE, pos, Optional.of(mockVariableName));
+    }
+
     @Test
     void testLogicalAndOperation() throws QueryExecutionException, IndexAccessException {
         // Create a query with AND condition
@@ -646,6 +665,95 @@ class QueryExecutorTest {
         assertTrue(resultSet.contains(new JoinedMatch(q1_d1, q2_d3)), "Missing pair: q1_d1 > q2_d3");
         assertTrue(resultSet.contains(new JoinedMatch(q1_d2, q2_d3)), "Missing pair: q1_d2 > q2_d3");
         assertTrue(resultSet.contains(new JoinedMatch(q1_d2, q2_d4)), "Missing pair: q1_d2 > q2_d4");
+    }
+
+    // --- Dependent Join Strategy Tests ---
+
+    @Test
+    void testExecuteDependentJoin_BeforePredicate_Success() throws QueryExecutionException {
+        // ---- Test Setup ----
+        String mainSource = "test_source";
+        String leadingAlias = "lead";
+        String dependentAlias = "dep";
+        String leadingDateKey = "event_date";
+        String dependentDateKey = "tx_date";
+
+        Contains dependentCondition = new Contains("some_term"); 
+        Query dependentSubquery = new Query(mainSource, List.of(dependentCondition), Query.Granularity.DOCUMENT);
+        SubquerySpec dependentSubquerySpec = new SubquerySpec(dependentSubquery, dependentAlias);
+
+        JoinCondition joinCondition = JoinCondition.createTemporalJoin(
+            leadingAlias + "." + leadingDateKey, 
+            dependentAlias + "." + dependentDateKey, 
+            JoinType.INNER, 
+            TemporalPredicate.BEFORE
+        );
+
+        Query overallQuery = new Query(
+            mainSource, Collections.emptyList(), Collections.emptyList(), Optional.empty(),        
+            Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), 
+            new VariableRegistry(), List.of(dependentSubquerySpec), Optional.of(joinCondition), Optional.of(leadingAlias)       
+        );
+
+        LocalDate date1 = LocalDate.of(2023, 1, 10);
+        LocalDate date2 = LocalDate.of(2023, 1, 15); 
+        MatchDetail lead_d1 = createMatchDetailWithDate(1, leadingDateKey, date1, leadingAlias);
+        MatchDetail lead_d2 = createMatchDetailWithDate(2, leadingDateKey, date2, leadingAlias);
+        QueryResult mainConditionsResult = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(lead_d1, lead_d2));
+
+        MatchDetail dep_filtered_d1 = createMatchDetailWithDate(101, dependentDateKey, LocalDate.of(2023, 1, 12), dependentAlias); 
+        QueryResult filteredDependentResult = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(dep_filtered_d1));
+        
+        // ArgumentCaptor<Temporal> newTemporalFilterCaptor = ArgumentCaptor.forClass(Temporal.class); // Removed, will get from modifiedQueryCaptor
+
+        // ---- Spy on QueryExecutor and Stub internal executeWithContext call ----
+        QueryExecutor realExecutor = new QueryExecutor(factory, mockTableResultService);
+        QueryExecutor spiedQueryExecutor = spy(realExecutor);
+
+        // Stub the specific internal call to executeWithContext that handles the modified dependent query.
+        // This is the primary stubbing for the dependent query execution path.
+        ArgumentCaptor<Query> modifiedQueryCaptor = ArgumentCaptor.forClass(Query.class);
+        doReturn(filteredDependentResult).when(spiedQueryExecutor).executeWithContext(
+            modifiedQueryCaptor.capture(), 
+            eq(indexes), 
+            any(SubqueryContext.class)
+        );
+        // Ensure no other competing stubs for spiedQueryExecutor.executeWithContext exist for this scenario.
+
+        // ---- Execution ----
+        spiedQueryExecutor.setJoinOptimizationStrategy(JoinOptimizationStrategy.DEPENDENT);
+        SubqueryContext initialSubqueryContext = new SubqueryContext();
+        initialSubqueryContext.addQueryResult(leadingAlias, mainConditionsResult);
+
+        // We will call the real executeDependentJoin on the spied executor.
+        // The internal call to executeWithContext for the modified query will be stubbed.
+        Object resultFromDependentJoin = spiedQueryExecutor.executeDependentJoin(overallQuery, indexes, initialSubqueryContext, leadingAlias, mainConditionsResult);
+
+        // ---- Assertions ----
+        verify(spiedQueryExecutor, never()).executeIndependentJoin(any(), any(), any());
+
+        // Extract and verify the new Temporal filter from the captured modifiedQuery
+        Query capturedModifiedQuery = modifiedQueryCaptor.getValue();
+        assertNotNull(capturedModifiedQuery, "Modified query should have been captured.");
+        assertEquals(2, capturedModifiedQuery.conditions().size(), "Modified query should have two conditions.");
+        
+        Temporal capturedFilter = capturedModifiedQuery.conditions().stream()
+            .filter(Temporal.class::isInstance)
+            .map(Temporal.class::cast)
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("Temporal filter not found in modified query's conditions"));
+
+        assertNotNull(capturedFilter, "New temporal filter should have been part of the modified query.");
+        assertEquals(TemporalPredicate.AFTER, capturedFilter.temporalType(), "Filter predicate should be AFTER for original BEFORE join.");
+        assertEquals(Optional.of(date1.atStartOfDay()), capturedFilter.startDate(), "Filter start date should be minLeadingDate.");
+        assertEquals(Optional.empty(), capturedFilter.qualifiedVariableName(), "Filter should not bind a variable.");
+
+        QueryResult resultInContextForDependent = initialSubqueryContext.getQueryResult(dependentAlias);
+        assertNotNull(resultInContextForDependent, "Filtered result for dependent alias should be in context.");
+        assertEquals(filteredDependentResult.getAllDetails().size(), resultInContextForDependent.getAllDetails().size(), "Context should hold the filtered dependent results.");
+        if (!filteredDependentResult.getAllDetails().isEmpty() && !resultInContextForDependent.getAllDetails().isEmpty()) {
+             assertEquals(filteredDependentResult.getAllDetails().get(0), resultInContextForDependent.getAllDetails().get(0), "Content of filtered result in context should match.");
+        }
     }
 
 } 

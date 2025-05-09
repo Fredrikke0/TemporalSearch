@@ -30,6 +30,11 @@ public record Temporal(
 ) implements Condition {
     
     /**
+     * Helper record to store parsed start and end dates from a Nash interval.
+     */
+    private record NashIntervalDatePair(LocalDate start, LocalDate end) {}
+    
+    /**
      * Maps comparison operators to TemporalPredicate
      */
     public enum ComparisonType {
@@ -53,8 +58,36 @@ public record Temporal(
     // Date formatters for Nash interval conversion
     private static final DateTimeFormatter NASH_DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
     // Define MIN/MAX bounds based on Nash implementation
-    private static final LocalDate MIN_NASH_DATE = LocalDate.parse("1100-01-01");
-    private static final LocalDate MAX_NASH_DATE = LocalDate.parse("2100-12-31");
+    private static final LocalDate MIN_NASH_DATE = Nash.GLOBAL_LOWER_BOUND;
+    private static final LocalDate MAX_NASH_DATE = Nash.GLOBAL_UPPER_BOUND;
+    
+    /**
+     * Parses a Nash interval string (e.g., "[YYYY-MM-DD , YYYY-MM-DD]") into a pair of LocalDate objects.
+     *
+     * @param nashInterval The interval string.
+     * @return An Optional containing a NashIntervalDatePair if parsing is successful, otherwise empty.
+     */
+    private static Optional<NashIntervalDatePair> parseNashIntervalToDates(String nashInterval) {
+        if (nashInterval == null || nashInterval.isBlank()) {
+            return Optional.empty();
+        }
+        String interval = nashInterval.replaceAll("[\\[\\]]", "").trim();
+        String[] parts = interval.split(" *, *");
+
+        if (parts.length != 2) {
+            // logger.warn("Invalid Nash interval format for parsing to dates: {}", nashInterval);
+            return Optional.empty();
+        }
+
+        try {
+            LocalDate startDateVal = LocalDate.parse(parts[0].trim(), NASH_DATE_FORMAT);
+            LocalDate endDateVal = LocalDate.parse(parts[1].trim(), NASH_DATE_FORMAT);
+            return Optional.of(new NashIntervalDatePair(startDateVal, endDateVal));
+        } catch (Exception e) {
+            // logger.warn("Failed to parse dates from Nash interval string '{}': {}", nashInterval, e.getMessage());
+            return Optional.empty();
+        }
+    }
     
     /**
      * Creates a temporal condition with validation.
@@ -191,6 +224,8 @@ public record Temporal(
     public Optional<String> toNashInterval() {
         if (isComparisonPredicate(temporalType)) {
             if (startDate.isEmpty()) {
+                // Cannot form an interval for comparison if the date is not present
+                // (e.g. if it's purely a variable comparison not yet resolved)
                 return Optional.empty();
             }
             LocalDateTime comparisonDate = startDate.get();
@@ -341,5 +376,57 @@ public record Temporal(
      */
     public String variableName() {
         return qualifiedVariableName.orElse(null);
+    }
+
+    /**
+     * Attempts to intersect this Temporal condition with another (typically non-binding) Temporal condition.
+     * If successful, returns a new Temporal condition representing the intersection.
+     * The new condition will have TemporalPredicate.INTERSECT and will retain the
+     * qualifiedVariableName and range of this original condition.
+     *
+     * @param otherNonBindingFilter The other Temporal condition to intersect with.
+     * @return An Optional containing the merged Temporal condition, or empty if merging is not possible
+     *         or results in an invalid/empty interval.
+     */
+    public Optional<Temporal> intersectWith(Temporal otherNonBindingFilter) {
+        Optional<String> thisIntervalOpt = this.toNashInterval();
+        Optional<String> otherIntervalOpt = otherNonBindingFilter.toNashInterval();
+
+        if (thisIntervalOpt.isEmpty() || otherIntervalOpt.isEmpty()) {
+            return Optional.empty(); // Cannot merge if one doesn't produce a valid interval
+        }
+
+        Optional<NashIntervalDatePair> p1Opt = parseNashIntervalToDates(thisIntervalOpt.get());
+        Optional<NashIntervalDatePair> p2Opt = parseNashIntervalToDates(otherIntervalOpt.get());
+
+        if (p1Opt.isEmpty() || p2Opt.isEmpty()) {
+            return Optional.empty(); // Parsing failed for one of the intervals
+        }
+
+        NashIntervalDatePair p1 = p1Opt.get();
+        NashIntervalDatePair p2 = p2Opt.get();
+
+        LocalDate s1 = p1.start(); LocalDate e1 = p1.end();
+        LocalDate s2 = p2.start(); LocalDate e2 = p2.end();
+
+        // Calculate intersection: newStart = max(s1, s2), newEnd = min(e1, e2)
+        LocalDate newStart = s1.isAfter(s2) ? s1 : s2;
+        LocalDate newEnd = e1.isBefore(e2) ? e1 : e2;
+
+        // Check if intersection is valid (newStart must be before or equal to newEnd)
+        if (newStart.isAfter(newEnd)) {
+            // The intersection is empty/invalid.
+            return Optional.empty();
+        }
+
+        // Create new Temporal with INTERSECT, new dates, and this condition's variable name and range.
+        // Range is preserved from 'this' original condition.
+        return Optional.of(new Temporal(
+            Optional.of(newStart.atStartOfDay()),
+            Optional.of(newEnd.atStartOfDay()),
+            this.qualifiedVariableName(), // Preserve original variable binding
+            this.range(),                 // Preserve original range
+            TemporalPredicate.INTERSECT
+        ));
     }
 } 

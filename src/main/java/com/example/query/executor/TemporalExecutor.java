@@ -9,13 +9,6 @@ import com.example.query.model.Query;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.condition.Temporal;
 import com.example.query.index.IndexManager;
-import com.example.query.executor.QueryResult;
-import com.example.query.binding.VariableRegistry;
-import com.example.query.binding.VariableType;
-import com.example.query.executor.QueryExecutionException.ErrorType;
-import com.example.query.model.condition.Condition;
-
-import org.apache.pig.impl.util.MultiMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -242,22 +235,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             // TODO: Review expandYearOnlyInterval - Does it handle non-year-only intervals correctly?
             // For now, assume it returns the input if not year-only.
             String expandedInterval = Temporal.expandYearOnlyInterval(interval);
-            
-            // Determine Nash predicate: Use CONTAINS for BEFORE/AFTER, otherwise derive from TemporalPredicate
-            // Nash.RangePredicate nashPredicate;
-            // TemporalPredicate originalPredicate = condition.temporalType();
-            // if (originalPredicate == TemporalPredicate.BEFORE || originalPredicate == TemporalPredicate.AFTER) {
-            //     nashPredicate = Nash.RangePredicate.CONTAINS;
-            //     strategyLogger.debug("Using Nash.RangePredicate.CONTAINS for TemporalPredicate: {}", originalPredicate);
-            // } else {
-            //     // Fallback to existing logic for other types (INTERSECT, EQUAL, etc.)
-            //     nashPredicate = originalPredicate.toNashPredicate()
-            //                                     .orElseThrow(() -> new QueryExecutionException(
-            //                                         "Nash strategy called with a TemporalPredicate that does not map to a Nash predicate: " + originalPredicate,
-            //                                         condition.toString(), 
-            //                                         ErrorType.INTERNAL_ERROR));
-            //     strategyLogger.debug("Using Nash predicate {} derived from TemporalPredicate: {}", nashPredicate, originalPredicate);
-            // }
+        
 
             // --- Revised Strategy: ALWAYS use INTERSECT ---
             // The specific temporal logic (BEFORE, AFTER, CONTAINS, etc.) is handled by 
@@ -272,7 +250,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                                  corpusName, expandedInterval, nashPredicate, variableName.isPresent() ? variableName.get() : "none");
             try {
                 String[] hashPrefixes = Nash.generateTimeHash(expandedInterval, nashPredicate);
-                strategyLogger.debug("Generated {} hash prefixes: {}", hashPrefixes.length, java.util.Arrays.toString(hashPrefixes));
+                //strategyLogger.debug("Generated {} hash prefixes: {}", hashPrefixes.length, java.util.Arrays.toString(hashPrefixes));
                 Set<NashDateEntryWithId> matchingEntries = new HashSet<>();
                 int prefixesWithData = 0;
                 for (String hashPrefix : hashPrefixes) {
