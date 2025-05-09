@@ -79,6 +79,26 @@ public class Annotations {
             conn.setAutoCommit(false);
             createTables(conn, false); // Don't drop tables
 
+            // If resuming (startDocumentId > 1), delete existing data for that specific document once.
+            // This handles cases where the document might have been partially processed before an interruption.
+            if (startDocumentId > 1) {
+                logger.info("Resuming, performing cleanup for document_id: {}", startDocumentId);
+                try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?");
+                     PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
+                    
+                    delAnn.setInt(1, startDocumentId);
+                    delAnn.executeUpdate();
+
+                    delDep.setInt(1, startDocumentId);
+                    delDep.executeUpdate();
+                    
+
+                } catch (SQLException e) {
+                    logger.error("Error during pre-emptive delete for document_id=" + startDocumentId, e);
+                    throw e; // Rethrow to halt processing if cleanup fails
+                }
+            }
+
             // --- Calculate total documents to process (respecting limit and startId) ---
             long totalDocumentsInDb = 0;
             String countQuery = "SELECT COUNT(*) FROM documents WHERE document_id >= ? AND LENGTH(text) <= " + MAX_DOCUMENT_LENGTH;
@@ -98,7 +118,7 @@ public class Annotations {
                         totalDocumentsInDb, startDocumentId, totalDocumentsToProcessThisRun);
 
             // Query documents to process
-            String queryBase = "SELECT document_id, text FROM documents WHERE document_id >= ? AND LENGTH(text) <= " + MAX_DOCUMENT_LENGTH + " ORDER BY document_id ASC";
+            String queryBase = "SELECT document_id, text, timestamp FROM documents WHERE document_id >= ? AND LENGTH(text) <= " + MAX_DOCUMENT_LENGTH + " ORDER BY document_id ASC";
             String query = (limit != null) ? queryBase + " LIMIT ?" : queryBase;
 
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
@@ -154,19 +174,10 @@ public class Annotations {
                             }
                         int documentId = rs.getInt("document_id");
                         String text = rs.getString("text");
-                        
-                            // Delete any existing annotation/dependency rows for this document (sequential, safe)
-                            try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?")) {
-                                delAnn.setInt(1, documentId);
-                                delAnn.executeUpdate();
-                            }
-                            try (PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
-                                delDep.setInt(1, documentId);
-                                delDep.executeUpdate();
-                            }
+                        String timestamp = rs.getString("timestamp"); // Get the timestamp
 
                             java.util.concurrent.Future<AnnotationResult> future = executor.submit(() -> {
-                        AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId);
+                        AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId, timestamp);
                                 return result;
                             });
                             futures.add(future);
@@ -289,6 +300,8 @@ public class Annotations {
                             FOREIGN KEY (document_id) REFERENCES documents(document_id)
                         )
                     """);
+            // Add the index for faster lookups on dependencies table
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_dependencies_document_id ON dependencies (document_id)");
         }
     }
 
@@ -300,13 +313,25 @@ public class Annotations {
      * @param documentId The ID of the document being processed
      * @return The AnnotationResult containing annotations and dependencies
      */
-    private static AnnotationResult processTextWithCoreNLP(StanfordCoreNLP pipeline, String text, int documentId) {
+    private static AnnotationResult processTextWithCoreNLP(StanfordCoreNLP pipeline, String text, int documentId, String documentTimestamp) {
         List<Map<String, Object>> annotations = new ArrayList<>();
         List<Map<String, Object>> dependencies = new ArrayList<>();
         
-        
-        // Process the document directly without chunking
         CoreDocument document = new CoreDocument(text);
+
+        // Set the document date for SUTime to resolve relative dates like "yesterday"
+        if (documentTimestamp != null && !documentTimestamp.isEmpty()) {
+            // Assuming timestamp is like "YYYY-MM-DD HH:MM:SS" or just "YYYY-MM-DD"
+            // CoreNLP's DocDateAnnotation expects "YYYY-MM-DD"
+            String dateOnly = documentTimestamp.length() > 10 ? documentTimestamp.substring(0, 10) : documentTimestamp;
+            if (dateOnly.matches("\\d{4}-\\d{2}-\\d{2}")) { // Basic check for YYYY-MM-DD format
+                 document.annotation().set(CoreAnnotations.DocDateAnnotation.class, dateOnly);
+                 logger.trace("Set DocDateAnnotation to: {} for document_id: {}", dateOnly, documentId);
+            } else {
+                logger.warn("Timestamp format for document_id: {} ('{}') is not YYYY-MM-DD. SUTime might not use it correctly.", documentId, dateOnly);
+            }
+        }
+        
         pipeline.annotate(document);
         
         int sentenceId = 0;
