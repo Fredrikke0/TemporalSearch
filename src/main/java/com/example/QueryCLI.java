@@ -5,7 +5,6 @@ import com.example.query.executor.*;
 import com.example.query.index.IndexManager;
 import com.example.query.model.*;
 import com.example.query.result.*;
-import com.example.core.*;
 import com.example.query.sqlite.SqliteAccessor;
 import com.example.query.executor.JoinOptimizationStrategy;
 
@@ -20,7 +19,6 @@ import tech.tablesaw.api.Table;
 import java.nio.file.Path;
 import java.util.*;
 import java.io.IOException;
-import java.util.Map;
 
 /**
  * Command-line interface for executing queries against the indexed corpus.
@@ -85,7 +83,6 @@ public class QueryCLI {
             Path projectPath = projectsDir.resolve(projectName);
             String corpusDbPath = projectPath.resolve(projectName + ".db").toString();
             Path indexBasePath = projectPath.resolve("indexes"); // Path object for IndexManager
-            String indexBasePathStr = indexBasePath.toString(); // String for logging/legacy if needed
 
             logger.debug("Resolved project path: {}", projectPath);
             logger.debug("Using database path for project '{}': {}", projectName, corpusDbPath);

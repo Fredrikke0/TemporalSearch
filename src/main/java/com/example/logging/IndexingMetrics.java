@@ -40,7 +40,7 @@ public class IndexingMetrics {
     private final AtomicLong maxProcessingTimeNanos;
     private final AtomicLong minProcessingTimeNanos;
     private final List<Long> recentProcessingTimes;
-
+    
     // Stage-level metrics (new)
     private final AtomicLong totalFetchTimeNanos;
     private final AtomicLong totalProcessTimeNanos;
@@ -280,7 +280,7 @@ public class IndexingMetrics {
             long totalBatches = totalBatchesProcessed.get();
             long currentTotalOutputItems = totalOutputItems.get();
             long currentTotalRawEntries = totalEntriesProcessed.get();
-
+            
             ObjectNode json = MAPPER.createObjectNode()
                 .put("event", "indexing_summary") // Changed event name for clarity
                 .put("index_type", currentIndexType != null ? currentIndexType : "overall") // Add index type if available

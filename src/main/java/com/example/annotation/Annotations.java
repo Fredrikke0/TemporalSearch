@@ -284,8 +284,9 @@ public class Annotations {
                         )
                     """);
 
-            // Add the index for faster lookups
+            // Indexes for annotations table
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_annotations_document_id ON annotations (document_id)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_ann_did_sid_token_lemma ON annotations (document_id, sentence_id, token, lemma)");
 
             stmt.execute("""
                         CREATE TABLE IF NOT EXISTS dependencies (
@@ -300,8 +301,14 @@ public class Annotations {
                             FOREIGN KEY (document_id) REFERENCES documents(document_id)
                         )
                     """);
-            // Add the index for faster lookups
+            // Indexes for dependencies table
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_dependencies_document_id ON dependencies (document_id)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_dep_id ON dependencies (dependency_id)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_dep_relation_did_sid_tokens ON dependencies (relation, document_id, sentence_id, head_token, dependent_token)");
+            
+            // Assuming 'documents' table exists and this is a good place to ensure its index
+            // If 'documents' table creation is handled elsewhere, this might be redundant or ideally co-located.
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_doc_id_timestamp ON documents (document_id, timestamp)");
         }
     }
 

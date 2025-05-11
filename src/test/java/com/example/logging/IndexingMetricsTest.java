@@ -85,7 +85,7 @@ class IndexingMetricsTest {
         assertEquals(0, metrics.getErrorCount());
         assertEquals(1, metrics.getNullCount());
     }
-    
+
     @Test
     void testMultipleBatchesDifferentTypesWithStages() throws Exception {
         metrics.startBatch(100, "unigram");
@@ -93,7 +93,7 @@ class IndexingMetricsTest {
 
         metrics.startBatch(150, "bigram"); // Different raw batch size
         metrics.recordBatchStageDurations(FETCH_NANOS + 1, PROCESS_NANOS + 1, WRITE_TEMP_NANOS + 1, 120, 150);
-        
+
         metrics.startBatch(50, "trigram");
         metrics.recordBatchStageDurations(FETCH_NANOS -1 , PROCESS_NANOS -1, WRITE_TEMP_NANOS -1, 40, 50);
 
@@ -152,7 +152,7 @@ class IndexingMetricsTest {
                     }
                     if ("test-bigram".equals(indexType) && loggedBigramBatch == null) { // Found first bigram
                         loggedBigramBatch = json;
-                    }
+            }
                 } else { // Failed batch
                      if ("test-failed".equals(indexType) && loggedFailedBatch == null) {
                         loggedFailedBatch = json;

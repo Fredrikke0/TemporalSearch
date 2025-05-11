@@ -80,11 +80,8 @@ public class IndexRunner {
         Path indexPath = Paths.get(indexDir);
         Files.createDirectories(indexPath);
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
-            int totalIndexes = indexType.equals("all") ? 10 : 1;
-            int currentIndex = 0;
             try {
                 if (indexType.equals("all") || indexType.equals("unigram")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "unigram");
                     long count = getAnnotationCount(conn);
                     progress.startIndex("Unigram Index", count);
@@ -101,7 +98,6 @@ public class IndexRunner {
                 }
 
                 if (indexType.equals("all") || indexType.equals("bigram")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "bigram");
                     long count = getAnnotationCount(conn);
                     progress.startIndex("Bigram Index", count);
@@ -120,7 +116,6 @@ public class IndexRunner {
                 }
 
                 if (indexType.equals("all") || indexType.equals("trigram")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "trigram");
                     long count = getAnnotationCount(conn);
                     progress.startIndex("Trigram Index", count);
@@ -139,7 +134,6 @@ public class IndexRunner {
                 }
 
                 if (indexType.equals("all") || indexType.equals("dependency")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "dependency");
                     long count = getDependencyCount(conn);
                     progress.startIndex("Dependency Index", count);
@@ -158,7 +152,6 @@ public class IndexRunner {
                 }
 
                 if (indexType.equals("all") || indexType.equals("ner_date")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "ner_date");
                     long count = getNerDateCount(conn);
                     progress.startIndex("NER Date Index", count);
@@ -177,7 +170,6 @@ public class IndexRunner {
                 }
 
                 if (indexType.equals("all") || indexType.equals("ner")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "ner");
                     long count = getNerCount(conn);
                     progress.startIndex("NER Index", count);
@@ -196,7 +188,6 @@ public class IndexRunner {
                 }
 
                 if (indexType.equals("all") || indexType.equals("pos")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "pos");
                     long count = getAnnotationCount(conn);
                     progress.startIndex("POS Tag Index", count);
@@ -215,7 +206,6 @@ public class IndexRunner {
                 }
 
                 if (indexType.equals("all") || indexType.equals("hypernym")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "hypernym");
                     long count = getAnnotationCount(conn);
                     progress.startIndex("Hypernym Index", count);
@@ -234,7 +224,6 @@ public class IndexRunner {
                 }
 
                 if (indexType.equals("all") || indexType.equals("stitch")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "stitch");
                     long count = getNerDateCount(conn);
                     progress.startIndex("Stitch Index", count);
@@ -255,7 +244,6 @@ public class IndexRunner {
                 }
 
                 if (indexType.equals("all") || indexType.equals("nash")) {
-                    currentIndex++;
                     metrics.startBatch(batchSize, "nash");
                     long count = getNerDateCount(conn);
                     progress.startIndex("Nash Index", count);

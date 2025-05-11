@@ -6,7 +6,6 @@ import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.logging.IndexingMetrics;
 import com.google.code.externalsorting.ExternalSort;
-import com.example.core.Position;
 import com.example.core.PositionList;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
@@ -20,7 +19,6 @@ import java.sql.Statement;
 import java.sql.ResultSet;
 import java.util.*;
 import java.nio.charset.Charset;
-import java.util.stream.Collectors;
 
 /**
  * Abstract base class for streaming index generation that processes large datasets efficiently
@@ -162,7 +160,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @param sortedFile The file containing the sorted entries
      */
     protected void writeToLevelDB(File sortedFile) throws IOException {
-        long batchCount = 0;
         long startTime = System.currentTimeMillis();
         totalNGramsGenerated = 0; // Reset count for this index generation
 
@@ -187,7 +184,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                 if (!currentTerm.equals(term)) {
                     writeWithRetry(currentTerm, mergedPositions, MAX_RETRIES, RETRY_DELAY_MS);
-                    batchCount++;
                     totalNGramsGenerated++;
 
                     if (totalNGramsGenerated % 100000 == 0) {
@@ -297,7 +293,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     durationWriteTempNanos = System.nanoTime() - startTimeWriteTemp;
                     tempFiles.add(tempFile);
                 }
-                
+
                 metrics.recordBatchStageDurations(durationFetchNanos, durationProcessNanos, durationWriteTempNanos, itemsInBatchOutput, rawEntriesInBatch);
 
                 if (!batch.isEmpty()) {
@@ -324,7 +320,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
             progress.completeIndex();
 
-            metrics.logIndexingMetrics(); 
+            metrics.logIndexingMetrics();
 
         } finally {
             logger.debug("Cleaning up {} temporary files for index [{}]...", tempFiles.size(), getIndexName());

@@ -5,7 +5,6 @@ import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Dependency;
 import com.example.query.model.condition.Logical;
-import com.example.query.model.condition.Logical.LogicalOperator;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
 import com.example.query.model.condition.Pos;
@@ -14,11 +13,8 @@ import com.example.query.model.TemporalPredicate;
 import com.example.query.model.TemporalRange;
 import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
-import com.example.core.IndexAccessInterface;
-import com.example.query.binding.MatchDetail;
 
 import org.antlr.v4.runtime.tree.ParseTree;
-import org.antlr.v4.runtime.tree.TerminalNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,8 +23,6 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 

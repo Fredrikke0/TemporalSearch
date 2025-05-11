@@ -59,44 +59,31 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
             .map(r -> "'" + r + "'")
             .collect(java.util.stream.Collectors.joining(", "));
 
-        String query;
-        // Base CTEs are the same regardless of first batch or not
-        String ctes = "WITH filtered_deps AS (" +
-                      "    SELECT dependency_id, document_id, sentence_id, head_token, dependent_token, " +
-                      "           relation, begin_char, end_char " +
-                      "    FROM dependencies " +
-                      "    WHERE relation IN (" + inClause + ")" +
-                      "), " +
-                      "head_tokens AS (" +
-                      "    SELECT fd.dependency_id, fd.document_id, fd.sentence_id, fd.head_token, fd.dependent_token, " +
-                      "           fd.relation, fd.begin_char, fd.end_char, a.lemma as head_lemma " +
-                      "    FROM filtered_deps fd " +
-                      "    JOIN annotations a ON fd.document_id = a.document_id " +
-                      "        AND fd.sentence_id = a.sentence_id " +
-                      "        AND fd.head_token = a.token" +
-                      ") ";
+        // Optimized query structure
+        String queryBase = "SELECT " +
+                           "    d.dependency_id, d.document_id, d.sentence_id, " +
+                           "    anno_head.lemma AS head_lemma, anno_dep.lemma AS dependent_lemma, " +
+                           "    d.relation, d.begin_char, d.end_char, doc.timestamp " +
+                           "FROM " +
+                           "    dependencies d " +
+                           "JOIN " +
+                           "    annotations anno_head ON d.document_id = anno_head.document_id " +
+                           "                       AND d.sentence_id = anno_head.sentence_id " +
+                           "                       AND d.head_token = anno_head.token " +
+                           "JOIN " +
+                           "    annotations anno_dep ON d.document_id = anno_dep.document_id " +
+                           "                       AND d.sentence_id = anno_dep.sentence_id " +
+                           "                       AND d.dependent_token = anno_dep.token " +
+                           "JOIN " +
+                           "    documents doc ON d.document_id = doc.document_id " +
+                           "WHERE " +
+                           "    d.relation IN (" + inClause + ") ";
 
+        String query;
         if (isFirstBatch) {
-            query = ctes +
-                    "SELECT h.dependency_id, h.document_id, h.sentence_id, h.head_lemma, a.lemma as dependent_lemma, " +
-                    "       h.relation, h.begin_char, h.end_char, doc.timestamp " +
-                    "FROM head_tokens h " +
-                    "JOIN annotations a ON h.document_id = a.document_id " +
-                    "    AND h.sentence_id = a.sentence_id " +
-                    "    AND h.dependent_token = a.token " +
-                    "JOIN documents doc ON h.document_id = doc.document_id " +
-                    "ORDER BY h.dependency_id LIMIT ?";
+            query = queryBase + "ORDER BY d.dependency_id LIMIT ?";
         } else {
-            query = ctes +
-                    "SELECT h.dependency_id, h.document_id, h.sentence_id, h.head_lemma, a.lemma as dependent_lemma, " +
-                    "       h.relation, h.begin_char, h.end_char, doc.timestamp " +
-                    "FROM head_tokens h " +
-                    "JOIN annotations a ON h.document_id = a.document_id " +
-                    "    AND h.sentence_id = a.sentence_id " +
-                    "    AND h.dependent_token = a.token " +
-                    "JOIN documents doc ON h.document_id = doc.document_id " +
-                    "WHERE h.dependency_id > ? " +
-                    "ORDER BY h.dependency_id LIMIT ?";
+            query = queryBase + "AND d.dependency_id > ? ORDER BY d.dependency_id LIMIT ?";
         }
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
