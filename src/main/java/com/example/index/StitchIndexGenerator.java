@@ -639,7 +639,7 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
 
             // Create the composite key
             String compositeKey = unigramLower + DELIMITER + entry.type().name();
-
+                
             // Create a StitchPosition for this specific entry
             StitchPosition stitchPos = new StitchPosition(
                 entry.documentId(),
@@ -649,8 +649,8 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
                 entry.timestamp(),
                 entry.type(),
                 entry.synonymId()
-            );
-
+                );
+                
             // Aggregate positions for the same composite key within this batch
             PositionList pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionList());
             pl.add(stitchPos);

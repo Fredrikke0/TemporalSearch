@@ -264,43 +264,54 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         List<File> tempFiles = new ArrayList<>();
         T lastProcessedEntry = null; // Keyset pagination: track last processed entry
         IndexingMetrics metrics = new IndexingMetrics();
-        metrics.startBatch(this.batchSize, getIndexName());
-        long totalRawEntriesProcessed = 0;
-        totalNGramsGenerated = 0; // Reset for safety, though writeToLevelDB also resets
+        long totalRawEntriesFetched = 0;
+        totalNGramsGenerated = 0; 
 
         try {
-            // Initialize progress bar for this specific index
-            long totalCount = getDocumentCountForIndex(); // Helper to get appropriate count
-            progress.startIndex(getIndexName(), totalCount); // Start progress for this index
+            long totalCountForProgressBar = getDocumentCountForIndex(); 
+            progress.startIndex(getIndexName(), totalCountForProgressBar);
 
             while (true) {
-                List<T> batch = fetchBatch(lastProcessedEntry); // Use lastProcessedEntry
+                metrics.startBatch(this.batchSize, getIndexName());
+
+                long startTimeFetch = System.nanoTime();
+                List<T> batch = fetchBatch(lastProcessedEntry);
+                long durationFetchNanos = System.nanoTime() - startTimeFetch;
+                int rawEntriesInBatch = batch.size();
+                totalRawEntriesFetched += rawEntriesInBatch;
+
                 if (batch.isEmpty()) {
+                    metrics.recordNullBatch();
                     break;
                 }
-                totalRawEntriesProcessed += batch.size();
 
+                long startTimeProcess = System.nanoTime();
                 ListMultimap<String, PositionList> positions = processBatch(batch);
+                long durationProcessNanos = System.nanoTime() - startTimeProcess;
+                int itemsInBatchOutput = positions.asMap().size(); 
 
+                long durationWriteTempNanos = 0;
                 if (!positions.isEmpty()) {
+                    long startTimeWriteTemp = System.nanoTime();
                     File tempFile = writeBatchToTempFile(positions);
+                    durationWriteTempNanos = System.nanoTime() - startTimeWriteTemp;
                     tempFiles.add(tempFile);
                 }
+                
+                metrics.recordBatchStageDurations(durationFetchNanos, durationProcessNanos, durationWriteTempNanos, itemsInBatchOutput, rawEntriesInBatch);
 
-                // Update lastProcessedEntry for the next iteration
                 if (!batch.isEmpty()) {
                     lastProcessedEntry = batch.get(batch.size() - 1);
                 }
                 
-                metrics.recordBatchSuccess(batch.size());
-                progress.updateIndex(batch.size()); // Update progress based on fetched batch size
+                progress.updateIndex(rawEntriesInBatch);
             }
 
-            logger.info("Finished fetching {} raw entries.", totalRawEntriesProcessed);
+            logger.info("Finished fetching {} raw entries for index [{}].", totalRawEntriesFetched, getIndexName());
 
             if (tempFiles.isEmpty()) {
                 logger.warn("No indexable entries found after filtering. Index [{}] will be empty.", getIndexName());
-                progress.completeIndex(); // Ensure progress bar is marked complete even if empty
+                progress.completeIndex();
                 return; 
             }
 
@@ -309,15 +320,14 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), true);
 
             logger.info("Writing merged entries to LevelDB index...");
-            writeToLevelDB(outputFile); // Writes and logs final count
+            writeToLevelDB(outputFile);
 
             progress.completeIndex();
 
-            metrics.logIndexingMetrics();
+            metrics.logIndexingMetrics(); 
 
         } finally {
-            // Cleanup temp files
-            logger.debug("Cleaning up {} temporary files...", tempFiles.size());
+            logger.debug("Cleaning up {} temporary files for index [{}]...", tempFiles.size(), getIndexName());
             for (File file : tempFiles) {
                 try {
                     Files.deleteIfExists(file.toPath());

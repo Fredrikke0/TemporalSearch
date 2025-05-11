@@ -47,17 +47,26 @@
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
-        <appender-ref ref="METRICS"/>
     </root>
 
     <!-- Keep specific loggers if needed, otherwise INFO will apply -->
     <logger name="com.example.performance" level="INFO" additivity="false">
-        <appender-ref ref="PERFORMANCE"/>
+        <appender-ref ref="CONSOLE"/> 
     </logger>
-    <logger name="com.example.index" level="INFO" additivity="false">
-         <appender-ref ref="CONSOLE"/> 
+
+    <logger name="com.example.index" level="DEBUG" additivity="false">
          <appender-ref ref="FILE"/> 
+        <appender name="CONSOLE_FOR_INDEX" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} %-5level - %msg%n</pattern>
+            </encoder>
+            <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+                <level>INFO</level>
+            </filter>
+        </appender>
+        <appender-ref ref="CONSOLE_FOR_INDEX"/>
     </logger>
+
     <logger name="com.example.query" level="DEBUG" additivity="false"> 
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
