@@ -10,6 +10,8 @@ import com.example.core.PositionList;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import org.iq80.leveldb.Options;
+import com.example.index.LevelDBConfig;
+import org.iq80.leveldb.WriteBatch;
 
 import java.io.*;
 import java.nio.file.*;
@@ -53,13 +55,8 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
     protected IndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        // Initialize IndexAccess with optimized options
-        Options options = new Options();
-        options.createIfMissing(true);
-        options.cacheSize(128 * 1024 * 1024); // 128MB cache
-        options.writeBufferSize(32 * 1024 * 1024); // 32MB write buffer
-        options.blockSize(4 * 1024); // 4KB block size
-        options.compressionType(org.iq80.leveldb.CompressionType.SNAPPY);
+        // Initialize IndexAccess with optimized options from LevelDBConfig
+        Options options = LevelDBConfig.createOptimizedOptions();
 
         try {
             this.indexAccess = new IndexAccess(Path.of(indexBaseDir), getIndexName(), options);
@@ -162,13 +159,17 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     protected void writeToLevelDB(File sortedFile) throws IOException {
         long startTime = System.currentTimeMillis();
         totalNGramsGenerated = 0; // Reset count for this index generation
+        WriteBatch batch = null;
+        int batchCounter = 0;
 
         try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile))) {
             String line;
             String currentTerm = null;
             PositionList mergedPositions = null;
-            final int MAX_RETRIES = 3;
-            final long RETRY_DELAY_MS = 100;
+            final int MAX_RETRIES = 3; // Retries for batch write
+            final long RETRY_DELAY_MS = 1000; // Longer delay for batch retries
+
+            batch = indexAccess.createWriteBatch();
 
             while ((line = reader.readLine()) != null) {
                 String[] parts = line.split("\t", 2);
@@ -183,8 +184,18 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 }
 
                 if (!currentTerm.equals(term)) {
-                    writeWithRetry(currentTerm, mergedPositions, MAX_RETRIES, RETRY_DELAY_MS);
+                    byte[] keyBytes = bytes(currentTerm);
+                    byte[] valueBytes = mergedPositions.serialize();
+                    batch.put(keyBytes, valueBytes);
+                    batchCounter++;
                     totalNGramsGenerated++;
+
+                    if (batchCounter >= LevelDBConfig.BATCH_SIZE) {
+                        writeBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
+                        batch.close(); // Close old batch
+                        batch = indexAccess.createWriteBatch(); // Start new batch
+                        batchCounter = 0;
+                    }
 
                     if (totalNGramsGenerated % 100000 == 0) {
                         long elapsed = System.currentTimeMillis() - startTime;
@@ -196,32 +207,52 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     currentTerm = term;
                     mergedPositions = positions;
                 } else {
-                    positions.getPositions().forEach(mergedPositions::add);
+                    // This case implies that the sortedFile was not properly unique-term aggregated.
+                    // For safety, we'll merge. If sortedFile is guaranteed unique, this can be an error or simplified.
+                    mergedPositions.getPositions().forEach(positions::add); 
                 }
             }
 
+            // Handle the last term
             if (currentTerm != null && mergedPositions != null) {
-                writeWithRetry(currentTerm, mergedPositions, MAX_RETRIES, RETRY_DELAY_MS);
+                byte[] keyBytes = bytes(currentTerm);
+                byte[] valueBytes = mergedPositions.serialize();
+                batch.put(keyBytes, valueBytes);
+                batchCounter++;
                 totalNGramsGenerated++;
             }
 
-            // Log count here after writing is complete for this method
+            // Write any remaining entries in the last batch
+            if (batchCounter > 0) {
+                writeBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
+            }
+
             logger.info("Finished writing {} unique terms/keys to index [{}]", totalNGramsGenerated, getIndexName()); 
+        } finally {
+            if (batch != null) {
+                try {
+                    batch.close(); // Ensure batch is closed in case of exceptions
+                } catch (IOException e) {
+                    logger.warn("Failed to close write batch for index [{}]: {}", getIndexName(), e.getMessage());
+                }
+            }
         }
     }
 
     /**
-     * Attempts to write a term and its positions to the index, retrying on specific failures.
+     * Attempts to write a batch to the index, retrying on specific failures.
      */
-    private void writeWithRetry(String term, PositionList positions, int maxRetries, long delayMs) throws IOException {
+    private void writeBatchWithRetry(WriteBatch batch, int maxRetries, long delayMs, int numEntries) throws IOException {
         int attempt = 0;
         while (true) {
             try {
-                indexAccess.put(bytes(term), positions);
+                indexAccess.write(batch);
+                if (logger.isTraceEnabled()) {
+                    logger.trace("Successfully wrote batch of {} entries to index [{}].", numEntries, getIndexName());
+                }
                 return; // Success
             } catch (IndexAccessException e) {
                 attempt++;
-                // Check if the cause might be the transient FileNotFoundException
                 Throwable cause = e.getCause();
                 boolean possiblyTransient = cause instanceof org.iq80.leveldb.DBException &&
                                              cause.getMessage() != null &&
@@ -229,17 +260,16 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                                               cause.getMessage().contains("FileNotFoundException"));
 
                 if (possiblyTransient && attempt <= maxRetries) {
-                    logger.warn("Attempt {} failed to write term '{}' due to potential transient LevelDB issue ({}). Retrying in {}ms...",
-                                attempt, term, cause.getMessage(), delayMs);
+                    logger.warn("Attempt {} failed to write batch of {} entries to index [{}] due to potential transient LevelDB issue ({}). Retrying in {}ms...",
+                                attempt, numEntries, getIndexName(), cause.getMessage(), delayMs * attempt);
                     try {
                         Thread.sleep(delayMs * attempt); // Simple backoff
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
-                        throw new IOException("Interrupted during retry wait for term: " + term, ie);
+                        throw new IOException("Interrupted during retry wait for batch write to index [" + getIndexName() + "]", ie);
                     }
                 } else {
-                    // Non-transient error or max retries exceeded
-                    throw new IOException("Failed to write term '" + term + "' after " + attempt + " attempts", e);
+                    throw new IOException("Failed to write batch of " + numEntries + " entries to index [" + getIndexName() + "] after " + attempt + " attempts", e);
                 }
             }
         }
