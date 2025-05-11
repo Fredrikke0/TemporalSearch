@@ -624,50 +624,41 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
     @Override
     protected ListMultimap<String, PositionList> processBatch(List<StitchEntry> batch) {
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        
-        // Group entries by unigram value
-        Map<String, List<StitchEntry>> groupedEntries = batch.stream()
-            .collect(Collectors.groupingBy(StitchEntry::value));
-        
-        // Process each unigram group
-        for (Map.Entry<String, List<StitchEntry>> entry : groupedEntries.entrySet()) {
-            String unigram = entry.getKey();
-            List<StitchEntry> entries = entry.getValue();
-            
-            // Create maps to group positions by annotation type
-            Map<AnnotationType, PositionList> positionsByType = new HashMap<>();
-            
-            // Process entries
-            for (StitchEntry e : entries) {
-                // Get or create position list for this unigram and annotation type
-                PositionList positions = positionsByType.computeIfAbsent(
-                    e.type(), 
-                    type -> new PositionList()
-                );
-                
-                // Create position with annotation details
-                StitchPosition position = new StitchPosition(
-                    e.documentId(), 
-                    e.sentenceId(),
-                    e.beginChar(), 
-                    e.endChar(),
-                    e.timestamp(), 
-                    e.type(),
-                    e.synonymId()
-                );
-                
-                positions.add(position);
+        Map<String, PositionList> tempAggregator = new HashMap<>();
+
+        for (StitchEntry entry : batch) {
+            String unigram = entry.value(); // Access unigram via value()
+
+            if (unigram == null || unigram.isEmpty()) {
+                continue;
             }
-            
-            // Add position lists to index with composite keys
-            for (Map.Entry<AnnotationType, PositionList> typeEntry : positionsByType.entrySet()) {
-                AnnotationType type = typeEntry.getKey();
-                PositionList positions = typeEntry.getValue();
-                
-                // Create composite key with format "unigram\0type"
-                String compositeKey = unigram + "\0" + type.name();
-                index.put(compositeKey, positions);
+            String unigramLower = unigram.toLowerCase();
+            if (isStopword(unigramLower)) {
+                continue;
             }
+
+            // Create the composite key
+            String compositeKey = unigramLower + DELIMITER + entry.type().name();
+
+            // Create a StitchPosition for this specific entry
+            StitchPosition stitchPos = new StitchPosition(
+                entry.documentId(),
+                entry.sentenceId(),
+                entry.beginChar(),
+                entry.endChar(),
+                entry.timestamp(),
+                entry.type(),
+                entry.synonymId()
+            );
+
+            // Aggregate positions for the same composite key within this batch
+            PositionList pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionList());
+            pl.add(stitchPos);
+        }
+
+        // Populate the final index multimap
+        for (Map.Entry<String, PositionList> mapEntry : tempAggregator.entrySet()) {
+            index.put(mapEntry.getKey(), mapEntry.getValue());
         }
         
         logger.debug("Processed batch with {} unique unigram-annotation combinations", index.keySet().size());

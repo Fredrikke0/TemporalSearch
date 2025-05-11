@@ -122,7 +122,11 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
                         continue;
                     }
                     
-                    if (isStopword(headLemma) || isStopword(dependentLemma)) {
+                    // Lowercase lemmas before stopword check
+                    String headLemmaLower = headLemma.toLowerCase();
+                    String dependentLemmaLower = dependentLemma.toLowerCase();
+
+                    if (isStopword(headLemmaLower) || isStopword(dependentLemmaLower)) {
                         continue;
                     }
 
@@ -132,8 +136,8 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
-                        headLemma,     // This is actually head_lemma from the query
-                        dependentLemma, // This is actually dependent_lemma from the query
+                        headLemma,     // Store original (non-lowercased here) lemma for DependencyEntry if needed elsewhere
+                        dependentLemma, // Store original (non-lowercased here) lemma for DependencyEntry
                         relation,
                         LocalDate.parse(rs.getString("timestamp").substring(0, 10))
                     ));

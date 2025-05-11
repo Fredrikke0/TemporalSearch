@@ -108,8 +108,15 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         return words;
     }
 
+    /**
+     * Checks if a word is a stopword.
+     * The input word is expected to be already lowercased by the caller.
+     *
+     * @param word The word to check (expected to be in lowercase).
+     * @return True if the word is null or a stopword, false otherwise.
+     */
     protected boolean isStopword(String word) {
-        return word == null || stopwords.contains(word.toLowerCase());
+        return word == null || stopwords.contains(word); // Optimized: removed .toLowerCase()
     }
 
     /**

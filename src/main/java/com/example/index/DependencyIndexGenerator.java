@@ -114,9 +114,12 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
         Map<String, PositionList> positionLists = new HashMap<>();
 
         for (DependencyEntry entry : batch) {
-            // Skip stopwords and blacklisted relations
-            if (isStopword(entry.getHeadToken()) || 
-                isStopword(entry.getDependentToken()) ||
+            // Ensure tokens are lowercased before stopword check
+            String headTokenLower = entry.getHeadToken().toLowerCase();
+            String dependentTokenLower = entry.getDependentToken().toLowerCase();
+
+            if (isStopword(headTokenLower) ||
+                isStopword(dependentTokenLower) ||
                 BLACKLISTED_RELATIONS.contains(entry.getRelation())) {
                 continue;
             }
