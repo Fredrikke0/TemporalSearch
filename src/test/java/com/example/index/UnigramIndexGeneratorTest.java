@@ -80,7 +80,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         insertBasicTestData();
 
         // Fetch batch
-        List<AnnotationEntry> entries = generator.fetchBatch(0);
+        List<AnnotationEntry> entries = generator.fetchBatch(null);
 
         // Verify results
         assertEquals(2, entries.size());

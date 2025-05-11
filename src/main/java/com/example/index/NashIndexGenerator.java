@@ -44,7 +44,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     }
 
     @Override
-    protected List<AnnotationEntry> fetchBatch(int offset) throws SQLException {
+    protected List<AnnotationEntry> fetchBatch(AnnotationEntry lastProcessedEntry) throws SQLException {
         // This method is technically not used by NashIndexGenerator because its
         // generateIndex() method fetches all data at once and processes it differently.
         // Provide a basic implementation to satisfy the abstract class, but it won't be called.

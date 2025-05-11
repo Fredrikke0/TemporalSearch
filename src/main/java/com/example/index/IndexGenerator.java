@@ -114,10 +114,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
     /**
      * Fetches a batch of entries from the database for processing.
-     * @param offset The offset to start fetching from
+     * @param lastProcessedEntry The last entry processed in the previous batch (null if first batch)
      * @return List of entries for processing
      */
-    protected abstract List<T> fetchBatch(int offset) throws SQLException;
+    protected abstract List<T> fetchBatch(T lastProcessedEntry) throws SQLException;
 
     /**
      * Process a batch of documents and return a map of terms to their position lists.
@@ -255,7 +255,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     public void generateIndex() throws SQLException, IOException {
         List<File> tempFiles = new ArrayList<>();
-        int offset = 0;
+        T lastProcessedEntry = null; // Keyset pagination: track last processed entry
         IndexingMetrics metrics = new IndexingMetrics();
         metrics.startBatch(this.batchSize, getIndexName());
         long totalRawEntriesProcessed = 0;
@@ -264,9 +264,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         try {
             // Initialize progress bar for this specific index
             long totalCount = getDocumentCountForIndex(); // Helper to get appropriate count
+            progress.startIndex(getIndexName(), totalCount); // Start progress for this index
 
             while (true) {
-                List<T> batch = fetchBatch(offset);
+                List<T> batch = fetchBatch(lastProcessedEntry); // Use lastProcessedEntry
                 if (batch.isEmpty()) {
                     break;
                 }
@@ -279,7 +280,11 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     tempFiles.add(tempFile);
                 }
 
-                offset += batch.size();
+                // Update lastProcessedEntry for the next iteration
+                if (!batch.isEmpty()) {
+                    lastProcessedEntry = batch.get(batch.size() - 1);
+                }
+                
                 metrics.recordBatchSuccess(batch.size());
                 progress.updateIndex(batch.size()); // Update progress based on fetched batch size
             }
@@ -288,7 +293,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
             if (tempFiles.isEmpty()) {
                 logger.warn("No indexable entries found after filtering. Index [{}] will be empty.", getIndexName());
-                 progress.completeIndex(); // Ensure progress bar is marked complete even if empty
+                progress.completeIndex(); // Ensure progress bar is marked complete even if empty
                 return; 
             }
 
@@ -299,8 +304,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             logger.info("Writing merged entries to LevelDB index...");
             writeToLevelDB(outputFile); // Writes and logs final count
 
-             // Complete the progress bar *after* all writing is done.
-             progress.completeIndex();
+            progress.completeIndex();
 
             metrics.logIndexingMetrics();
 

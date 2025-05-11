@@ -34,6 +34,7 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
     private static final Logger logger = LoggerFactory.getLogger(StitchIndexGenerator.class);
     private final MultiAnnotationSynonyms annotationSynonyms;
     private static final Pattern DATE_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
+    private Integer lastProcessedDocumentIdForStitch = null; // For keyset pagination on documents
 
     private static class DocumentInfo {
         final int documentId;
@@ -245,53 +246,66 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
     }
 
     @Override
-    protected List<StitchEntry> fetchBatch(int offset) throws SQLException {
-        // Start by fetching a batch of documents to process
-        List<DocumentInfo> documentInfos = fetchDocumentBatch(offset, this.batchSize);
-        if (documentInfos.isEmpty()) {
-            return List.of(); // No more documents to process
-        }
+    protected List<StitchEntry> fetchBatch(StitchEntry lastStitchEntryFromPreviousOverallBatch) throws SQLException {
+        // lastStitchEntryFromPreviousOverallBatch is from the superclass, not directly used here for document fetching.
+        // We use this.lastProcessedDocumentIdForStitch to manage document-level pagination.
 
-        List<StitchEntry> entries = new ArrayList<>();
+        List<StitchEntry> currentStitchEntriesForBatch = new ArrayList<>();
         
-        // Process one document at a time to avoid memory issues
-        for (DocumentInfo documentInfo : documentInfos) {
-            processDocumentForStitchIndex(documentInfo.documentId, documentInfo.timestamp, entries);
-        }
-        
-        return entries;
-    }
+        // The batchSize from constructor is the target number of StitchEntry items to return.
+        // Loop to fetch documents one by one until enough StitchEntry items are collected
+        // or no more documents are available.
+        while (currentStitchEntriesForBatch.size() < this.batchSize) {
+            String sql;
+            DocumentInfo currentDocument = null;
 
-    /**
-     * Fetches a batch of document IDs to process
-     */
-    private List<DocumentInfo> fetchDocumentBatch(int offset, int batchSize) throws SQLException {
-        List<DocumentInfo> documentInfos = new ArrayList<>();
-        String sql = "SELECT document_id, timestamp FROM documents ORDER BY document_id LIMIT ? OFFSET ?";
-        
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
-            stmt.setInt(1, batchSize);
-            stmt.setInt(2, offset);
+            if (this.lastProcessedDocumentIdForStitch == null) { // First document batch for this generator instance
+                sql = "SELECT document_id, timestamp FROM documents ORDER BY document_id LIMIT 1";
+            } else { // Subsequent document batches
+                sql = "SELECT document_id, timestamp FROM documents WHERE document_id > ? ORDER BY document_id LIMIT 1";
+            }
 
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    int documentId = rs.getInt("document_id");
-                    String timestampStr = rs.getString("timestamp");
-                    if (timestampStr != null && timestampStr.length() >= 10) {
-                        try {
-                            LocalDate timestamp = LocalDate.parse(timestampStr.substring(0, 10));
-                            documentInfos.add(new DocumentInfo(documentId, timestamp));
-                        } catch (DateTimeParseException e) {
-                            logger.warn("Skipping document_id {} due to invalid timestamp format: {}", documentId, timestampStr, e);
+            try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
+                if (this.lastProcessedDocumentIdForStitch != null) {
+                    stmt.setInt(1, this.lastProcessedDocumentIdForStitch);
+                }
+
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) {
+                        int docId = rs.getInt("document_id");
+                        String timestampStr = rs.getString("timestamp");
+                        if (timestampStr != null && timestampStr.length() >= 10) {
+                            try {
+                                LocalDate timestamp = LocalDate.parse(timestampStr.substring(0, 10));
+                                currentDocument = new DocumentInfo(docId, timestamp);
+                                this.lastProcessedDocumentIdForStitch = docId; // Update for next iteration
+                            } catch (DateTimeParseException e) {
+                                logger.warn("Skipping document_id {} due to invalid timestamp format: {} during stitch batching", docId, timestampStr, e);
+                            }
+                        } else {
+                            logger.warn("Skipping document_id {} due to missing or short timestamp during stitch batching: {}", docId, timestampStr);
+                            // If we skip, we still need to advance lastProcessedDocumentId to avoid an infinite loop on this bad document
+                            this.lastProcessedDocumentIdForStitch = docId; 
                         }
                     } else {
-                        logger.warn("Skipping document_id {} due to missing or short timestamp: {}", documentId, timestampStr);
+                        // No more documents found
+                        break; // Exit the while loop
                     }
                 }
             }
+
+            if (currentDocument != null && currentDocument.timestamp != null) {
+                // This method appends entries to currentStitchEntriesForBatch
+                processDocumentForStitchIndex(currentDocument.documentId, currentDocument.timestamp, currentStitchEntriesForBatch);
+            } else if (currentDocument == null) {
+                // This means no more documents were found by the query, already handled by the break above
+            } else {
+                 // Document was found but had null timestamp or other issue, already logged.
+                 // Loop continues to fetch next document if condition currentStitchEntriesForBatch.size() < this.batchSize is met.
+            }
         }
         
-        return documentInfos;
+        return currentStitchEntriesForBatch;
     }
 
     /**
@@ -668,6 +682,19 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
     @Override
     protected String getIndexName() {
         return "stitch";
+    }
+
+    @Override
+    protected long getDocumentCountForIndex() throws SQLException {
+        // Stitch index processes documents, so count from the documents table
+        String countSql = "SELECT COUNT(*) FROM documents";
+        try (Statement stmt = sqliteConn.createStatement();
+             ResultSet rs = stmt.executeQuery(countSql)) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        }
+        return 0;
     }
 
     @Override

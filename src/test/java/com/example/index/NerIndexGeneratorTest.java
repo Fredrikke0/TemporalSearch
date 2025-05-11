@@ -96,7 +96,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
     @Test
     public void testEntityIndexing() throws Exception {
         // Fetch first batch of entries
-        var entries = generator.fetchBatch(0);
+        var entries = generator.fetchBatch(null);
         
         // Check entity count
         assertEquals(4, entries.size(), "Should have fetched 4 entities");
@@ -161,7 +161,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         }
 
         // Fetch and process entries
-        var entries = generator.fetchBatch(0);
+        var entries = generator.fetchBatch(null);
         
         // Check that DATE entity is excluded
         assertEquals(4, entries.size(), "Should still have 4 entities (DATE excluded)");
@@ -207,7 +207,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         }
 
         // Fetch and process entries
-        var entries = generator.fetchBatch(0);
+        var entries = generator.fetchBatch(null);
         var result = generator.processBatch(entries);
         
         // Verify case normalization - both APPLE and Apple should be mapped to the same key
@@ -257,7 +257,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         }
 
         // Fetch and process entries
-        var entries = generator.fetchBatch(0);
+        var entries = generator.fetchBatch(null);
         var result = generator.processBatch(entries);
         
         // The multi-token entity should be combined into a single entry

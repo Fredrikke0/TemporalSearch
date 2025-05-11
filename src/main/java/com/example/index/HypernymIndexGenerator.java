@@ -51,41 +51,61 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
     }
 
     @Override
-    protected List<DependencyEntry> fetchBatch(int offset) throws SQLException {
+    protected List<DependencyEntry> fetchBatch(DependencyEntry lastProcessedEntry) throws SQLException {
         List<DependencyEntry> batch = new ArrayList<>();
+        boolean isFirstBatch = (lastProcessedEntry == null);
         
-        // Build the IN clause from HYPERNYM_RELATIONS
         String inClause = HYPERNYM_RELATIONS.stream()
             .map(r -> "'" + r + "'")
             .collect(java.util.stream.Collectors.joining(", "));
-            
-        String query = String.format(
-            "WITH filtered_deps AS (" +
-            "    SELECT document_id, sentence_id, head_token, dependent_token, " +
-            "           relation, begin_char, end_char " +
-            "    FROM dependencies " +
-            "    WHERE relation IN (%s)" +
-            "), " +
-            "head_tokens AS (" +
-            "    SELECT d.*, a.lemma as head_lemma " +
-            "    FROM filtered_deps d " +
-            "    JOIN annotations a ON d.document_id = a.document_id " +
-            "        AND d.sentence_id = a.sentence_id " +
-            "        AND d.head_token = a.token" +
-            ") " +
-            "SELECT h.*, a.lemma as dependent_lemma, doc.timestamp " +
-            "FROM head_tokens h " +
-            "JOIN annotations a ON h.document_id = a.document_id " +
-            "    AND h.sentence_id = a.sentence_id " +
-            "    AND h.dependent_token = a.token " +
-            "JOIN documents doc ON h.document_id = doc.document_id " +
-            "ORDER BY h.document_id, h.sentence_id, h.begin_char " +
-            "LIMIT ? OFFSET ?",
-            inClause);
+
+        String query;
+        // Base CTEs are the same regardless of first batch or not
+        String ctes = "WITH filtered_deps AS (" +
+                      "    SELECT dependency_id, document_id, sentence_id, head_token, dependent_token, " +
+                      "           relation, begin_char, end_char " +
+                      "    FROM dependencies " +
+                      "    WHERE relation IN (" + inClause + ")" +
+                      "), " +
+                      "head_tokens AS (" +
+                      "    SELECT fd.dependency_id, fd.document_id, fd.sentence_id, fd.head_token, fd.dependent_token, " +
+                      "           fd.relation, fd.begin_char, fd.end_char, a.lemma as head_lemma " +
+                      "    FROM filtered_deps fd " +
+                      "    JOIN annotations a ON fd.document_id = a.document_id " +
+                      "        AND fd.sentence_id = a.sentence_id " +
+                      "        AND fd.head_token = a.token" +
+                      ") ";
+
+        if (isFirstBatch) {
+            query = ctes +
+                    "SELECT h.dependency_id, h.document_id, h.sentence_id, h.head_lemma, a.lemma as dependent_lemma, " +
+                    "       h.relation, h.begin_char, h.end_char, doc.timestamp " +
+                    "FROM head_tokens h " +
+                    "JOIN annotations a ON h.document_id = a.document_id " +
+                    "    AND h.sentence_id = a.sentence_id " +
+                    "    AND h.dependent_token = a.token " +
+                    "JOIN documents doc ON h.document_id = doc.document_id " +
+                    "ORDER BY h.dependency_id LIMIT ?";
+        } else {
+            query = ctes +
+                    "SELECT h.dependency_id, h.document_id, h.sentence_id, h.head_lemma, a.lemma as dependent_lemma, " +
+                    "       h.relation, h.begin_char, h.end_char, doc.timestamp " +
+                    "FROM head_tokens h " +
+                    "JOIN annotations a ON h.document_id = a.document_id " +
+                    "    AND h.sentence_id = a.sentence_id " +
+                    "    AND h.dependent_token = a.token " +
+                    "JOIN documents doc ON h.document_id = doc.document_id " +
+                    "WHERE h.dependency_id > ? " +
+                    "ORDER BY h.dependency_id LIMIT ?";
+        }
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            stmt.setInt(1, this.batchSize);
-            stmt.setInt(2, offset);
+            if (isFirstBatch) {
+                stmt.setInt(1, this.batchSize);
+            } else {
+                stmt.setInt(1, lastProcessedEntry.getDependencyId());
+                stmt.setInt(2, this.batchSize);
+            }
             
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
@@ -94,7 +114,6 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
                     String dependentLemma = sanitizeText(rs.getString("dependent_lemma"));
                     String relation = sanitizeText(rs.getString("relation"));
                     
-                    // Skip if any required field is null or empty after sanitization
                     if (headLemma == null || headLemma.isEmpty() ||
                         dependentLemma == null || dependentLemma.isEmpty() ||
                         relation == null || relation.isEmpty()) {
@@ -103,18 +122,18 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
                         continue;
                     }
                     
-                    // Skip if either term is a stopword
                     if (isStopword(headLemma) || isStopword(dependentLemma)) {
                         continue;
                     }
 
                     batch.add(new DependencyEntry(
+                        rs.getInt("dependency_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
-                        headLemma,
-                        dependentLemma,
+                        headLemma,     // This is actually head_lemma from the query
+                        dependentLemma, // This is actually dependent_lemma from the query
                         relation,
                         LocalDate.parse(rs.getString("timestamp").substring(0, 10))
                     ));

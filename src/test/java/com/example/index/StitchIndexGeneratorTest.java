@@ -134,7 +134,7 @@ class StitchIndexGeneratorTest extends BaseIndexTest {
         insertBasicTestData();
 
         // Fetch batch
-        List<StitchEntry> entries = generator.fetchBatch(0);
+        List<StitchEntry> entries = generator.fetchBatch(null);
 
         // Verify results
         assertEquals(40, entries.size(), "Expected 40 stitch entries");

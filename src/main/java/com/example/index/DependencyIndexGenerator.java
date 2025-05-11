@@ -47,17 +47,33 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
     }
 
     @Override
-    protected List<DependencyEntry> fetchBatch(int offset) throws SQLException {
+    protected List<DependencyEntry> fetchBatch(DependencyEntry lastProcessedEntry) throws SQLException {
         List<DependencyEntry> batch = new ArrayList<>();
-        String query = "SELECT d.document_id, d.sentence_id, d.head_token, d.dependent_token, d.relation, " +
-                      "d.begin_char, d.end_char, doc.timestamp " +
-                      "FROM dependencies d " +
-                      "JOIN documents doc ON d.document_id = doc.document_id " +
-                      "ORDER BY d.document_id, d.sentence_id, d.begin_char LIMIT ? OFFSET ?";
+        String query;
+        boolean isFirstBatch = (lastProcessedEntry == null);
+
+        if (isFirstBatch) {
+            query = "SELECT d.dependency_id, d.document_id, d.sentence_id, d.head_token, d.dependent_token, d.relation, " +
+                    "d.begin_char, d.end_char, doc.timestamp " +
+                    "FROM dependencies d " +
+                    "JOIN documents doc ON d.document_id = doc.document_id " +
+                    "ORDER BY d.dependency_id LIMIT ?";
+        } else {
+            query = "SELECT d.dependency_id, d.document_id, d.sentence_id, d.head_token, d.dependent_token, d.relation, " +
+                    "d.begin_char, d.end_char, doc.timestamp " +
+                    "FROM dependencies d " +
+                    "JOIN documents doc ON d.document_id = doc.document_id " +
+                    "WHERE d.dependency_id > ? " +
+                    "ORDER BY d.dependency_id LIMIT ?";
+        }
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            stmt.setInt(1, this.batchSize);
-            stmt.setInt(2, offset);
+            if (isFirstBatch) {
+                stmt.setInt(1, this.batchSize);
+            } else {
+                stmt.setInt(1, lastProcessedEntry.getDependencyId());
+                stmt.setInt(2, this.batchSize);
+            }
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
@@ -76,6 +92,7 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
                     }
 
                     batch.add(new DependencyEntry(
+                        rs.getInt("dependency_id"), // Use the new dependency_id
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),

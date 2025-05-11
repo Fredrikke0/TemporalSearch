@@ -26,6 +26,7 @@ public class TestData {
 
     public static DependencyEntry createDependency(int docId, String head, String dependent, String relation) {
         return new DependencyEntry(
+            0, // Placeholder for dependencyId, adjust if tests need specific values
             docId, 1, 0, head.length() + dependent.length() + 1,
             head, dependent, relation, LocalDate.now()
         );

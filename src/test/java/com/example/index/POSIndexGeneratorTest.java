@@ -102,7 +102,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
     @Test
     public void testBasicPOSIndexing() throws Exception {
         // Fetch first batch of entries
-        var entries = generator.fetchBatch(0);
+        var entries = generator.fetchBatch(null);
         
         // Process batch and verify results
         ListMultimap<String, PositionList> result = generator.processBatch(entries);
@@ -170,7 +170,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         }
 
         // Fetch and process entries
-        var entries = generator.fetchBatch(0);
+        var entries = generator.fetchBatch(null);
         var result = generator.processBatch(entries);
 
         // Verify case normalization

@@ -40,17 +40,32 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
     }
 
     @Override
-    protected List<AnnotationEntry> fetchBatch(int offset) throws SQLException {
+    protected List<AnnotationEntry> fetchBatch(AnnotationEntry lastProcessedEntry) throws SQLException {
         List<AnnotationEntry> entries = new ArrayList<>();
-        String sql = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
-                    "FROM annotations a " +
-                    "JOIN documents d ON a.document_id = d.document_id " +
-                    "WHERE a.token IS NOT NULL " +
-                    "ORDER BY a.document_id, a.sentence_id, a.begin_char LIMIT ? OFFSET ?";
+        String sql;
+        boolean isFirstBatch = (lastProcessedEntry == null);
+
+        if (isFirstBatch) {
+            sql = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
+                  "FROM annotations a " +
+                  "JOIN documents d ON a.document_id = d.document_id " +
+                  "WHERE a.token IS NOT NULL " +
+                  "ORDER BY a.annotation_id LIMIT ?";
+        } else {
+            sql = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
+                  "FROM annotations a " +
+                  "JOIN documents d ON a.document_id = d.document_id " +
+                  "WHERE a.token IS NOT NULL AND a.annotation_id > ? " +
+                  "ORDER BY a.annotation_id LIMIT ?";
+        }
                     
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
-            stmt.setInt(1, this.batchSize);
-            stmt.setInt(2, offset);
+            if (isFirstBatch) {
+                stmt.setInt(1, this.batchSize);
+            } else {
+                stmt.setInt(1, lastProcessedEntry.getAnnotationId());
+                stmt.setInt(2, this.batchSize);
+            }
             
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {

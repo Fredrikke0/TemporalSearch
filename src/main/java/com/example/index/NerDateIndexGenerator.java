@@ -66,18 +66,34 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
     }
 
     @Override
-    protected List<AnnotationEntry> fetchBatch(int offset) throws SQLException {
+    protected List<AnnotationEntry> fetchBatch(AnnotationEntry lastProcessedEntry) throws SQLException {
         List<AnnotationEntry> batch = new ArrayList<>();
-        String query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
-                      "a.token, a.normalized_ner, a.ner, d.timestamp " +
-                      "FROM annotations a " +
-                      "JOIN documents d ON a.document_id = d.document_id " +
-                      "WHERE a.ner = 'DATE' " +
-                      "ORDER BY a.document_id, a.sentence_id, a.begin_char LIMIT ? OFFSET ?";
+        String query;
+        boolean isFirstBatch = (lastProcessedEntry == null);
+
+        if (isFirstBatch) {
+            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
+                    "a.token, a.normalized_ner, a.ner, d.timestamp " +
+                    "FROM annotations a " +
+                    "JOIN documents d ON a.document_id = d.document_id " +
+                    "WHERE a.ner = 'DATE' " +
+                    "ORDER BY a.annotation_id LIMIT ?";
+        } else {
+            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
+                    "a.token, a.normalized_ner, a.ner, d.timestamp " +
+                    "FROM annotations a " +
+                    "JOIN documents d ON a.document_id = d.document_id " +
+                    "WHERE a.ner = 'DATE' AND a.annotation_id > ? " +
+                    "ORDER BY a.annotation_id LIMIT ?";
+        }
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            stmt.setInt(1, this.batchSize);
-            stmt.setInt(2, offset);
+            if (isFirstBatch) {
+                stmt.setInt(1, this.batchSize);
+            } else {
+                stmt.setInt(1, lastProcessedEntry.getAnnotationId());
+                stmt.setInt(2, this.batchSize);
+            }
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
