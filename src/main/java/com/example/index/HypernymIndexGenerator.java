@@ -36,13 +36,8 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
     );
 
     public HypernymIndexGenerator(String levelDbPath, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress) throws IOException {
-        super(levelDbPath, stopwordsPath, sqliteConn, progress);
-    }
-
-    public HypernymIndexGenerator(String levelDbPath, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, IndexConfig config) throws IOException {
-        super(levelDbPath, stopwordsPath, sqliteConn, progress, config);
+            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        super(levelDbPath, stopwordsPath, sqliteConn, progress, batchSize);
     }
 
     @Override
@@ -89,7 +84,7 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
             inClause);
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            stmt.setInt(1, config.getBatchSize());
+            stmt.setInt(1, this.batchSize);
             stmt.setInt(2, offset);
             
             try (ResultSet rs = stmt.executeQuery()) {

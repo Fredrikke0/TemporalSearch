@@ -101,6 +101,11 @@ public class Pipeline {
                 .setDefault("stopwords.txt")
                 .help("Path to file containing stopwords to exclude (default: stopwords.txt)");
 
+        indexGroup.addArgument("--idx-batch-size")
+                .setDefault(100000)
+                .type(Integer.class)
+                .help("Number of documents to fetch from DB at a time by an index generator (default: 100000). Critical for memory usage of complex indexes like 'stitch'.");
+
         indexGroup.addArgument("-y", "--index-type")
                 .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch", "nash", "all") // Added 'nash'
                 .setDefault("all")
@@ -204,7 +209,7 @@ public class Pipeline {
             logger.debug("About to run indexing on DB: {}", projectDbPath.toAbsolutePath());
             String indexType = ns.getString("index_type");
             String stopwordsPath = ns.getString("stopwords");
-            int indexBatchSize = 1000; // Default batch size for indexer internal operations, if needed by IndexRunner later.
+            int indexBatchSize = ns.getInt("idx_batch_size"); // Use the new argument
 
             // Determine the specific index directory path
             Path specificIndexDir = indexBasePath.resolve(indexType.equals("all") ? "" : indexType); // Base path if 'all'
@@ -280,7 +285,7 @@ public class Pipeline {
                      projectDbPath.toString(),
                      indexBasePath.toString(), // Pass base index dir
                      stopwordsPath,
-                     indexBatchSize, // Pass default/parsed batch size
+                     indexBatchSize, // Pass specific index batch size
                      indexType // Pass specific type ('all' or single)
                  );
                  logger.info("Indexing stage completed.");

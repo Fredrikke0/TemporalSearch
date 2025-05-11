@@ -59,7 +59,8 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
             indexBaseDir.toString(),
             stopwordsPath.toString(),
             sqliteConn,
-            progress
+            progress,
+            1000 // Added batchSize argument
         );
     }
 

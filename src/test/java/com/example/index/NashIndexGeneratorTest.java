@@ -29,7 +29,8 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
             tempDir.resolve("test-leveldb-nash").toString(),
             TEST_STOPWORDS_PATH,
             sqliteConn,
-            new ProgressTracker()
+            new ProgressTracker(),
+            1000
         );
         setupTestData();
     }

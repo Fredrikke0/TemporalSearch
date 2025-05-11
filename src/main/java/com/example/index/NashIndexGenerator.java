@@ -28,14 +28,9 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(NashIndexGenerator.class);
     private static final DateTimeFormatter NASH_INTERVAL_FORMATTER = DateTimeFormatter.ISO_DATE; // YYYY-MM-DD
 
-    public NashIndexGenerator(String levelDbPath, String stopwordsPath, Connection sqliteConn, ProgressTracker progress)
+    public NashIndexGenerator(String levelDbPath, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize)
             throws IOException {
-        super(levelDbPath, stopwordsPath, sqliteConn, progress);
-    }
-
-    public NashIndexGenerator(String levelDbPath, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, IndexConfig config)
-            throws IOException {
-        super(levelDbPath, stopwordsPath, sqliteConn, progress, config);
+        super(levelDbPath, stopwordsPath, sqliteConn, progress, batchSize);
     }
 
     @Override
@@ -50,9 +45,10 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     @Override
     protected List<AnnotationEntry> fetchBatch(int offset) throws SQLException {
-        // This method is technically not used because generateIndex fetches all data at once.
-        // Provide a basic implementation to satisfy the abstract class, but it won't be called by the overridden generateIndex.
-        logger.warn("fetchBatch called unexpectedly in NashIndexGenerator. This should not happen.");
+        // This method is technically not used by NashIndexGenerator because its
+        // generateIndex() method fetches all data at once and processes it differently.
+        // Provide a basic implementation to satisfy the abstract class, but it won't be called.
+        logger.warn("fetchBatch called unexpectedly in NashIndexGenerator. This should not happen with the current implementation.");
         return Collections.emptyList();
     }
 

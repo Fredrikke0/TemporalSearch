@@ -9,7 +9,6 @@ import java.sql.*;
 import java.nio.file.Path;
 import java.util.Optional;
 import com.example.logging.ProgressTracker;
-import com.example.index.IndexConfig;
 import com.example.core.Position;
 import com.example.core.PositionList;
 import com.example.core.IndexAccess;
@@ -125,7 +124,7 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
     public void testBasicIndexing() throws Exception {
         // Create and run bigram indexer
         try (BigramIndexGenerator indexer = new BigramIndexGenerator(
-                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker())) {
+                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
             indexer.generateIndex();
         }
 
@@ -150,7 +149,7 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
     public void testSentenceBoundaries() throws Exception {
         // Create and run bigram indexer
         try (BigramIndexGenerator indexer = new BigramIndexGenerator(
-                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker())) {
+                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
             indexer.generateIndex();
         }
 

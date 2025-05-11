@@ -35,33 +35,23 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
     private final MultiAnnotationSynonyms annotationSynonyms;
     private static final Pattern DATE_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
 
-    public StitchIndexGenerator(String indexBaseDir, String stopwordsPath,
-            java.sql.Connection sqliteConn, ProgressTracker progress) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress);
-        Path baseDir = Path.of(indexBaseDir);
-        this.annotationSynonyms = new MultiAnnotationSynonyms(baseDir);
-        try {
-            logger.info("Initializing annotation synonyms for stitch index");
-            populateAnnotationSynonyms();
-            logger.info("Successfully initialized annotation synonyms with {} entries", annotationSynonyms.size());
-        } catch (SQLException e) {
-            // Close resources to prevent memory leaks
-            try {
-                annotationSynonyms.close();
-            } catch (Exception ex) {
-                logger.warn("Failed to close annotation synonyms after initialization error", ex);
-            }
-            throw new IOException("Failed to populate annotation synonyms", e);
+    private static class DocumentInfo {
+        final int documentId;
+        final LocalDate timestamp;
+
+        DocumentInfo(int documentId, LocalDate timestamp) {
+            this.documentId = documentId;
+            this.timestamp = timestamp;
         }
     }
 
     public StitchIndexGenerator(String indexBaseDir, String stopwordsPath,
-            java.sql.Connection sqliteConn, ProgressTracker progress, IndexConfig config) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, config);
+            java.sql.Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize);
         Path baseDir = Path.of(indexBaseDir);
         this.annotationSynonyms = new MultiAnnotationSynonyms(baseDir);
         try {
-            logger.info("Initializing annotation synonyms for stitch index with custom config");
+            logger.info("Initializing annotation synonyms for stitch index");
             populateAnnotationSynonyms();
             logger.info("Successfully initialized annotation synonyms with {} entries", annotationSynonyms.size());
         } catch (SQLException e) {
@@ -257,16 +247,16 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
     @Override
     protected List<StitchEntry> fetchBatch(int offset) throws SQLException {
         // Start by fetching a batch of documents to process
-        List<Integer> documentIds = fetchDocumentBatch(offset, config.getBatchSize());
-        if (documentIds.isEmpty()) {
+        List<DocumentInfo> documentInfos = fetchDocumentBatch(offset, this.batchSize);
+        if (documentInfos.isEmpty()) {
             return List.of(); // No more documents to process
         }
 
         List<StitchEntry> entries = new ArrayList<>();
         
         // Process one document at a time to avoid memory issues
-        for (Integer documentId : documentIds) {
-            processDocumentForStitchIndex(documentId, entries);
+        for (DocumentInfo documentInfo : documentInfos) {
+            processDocumentForStitchIndex(documentInfo.documentId, documentInfo.timestamp, entries);
         }
         
         return entries;
@@ -275,8 +265,8 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
     /**
      * Fetches a batch of document IDs to process
      */
-    private List<Integer> fetchDocumentBatch(int offset, int batchSize) throws SQLException {
-        List<Integer> documentIds = new ArrayList<>();
+    private List<DocumentInfo> fetchDocumentBatch(int offset, int batchSize) throws SQLException {
+        List<DocumentInfo> documentInfos = new ArrayList<>();
         String sql = "SELECT document_id, timestamp FROM documents ORDER BY document_id LIMIT ? OFFSET ?";
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
@@ -285,22 +275,33 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    documentIds.add(rs.getInt("document_id"));
+                    int documentId = rs.getInt("document_id");
+                    String timestampStr = rs.getString("timestamp");
+                    if (timestampStr != null && timestampStr.length() >= 10) {
+                        try {
+                            LocalDate timestamp = LocalDate.parse(timestampStr.substring(0, 10));
+                            documentInfos.add(new DocumentInfo(documentId, timestamp));
+                        } catch (DateTimeParseException e) {
+                            logger.warn("Skipping document_id {} due to invalid timestamp format: {}", documentId, timestampStr, e);
+                        }
+                    } else {
+                        logger.warn("Skipping document_id {} due to missing or short timestamp: {}", documentId, timestampStr);
+                    }
                 }
             }
         }
         
-        return documentIds;
+        return documentInfos;
     }
 
     /**
      * Processes a single document, fetching its unigrams and annotations separately
      * and then joining them in memory to create StitchEntries
      */
-    private void processDocumentForStitchIndex(int documentId, List<StitchEntry> entries) throws SQLException {
+    private void processDocumentForStitchIndex(int documentId, LocalDate documentTimestamp, List<StitchEntry> entries) throws SQLException {
         // Step 1: Get document timestamp
-        LocalDate documentTimestamp = getDocumentTimestamp(documentId);
         if (documentTimestamp == null) {
+            logger.warn("Skipping document_id {} due to null timestamp provided to processDocumentForStitchIndex", documentId);
             return; // Skip if we can't get timestamp
         }
         
@@ -315,37 +316,6 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
         processNerAnnotations(documentId, documentTimestamp, unigramsBySentence, entries);
         processPosAnnotations(documentId, documentTimestamp, unigramsBySentence, entries);
         processDependencyAnnotations(documentId, documentTimestamp, unigramsBySentence, entries);
-    }
-
-    /**
-     * Gets the timestamp for a document
-     */
-    private LocalDate getDocumentTimestamp(int documentId) throws SQLException {
-        String sql = "SELECT timestamp FROM documents WHERE document_id = ?";
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
-            stmt.setInt(1, documentId);
-            try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    return LocalDate.parse(rs.getString("timestamp").substring(0, 10));
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Simple data class to hold unigram information
-     */
-    private static class UnigramData {
-        final int beginChar;
-        final int endChar;
-        final String token;
-        
-        UnigramData(int beginChar, int endChar, String token) {
-            this.beginChar = beginChar;
-            this.endChar = endChar;
-            this.token = token;
-        }
     }
 
     /**
@@ -730,5 +700,20 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
         }
         
         logger.info("Successfully closed StitchIndexGenerator");
+    }
+
+    /**
+     * Simple data class to hold unigram information
+     */
+    private static class UnigramData {
+        final int beginChar;
+        final int endChar;
+        final String token;
+        
+        UnigramData(int beginChar, int endChar, String token) {
+            this.beginChar = beginChar;
+            this.endChar = endChar;
+            this.token = token;
+        }
     }
 } 

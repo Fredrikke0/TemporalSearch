@@ -29,10 +29,11 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
 
         // Create generator
         generator = new NerDateIndexGenerator(
-            tempDir.resolve("test-leveldb-ner").toString(),
+            tempDir.resolve("test-leveldb-ner-date").toString(),
             TEST_STOPWORDS_PATH,
             sqliteConn,
-            new ProgressTracker()
+            new ProgressTracker(),
+            1000
         );
 
         // Insert test data

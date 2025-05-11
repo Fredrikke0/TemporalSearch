@@ -15,7 +15,7 @@ import java.util.Map;
 /**
  * Provides access to SQLite databases for different sources.
  * This class handles database connections and provides methods to retrieve metadata and other information.
- * Implemented as a singleton to avoid passing the index directory through all layers.
+ * Implemented as a singleton. QueryCLI re-initializes it with the specific DB path for each query.
  */
 public class SqliteAccessor {
     private static final Logger logger = LoggerFactory.getLogger(SqliteAccessor.class);
@@ -23,35 +23,37 @@ public class SqliteAccessor {
     // Singleton instance
     private static SqliteAccessor instance;
     
-    // Base directory for all index sets
-    private final String indexBaseDir;
+    // Path to the currently configured SQLite database file. Set by initialize().
+    private String currentDbFilePath; 
     
-    // Cache of database paths to avoid repeated file existence checks
+    // Cache of database paths (key: source name, value: currentDbFilePath). Cleared on re-initialization.
     private final Map<String, String> dbPathCache = new HashMap<>();
     
     /**
-     * Creates a new SqliteAccessor with the specified index base directory.
-     * Private constructor to enforce singleton pattern.
+     * Private constructor for singleton.
      *
-     * @param indexBaseDir The base directory for all index sets
+     * @param dbFilePath The direct path to the SQLite database file.
      */
-    private SqliteAccessor(String indexBaseDir) {
-        this.indexBaseDir = indexBaseDir;
-        logger.info("Initialized SqliteAccessor with base directory: {}", indexBaseDir);
+    private SqliteAccessor(String dbFilePath) {
+        this.currentDbFilePath = dbFilePath;
+        logger.info("SqliteAccessor instance created with database path: {}", dbFilePath);
     }
     
     /**
-     * Initializes the singleton instance with the specified index base directory.
-     * This should be called once at application startup.
+     * Initializes or re-initializes the singleton instance with the specified database file path.
+     * QueryCLI calls this for each query to set the correct database context.
      *
-     * @param indexBaseDir The base directory for all index sets
+     * @param dbFilePath The direct path to the SQLite database file.
      */
-    public static synchronized void initialize(String indexBaseDir) {
+    public static synchronized void initialize(String dbFilePath) {
         if (instance == null) {
-            instance = new SqliteAccessor(indexBaseDir);
-            logger.info("SqliteAccessor singleton initialized with base directory: {}", indexBaseDir);
+            instance = new SqliteAccessor(dbFilePath);
+            logger.info("SqliteAccessor singleton initialized with database path: {}", dbFilePath);
         } else {
-            logger.warn("SqliteAccessor already initialized, ignoring new initialization request");
+            logger.info("Re-initializing SqliteAccessor. Old DB path: '{}', New DB path: '{}'", instance.currentDbFilePath, dbFilePath);
+            instance.currentDbFilePath = dbFilePath;
+            instance.dbPathCache.clear(); // Clear cache as the DB context has changed
+            logger.info("SqliteAccessor re-initialized and cache cleared. Current DB path: {}", instance.currentDbFilePath);
         }
     }
     
@@ -70,15 +72,15 @@ public class SqliteAccessor {
     }
     
     /**
-     * Gets a connection to the SQLite database for the specified source.
+     * Gets a connection to the currently configured SQLite database.
      *
-     * @param source The source name (e.g., "wikipedia")
+     * @param source The source name (used for logging and consistency, path comes from initialization)
      * @return A connection to the database
      * @throws SQLException If a database access error occurs
      */
     public Connection getConnection(String source) throws SQLException {
-        String dbPath = getDatabasePath(source);
-        //logger.debug("Opening connection to database: {}", dbPath);
+        String dbPath = getDatabasePath(source); // 'source' is used as cache key
+        // logger.debug("Opening connection to database: {} for source: {}", dbPath, source);
         
         try {
             Class.forName("org.sqlite.JDBC");
@@ -182,19 +184,28 @@ public class SqliteAccessor {
     
     /**
      * Gets the path to the SQLite database for the specified source.
+     * Relies on currentDbFilePath being set correctly by initialize().
      *
-     * @param source The source name
+     * @param source The source name (used as a key for caching currentDbFilePath)
      * @return The path to the database
      */
     private String getDatabasePath(String source) {
-        // Check if we've already resolved this path
+        // Check cache first. Key is 'source', value is 'this.currentDbFilePath'.
         if (dbPathCache.containsKey(source)) {
             return dbPathCache.get(source);
         }
         
-        // Use the source name for both directory and file
-        String path = indexBaseDir + "/" + source + "/" + source + ".db";
-        dbPathCache.put(source, path);
-        return path;
+        // The path is simply what was provided during the last initialization.
+        String actualDbPath = this.currentDbFilePath;
+        
+        // Sanity check: ensure the initialized path is not null or empty
+        if (actualDbPath == null || actualDbPath.trim().isEmpty()) {
+             logger.error("SqliteAccessor: currentDbFilePath is null or empty for source '{}'. This indicates an issue with initialization.", source);
+             throw new IllegalStateException("SqliteAccessor currentDbFilePath is not set for source: " + source);
+        }
+
+        dbPathCache.put(source, actualDbPath);
+        logger.debug("SqliteAccessor: Using database path '{}' for source '{}' (from initialization). Path cached.", actualDbPath, source);
+        return actualDbPath;
     }
 } 

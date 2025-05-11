@@ -39,7 +39,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     protected final ProgressTracker progress;
     private final Path tempDir;
     private long totalNGramsGenerated = 0;
-    protected final IndexConfig config;
+    protected final int batchSize;
 
     /**
      * Gets the name of the table to query for entries.
@@ -54,12 +54,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     protected abstract String getIndexName();
 
     protected IndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress) throws IOException {
-        this(indexBaseDir, stopwordsPath, sqliteConn, progress, new IndexConfig.Builder().build());
-    }
-
-    protected IndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, IndexConfig config) throws IOException {
+            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         // Initialize IndexAccess with optimized options
         Options options = new Options();
         options.createIfMissing(true);
@@ -78,7 +73,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         this.sqliteConn = sqliteConn;
         this.progress = progress;
         this.tempDir = Files.createTempDirectory("index-");
-        this.config = config;
+        this.batchSize = batchSize;
 
         // Register shutdown hook for cleanup
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -262,13 +257,13 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         List<File> tempFiles = new ArrayList<>();
         int offset = 0;
         IndexingMetrics metrics = new IndexingMetrics();
-        metrics.startBatch(config.getBatchSize(), getIndexName());
+        metrics.startBatch(this.batchSize, getIndexName());
         long totalRawEntriesProcessed = 0;
         totalNGramsGenerated = 0; // Reset for safety, though writeToLevelDB also resets
 
         try {
             // Initialize progress bar for this specific index
-            long totalCount = getDocumentCountForIndex(config.getLimit()); // Helper to get appropriate count
+            long totalCount = getDocumentCountForIndex(); // Helper to get appropriate count
 
             while (true) {
                 List<T> batch = fetchBatch(offset);
@@ -327,16 +322,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * Helper method to get the relevant document count for the progress bar.
      * Specific index types might override this if they process different units.
      */
-    protected long getDocumentCountForIndex(Integer limit) throws SQLException {
+    protected long getDocumentCountForIndex() throws SQLException {
         String countTable = getTableName(); // Default to the generator's table
         String countSql = "SELECT COUNT(*) FROM " + countTable;
-        // Apply limit if necessary (though specific generators might need more complex counts)
-        if (limit != null) {
-             // Basic limit application, subclasses might need refinement
-             // countSql += " LIMIT " + limit; 
-             // Limiting the COUNT(*) query itself might not be right. Better to count based on the actual fetch logic.
-             // For now, return total count and let progress bar handle potential overestimation.
-        }
         
         try (Statement stmt = sqliteConn.createStatement();
              ResultSet rs = stmt.executeQuery(countSql)) {

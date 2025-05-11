@@ -34,7 +34,8 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
             tempDir.resolve("test-leveldb-ner").toString(),
             TEST_STOPWORDS_PATH,
             sqliteConn,
-            new ProgressTracker()
+            new ProgressTracker(),
+            1000
         );
 
         // Insert test data

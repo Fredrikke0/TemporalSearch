@@ -284,7 +284,7 @@ public class Annotations {
                         )
                     """);
 
-            // Add the index for faster lookups when not overwriting
+            // Add the index for faster lookups
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_annotations_document_id ON annotations (document_id)");
 
             stmt.execute("""
@@ -300,7 +300,7 @@ public class Annotations {
                             FOREIGN KEY (document_id) REFERENCES documents(document_id)
                         )
                     """);
-            // Add the index for faster lookups on dependencies table
+            // Add the index for faster lookups
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_dependencies_document_id ON dependencies (document_id)");
         }
     }

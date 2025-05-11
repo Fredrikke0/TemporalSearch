@@ -126,6 +126,7 @@ public class TableResultService {
             // Create the table
             Table table = Table.create("QueryResults");
             Map<String, Column<?>> columnMap = new HashMap<>();
+            Map<String, Object> contextCache = new HashMap<>(); // Initialize context cache
             
             // Create and add columns directly to the table
             for (SelectColumn selectColumn : selectColumns) {
@@ -190,7 +191,7 @@ public class TableResultService {
                     if (tableCol != null) {
                         // Pass the whole list of details for this unit
                         // Call the new populateColumn method with the query context
-                        selectColumn.populateColumn(table, rowIndex, detailsForUnit, source, indexes, query);
+                        selectColumn.populateColumn(table, rowIndex, detailsForUnit, source, indexes, query, contextCache);
                     } else {
                         logger.warn("Column '{}' defined in SelectColumn but not found in table structure?", selectColumn.getColumnName());
                     }
@@ -383,6 +384,7 @@ public class TableResultService {
 
             Table table = Table.create("JoinQueryResults");
             Map<String, Column<?>> columnMap = new HashMap<>();
+            Map<String, Object> contextCache = new HashMap<>(); // Initialize context cache
 
             // Create and add columns based on the *effective* SELECT clause (explicit or default)
             for (SelectColumn selectColumn : selectColumns) {
@@ -424,7 +426,7 @@ public class TableResultService {
                         if (relevantDetail != null) {
                             // Delegate population to the SelectColumn implementation
                             List<MatchDetail> detailList = List.of(relevantDetail);
-                            selectColumn.populateColumn(table, rowIndex, detailList, source, indexes, query);
+                            selectColumn.populateColumn(table, rowIndex, detailList, source, indexes, query, contextCache);
                         } else {
                             // Handle cases where the alias didn't match / no relevant detail
                             logger.trace("No relevant detail found for column {} at row {}. Setting missing.", qualifiedName, rowIndex);

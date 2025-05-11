@@ -9,7 +9,6 @@ import java.sql.*;
 import java.nio.file.Path;
 import java.util.Optional;
 import com.example.logging.ProgressTracker;
-import com.example.index.IndexConfig;
 import com.example.core.Position;
 import com.example.core.PositionList;
 import com.example.core.IndexAccess;
@@ -169,7 +168,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     public void testBasicTrigramIndexing() throws Exception {
         // Create and run trigram indexer
         try (TrigramIndexGenerator indexer = new TrigramIndexGenerator(
-                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker())) {
+                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
             indexer.generateIndex();
         }
 
@@ -194,7 +193,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     public void testSentenceBoundaries() throws Exception {
         // Create and run trigram indexer
         try (TrigramIndexGenerator indexer = new TrigramIndexGenerator(
-                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker())) {
+                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
             indexer.generateIndex();
         }
 
@@ -218,7 +217,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
 
         // Create and run trigram indexer
         try (TrigramIndexGenerator indexer = new TrigramIndexGenerator(
-                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker())) {
+                indexBaseDir.getPath(), TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
             indexer.generateIndex();
         }
 

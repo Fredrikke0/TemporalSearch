@@ -77,7 +77,7 @@ public class StructuralColumn implements SelectColumn {
     }
 
     @Override
-    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, String source, Map<String, IndexAccessInterface> indexes, Query query) {
+    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, String source, Map<String, IndexAccessInterface> indexes, Query query, Map<String, Object> contextCache) {
         if (detailsForUnit == null || detailsForUnit.isEmpty() || !(detailsForUnit.get(0) instanceof MatchDetail)) {
             logger.warn("StructuralColumn populateColumn received null, empty, or non-MatchDetail list for alias {}. Row: {}. Setting missing.", alias, rowIndex);
             table.column(getColumnName()).setMissing(rowIndex);
@@ -96,8 +96,17 @@ public class StructuralColumn implements SelectColumn {
             switch (fieldName.toUpperCase()) {
                 case "TITLE":
                     if (column instanceof StringColumn strCol) {
-                        String title = SqliteAccessor.getInstance().getMetadata(source, relevantDetail.getDocumentId(), "title");
-                        strCol.set(rowIndex, title != null ? title : "");
+                        String cacheKey = "title_" + relevantDetail.getDocumentId();
+                        String title = (String) contextCache.get(cacheKey);
+                        if (title == null) {
+                            title = SqliteAccessor.getInstance().getMetadata(source, relevantDetail.getDocumentId(), "title");
+                            title = (title != null) ? title : ""; // Ensure title is not null before caching
+                            contextCache.put(cacheKey, title);
+                            logger.trace("Fetched and cached TITLE '{}' for docId {}", title, relevantDetail.getDocumentId());
+                        } else {
+                            logger.trace("Retrieved TITLE '{}' from cache for docId {}", title, relevantDetail.getDocumentId());
+                        }
+                        strCol.set(rowIndex, title);
                         logger.trace("Set TITLE '{}' for {}.{} at row {}", title, alias, fieldName, rowIndex);
                     } else {
                          logger.error("Expected StringColumn for TITLE but got {} for column {}", column.type(), getColumnName());

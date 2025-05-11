@@ -31,14 +31,9 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
         "punct", "det", "case", "cc"
     );
 
-    public DependencyIndexGenerator(String levelDbPath, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress) throws IOException {
-        super(levelDbPath, stopwordsPath, sqliteConn, progress);
-    }
-
-    public DependencyIndexGenerator(String levelDbPath, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, IndexConfig config) throws IOException {
-        super(levelDbPath, stopwordsPath, sqliteConn, progress, config);
+    public DependencyIndexGenerator(String indexBaseDir, String stopwordsPath,
+            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize);
     }
 
     @Override
@@ -61,7 +56,7 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
                       "ORDER BY d.document_id, d.sentence_id, d.begin_char LIMIT ? OFFSET ?";
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            stmt.setInt(1, config.getBatchSize());
+            stmt.setInt(1, this.batchSize);
             stmt.setInt(2, offset);
 
             try (ResultSet rs = stmt.executeQuery()) {

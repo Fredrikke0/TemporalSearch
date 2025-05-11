@@ -35,13 +35,8 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
     }
 
     public UnigramIndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress);
-    }
-
-    public UnigramIndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, IndexConfig config) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, config);
+            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize);
     }
 
     @Override
@@ -54,7 +49,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                     "ORDER BY a.document_id, a.sentence_id, a.begin_char LIMIT ? OFFSET ?";
                     
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
-            stmt.setInt(1, config.getBatchSize());
+            stmt.setInt(1, this.batchSize);
             stmt.setInt(2, offset);
             
             try (ResultSet rs = stmt.executeQuery()) {

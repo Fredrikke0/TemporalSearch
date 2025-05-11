@@ -32,7 +32,8 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
             tempDir.resolve("test-leveldb-pos").toString(),
             TEST_STOPWORDS_PATH,
             sqliteConn,
-            new ProgressTracker()
+            new ProgressTracker(),
+            1000
         );
 
         // Insert test data

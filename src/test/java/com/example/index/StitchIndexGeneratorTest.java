@@ -75,7 +75,8 @@ class StitchIndexGeneratorTest extends BaseIndexTest {
             indexBaseDir.toString(),
             stopwordsPath.toString(),
             sqliteConn,
-            progress
+            progress,
+            1000
         );
     }
 

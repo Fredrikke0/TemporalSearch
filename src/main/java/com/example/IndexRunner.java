@@ -77,7 +77,6 @@ public class IndexRunner {
         setupIndexDirectories(indexDir, indexType);
         IndexingMetrics metrics = new IndexingMetrics();
         ProgressTracker progress = new ProgressTracker();
-        IndexConfig indexConfig = new IndexConfig.Builder().build();
         Path indexPath = Paths.get(indexDir);
         Files.createDirectories(indexPath);
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
@@ -91,7 +90,7 @@ public class IndexRunner {
                     progress.startIndex("Unigram Index", count);
                     Path unigramPath = Path.of(indexDir).resolve("unigram");
                     try (UnigramIndexGenerator gen = new UnigramIndexGenerator(
-                            unigramPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            unigramPath.toString(), stopwordsPath, conn, progress, batchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
@@ -110,7 +109,7 @@ public class IndexRunner {
                     // Get path with proper directory structure
                     Path bigramPath = Path.of(indexDir).resolve("bigram");
                     try (BigramIndexGenerator gen = new BigramIndexGenerator(
-                            bigramPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            bigramPath.toString(), stopwordsPath, conn, progress, batchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
@@ -129,7 +128,7 @@ public class IndexRunner {
                     // Get path with proper directory structure
                     Path trigramPath = Path.of(indexDir).resolve("trigram");
                     try (TrigramIndexGenerator gen = new TrigramIndexGenerator(
-                            trigramPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            trigramPath.toString(), stopwordsPath, conn, progress, batchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
@@ -148,7 +147,7 @@ public class IndexRunner {
                     // Get path with proper directory structure
                     Path dependencyPath = Path.of(indexDir).resolve("dependency");
                     try (DependencyIndexGenerator gen = new DependencyIndexGenerator(
-                            dependencyPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            dependencyPath.toString(), stopwordsPath, conn, progress, batchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
@@ -167,7 +166,7 @@ public class IndexRunner {
                     // Get path with proper directory structure
                     Path nerDatePath = Path.of(indexDir).resolve("ner_date");
                     try (NerDateIndexGenerator gen = new NerDateIndexGenerator(
-                            nerDatePath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            nerDatePath.toString(), stopwordsPath, conn, progress, batchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
@@ -186,7 +185,7 @@ public class IndexRunner {
                     // Get path with proper directory structure
                     Path nerPath = Path.of(indexDir).resolve("ner");
                     try (NerIndexGenerator gen = new NerIndexGenerator(
-                            nerPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            nerPath.toString(), stopwordsPath, conn, progress, batchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
@@ -205,7 +204,7 @@ public class IndexRunner {
                     // Get path with proper directory structure
                     Path posPath = Path.of(indexDir).resolve("pos");
                     try (POSIndexGenerator gen = new POSIndexGenerator(
-                            posPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            posPath.toString(), stopwordsPath, conn, progress, batchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
@@ -224,7 +223,7 @@ public class IndexRunner {
                     // Get path with proper directory structure
                     Path hypernymPath = Path.of(indexDir).resolve("hypernym");
                     try (HypernymIndexGenerator gen = new HypernymIndexGenerator(
-                            hypernymPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            hypernymPath.toString(), stopwordsPath, conn, progress, batchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
@@ -242,8 +241,10 @@ public class IndexRunner {
                     
                     // Get path with proper directory structure
                     Path stitchPath = Path.of(indexDir).resolve("stitch");
+                    int stitchBatchSize = Math.max(1, batchSize / 10); // Divide by 10 for stitch, ensure at least 1
+                    logger.info("Using adjusted batch size for StitchIndexGenerator: {}", stitchBatchSize);
                     try (StitchIndexGenerator gen = new StitchIndexGenerator(
-                            stitchPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            stitchPath.toString(), stopwordsPath, conn, progress, stitchBatchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
@@ -262,7 +263,7 @@ public class IndexRunner {
                     // Get path with proper directory structure
                     Path nashPath = Path.of(indexDir).resolve("nash");
                     try (NashIndexGenerator gen = new NashIndexGenerator(
-                            nashPath.toString(), stopwordsPath, conn, progress, indexConfig)) {
+                            nashPath.toString(), stopwordsPath, conn, progress, batchSize)) {
                         gen.generateIndex();
                         metrics.recordBatchSuccess((int)count);
                     } catch (Exception e) {
