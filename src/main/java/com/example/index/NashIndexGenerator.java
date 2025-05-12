@@ -93,7 +93,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
         String query = "SELECT a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
                        "a.normalized_ner, d.timestamp " +
                        "FROM annotations a JOIN documents d ON a.document_id = d.document_id " +
-                       "WHERE a.ner = 'DATE' " +
+                       "WHERE a.ner = 'DATE' AND a.normalized_ner IS NOT NULL " +
                        "ORDER BY a.document_id, a.sentence_id, a.begin_char";
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query); ResultSet rs = stmt.executeQuery()) {
@@ -107,13 +107,15 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 String normalizedNer = rs.getString("normalized_ner");
                 LocalDate timestamp = LocalDate.parse(rs.getString("timestamp").substring(0, 10)); // Assuming timestamp is valid
 
-                if (docId == currentDocId && sentId == currentSentId && normalizedNer.equals(currentNormalizedNer)) {
+                if (docId == currentDocId && sentId == currentSentId && Objects.equals(normalizedNer, currentNormalizedNer)) {
                     // --- Part of the same logical mention ---
+                    // SQL query ensures normalizedNer is not null here.
                     currentEndChar = endChar; // Extend the span
                 } else {
-                    // --- Start of a new mention (or the first one) ---
+                    // --- Start of a new mention (or the first one, or different NER) ---
                     // 1. Finalize the *previous* mention (if valid)
-                    if (currentDocId != -1 && currentNormalizedNer != null && currentDateId != -1) {
+                    // Check currentDateId != -1 which implies previous normalizedNer was non-null and parseable.
+                    if (currentDocId != -1 && currentDateId != -1) { 
                         // Create finalized Position for the previous mention
                         Position finalizedPosition = new Position(
                                 currentDocId,
@@ -135,7 +137,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                     currentTimestamp = timestamp;
                     currentDateId = -1; // Reset dateId, will be set below if date is valid
 
-                    // Process the date for the new mention
+                    // Process the date for the new mention (normalizedNer is non-null here)
                     LocalDate docDate = parseNormalizedDate(normalizedNer);
                     if (docDate != null) {
                         // Get or create Date ID for the new mention
@@ -154,20 +156,16 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                             return newId;
                         });
                     } else {
+                        // normalizedNer was non-null but not parseable. Just log and skip.
+                        // currentDateId remains -1, so this mention won't be finalized.
                         logger.trace("Skipping invalid/unparseable normalized_ner date: {}", normalizedNer);
-                        // Invalidate the current mention so it's not finalized on the next iteration
-                        currentDocId = -1;
-                        currentNormalizedNer = null;
                     }
-                }
-
-                if (rawAnnotationsProcessed % 50000 == 0) {
-                    logger.info("Processed {} raw DATE annotations for merging...", rawAnnotationsProcessed);
                 }
             }
 
             // --- Finalize the very last mention after the loop ---
-            if (currentDocId != -1 && currentNormalizedNer != null && currentDateId != -1) {
+            // Check currentDateId != -1 which implies last normalizedNer was non-null and parseable.
+            if (currentDocId != -1 && currentDateId != -1) { 
                 Position finalizedPosition = new Position(
                         currentDocId,
                         currentSentId,

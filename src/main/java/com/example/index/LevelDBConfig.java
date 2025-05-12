@@ -15,7 +15,7 @@ public class LevelDBConfig {
     public static final int WRITE_BUFFER_SIZE = 256 * 1024 * 1024; // 256MB
     public static final int BLOCK_CACHE_SIZE = 1024 * 1024 * 1024; // 1GB
     public static final int BLOOM_FILTER_BITS = 10; // Bits per key for Bloom filter
-    public static final int BATCH_SIZE = 10_000;
+    public static final int BATCH_SIZE = 1_000; // Reduced from 10_000 to prevent NegativeArraySizeException
     
     /**
      * Creates an optimized Options instance for LevelDB configuration.

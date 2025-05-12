@@ -248,28 +248,24 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             try {
                 indexAccess.write(batch);
                 if (logger.isTraceEnabled()) {
-                    logger.trace("Successfully wrote batch of {} entries to index [{}].", numEntries, getIndexName());
+                    logger.trace("Successfully wrote batch of {} entries to index [{}] on attempt {}", numEntries, getIndexName(), attempt + 1);
                 }
                 return; // Success
             } catch (IndexAccessException e) {
                 attempt++;
-                Throwable cause = e.getCause();
-                boolean possiblyTransient = cause instanceof org.iq80.leveldb.DBException &&
-                                             cause.getMessage() != null &&
-                                             (cause.getMessage().contains("Could not open table") ||
-                                              cause.getMessage().contains("FileNotFoundException"));
+                logger.warn("Attempt {}/{} failed to write batch of {} entries to index [{}]: {}. Error Type: {}",
+                            attempt, maxRetries, numEntries, getIndexName(), e.getMessage(), e.getErrorType());
 
-                if (possiblyTransient && attempt <= maxRetries) {
-                    logger.warn("Attempt {} failed to write batch of {} entries to index [{}] due to potential transient LevelDB issue ({}). Retrying in {}ms...",
-                                attempt, numEntries, getIndexName(), cause.getMessage(), delayMs * attempt);
-                    try {
-                        Thread.sleep(delayMs * attempt); // Simple backoff
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        throw new IOException("Interrupted during retry wait for batch write to index [" + getIndexName() + "]", ie);
-                    }
-                } else {
+                if (attempt >= maxRetries || e.getErrorType() == IndexAccessException.ErrorType.INITIALIZATION_ERROR) {
+                    // Log the final failure with more detail before throwing
+                    logger.error("Failed to write batch of {} entries to index [{}] after {} attempts. Giving up.", numEntries, getIndexName(), attempt, e);
                     throw new IOException("Failed to write batch of " + numEntries + " entries to index [" + getIndexName() + "] after " + attempt + " attempts", e);
+                }
+                try {
+                    Thread.sleep(delayMs * attempt); // Simple backoff
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted during retry wait for batch write to index [" + getIndexName() + "]", ie);
                 }
             }
         }
