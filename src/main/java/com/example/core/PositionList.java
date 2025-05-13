@@ -400,4 +400,25 @@ public class PositionList {
             return Integer.compare(a.getEndPosition(), b.getEndPosition());
         });
     }
+
+    /**
+     * Efficiently retrieves the number of positions from a serialized PositionList byte array
+     * without fully deserializing the entire list.
+     * 
+     * @param data The serialized byte array of a PositionList.
+     * @return The count of positions, or 0 if the data is invalid or empty.
+     */
+    public static int getPositionCountFromSerialized(byte[] data) {
+        if (data == null || data.length < 4) { // Minimum 4 bytes for an int (the count)
+            // logger.debug("Cannot get position count from null, empty, or too short data array (length: {}).", data == null ? "null" : data.length);
+            return 0;
+        }
+        ByteBuffer buffer = ByteBuffer.wrap(data);
+        try {
+            return buffer.getInt(); // The first int in the serialized data is the count of positions.
+        } catch (java.nio.BufferUnderflowException e) {
+            logger.warn("Buffer underflow when trying to read position count from serialized data. Data length: {}. Expected at least 4 bytes for count.", data.length, e);
+            return 0; // Or throw a custom exception if this case should be handled more strictly.
+        }
+    }
 }

@@ -239,9 +239,11 @@ public class LevelDBBrowser {
         System.out.println("All Entries Summary (Key and Position Count)");
         System.out.println("============================================");
 
-        List<Map.Entry<String, PositionList>> allEntriesList = new ArrayList<>();
-        // For Nash, we'll process directly to avoid holding all byte arrays if not strictly necessary for sorting by value size.
-        // If sorting Nash entries by value size becomes a requirement, this part needs adjustment.
+        // For non-Nash, store pairs of <Key, PositionCount> for sorting
+        List<Map.Entry<String, Integer>> keyAndCountsList = new ArrayList<>();
+        
+        // For Nash, we'll process directly as before, as their value structure is different
+        // and typically not as large in terms of individual entry *value* size for the summary.
         List<Map.Entry<byte[], byte[]>> nashEntriesList = new ArrayList<>();
 
         if (isNash) {
@@ -258,15 +260,18 @@ public class LevelDBBrowser {
                 while (iterator.hasNext()) {
                     Map.Entry<byte[], byte[]> entry = iterator.next();
                     String key = asString(entry.getKey());
-                    PositionList positions = PositionList.deserialize(entry.getValue());
-                    allEntriesList.add(new AbstractMap.SimpleEntry<>(key, positions));
+                    // Efficiently get count without full deserialization
+                    int positionCount = PositionList.getPositionCountFromSerialized(entry.getValue()); 
+                    keyAndCountsList.add(new AbstractMap.SimpleEntry<>(key, positionCount));
                 }
             }
-            allEntriesList.sort((e1, e2) -> Integer.compare(e2.getValue().size(), e1.getValue().size()));
+            // Sort by position count (the Integer value in the Map.Entry)
+            keyAndCountsList.sort((e1, e2) -> Integer.compare(e2.getValue(), e1.getValue()));
         }
 
         int count = 0;
         if (isNash) {
+            // Nash processing remains largely the same as it already deserializes for counts
             for (Map.Entry<byte[], byte[]> entry : nashEntriesList) {
                 if (limit > 0 && count >= limit) break;
                 byte[] keyBytes = entry.getKey();
@@ -283,16 +288,17 @@ public class LevelDBBrowser {
                 count++;
             }
         } else {
-            for (Map.Entry<String, PositionList> entry : allEntriesList) {
+            for (Map.Entry<String, Integer> entry : keyAndCountsList) {
                 if (limit > 0 && count >= limit) break;
                 String formattedKey = formatKey(entry.getKey(), indexType);
-                System.out.printf("Key: %s, Position Count: %d%n", formattedKey, entry.getValue().size());
+                // entry.getValue() is now the position count directly
+                System.out.printf("Key: %s, Position Count: %d%n", formattedKey, entry.getValue()); 
                 count++;
             }
         }
 
         if (limit > 0 && count == limit) {
-            long totalEntriesInDb = isNash ? nashEntriesList.size() : allEntriesList.size();
+            long totalEntriesInDb = isNash ? nashEntriesList.size() : keyAndCountsList.size(); // Corrected total for non-Nash
             System.out.printf("%nShowing first %d entries (of %,d total). Use --limit 0 to see all.%n", limit, totalEntriesInDb);
         }
     }
