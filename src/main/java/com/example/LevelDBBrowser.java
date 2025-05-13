@@ -76,6 +76,7 @@ public class LevelDBBrowser {
             try (DB db = factory.open(new File(dbPath), options)) {
                 if (showStats) {
                     displayStats(db);
+                    return; // Exit after displaying stats
                 }
                 if (key != null) {
                     displayEntry(db, key, indexType, annotationSynonyms);
@@ -162,30 +163,48 @@ public class LevelDBBrowser {
 
     private static void listAllEntries(DB db, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
         boolean isNash = indexType.equals("nash");
-        System.out.println("All Entries");
-        System.out.println("===========");
-        
-        int count = 0;
+        System.out.println("All Entries (sorted by position count)");
+        System.out.println("=====================================");
+
+        List<Map.Entry<String, PositionList>> allEntriesList = new ArrayList<>();
+        List<Map.Entry<byte[], byte[]>> nashEntriesList = new ArrayList<>();
+
         try (DBIterator iterator = db.iterator()) {
             iterator.seekToFirst();
-            
-            while (iterator.hasNext() && (limit == 0 || count < limit)) {
-                Map.Entry<byte[], byte[]> entry = iterator.peekNext();
-
+            while (iterator.hasNext()) {
+                Map.Entry<byte[], byte[]> entry = iterator.next(); // Use next() as we process it now
                 if (isNash) {
-                    displayNashEntry(entry.getKey(), entry.getValue());
+                    nashEntriesList.add(new AbstractMap.SimpleEntry<>(entry.getKey(), entry.getValue()));
                 } else {
                     String key = asString(entry.getKey());
                     PositionList positions = PositionList.deserialize(entry.getValue());
-                    displayPositions(key, positions, indexType, synonyms);
+                    allEntriesList.add(new AbstractMap.SimpleEntry<>(key, positions));
                 }
+            }
+        }
+
+        if (!isNash) {
+            allEntriesList.sort((e1, e2) -> Integer.compare(e2.getValue().size(), e1.getValue().size()));
+        } // Nash entries are not sorted by position list size in this manner
+
+        int count = 0;
+        if (isNash) {
+            for (Map.Entry<byte[], byte[]> entry : nashEntriesList) {
+                if (limit > 0 && count >= limit) break;
+                displayNashEntry(entry.getKey(), entry.getValue());
                 count++;
-                iterator.next();
+            }
+        } else {
+            for (Map.Entry<String, PositionList> entry : allEntriesList) {
+                if (limit > 0 && count >= limit) break;
+                displayPositions(entry.getKey(), entry.getValue(), indexType, synonyms);
+                count++;
             }
         }
 
         if (limit > 0 && count == limit) {
-            System.out.printf("%nShowing first %d entries. Use --limit to see more.%n", limit);
+            long totalEntries = isNash ? nashEntriesList.size() : allEntriesList.size();
+            System.out.printf("%nShowing first %d entries (of %d total). Use --limit 0 to see all.%n", limit, totalEntries);
         }
     }
 

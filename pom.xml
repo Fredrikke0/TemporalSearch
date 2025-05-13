@@ -441,8 +441,10 @@
                                         <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                             <mainClass>com.example.Pipeline</mainClass>
                                             <manifestEntries>
+                                                <!-- Add-Opens needed for LevelDB/Snappy on newer JDKs -->
                                                 <Add-Opens>java.base/java.lang=ALL-UNNAMED</Add-Opens>
-                                                <Add-Opens>java.base/sun.misc=ALL-UNNAMED</Add-Opens>
+                                                <!-- Keep existing Add-Opens if needed -->
+                                                <Add-Opens>java.base/sun.misc=ALL-UNNAMED</Add-Opens> 
                                             </manifestEntries>
                                         </transformer>
                                     </transformers>
