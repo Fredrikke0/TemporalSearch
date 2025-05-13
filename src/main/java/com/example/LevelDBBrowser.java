@@ -25,34 +25,44 @@ public class LevelDBBrowser {
     private static final Logger logger = LoggerFactory.getLogger(LevelDBBrowser.class);
     private static final String ANNOTATION_SYNONYMS_PREFIX = "%s_synonyms.ser";
     private static final String[] ANNOTATION_TYPES = {"date", "ner", "pos", "dependency"};
+    private static final List<String> ALL_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
+        "unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "hypernym", "stitch", "nash"
+    ));
 
     public static void main(String[] args) throws IOException {
         logger.debug("Starting LevelDBBrowser...");
         ArgumentParser parser = ArgumentParsers.newFor("LevelDBBrowser").build()
                 .defaultHelp(true)
-                .description("Browse contents of LevelDB index databases");
+                .description("Browse contents of LevelDB index databases. Supports listing entries, looking up specific keys/prefixes, and displaying statistics.");
 
-        parser.addArgument("index_type")
-                .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "hypernym", "stitch", "nash")
-                .help("Type of index to browse");
+        List<String> availableIndexChoices = new ArrayList<>(ALL_INDEX_TYPES);
+        availableIndexChoices.add("all");
 
-        parser.addArgument("db_path")
-                .help("Base path to index directory");
+        parser.addArgument("-i", "--index-type")
+                .choices(availableIndexChoices)
+                .metavar("INDEX_TYPE")
+                .required(true)
+                .help("Type of index to browse (e.g., unigram, stitch). Use 'all' to perform the operation on all known index types sequentially.");
+
+        parser.addArgument("-d", "--db-path")
+                .metavar("DB_PATH")
+                .required(true)
+                .help("Base path to the directory containing the various index subdirectories (e.g., projects/nyt/indexes/)");
 
         parser.addArgument("-k", "--key")
-                .help("Look up a specific key");
+                .help("Look up a specific key within the selected index. The exact format of the key depends on the index type.");
 
         parser.addArgument("-p", "--prefix")
-                .help("List entries with this key prefix");
+                .help("List entries where the key starts with the given prefix. Useful for exploring keys in a hierarchical structure.");
 
         parser.addArgument("-l", "--limit")
                 .type(Integer.class)
                 .setDefault(100)
-                .help("Maximum number of entries to display (default: 100, use 0 for no limit)");
+                .help("Maximum number of entries or positions to display (default: 100). Use 0 for no limit. Applies to listing operations.");
 
         parser.addArgument("-s", "--stats")
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
-                .help("Show basic statistics about the index");
+                .help("Show basic statistics about the selected index (or all indexes if 'all' is chosen for index_type). If no key or prefix is specified, only stats are shown.");
 
         try {
             Namespace ns = parser.parseArgs(args);
@@ -63,56 +73,119 @@ public class LevelDBBrowser {
             int limit = ns.getInt("limit");
             boolean showStats = ns.getBoolean("stats");
 
-            String dbPath = basePath + "/" + indexType;
-
-            // Load annotation synonyms for stitch index if needed
-            Map<String, Map<Integer, String>> annotationSynonyms = new HashMap<>();
-            if (indexType.equals("stitch") && (key != null || prefix != null)) {
-                annotationSynonyms = loadAnnotationSynonyms(basePath);
+            if ("all".equalsIgnoreCase(indexType)) {
+                for (String singleIndexType : ALL_INDEX_TYPES) {
+                    System.out.printf("\n--- Processing Index: %s ---\n", singleIndexType);
+                    try {
+                        processSingleIndex(singleIndexType, basePath, key, prefix, limit, showStats, parser);
+                    } catch (Exception e) {
+                        System.err.printf("Error processing index %s: %s%n", singleIndexType, e.getMessage());
+                        // Optionally print stack trace for more detail: e.printStackTrace();
+                    }
+                }
+            } else {
+                processSingleIndex(indexType, basePath, key, prefix, limit, showStats, parser);
             }
 
-            // Open the database
-            Options options = new Options();
-            try (DB db = factory.open(new File(dbPath), options)) {
-                if (showStats) {
-                    displayStats(db);
-                    return; // Exit after displaying stats
-                }
-                if (key != null) {
-                    displayEntry(db, key, indexType, annotationSynonyms);
-                } else if (prefix != null) {
-                    listEntriesByPrefix(db, prefix, limit, indexType, annotationSynonyms);
-                } else {
-                    listAllEntries(db, limit, indexType, annotationSynonyms);
-                }
-            }
         } catch (ArgumentParserException e) {
             parser.handleError(e);
             System.exit(1);
-        } catch (Exception e) {
-            System.err.println("Error browsing database: " + e.getMessage());
+        } catch (Exception e) { // Catching other potential exceptions from initial setup
+            System.err.println("Error in LevelDBBrowser setup: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
         }
     }
 
-    private static void displayStats(DB db) throws IOException {
+    private static void processSingleIndex(String indexType, String basePath, String key, String prefix, int limit, boolean showStats, ArgumentParser parser) throws IOException {
+        String dbPath = basePath + "/" + indexType;
+        File dbFile = new File(dbPath);
+
+        if (!dbFile.exists() || !dbFile.isDirectory()) {
+            System.err.printf("Database path for index '%s' not found or not a directory: %s%n", indexType, dbPath);
+            return;
+        }
+        System.out.printf("Accessing database at: %s%n", dbPath);
+
+        Map<String, Map<Integer, String>> annotationSynonyms = new HashMap<>();
+        if (indexType.equals("stitch") && (key != null || prefix != null)) {
+            // Pass the base path for indexes, not the specific stitch index path for synonyms
+            annotationSynonyms = loadAnnotationSynonyms(basePath);
+        }
+
+        Options options = new Options();
+        options.createIfMissing(false); // Do not create if missing, we are browsing
+
+        try (DB db = factory.open(dbFile, options)) {
+            if (showStats) {
+                displayStats(db, indexType);
+                // If only stats are shown for a single index, and "all" is not selected, main method's return handles exit.
+                // If "all" is selected, we want to continue to the next index if only stats are shown.
+                // The previous change (return in main if showStats) should be revisited if --stats for 'all' should only show stats and not list entries.
+                // For now, if --stats is true, it will show stats and then, if key/prefix not null, also show entries.
+                // The return in main: "if (showStats) { displayStats(db); return; }" is now inside processSingleIndex implicitly for the single index case.
+                // Let's refine this: if showStats is true, we only do stats for this index.
+                if (key == null && prefix == null) { // Only return if no specific key/prefix is given alongside --stats
+                    return;
+                }
+            }
+            if (key != null) {
+                displayEntry(db, key, indexType, annotationSynonyms);
+            } else if (prefix != null) {
+                listEntriesByPrefix(db, prefix, limit, indexType, annotationSynonyms);
+            } else { // If not showing only stats, and no key/prefix, list all
+                listAllEntries(db, limit, indexType, annotationSynonyms);
+            }
+        }
+        // Catch DB spezifc errors here to allow processing of other dbs in "all" mode.
+        // General IOExceptions will be caught by the caller (main) if not in "all" mode, or handled per-index in "all" mode.
+    }
+
+    private static void displayStats(DB db, String indexType) throws IOException {
         long totalEntries = 0;
         long totalPositions = 0;
+        long nashDateLookupCount = 0;
+        boolean isNashIndex = "nash".equals(indexType);
 
         try (DBIterator iterator = db.iterator()) {
             for (iterator.seekToFirst(); iterator.hasNext(); iterator.next()) {
                 totalEntries++;
-                PositionList positions = PositionList.deserialize(iterator.peekNext().getValue());
-                totalPositions += positions.size();
+                if (isNashIndex) {
+                    // For Nash, we might want to count specific things if possible,
+                    // e.g. count of dates in the lookup table if we find that key.
+                    // For now, we just count entries.
+                    // If we find the date lookup key, we can count dates.
+                    if (Arrays.equals(iterator.peekNext().getKey(), NashSerializationUtils.DATE_LOOKUP_KEY)) {
+                        try {
+                            List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(iterator.peekNext().getValue());
+                            nashDateLookupCount = dateLookup.size();
+                        } catch (IOException e) {
+                            logger.warn("Could not deserialize Nash date lookup table during stats: {}", e.getMessage());
+                        }
+                    }
+                } else {
+                    try {
+                        PositionList positions = PositionList.deserialize(iterator.peekNext().getValue());
+                        totalPositions += positions.size();
+                    } catch (Exception e) {
+                        logger.warn("Could not deserialize entry value in index '{}' during stats calculation: {}. Skipping for position count.", indexType, e.getMessage());
+                    }
+                }
             }
         }
 
         System.out.println("Index Statistics");
         System.out.println("================");
         System.out.printf("Total entries: %,d%n", totalEntries);
-        System.out.printf("Total positions: %,d%n", totalPositions);
-        System.out.printf("Average positions per entry: %.2f%n", totalEntries > 0 ? (double) totalPositions / totalEntries : 0);
+        if (isNashIndex) {
+            if (nashDateLookupCount > 0) {
+                System.out.printf("Total dates in lookup table: %,d%n", nashDateLookupCount);
+            }
+            System.out.println("(Detailed position counts are not applicable for Nash index in this view)");
+        } else {
+            System.out.printf("Total positions: %,d%n", totalPositions);
+            System.out.printf("Average positions per entry: %.2f%n", totalEntries > 0 ? (double) totalPositions / totalEntries : 0);
+        }
         System.out.println();
     }
 
