@@ -59,13 +59,16 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
+                    String rawToken = rs.getString("token");
+                    String token = (rawToken != null) ? rawToken.trim() : null;
+
                     AnnotationEntry entry = new AnnotationEntry(
                         rs.getInt("annotation_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
-                        rs.getString("token"),
+                        token,
                         rs.getString("pos"),
                         LocalDate.parse(rs.getString("timestamp").substring(0, 10))
                     );
