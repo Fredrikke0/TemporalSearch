@@ -348,6 +348,9 @@ public class LevelDBBrowser {
         if (indexType.equals("dependency")) {
             String[] parts = key.split(DELIMITER);
             return parts.length == 3 ? String.format("%s-%s->%s", parts[0], parts[1], parts[2]) : key;
+        } else if (indexType.equals("bigram") || indexType.equals("trigram")) {
+            // Replace the null delimiter with a space for readability
+            return key.replace(DELIMITER, " ");
         }
         return key;
     }

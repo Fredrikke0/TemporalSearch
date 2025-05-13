@@ -354,6 +354,7 @@ public class PositionList {
                 
                 // If positions overlap significantly, treat them as the same
                 if (beginDiff <= 2 && endDiff <= 2) {
+                    logger.debug("Overlapping positions: {} and {}", a, b);
                     return 0; // Treat as equal/same position
                 }
                 
