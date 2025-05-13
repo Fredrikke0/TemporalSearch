@@ -236,48 +236,64 @@ public class LevelDBBrowser {
 
     private static void listAllEntries(DB db, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
         boolean isNash = indexType.equals("nash");
-        System.out.println("All Entries (sorted by position count)");
-        System.out.println("=====================================");
+        System.out.println("All Entries Summary (Key and Position Count)");
+        System.out.println("============================================");
 
         List<Map.Entry<String, PositionList>> allEntriesList = new ArrayList<>();
+        // For Nash, we'll process directly to avoid holding all byte arrays if not strictly necessary for sorting by value size.
+        // If sorting Nash entries by value size becomes a requirement, this part needs adjustment.
         List<Map.Entry<byte[], byte[]>> nashEntriesList = new ArrayList<>();
 
-        try (DBIterator iterator = db.iterator()) {
-            iterator.seekToFirst();
-            while (iterator.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = iterator.next(); // Use next() as we process it now
-                if (isNash) {
+        if (isNash) {
+            try (DBIterator iterator = db.iterator()) {
+                iterator.seekToFirst();
+                while (iterator.hasNext()) {
+                    Map.Entry<byte[], byte[]> entry = iterator.next();
                     nashEntriesList.add(new AbstractMap.SimpleEntry<>(entry.getKey(), entry.getValue()));
-                } else {
+                }
+            }
+        } else {
+            try (DBIterator iterator = db.iterator()) {
+                iterator.seekToFirst();
+                while (iterator.hasNext()) {
+                    Map.Entry<byte[], byte[]> entry = iterator.next();
                     String key = asString(entry.getKey());
                     PositionList positions = PositionList.deserialize(entry.getValue());
                     allEntriesList.add(new AbstractMap.SimpleEntry<>(key, positions));
                 }
             }
-        }
-
-        if (!isNash) {
             allEntriesList.sort((e1, e2) -> Integer.compare(e2.getValue().size(), e1.getValue().size()));
-        } // Nash entries are not sorted by position list size in this manner
+        }
 
         int count = 0;
         if (isNash) {
             for (Map.Entry<byte[], byte[]> entry : nashEntriesList) {
                 if (limit > 0 && count >= limit) break;
-                displayNashEntry(entry.getKey(), entry.getValue());
+                byte[] keyBytes = entry.getKey();
+                byte[] valueBytes = entry.getValue();
+                String keyStr = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+                if (Arrays.equals(keyBytes, NashSerializationUtils.DATE_LOOKUP_KEY)) {
+                    List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(valueBytes);
+                    System.out.printf("Key: %s (Date Lookup Table), Dates: %d%n", keyStr, dateLookup.size());
+                } else {
+                    List<NashDateEntryWithId> nashEntries = NashSerializationUtils.deserializeNashEntries(valueBytes);
+                    System.out.printf("Key: %s (Nash Prefix), Entries: %d%n", keyStr, nashEntries.size());
+                }
                 count++;
             }
         } else {
             for (Map.Entry<String, PositionList> entry : allEntriesList) {
                 if (limit > 0 && count >= limit) break;
-                displayPositions(entry.getKey(), entry.getValue(), indexType, synonyms);
+                String formattedKey = formatKey(entry.getKey(), indexType);
+                System.out.printf("Key: %s, Position Count: %d%n", formattedKey, entry.getValue().size());
                 count++;
             }
         }
 
         if (limit > 0 && count == limit) {
-            long totalEntries = isNash ? nashEntriesList.size() : allEntriesList.size();
-            System.out.printf("%nShowing first %d entries (of %d total). Use --limit 0 to see all.%n", limit, totalEntries);
+            long totalEntriesInDb = isNash ? nashEntriesList.size() : allEntriesList.size();
+            System.out.printf("%nShowing first %d entries (of %,d total). Use --limit 0 to see all.%n", limit, totalEntriesInDb);
         }
     }
 
