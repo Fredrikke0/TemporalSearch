@@ -516,7 +516,7 @@ class AnnotationsTest {
     
     private void runAnnotations() throws Exception {
         // Use the new parallel annotation method with 1 thread for deterministic test behavior
-        Annotations.runAnnotation(dbFile, 1, 1, 10, null);
+        Annotations.runAnnotation(dbFile, 1, 1, 10, null, false);
     }
     
     private void clearDatabase() throws SQLException {

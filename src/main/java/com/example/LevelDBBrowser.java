@@ -21,7 +21,7 @@ import com.example.index.NashDateEntryWithId;
 import com.example.index.util.NashSerializationUtils;
 
 public class LevelDBBrowser {
-    private static final String DELIMITER = "\u0000";
+    private static final String DELIMITER = "\0";
     private static final Logger logger = LoggerFactory.getLogger(LevelDBBrowser.class);
     private static final String ANNOTATION_SYNONYMS_PREFIX = "%s_synonyms.ser";
     private static final String[] ANNOTATION_TYPES = {"date", "ner", "pos", "dependency"};

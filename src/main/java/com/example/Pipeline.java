@@ -81,6 +81,12 @@ public class Pipeline {
                 .type(Integer.class)
                 .help("Maximum documents to process in the ANNOTATION stage per run (does not count already annotated documents).");
 
+        commonOptsGroup.addArgument("--start-doc-id")
+                .dest("cli_start_doc_id")
+                .type(Integer.class)
+                .required(false)
+                .help("Specify the document_id from which to start annotation. Overrides resume logic if provided.");
+
         // Annotation stage group
         var annotateGroup = parser.addArgumentGroup("Annotation stage arguments (used in 'annotate' or 'all' stage)");
         annotateGroup.addArgument("-b", "--batch-size")
@@ -132,6 +138,7 @@ public class Pipeline {
         String sourceDbPathStr = ns.getString("source_db_path");
         boolean force = ns.getBoolean("force");
         Integer limit = ns.getInt("limit");
+        Integer cliStartDocId = ns.get("cli_start_doc_id");
         
         logger.info("Starting Pipeline for project '{}' at '{}' (Stage: {})", projectName, projectPath, stage);
 
@@ -190,11 +197,25 @@ public class Pipeline {
             Annotations.AnnotationStatus status = Annotations.getAnnotationStatus(projectDbPath);
 
             if (force || status.needsProcessing) {
-                int startId = force ? 1 : status.startDocumentId; // Start from 1 if forcing
+                int startId;
+                if (cliStartDocId != null) {
+                    startId = cliStartDocId;
+                    logger.info("Using command-line specified --start-doc-id: {}", startId);
+                    if (force) {
+                        logger.info("--force is also active. Annotation will start from {} and overwrite existing annotations from this ID onwards.", startId);
+                    }
+                } else if (force) {
+                    startId = 1; // Default start for a full forced run
+                    logger.info("--force active, starting annotation from document_id 1.");
+                } else {
+                    startId = status.startDocumentId;
+                    logger.info("Resuming annotation based on status, starting from document_id: {}", startId);
+                }
+
                 logger.info("Starting annotation (startDocumentId={}, force={}, limit={}, threads={}, batchSize={})",
                             startId, force, limit == null ? "none" : limit, threads, batchSize);
                 // Ensure limit is passed correctly
-                Annotations.runAnnotation(projectDbPath, startId, threads, batchSize, limit);
+                Annotations.runAnnotation(projectDbPath, startId, threads, batchSize, limit, force); // Pass force flag
                 logger.info("Annotation stage completed.");
             } else {
                 logger.info("Annotation already complete according to status check. Skipping. Use --force to re-annotate.");

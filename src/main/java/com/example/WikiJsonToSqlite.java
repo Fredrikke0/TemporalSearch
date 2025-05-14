@@ -158,7 +158,7 @@ public class WikiJsonToSqlite {
                             }
                         }
 
-                        if (++lineCount % 10_000 == 0) {  // Reduced batch size for more frequent updates
+                        if (++lineCount % 100_000 == 0) {  // Reduced batch size for more frequent updates
                             pstmt.executeBatch();
                             conn.commit();
                             logger.debug("Processed {} lines, {} entries added", lineCount, totalEntries);

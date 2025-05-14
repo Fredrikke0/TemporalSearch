@@ -26,6 +26,14 @@ import java.util.TimeZone;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.Comparator;
+import java.util.stream.Collectors;
 
 /**
  * Standalone tool to convert New York Times Corpus XML dumps (within .tar.gz archives)
@@ -71,12 +79,12 @@ public class NytXmlToSqlite {
      * @param inputDir Path to directory containing .tar.gz files.
      * @param outputDbPath Path for the output SQLite database file.
      * @param recreate Whether to recreate the table if it exists.
-     * @param limit Maximum number of articles (XML files) to extract.
+     * @param globalLimit Maximum number of articles (XML files) to extract in total. This limit will be distributed among available years.
      * @return Extraction result with output path and counts.
      * @throws SQLException If database operations fail.
      * @throws IOException If file/archive reading fails.
      */
-    public static ExtractionResult extractToSqlite(Path inputDir, Path outputDbPath, boolean recreate, Integer limit)
+    public static ExtractionResult extractToSqlite(Path inputDir, Path outputDbPath, boolean recreate, Integer globalLimit)
             throws SQLException, IOException {
 
         if (!Files.isDirectory(inputDir)) {
@@ -87,36 +95,93 @@ public class NytXmlToSqlite {
         logger.info("Input directory: {}", inputDir.toAbsolutePath());
         logger.info("Output database: {}", outputDbPath.toAbsolutePath());
         logger.info("Recreate table: {}", recreate);
-        logger.info("Limit: {}", limit == null ? "none" : limit);
+        logger.info("Global article limit: {}", globalLimit == null ? "none (process all)" : globalLimit);
 
         // Count total XML files first for progress bar (best effort)
         long estimatedXmlFiles = countXmlFilesInArchives(inputDir);
         logger.info("Estimated total XML files across archives: {}", estimatedXmlFiles);
-        long maxFilesToProcess = (limit != null && limit < estimatedXmlFiles) ? limit : estimatedXmlFiles;
+        long maxFilesToProcessProgressBar = (globalLimit != null && globalLimit < estimatedXmlFiles) ? globalLimit : estimatedXmlFiles; // For logging estimate
+
+        List<Path> allArchivePathsInOrder;
+        try (Stream<Path> stream = Files.list(inputDir)
+                .filter(p -> p.toString().toLowerCase().endsWith(".tar.gz"))
+                .sorted(Comparator.comparing(p -> p.getFileName().toString()))) { // Sort by filename (year)
+            allArchivePathsInOrder = stream.collect(Collectors.toList());
+        }
+
+        if (allArchivePathsInOrder.isEmpty()) {
+            logger.warn("No .tar.gz archives found in input directory: {}. Exiting.", inputDir);
+            return new ExtractionResult(outputDbPath, 0, 0);
+        }
+
+        Map<String, Long> limitPerYearMap = new HashMap<>();
+        Map<String, Long> processedCountPerYearMap = new HashMap<>();
+        Set<String> availableYears = new TreeSet<>();
+
+        for (Path archivePath : allArchivePathsInOrder) {
+            String fileName = archivePath.getFileName().toString();
+            // Assuming filenames like "1987.tar.gz"
+            if (fileName.matches("\\d{4}\\.tar\\.gz")) {
+                availableYears.add(fileName.substring(0, 4));
+            }
+        }
+
+        if (globalLimit != null && !availableYears.isEmpty()) {
+            logger.info("Distributing global limit of {} articles across {} available years: {}", globalLimit, availableYears.size(), availableYears);
+            long baseLimitPerYear = globalLimit / availableYears.size();
+            long remainder = globalLimit % availableYears.size();
+            List<String> sortedYears = new ArrayList<>(availableYears); // Iterating in sorted order for consistent remainder distribution
+
+            for (int i = 0; i < sortedYears.size(); i++) {
+                String year = sortedYears.get(i);
+                long yearSpecificLimit = baseLimitPerYear;
+                if (i < remainder) { // Distribute remainder to the first few years
+                    yearSpecificLimit++;
+                }
+                if (yearSpecificLimit > 0) {
+                    limitPerYearMap.put(year, yearSpecificLimit);
+                    processedCountPerYearMap.put(year, 0L); // Initialize processed count for this year
+                    logger.info("Year {}: Will aim to process up to {} articles.", year, yearSpecificLimit);
+                } else {
+                    logger.info("Year {}: Will process 0 articles for this year due to limit distribution.", year);
+                }
+            }
+        } else if (globalLimit != null) {
+            logger.info("Global limit of {} articles will be applied without per-year distribution (no year-patterned archives found or none available).", globalLimit);
+        }
 
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + outputDbPath.toString())) {
             setupDatabase(conn, recreate);
 
             conn.setAutoCommit(false);
-            long totalEntriesAdded = 0;
-            long totalFilesProcessed = 0;
+            AtomicLong totalEntriesAddedToDb = new AtomicLong(0);
+            AtomicLong actualFilesProcessedCounter = new AtomicLong(0); // Counts files meeting criteria & attempted for parsing
             String insertSql = "INSERT INTO documents (title, text, timestamp) VALUES (?, ?, ?)";
 
             try (PreparedStatement pstmt = conn.prepareStatement(insertSql)) {
+                NYTCorpusDocumentParser parser = new NYTCorpusDocumentParser(); // Ensure parser is declared
+                AtomicBoolean globalLimitReachedSignal = new AtomicBoolean(false);
 
-                NYTCorpusDocumentParser parser = new NYTCorpusDocumentParser();
+                for (Path archivePath : allArchivePathsInOrder) {
+                    if (globalLimitReachedSignal.get()) {
+                        logger.info("Global limit reached signal received, skipping remaining archives.");
+                        break; 
+                    }
 
-                try (Stream<Path> archiveFiles = Files.list(inputDir).filter(p -> p.toString().toLowerCase().endsWith(".tar.gz"))) {
-                    // Process the stream directly using forEachOrdered to maintain processing order if needed
-                    // Using AtomicBoolean/Long for exception handling and counts within lambda
-                    AtomicBoolean errorOccurred = new AtomicBoolean(false);
-                    AtomicLong currentTotalEntries = new AtomicLong(totalEntriesAdded);
-                    AtomicLong currentFilesProcessed = new AtomicLong(totalFilesProcessed);
+                    // Check global limit before processing a new archive
+                    if (globalLimit != null && actualFilesProcessedCounter.get() >= globalLimit) {
+                         logger.info("Global article limit ({}) reached before processing archive {}. Stopping.", globalLimit, archivePath.getFileName());
+                         globalLimitReachedSignal.set(true);
+                         break;
+                    }
 
-                    archiveFiles.forEachOrdered(archivePath -> {
-                        if (errorOccurred.get()) return; // Stop processing if an error happened in a previous archive
-                        if (limit != null && currentFilesProcessed.get() >= limit) return; // Stop if limit reached
+                    String archiveFileName = archivePath.getFileName().toString();
+                    String currentArchiveYear = null;
+                    if (archiveFileName.matches("\\d{4}\\.tar\\.gz")) {
+                        currentArchiveYear = archiveFileName.substring(0, 4);
+                    }
 
+                    try { // Outer try for archive-level IO errors
                         logger.info("Processing archive: {}", archivePath.getFileName());
                         try (InputStream fis = Files.newInputStream(archivePath);
                              BufferedInputStream bis = new BufferedInputStream(fis);
@@ -126,102 +191,117 @@ public class NytXmlToSqlite {
 
                             TarArchiveEntry entry;
                             while ((entry = tis.getNextTarEntry()) != null) {
-                                // Check limit again inside the inner loop
-                                if (limit != null && currentFilesProcessed.get() >= limit) {
-                                    logger.info("Reached processing limit of {} files.", limit);
-                                    errorOccurred.set(true); // Use error flag to break outer stream processing
+                                if (globalLimitReachedSignal.get()) break; // Check if global limit was hit in a previous iteration
+
+                                // 1. Check global limit: Have we processed enough files overall?
+                                if (globalLimit != null && actualFilesProcessedCounter.get() >= globalLimit) {
+                                    logger.info("Global article limit ({}) reached. Halting further processing.", globalLimit);
+                                    globalLimitReachedSignal.set(true);
                                     break; // Break inner while loop
                                 }
 
-                                String entryName = entry.getName(); // Get name once
-                                String entryNameLower = entryName.toLowerCase();
-                                boolean isDirectory = entry.isDirectory();
-                                boolean endsWithXml = entryNameLower.endsWith(".xml");
-                                boolean endsWithOnelineXml = entryNameLower.endsWith(".xml-oneline.xml");
+                                if (entry.isDirectory() || !entry.getName().toLowerCase().endsWith(".xml")) {
+                                    continue; // Skip non-XML files or directories
+                                }
+                                // At this point, 'entry' is an XML file candidate.
 
-                                // DEBUG: Log details for every entry before the check
-                                // Limit logging to first N files to avoid flooding
-                                if (currentFilesProcessed.get() < 50) { // Log details for first 50 potential candidates encountered
-                                     logger.debug("Checking entry: Name='{}', IsDir={}, EndsXml={}, EndsOnelineXml={}",
-                                                  entryName, isDirectory, endsWithXml, endsWithOnelineXml);
+                                // 2. Check year-specific limit (if globalLimit was set and this archive has a year):
+                                if (globalLimit != null && currentArchiveYear != null && limitPerYearMap.containsKey(currentArchiveYear)) {
+                                    long yearTarget = limitPerYearMap.get(currentArchiveYear);
+                                    long yearProcessed = processedCountPerYearMap.getOrDefault(currentArchiveYear, 0L);
+                                    if (yearProcessed >= yearTarget) {
+                                        logger.debug("Year {} target of {} met for archive {}. Skipping further XMLs from this specific archive.", 
+                                                   currentArchiveYear, yearTarget, archivePath.getFileName());
+                                        break; // Stop processing XML entries from *this archive* for this year.
+                                    }
                                 }
 
-                                // Process if it's a file and ends with .xml (including .xml-oneline.xml)
-                                if (!isDirectory && endsWithXml) {
-                                    currentFilesProcessed.incrementAndGet();
+                                // If we are here, we will attempt to process this file.
+                                actualFilesProcessedCounter.incrementAndGet();
+                                if (globalLimit != null && currentArchiveYear != null && processedCountPerYearMap.containsKey(currentArchiveYear)) {
+                                    processedCountPerYearMap.computeIfPresent(currentArchiveYear, (k, v) -> v + 1);
+                                }
 
-                                    try {
-                                        InputStream shieldedTis = CloseShieldInputStream.wrap(tis);
-                                        NYTCorpusDocument doc = parser.parseNYTCorpusDocumentFromInputStream(shieldedTis, false);
+                                String entryName = entry.getName(); // Get name once
+                                if (actualFilesProcessedCounter.get() <= 50) { 
+                                     logger.debug("Processing entry: Name='{}'", entryName);
+                                }
+                                
+                                try (InputStream shieldedTis = CloseShieldInputStream.wrap(tis)) { // Shield TIS for this entry
+                                    NYTCorpusDocument doc = parser.parseNYTCorpusDocumentFromInputStream(shieldedTis, false);
 
-                                        if (doc != null) {
-                                            String title = doc.getHeadline();
-                                            String text = doc.getBody();
-                                            String timestamp = (doc.getPublicationDate() != null)
-                                                    ? ISO_8601_FORMAT.format(doc.getPublicationDate())
-                                                    : null;
+                                    if (doc != null) {
+                                        String title = doc.getHeadline();
+                                        String text = doc.getBody();
+                                        String timestamp = (doc.getPublicationDate() != null)
+                                                ? ISO_8601_FORMAT.format(doc.getPublicationDate())
+                                                : null;
 
-                                            if (title != null && !title.isBlank() && text != null && !text.isBlank()) {
-                                                pstmt.setString(1, title);
-                                                pstmt.setString(2, text);
-                                                pstmt.setString(3, timestamp);
-                                                pstmt.addBatch();
-                                                long entries = currentTotalEntries.incrementAndGet();
+                                        if (title != null && !title.isBlank() && text != null && !text.isBlank()) {
+                                            pstmt.setString(1, title);
+                                            pstmt.setString(2, text);
+                                            pstmt.setString(3, timestamp);
+                                            pstmt.addBatch();
+                                            long currentDbEntries = totalEntriesAddedToDb.incrementAndGet();
 
-                                                // Increased batch size
-                                                if (entries % 100000 == 0) {
-                                                    pstmt.executeBatch();
-                                                    conn.commit();
-                                                    logger.debug("Committed batch. Total entries added: {}", entries);
-                                                }
-                                            } else {
-                                                // Log detailed info only for the first few skipped entries
-                                                if (currentFilesProcessed.get() <= 100 && (title == null || title.isBlank() || text == null || text.isBlank())) {
-                                                     logger.warn("Skipping entry due to missing title/text. Entry: {}. Title Blank: {}, Text Blank: {}", 
-                                                                entry.getName(), 
-                                                                (title == null || title.isBlank()), 
-                                                                (text == null || text.isBlank()));
-                                                    logger.warn("Skipped Document Content Hint: {}", doc.toString().substring(0, Math.min(500, doc.toString().length())));
-                                                }
+                                            if (currentDbEntries % 100000 == 0) { // Commit batch
+                                                pstmt.executeBatch();
+                                                conn.commit();
+                                                logger.debug("Committed batch. Total DB entries: {}", currentDbEntries);
                                             }
                                         } else {
-                                            logger.error("Parser returned null for entry: {}", entry.getName());
+                                            // Log skipped entries (missing title/text)
+                                            if (actualFilesProcessedCounter.get() <= 100) { // Log details for early skips
+                                                 logger.warn("Skipping entry due to missing title/text. Entry: {}. Title Blank: {}, Text Blank: {}",
+                                                            entry.getName(),
+                                                            (title == null || title.isBlank()),
+                                                            (text == null || text.isBlank()));
+                                                logger.warn("Skipped Document Content Hint (first 500 chars): {}", doc.toString().substring(0, Math.min(500, doc.toString().length())));
+                                            }
                                         }
-                                    } catch (Exception e) {
-                                        logger.error("Error processing entry {} in archive {}: {}",
-                                                entry.getName(), archivePath.getFileName(), e.getMessage(), e);
-                                        errorOccurred.set(true); // Stop processing on inner error
-                                        break; // Break inner while loop
+                                    } else {
+                                        logger.warn("Parser returned null for entry: {}", entry.getName());
                                     }
-                                } // end if xml file
+                                } catch (Exception e) { // Catch parsing errors for a specific entry
+                                    logger.error("Error parsing XML entry {} in archive {}: {}",
+                                            entry.getName(), archivePath.getFileName(), e.getMessage(), e);
+                                    // Decide if this error should stop all processing or just skip the entry
+                                    // For now, it logs and continues with the next entry/archive.
+                                    // If a severe error, globalLimitReachedSignal.set(true) could be used.
+                                }
                             } // end while entries
                         } catch (IOException e) {
                             logger.error("Error reading archive {}: {}", archivePath.getFileName(), e.getMessage(), e);
-                            errorOccurred.set(true); // Signal error to stop stream processing
+                            // This might indicate a corrupted archive; consider if all processing should stop.
+                            // For now, it will continue to the next archive if possible.
+                            // globalLimitReachedSignal.set(true); // Optionally, stop all on archive read error.
                         }
-                    }); // end forEachOrdered
-
-                    // Update the main counters after stream processing
-                    totalEntriesAdded = currentTotalEntries.get();
-                    totalFilesProcessed = currentFilesProcessed.get();
-
-                } // end try-with-resources for file listing
+                    } catch (Exception e) { // Catch any other exception during archive processing
+                        logger.error("Unhandled exception processing archive {}: {}", archivePath.getFileName(), e.getMessage(), e);
+                        // globalLimitReachedSignal.set(true); // Optionally, stop all
+                    }
+                } // end for each archivePath
 
                 // Final batch commit
                 pstmt.executeBatch();
                 conn.commit();
 
+                if (!processedCountPerYearMap.isEmpty()) {
+                    logger.info("--- Per-Year Processing Summary ---");
+                    processedCountPerYearMap.forEach((year, count) -> 
+                        logger.info("Year {}: {} articles processed (target: {}).", 
+                                    year, count, limitPerYearMap.getOrDefault(year, -1L) == -1L ? "N/A (no global limit or year not targeted)" : limitPerYearMap.get(year).toString())
+                    );
+                    logger.info("-----------------------------------");
+                }
+
+                logger.info("Completed NYT Corpus extraction.");
+                logger.info("Total XML files meeting criteria and processed: {}", actualFilesProcessedCounter.get());
+                logger.info("Total entries added to database: {}", totalEntriesAddedToDb.get());
+
+                return new ExtractionResult(outputDbPath, totalEntriesAddedToDb.get(), actualFilesProcessedCounter.get());
+
             } // end try-with-resources for PreparedStatement
-
-            // Add debug logging here
-            logger.debug("DEBUG: Just before final logs - totalFilesProcessed = {}", totalFilesProcessed);
-            logger.debug("DEBUG: Just before final logs - totalEntriesAdded = {}", totalEntriesAdded);
-
-            logger.info("Completed NYT Corpus extraction.");
-            logger.info("Total XML files processed: {}", totalFilesProcessed);
-            logger.info("Total entries added to database: {}", totalEntriesAdded);
-
-            return new ExtractionResult(outputDbPath, totalEntriesAdded, totalFilesProcessed);
 
         } // end try-with-resources for Connection
     }
@@ -305,9 +385,9 @@ public class NytXmlToSqlite {
             Path inputDir = Paths.get(ns.getString("input_dir"));
             Path outputDb = Paths.get(ns.getString("output_db"));
             boolean recreate = ns.getBoolean("recreate");
-            Integer limit = ns.getInt("limit");
+            Integer globalLimit = ns.getInt("limit");
 
-            ExtractionResult result = extractToSqlite(inputDir, outputDb, recreate, limit);
+            ExtractionResult result = extractToSqlite(inputDir, outputDb, recreate, globalLimit);
             System.out.printf("Extraction complete. %d files processed, %d entries added to database: %s%n",
                     result.totalFilesProcessed, result.totalEntries, result.outputDb.toAbsolutePath());
 

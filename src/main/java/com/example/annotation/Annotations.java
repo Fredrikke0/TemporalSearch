@@ -72,17 +72,35 @@ public class Annotations {
      * Runs annotation from a specific document ID, deleting any existing annotation/dependency rows for each doc before inserting new ones.
      * Processes up to 'limit' documents in this run (limit is per run, not total).
      * Respects resumability: resumes from the last annotated document.
+     * Also accepts a force flag to control cleanup behavior.
      */
-    public static void runAnnotation(Path projectDbPath, int startDocumentId, int threads, int batchSize, Integer limit) throws Exception {
+    public static void runAnnotation(Path projectDbPath, int startDocumentId, int threads, int batchSize, Integer limit, boolean force) throws Exception {
         String url = "jdbc:sqlite:" + projectDbPath;
         try (Connection conn = DriverManager.getConnection(url)) {
             conn.setAutoCommit(false);
             createTables(conn, false); // Don't drop tables
 
-            // If resuming (startDocumentId > 1), delete existing data for that specific document once.
-            // This handles cases where the document might have been partially processed before an interruption.
-            if (startDocumentId > 1) {
-                logger.info("Resuming, performing cleanup for document_id: {}", startDocumentId);
+            // Cleanup logic based on force and startDocumentId
+            if (force) {
+                logger.info("Force flag is true. Deleting existing annotations and dependencies for document_id >= {}", startDocumentId);
+                try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id >= ?");
+                     PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id >= ?")) {
+                    
+                    delAnn.setInt(1, startDocumentId);
+                    delAnn.executeUpdate();
+
+                    delDep.setInt(1, startDocumentId);
+                    delDep.executeUpdate();
+                    
+                    conn.commit(); // Commit the deletions
+                } catch (SQLException e) {
+                    logger.error("Error during forced delete for document_id >= " + startDocumentId, e);
+                    throw e; 
+                }
+            } else if (startDocumentId > 1) {
+                // This is the original resume logic: clean up only the specific document_id we are starting from
+                // in case it was partially processed.
+                logger.info("Resuming or starting from specific ID (force=false). Performing cleanup for document_id: {}", startDocumentId);
                 try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?");
                      PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
                     
@@ -92,7 +110,7 @@ public class Annotations {
                     delDep.setInt(1, startDocumentId);
                     delDep.executeUpdate();
                     
-
+                    conn.commit(); // Commit the deletions
                 } catch (SQLException e) {
                     logger.error("Error during pre-emptive delete for document_id=" + startDocumentId, e);
                     throw e; // Rethrow to halt processing if cleanup fails
