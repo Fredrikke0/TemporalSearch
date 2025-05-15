@@ -177,13 +177,24 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 String term = parts[0];
                 PositionList positions = PositionList.deserialize(Base64.getDecoder().decode(parts[1]));
 
+                if ("shrek".equals(term)) {
+                    logger.debug("Processing term 'shrek'. Current mergedPositions size: {}. New positions size: {}.",
+                        (mergedPositions != null ? mergedPositions.size() : "null"), positions.size());
+                }
+
                 if (currentTerm == null) {
                     currentTerm = term;
                     mergedPositions = positions;
+                    if ("shrek".equals(currentTerm)) {
+                        logger.debug("Encountered 'shrek' for the first time in sorted file. Positions size: {}", mergedPositions.size());
+                    }
                     continue;
                 }
 
                 if (!currentTerm.equals(term)) {
+                    if ("shrek".equals(currentTerm)) {
+                        logger.debug("Finalizing 'shrek' before switching to term '{}'. Merged positions size: {}", term, mergedPositions.size());
+                    }
                     byte[] keyBytes = bytes(currentTerm);
                     byte[] valueBytes = mergedPositions.serialize();
                     batch.put(keyBytes, valueBytes);
@@ -206,15 +217,27 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                     currentTerm = term;
                     mergedPositions = positions;
+                    if ("shrek".equals(currentTerm)) {
+                        logger.debug("Switched to new term 'shrek'. Initial positions size: {}", mergedPositions.size());
+                    }
                 } else { // Same term as before, merge positions
+                    if ("shrek".equals(currentTerm)) {
+                        logger.debug("Merging additional positions for 'shrek'. Before merge size: {}. Adding {} positions.", mergedPositions.size(), positions.size());
+                    }
                     // The 'positions' object is the PositionList from the current line, for the same 'currentTerm'.
                     // Add all Position objects from the current line's 'positions' list to our 'mergedPositions' accumulator.
                     positions.getPositions().forEach(mergedPositions::add);
+                    if ("shrek".equals(currentTerm)) {
+                        logger.debug("After merge for 'shrek', new total positions: {}.", mergedPositions.size());
+                    }
                 }
             }
 
             // Handle the last term
             if (currentTerm != null && mergedPositions != null) {
+                if ("shrek".equals(currentTerm)) {
+                    logger.debug("Finalizing last term 'shrek'. Merged positions size: {}", mergedPositions.size());
+                }
                 byte[] keyBytes = bytes(currentTerm);
                 byte[] valueBytes = mergedPositions.serialize();
                 batch.put(keyBytes, valueBytes);
@@ -339,7 +362,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
             File outputFile = new File(tempDir.toFile(), "sorted.tmp");
             logger.info("Merging {} temporary files...", tempFiles.size());
-            ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), true);
+            ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), false);
 
             logger.info("Writing merged entries to LevelDB index...");
             writeToLevelDB(outputFile);
