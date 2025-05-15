@@ -44,7 +44,7 @@
     <logger name="edu.stanford.nlp" level="WARN"/>
 
     <!-- Root logger configuration -->
-    <root level="INFO">
+    <root level="DEBUG">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
     </root>
@@ -55,7 +55,17 @@
     </logger>
 
     <logger name="com.example.index" level="DEBUG" additivity="false">
-         <appender-ref ref="FILE"/> 
+        <appender name="INDEX_LOG_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>logs/indexer.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>logs/indexer.%d{yyyy-MM-dd}.log</fileNamePattern>
+                <maxHistory>10</maxHistory>
+                <totalSizeCap>3GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
         <appender name="CONSOLE_FOR_INDEX" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
                 <pattern>%d{HH:mm:ss.SSS} %-5level - %msg%n</pattern>
@@ -64,7 +74,6 @@
                 <level>DEBUG</level>
             </filter>
         </appender>
-        <appender-ref ref="CONSOLE_FOR_INDEX"/>
     </logger>
 
     <logger name="com.example.query" level="DEBUG" additivity="false"> 
