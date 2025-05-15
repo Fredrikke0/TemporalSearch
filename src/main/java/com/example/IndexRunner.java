@@ -281,7 +281,7 @@ public class IndexRunner {
             }
         }
         
-        String sql = "SELECT COUNT(*) FROM annotations";
+        String sql = "SELECT COALESCE(MAX(annotation_id), 0) FROM annotations";
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             if (rs.next()) {
@@ -289,7 +289,7 @@ public class IndexRunner {
             }
             return 0;
         } catch (SQLException e) {
-            logger.error("Error counting annotations: {}", e.getMessage());
+            logger.error("Error estimating annotation count using MAX(annotation_id): {}", e.getMessage());
             return 0;
         }
     }
@@ -306,7 +306,7 @@ public class IndexRunner {
             }
         }
         
-        String sql = "SELECT COUNT(*) FROM dependencies";
+        String sql = "SELECT COALESCE(MAX(dependency_id), 0) FROM dependencies";
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             if (rs.next()) {
@@ -314,7 +314,7 @@ public class IndexRunner {
             }
             return 0;
         } catch (SQLException e) {
-            logger.error("Error counting dependencies: {}", e.getMessage());
+            logger.error("Error estimating dependency count using MAX(dependency_id): {}", e.getMessage());
             return 0;
         }
     }
@@ -331,7 +331,7 @@ public class IndexRunner {
             }
         }
         
-        String sql = "SELECT COUNT(*) FROM annotations WHERE ner = 'DATE'";
+        String sql = "SELECT COALESCE(MAX(annotation_id), 0) FROM annotations WHERE ner = 'DATE'";
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             if (rs.next()) {
@@ -339,7 +339,7 @@ public class IndexRunner {
             }
             return 0;
         } catch (SQLException e) {
-            logger.error("Error counting NER dates: {}", e.getMessage());
+            logger.error("Error estimating NER date count using MAX(annotation_id): {}", e.getMessage());
             return 0;
         }
     }
@@ -356,7 +356,7 @@ public class IndexRunner {
             }
         }
         
-        String sql = "SELECT COUNT(*) FROM annotations WHERE ner IS NOT NULL AND ner != '' AND ner != 'DATE' AND ner != 'O'";
+        String sql = "SELECT COALESCE(MAX(annotation_id), 0) FROM annotations WHERE ner IS NOT NULL AND ner != '' AND ner != 'DATE' AND ner != 'O'";
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             if (rs.next()) {
@@ -364,7 +364,7 @@ public class IndexRunner {
             }
             return 0;
         } catch (SQLException e) {
-            logger.error("Error counting NER entities: {}", e.getMessage());
+            logger.error("Error estimating NER entity count using MAX(annotation_id): {}", e.getMessage());
             return 0;
         }
     }

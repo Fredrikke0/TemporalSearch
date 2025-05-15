@@ -111,7 +111,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @return True if the word is null or a stopword, false otherwise.
      */
     protected boolean isStopword(String word) {
-        return word == null || stopwords.contains(word); // Optimized: removed .toLowerCase()
+        return word == null || stopwords.contains(word);
     }
 
     /**
@@ -206,10 +206,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                     currentTerm = term;
                     mergedPositions = positions;
-                } else {
-                    // This case implies that the sortedFile was not properly unique-term aggregated.
-                    // For safety, we'll merge. If sortedFile is guaranteed unique, this can be an error or simplified.
-                    mergedPositions.getPositions().forEach(positions::add); 
+                } else { // Same term as before, merge positions
+                    // The 'positions' object is the PositionList from the current line, for the same 'currentTerm'.
+                    // Add all Position objects from the current line's 'positions' list to our 'mergedPositions' accumulator.
+                    positions.getPositions().forEach(mergedPositions::add);
                 }
             }
 

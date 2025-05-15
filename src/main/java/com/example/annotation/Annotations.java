@@ -118,26 +118,57 @@ public class Annotations {
             }
 
             // --- Calculate total documents to process (respecting limit and startId) ---
-            long totalDocumentsInDb = 0;
-            String countQuery = "SELECT COUNT(*) FROM documents WHERE document_id >= ? AND LENGTH(text) <= " + MAX_DOCUMENT_LENGTH;
-            try (PreparedStatement countStmt = conn.prepareStatement(countQuery)) {
-                countStmt.setInt(1, startDocumentId);
-                try (ResultSet countRs = countStmt.executeQuery()) {
-                if (countRs.next()) {
-                        totalDocumentsInDb = countRs.getLong(1);
+            // Estimate documents in the current processing scope using MAX(document_id)
+            long estimatedDocsInScope = 0;
+            String maxIdSql = "SELECT COALESCE(MAX(document_id), 0) FROM documents WHERE document_id >= ? AND LENGTH(text) <= " + MAX_DOCUMENT_LENGTH;
+            try (PreparedStatement maxIdStmt = conn.prepareStatement(maxIdSql)) {
+                maxIdStmt.setInt(1, startDocumentId);
+                try (ResultSet maxIdRs = maxIdStmt.executeQuery()) {
+                    if (maxIdRs.next()) {
+                        long queriedMaxId = maxIdRs.getLong(1);
+                        if (queriedMaxId > 0) { // Check if MAX returned a valid ID (not 0 from COALESCE on empty or no match)
+                             // Ensure queriedMaxId is at least startDocumentId if result is found
+                            estimatedDocsInScope = (queriedMaxId >= startDocumentId) ? (queriedMaxId - startDocumentId + 1) : 0;
+                        }
+                    }
+                }
+            }
+            if (estimatedDocsInScope == 0 && startDocumentId == 1) { // If starting fresh and no docs found, verify total docs
+                try (PreparedStatement totalCheckStmt = conn.prepareStatement("SELECT COALESCE(MAX(document_id), 0) FROM documents WHERE LENGTH(text) <= " + MAX_DOCUMENT_LENGTH); 
+                     ResultSet totalRs = totalCheckStmt.executeQuery()) {
+                    if (totalRs.next() && totalRs.getLong(1) == 0) {
+                        logger.info("No documents found in the database (or all are too long). Nothing to annotate.");
+                        return; // Exit early
                     }
                 }
             }
 
-            // Determine the actual number to process in this run based on the limit
-            long totalDocumentsToProcessThisRun = (limit != null && limit < totalDocumentsInDb) ? limit : totalDocumentsInDb;
-
-            logger.info("Found {} documents remaining to potentially process (startId={}). This run will process up to {}.",
-                        totalDocumentsInDb, startDocumentId, totalDocumentsToProcessThisRun);
-
-            // Query documents to process
+            // Determine the actual number of documents for the progress bar this run
+            long totalDocumentsToProcessThisRun;
             String queryBase = "SELECT document_id, text, timestamp FROM documents WHERE document_id >= ? AND LENGTH(text) <= " + MAX_DOCUMENT_LENGTH + " ORDER BY document_id ASC";
-            String query = (limit != null) ? queryBase + " LIMIT ?" : queryBase;
+            String query;
+
+            if (limit != null) {
+                totalDocumentsToProcessThisRun = limit;
+                query = queryBase + " LIMIT ?";
+                logger.info("Attempting to process up to {} documents starting from document_id {} (limit specified). Estimated {} documents in available range starting from this ID.", limit, startDocumentId, estimatedDocsInScope);
+            } else {
+                totalDocumentsToProcessThisRun = estimatedDocsInScope;
+                query = queryBase;
+                if (estimatedDocsInScope > 0) {
+                    logger.info("Attempting to process all {} estimated documents starting from document_id {} (no limit specified).", estimatedDocsInScope, startDocumentId);
+                } else {
+                    logger.info("No documents found to process at or after document_id {} (no limit specified).", startDocumentId);
+                    // If no documents to process, we can return early, progress bar won't even show.
+                    if (totalDocumentsToProcessThisRun == 0) return;
+                }
+            }
+            
+            // If totalDocumentsToProcessThisRun is 0, nothing to do.
+            if (totalDocumentsToProcessThisRun == 0) {
+                 logger.info("No documents to process in this run.");
+                 return;
+            }
 
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
                 stmt.setInt(1, startDocumentId);
@@ -179,7 +210,7 @@ public class Annotations {
 
                     ProgressBarBuilder pbb = new ProgressBarBuilder()
                         .setTaskName("Annotating")
-                        .setInitialMax(totalDocumentsToProcessThisRun)
+                        .setInitialMax(totalDocumentsToProcessThisRun) // Use the calculated value
                         .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
                         .setUpdateIntervalMillis(200)
                         .showSpeed();

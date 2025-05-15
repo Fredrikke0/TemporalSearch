@@ -13,6 +13,7 @@ import me.tongfei.progressbar.ProgressBarBuilder;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
 
@@ -66,32 +67,21 @@ public class WikiJsonToSqlite {
         if (outputDb == null) {
             outputDb = inputFile.resolveSibling(inputFile.getFileName().toString().replaceFirst("[.][^.]+$", ".db"));
         }
-        
-        // Count total lines first
-        long totalLines = 0;
-        try (BufferedReader countReader = new BufferedReader(
-                new InputStreamReader(new FileInputStream(inputFile.toFile()), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = countReader.readLine()) != null) {
-                try {
-                    JsonNode item = objectMapper.readTree(line);
-                    // Skip the index information object
-                    if (item.has("_type") && item.get("_type").asText().equals("_doc")) {
-                        continue;
-                    }
-                    if (item.has("text")) {
-                        totalLines++;
-                    }
-                } catch (Exception e) {
-                    logger.error("Error counting line: {}", e.getMessage());
-                }
-            }
-        } catch (IOException e) {
-            logger.error("Failed to read input file for line count: {}", inputFile, e);
-            throw e; // Re-throw IOExceptions
+
+        // 1. Check input file readability first
+        if (!Files.isReadable(inputFile)) {
+            throw new FileNotFoundException("Input file not found or not readable: " + inputFile.toAbsolutePath());
         }
-        logger.info("Found {} lines in input file{}", totalLines,
-            limit != null ? String.format(" (will process up to %d entries)", limit) : "");
+
+        // 2. Ensure parent directory for the output database exists
+        if (outputDb.getParent() != null) {
+            Files.createDirectories(outputDb.getParent());
+        }
+        
+        // Removed the initial line counting block for performance with large files.
+        // Progress will be based on processed entries or the specified limit.
+        logger.info("Starting conversion for input file {}{}", inputFile,
+            limit != null ? String.format(" (will process up to %d entries)", limit) : " (processing all entries)");
         
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + outputDb.toString())) {
             // Enable WAL mode and other optimizations for better performance
@@ -127,7 +117,7 @@ public class WikiJsonToSqlite {
                      new InputStreamReader(new FileInputStream(inputFile.toFile()), StandardCharsets.UTF_8));
                  ProgressBar pb = new ProgressBarBuilder()
                          .setTaskName("Converting Wiki Dump")
-                         .setInitialMax(limit != null ? limit : totalLines)
+                         .setInitialMax(limit != null ? (long)limit : -1) // Use limit or indeterminate progress
                          .build())
             {
                 String line;

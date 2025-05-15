@@ -22,8 +22,9 @@ A high-performance natural language processing pipeline specializing in temporal
    cd java-nlp
    ```
 
-2. Build the project:
+2. Build nash and the project:
    ```bash
+   mvn install:install-file -Dfile=sandbox/lib/nash.jar -DgroupId=no.ntnu -DartifactId=nash -Dversion=1.0 -Dpackaging=jar
    mvn clean package
    ```
 
