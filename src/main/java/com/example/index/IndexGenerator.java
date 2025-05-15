@@ -136,8 +136,13 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     protected File writeBatchToTempFile(ListMultimap<String, PositionList> positions) throws IOException {
         File tempFile = Files.createTempFile(tempDir, "batch-", ".tmp").toFile();
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
-            for (Map.Entry<String, Collection<PositionList>> entry : positions.asMap().entrySet()) {
-                // Merge all position lists for this term
+            // Sort the entries by term (key) before writing to ensure each batch file is sorted.
+            List<Map.Entry<String, Collection<PositionList>>> sortedEntries =
+                new ArrayList<>(positions.asMap().entrySet());
+            sortedEntries.sort(Map.Entry.comparingByKey());
+
+            for (Map.Entry<String, Collection<PositionList>> entry : sortedEntries) {
+                // Merge all position lists for this term within this batch
                 PositionList mergedList = new PositionList();
                 for (PositionList list : entry.getValue()) {
                     list.getPositions().forEach(mergedList::add);
@@ -162,12 +167,14 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         WriteBatch batch = null;
         int batchCounter = 0;
 
+        String debugTerm = System.getProperty("debug.index.term", "shrek"); // Default to shrek if not set
+
         try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile))) {
             String line;
             String currentTerm = null;
             PositionList mergedPositions = null;
-            final int MAX_RETRIES = 3; // Retries for batch write
-            final long RETRY_DELAY_MS = 1000; // Longer delay for batch retries
+            final int MAX_RETRIES = 3;
+            final long RETRY_DELAY_MS = 1000;
 
             batch = indexAccess.createWriteBatch();
 
@@ -177,23 +184,23 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 String term = parts[0];
                 PositionList positions = PositionList.deserialize(Base64.getDecoder().decode(parts[1]));
 
-                if ("shrek".equals(term)) {
-                    logger.debug("Processing term 'shrek'. Current mergedPositions size: {}. New positions size: {}.",
-                        (mergedPositions != null ? mergedPositions.size() : "null"), positions.size());
+                if (debugTerm.equals(term)) {
+                    logger.debug("Processing term '{}'. Current mergedPositions size: {}. New positions size: {}.",
+                        debugTerm, (mergedPositions != null ? mergedPositions.size() : "null"), positions.size());
                 }
 
                 if (currentTerm == null) {
                     currentTerm = term;
                     mergedPositions = positions;
-                    if ("shrek".equals(currentTerm)) {
-                        logger.debug("Encountered 'shrek' for the first time in sorted file. Positions size: {}", mergedPositions.size());
+                    if (debugTerm.equals(currentTerm)) {
+                        logger.debug("Encountered '{}' for the first time in sorted file. Positions size: {}", debugTerm, mergedPositions.size());
                     }
                     continue;
                 }
 
                 if (!currentTerm.equals(term)) {
-                    if ("shrek".equals(currentTerm)) {
-                        logger.debug("Finalizing 'shrek' before switching to term '{}'. Merged positions size: {}", term, mergedPositions.size());
+                    if (debugTerm.equals(currentTerm)) {
+                        logger.debug("Finalizing '{}' before switching to term '{}'. Merged positions size: {}", debugTerm, term, mergedPositions.size());
                     }
                     byte[] keyBytes = bytes(currentTerm);
                     byte[] valueBytes = mergedPositions.serialize();
@@ -217,26 +224,26 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                     currentTerm = term;
                     mergedPositions = positions;
-                    if ("shrek".equals(currentTerm)) {
-                        logger.debug("Switched to new term 'shrek'. Initial positions size: {}", mergedPositions.size());
+                    if (debugTerm.equals(currentTerm)) {
+                        logger.debug("Switched to new term '{}'. Initial positions size: {}", debugTerm, mergedPositions.size());
                     }
                 } else { // Same term as before, merge positions
-                    if ("shrek".equals(currentTerm)) {
-                        logger.debug("Merging additional positions for 'shrek'. Before merge size: {}. Adding {} positions.", mergedPositions.size(), positions.size());
+                    if (debugTerm.equals(currentTerm)) {
+                        logger.debug("Merging additional positions for '{}'. Before merge size: {}. Adding {} positions.", debugTerm, mergedPositions.size(), positions.size());
                     }
                     // The 'positions' object is the PositionList from the current line, for the same 'currentTerm'.
                     // Add all Position objects from the current line's 'positions' list to our 'mergedPositions' accumulator.
                     positions.getPositions().forEach(mergedPositions::add);
-                    if ("shrek".equals(currentTerm)) {
-                        logger.debug("After merge for 'shrek', new total positions: {}.", mergedPositions.size());
+                    if (debugTerm.equals(currentTerm)) {
+                        logger.debug("After merge for '{}', new total positions: {}.", debugTerm, mergedPositions.size());
                     }
                 }
             }
 
             // Handle the last term
             if (currentTerm != null && mergedPositions != null) {
-                if ("shrek".equals(currentTerm)) {
-                    logger.debug("Finalizing last term 'shrek'. Merged positions size: {}", mergedPositions.size());
+                if (debugTerm.equals(currentTerm)) {
+                    logger.debug("Finalizing last term '{}'. Merged positions size: {}", debugTerm, mergedPositions.size());
                 }
                 byte[] keyBytes = bytes(currentTerm);
                 byte[] valueBytes = mergedPositions.serialize();
@@ -357,12 +364,11 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             if (tempFiles.isEmpty()) {
                 logger.warn("No indexable entries found after filtering. Index [{}] will be empty.", getIndexName());
                 progress.completeIndex();
-                return; 
+                return;
             }
 
             File outputFile = new File(tempDir.toFile(), "sorted.tmp");
             logger.info("Merging {} temporary files...", tempFiles.size());
-            logger.info("Outputting sorted temporary data to: {}", outputFile.getAbsolutePath());
             ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), false);
 
             logger.info("Writing merged entries to LevelDB index...");
@@ -374,8 +380,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
         } finally {
             logger.debug("Cleaning up {} temporary files for index [{}]...", tempFiles.size(), getIndexName());
-            // Temporarily disable deletion of individual batch files for debugging
-            /*
             for (File file : tempFiles) {
                 try {
                     Files.deleteIfExists(file.toPath());
@@ -383,10 +387,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     logger.debug("Could not delete temp file: {} ({})", file, e.getMessage());
                 }
             }
-            */
-            // The outputFile (sorted.tmp) will be cleaned up by the shutdown hook or OS eventually.
-            // We are intentionally not deleting it here to allow for inspection.
-            logger.debug("Temporary file cleanup (partially) complete. Sorted output file kept for inspection.");
+            logger.debug("Temporary file cleanup complete.");
         }
     }
 
