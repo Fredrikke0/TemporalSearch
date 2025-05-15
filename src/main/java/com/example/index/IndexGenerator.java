@@ -362,6 +362,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
             File outputFile = new File(tempDir.toFile(), "sorted.tmp");
             logger.info("Merging {} temporary files...", tempFiles.size());
+            logger.info("Outputting sorted temporary data to: {}", outputFile.getAbsolutePath());
             ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), false);
 
             logger.info("Writing merged entries to LevelDB index...");
@@ -373,6 +374,8 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
         } finally {
             logger.debug("Cleaning up {} temporary files for index [{}]...", tempFiles.size(), getIndexName());
+            // Temporarily disable deletion of individual batch files for debugging
+            /*
             for (File file : tempFiles) {
                 try {
                     Files.deleteIfExists(file.toPath());
@@ -380,7 +383,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     logger.debug("Could not delete temp file: {} ({})", file, e.getMessage());
                 }
             }
-            logger.debug("Temporary file cleanup complete.");
+            */
+            // The outputFile (sorted.tmp) will be cleaned up by the shutdown hook or OS eventually.
+            // We are intentionally not deleting it here to allow for inspection.
+            logger.debug("Temporary file cleanup (partially) complete. Sorted output file kept for inspection.");
         }
     }
 
