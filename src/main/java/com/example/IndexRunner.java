@@ -230,7 +230,7 @@ public class IndexRunner {
                     
                     // Get path with proper directory structure
                     Path stitchPath = Path.of(indexDir).resolve("stitch");
-                    int stitchBatchSize = Math.max(1, batchSize / 10); // Divide by 10 for stitch, ensure at least 1
+                    int stitchBatchSize = Math.max(1, batchSize / 100); // Divide by 100 for stitch, ensure at least 1
                     logger.info("Using adjusted batch size for StitchIndexGenerator: {}", stitchBatchSize);
                     try (StitchIndexGenerator gen = new StitchIndexGenerator(
                             stitchPath.toString(), stopwordsPath, conn, progress, stitchBatchSize)) {

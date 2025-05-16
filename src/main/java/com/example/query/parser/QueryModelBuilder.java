@@ -72,6 +72,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         List<SelectColumn> selectColumns = new ArrayList<>();
         List<SubquerySpec> subqueries = new ArrayList<>();
         Optional<JoinCondition> joinCondition = Optional.empty();
+        List<String> groupByColumns = new ArrayList<>();
 
         // Process join clauses first to determine if qualification is needed early
         if (ctx.joinClause() != null && !ctx.joinClause().isEmpty()) {
@@ -88,7 +89,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             }
         }
 
-        // Determine if qualification is required in SELECT, ORDER BY
+        // Determine if qualification is required in SELECT, ORDER BY, GROUP BY
         boolean qualificationRequired = explicitMainAlias.isPresent() || !subqueries.isEmpty();
 
         // Extract select columns, passing qualification requirement
@@ -105,6 +106,10 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         if (ctx.orderByClause() != null) {
              // Pass qualification requirement to visitOrderByClause
             orderColumns.addAll(visitOrderByClause(ctx.orderByClause(), qualificationRequired));
+        }
+
+        if (ctx.groupByClause() != null) {
+            groupByColumns.addAll(visitGroupByClause(ctx.groupByClause(), effectiveMainAlias, qualificationRequired));
         }
 
         if (ctx.limitClause() != null) {
@@ -131,7 +136,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         // Updated Query constructor call - pass explicitMainAlias, not effectiveMainAlias
         // The Query object stores the user-provided alias, or empty if none.
         // Internal logic uses effectiveMainAlias ($main or explicit).
-        return new Query(source, conditions, orderColumns, limit, granularity, granularitySize, selectColumns, variableRegistry, subqueries, joinCondition, explicitMainAlias);
+        return new Query(source, conditions, orderColumns, limit, granularity, granularitySize, selectColumns, variableRegistry, subqueries, joinCondition, explicitMainAlias, groupByColumns);
     }
 
     // Overload visitSelectList to accept qualification requirement
@@ -335,19 +340,29 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     }
     
     public Object visitCountUniqueExpression(QueryLangParser.CountUniqueExpressionContext ctx, boolean qualificationRequired) {
-        // COUNT(UNIQUE var) always refers to the main query scope
-        String variableName = (String) visit(ctx.variable());
-        // Check if qualification is required *in the query context* (even though COUNT(UNIQUE) uses unqualified grammar)
+        String varName = ctx.variable().getText();
+        String qualifiedVarName;
+
         if (qualificationRequired) {
-             // We could throw an error here, or implicitly qualify.
-             // Let's implicitly qualify, assuming COUNT(UNIQUE var) always refers to the main scope's variable.
-             // Validation should catch if 'var' doesn't exist in the main scope later.
-             logger.warn("Unqualified variable '{}' used in COUNT(UNIQUE ...) when query requires qualification. Assuming reference to main scope.", variableName);
+            // If qualification is required, the variable in COUNT(UNIQUE var) must already be qualified or this is an error.
+            // However, the grammar for `variable` is just IDENTIFIER. We need to check if it's part of a qualifiedIdentifier context
+            // OR assume it must be from the main query if no explicit alias is given. This is tricky.
+            // For now, let's assume if qualificationRequired is true, it must be found in a subquery or aliased main.
+            // The SELECT column visitor logic is better suited to resolve this. 
+            // Here, we might need to throw if it's not parsable as a qualified name directly
+            // or rely on a (currently non-existent) method to get the alias from the context of `variable`.
+            // Let's assume for now that `variable` itself must be of the form `alias.var` if qualification is required here.
+            // This part of the logic might need refinement based on how qualified variables are handled by `visitVariable` in select.
+             if (!varName.contains(".")) {
+                 throw new IllegalStateException(
+                     String.format("COUNT(UNIQUE %s) requires a qualified variable in this context. Use COUNT(UNIQUE alias.%s)", varName, varName)
+                 );
+             }
+            qualifiedVarName = varName; // Already qualified
+        } else {
+            qualifiedVarName = DEFAULT_MAIN_ALIAS + "." + varName; // Implicitly qualify
         }
-        // Always qualify with default main alias for internal representation
-        String qualifiedName = DEFAULT_MAIN_ALIAS + "." + variableName;
-        // CountColumn needs the qualified name for validation consistency
-        return CountColumn.countUnique(qualifiedName);
+        return CountColumn.countUnique(qualifiedVarName);
     }
     
     @Override
@@ -859,11 +874,11 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     // Overload visitOrderSpec to accept qualification requirement
     public String visitOrderSpec(QueryLangParser.OrderSpecContext ctx, boolean qualificationRequired) {
-        String qualifiedFieldName; // Holds the final name, e.g., $main.var, alias.var, alias.TITLE
-        
+        String qualifiedFieldName; // Holds the final name, e.g., $main.var, alias.var, alias.TITLE, COUNT(*)
+
         // Determine the base field name (plain or qualified)
         if (ctx.variable() != null) {
-            String variableName = (String) visit(ctx.variable());
+            String variableName = (String) visit(ctx.variable()); // visitVariable returns plain name
             if (qualificationRequired) {
                  throw new IllegalStateException(
                     String.format("Unqualified variable '%s' used in ORDER BY where qualification is required. Use 'alias.%s'.",
@@ -876,31 +891,54 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn
             Object qualifiedResult = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
             if (qualifiedResult instanceof VariableColumn vc) {
-                qualifiedFieldName = vc.getColumnName(); 
+                qualifiedFieldName = vc.getColumnName();
             } else if (qualifiedResult instanceof com.example.query.model.StructuralColumn sc) {
                 qualifiedFieldName = sc.getColumnName();
             } else {
                 throw new IllegalStateException("Unexpected result type from visitQualifiedIdentifier for ORDER BY column: " + qualifiedResult.getClass().getName());
             }
         } else if (ctx.identifier() != null) {
-            // Only treat TITLE, TIMESTAMP, DOCUMENT_ID, SENTENCE_ID as structural fields
+            // Only treat TITLE, TIMESTAMP, DOCUMENT_ID, SENTENCE_ID as structural fields if unqualified
             String id = ctx.identifier().getText();
             if (Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID").contains(id.toUpperCase())) {
                 if (qualificationRequired) {
                     throw new IllegalStateException(
-                        String.format("Unqualified identifier '%s' used in ORDER BY where qualification is required. Use 'alias.%s' or select a bound variable.",
-                                       id, id));
+                        String.format("Unqualified structural identifier '%s' used in ORDER BY where qualification is required. Use 'alias.%s' or select a bound variable.",
+                                       id, id.toUpperCase())); // Use toUpperCase for consistency if it's a structural field
                 }
                 qualifiedFieldName = DEFAULT_MAIN_ALIAS + "." + id.toUpperCase();
             } else {
-                // Treat as variable binding (e.g., $main.date)
+                // Treat as variable binding (e.g., date -> $main.date)
+                 if (qualificationRequired) {
+                    // This case implies an unbound identifier or a variable that should have been qualified.
+                    // If 'id' is a variable, it should have been parsed as ctx.variable() or ctx.qualifiedIdentifier().
+                    // If it's an identifier not matching known structural ones and qualification is required,
+                    // it implies an attempt to use an unqualified variable or a misspelled/unknown field.
+                     throw new IllegalStateException(
+                        String.format("Unqualified identifier '%s' used in ORDER BY where qualification is required. Ensure it's a defined variable (e.g., 'alias.var') or a known structural field.",
+                                       id));
+                }
                 qualifiedFieldName = DEFAULT_MAIN_ALIAS + "." + id;
             }
+        } else if (ctx.countExpression() != null) {
+            QueryLangParser.CountExpressionContext countCtx = ctx.countExpression();
+            CountColumn countCol;
+            if (countCtx instanceof QueryLangParser.CountAllExpressionContext cax) {
+                countCol = (CountColumn) visitCountAllExpression(cax);
+            } else if (countCtx instanceof QueryLangParser.CountUniqueExpressionContext cux) {
+                // visitCountUniqueExpression needs qualificationRequired for the variable inside
+                countCol = (CountColumn) visitCountUniqueExpression(cux, qualificationRequired);
+            } else if (countCtx instanceof QueryLangParser.CountDocumentsExpressionContext cdx) {
+                countCol = (CountColumn) visitCountDocumentsExpression(cdx);
+            } else {
+                throw new IllegalStateException("Unknown CountExpressionContext type: " + countCtx.getClass().getName());
+            }
+            qualifiedFieldName = countCol.getColumnName(); // Assumes getColumnName() gives "COUNT(*)", "COUNT(UNIQUE alias.var)" etc.
         }
         else {
-            throw new IllegalStateException("OrderSpec must have identifier, variable or qualifiedIdentifier");
+            throw new IllegalStateException("OrderSpec must have identifier, variable, qualifiedIdentifier, or countExpression. Found: " + ctx.getText());
         }
-        
+
         // Return the qualified field name, prefixed with "-" if DESC
         if (ctx.DESC() != null) {
             return "-" + qualifiedFieldName;
@@ -1069,7 +1107,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             subqueryBuilder.variableRegistry, // Use the isolated registry (now requalified)
             List.of(), // No nested subqueries within this subquery's definition
             Optional.empty(), // No join condition within this subquery's definition
-            Optional.empty() // Subquery's internal Query object doesn't have a main alias itself
+            Optional.empty(), // Subquery's internal Query object doesn't have a main alias itself
+            List.of() // Add empty list for groupByColumns for subquery's Query object
         );
         
         // Return the SubquerySpec containing the Query object and its external alias
@@ -1334,4 +1373,62 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             default -> throw new IllegalArgumentException("Unsupported comparison operator for DATE: " + operator);
         };
     }
+
+    // New methods for Group By Clause
+    public List<String> visitGroupByClause(QueryLangParser.GroupByClauseContext ctx, String effectiveMainAlias, boolean qualificationRequired) {
+        if (ctx.groupByItemList() != null) {
+            return visitGroupByItemList(ctx.groupByItemList(), effectiveMainAlias, qualificationRequired);
+        }
+        return List.of();
+    }
+
+    public List<String> visitGroupByItemList(QueryLangParser.GroupByItemListContext ctx, String effectiveMainAlias, boolean qualificationRequired) {
+        List<String> items = new ArrayList<>();
+        for (QueryLangParser.GroupByItemContext itemCtx : ctx.groupByItem()) {
+            items.add(visitGroupByItem(itemCtx, effectiveMainAlias, qualificationRequired));
+        }
+        return items;
+    }
+
+    public String visitGroupByItem(QueryLangParser.GroupByItemContext ctx, String effectiveMainAlias, boolean qualificationRequired) {
+        if (ctx.qualifiedIdentifier() != null) {
+            // For qualifiedIdentifier, the alias is already part of its text
+            // visitQualifiedIdentifier already returns a SelectColumn (StructuralColumn or VariableColumn)
+            // We need the string name here.
+            Object col = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
+            if (col instanceof SelectColumn) {
+                return ((SelectColumn) col).getColumnName();
+            }
+            throw new IllegalStateException("Expected SelectColumn from qualifiedIdentifier in GROUP BY, got: " + col.getClass().getName());
+        } else if (ctx.variable() != null) {
+            String varName = ctx.variable().getText();
+            if (qualificationRequired) {
+                throw new IllegalStateException(
+                    String.format("Unqualified variable '%s' used in GROUP BY where qualification is required. Use 'alias.%s'.", varName, varName)
+                );
+            }
+            return effectiveMainAlias + "." + varName;
+        } else if (ctx.identifier() != null) {
+            String identifierName = ctx.identifier().getText();
+            // Check if it's a structural keyword that can be unqualified in non-join/non-alias main query context
+            String upperIdName = identifierName.toUpperCase();
+            if (Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID").contains(upperIdName)) {
+                 if (qualificationRequired) {
+                    throw new IllegalStateException(
+                        String.format("Unqualified structural keyword '%s' used in GROUP BY where qualification is required. Use 'alias.%s'.", identifierName, identifierName)
+                    );
+                }
+                return effectiveMainAlias + "." + upperIdName; // Use uppercase for consistency with StructuralColumn handling
+            }
+            // Otherwise, treat as a variable
+            if (qualificationRequired) {
+                throw new IllegalStateException(
+                    String.format("Unqualified identifier '%s' used in GROUP BY where qualification is required. Use 'alias.%s'.", identifierName, identifierName)
+                );
+            }
+            return effectiveMainAlias + "." + identifierName;
+        }
+        throw new IllegalStateException("Unknown groupByItem type: " + ctx.getText());
+    }
+    // End new methods for Group By Clause
 } 

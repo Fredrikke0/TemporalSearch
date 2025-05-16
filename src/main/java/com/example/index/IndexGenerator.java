@@ -21,6 +21,8 @@ import java.sql.Statement;
 import java.sql.ResultSet;
 import java.util.*;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.io.IOException;
 
 /**
  * Abstract base class for streaming index generation that processes large datasets efficiently

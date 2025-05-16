@@ -113,9 +113,9 @@ class IndexingMetricsTest {
     @Test
     void testMetricsLoggingWithStages() throws Exception {
         // Increase iterations to improve chance of sampler hitting.
-        // For a 5% sample rate, 50 iterations gives a high chance of at least one hit.
-        int unigramIterations = 50;
-        int bigramIterations = 50;
+        // For a 5% sample rate, 500 iterations gives a high chance of at least one hit.
+        int unigramIterations = 500;
+        int bigramIterations = 500;
 
         for (int i = 0; i < unigramIterations; i++) {
             metrics.startBatch(100, "test-unigram");

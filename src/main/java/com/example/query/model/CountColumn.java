@@ -39,7 +39,7 @@ public class CountColumn implements SelectColumn {
      * Creates a COUNT(*) column.
      */
     public static CountColumn countAll() {
-        return new CountColumn(CountType.ALL, null, "count");
+        return new CountColumn(CountType.ALL, null, "COUNT(*)");
     }
     
     /**

@@ -64,12 +64,16 @@ class SubqueryTest {
         Query mainQuery = new Query(
             "source",
             List.of(new Contains(List.of("main_term"))),
-            List.of(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
+            List.of(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
             List.of(), // No select columns in this test
-            mainRegistry,
-            List.of(subquerySpec),
-            Optional.of(joinCondition),
-            Optional.of("main") // Explicit main alias
+            mainRegistry, // variableRegistry
+            List.of(subquerySpec), // subqueries
+            Optional.of(joinCondition), // joinCondition
+            Optional.of("main"), // Explicit main alias
+            List.of() // groupByColumns
         );
 
         assertEquals(1, mainQuery.subqueries().size());
@@ -90,12 +94,16 @@ class SubqueryTest {
         Query mainQuery = new Query(
             "source",
             List.of(), // No main conditions
-            List.of(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
+            List.of(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
             List.of(), // No select columns
-            mainRegistry,
-            List.of(subquerySpec),
-            Optional.of(joinCondition),
-            Optional.of("main")
+            mainRegistry, // variableRegistry
+            List.of(subquerySpec), // subqueries
+            Optional.of(joinCondition), // joinCondition
+            Optional.of("main"), // mainAlias
+            List.of() // groupByColumns
         );
         
         assertEquals(1, mainQuery.subqueries().size());

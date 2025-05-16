@@ -500,7 +500,8 @@ public class QueryExecutor {
                 originalDependentQuery.variableRegistry(), // Preserve original variable registry
                 originalDependentQuery.subqueries(),
                 originalDependentQuery.joinCondition(),
-                originalDependentQuery.mainAlias()
+                originalDependentQuery.mainAlias(),
+                List.of() // Explicitly add empty list for groupByColumns
             );
             
             QueryResult modifiedSubqueryResult;

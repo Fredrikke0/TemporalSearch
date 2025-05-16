@@ -24,11 +24,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import org.junit.jupiter.api.Disabled;
 
 /**
  * Performance tests comparing Set<DocSentenceMatch>, Set<MatchDetail>, and Tablesaw.
  * This test creates large datasets and performs operations simulating query processing.
  */
+@Disabled("Disabled for regular builds - run manually if needed") // Disable test
 public class TablesawQueryPerformanceTest {
     private static final Logger logger = LoggerFactory.getLogger(TablesawQueryPerformanceTest.class);
     

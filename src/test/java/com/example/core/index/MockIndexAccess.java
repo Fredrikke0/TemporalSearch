@@ -46,7 +46,7 @@ public class MockIndexAccess implements IndexAccessInterface {
      * Helper method to add test data.
      * Converts the string key to bytes and creates/serializes a PositionList.
      */
-    public void addTestData(String key, int docId, int sentenceId, int begin, int end) {
+    public void addTestData(String key, int docId, int sentenceId, int begin, int end) throws IOException {
         if (closed) throw new IllegalStateException("Index is closed");
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
         Position pos = new Position(docId, sentenceId, begin, end, LocalDate.now());
@@ -75,7 +75,7 @@ public class MockIndexAccess implements IndexAccessInterface {
     /**
      * Helper method to add pre-serialized test data.
      */
-    public void addTestData(String key, PositionList positionList) {
+    public void addTestData(String key, PositionList positionList) throws IOException {
         if (closed) throw new IllegalStateException("Index is closed");
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
         dataStore.put(wrappedKey, positionList.serialize());

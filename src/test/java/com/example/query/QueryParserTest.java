@@ -464,4 +464,76 @@ class QueryParserTest {
         assertEquals("scientist", ((VariableColumn) column).getColumnName());
         */
     }
+
+    // --- GROUP BY Parsing Tests ---
+    @Test
+    @DisplayName("Parse query with GROUP BY single column")
+    void parseGroupBySingleColumn() throws QueryParseException {
+        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia GROUP BY category";
+        Query query = parser.parse(queryStr);
+        assertNotNull(query.groupByColumns(), "groupByColumns list should not be null");
+        assertEquals(1, query.groupByColumns().size());
+        assertEquals("$main.category", query.groupByColumns().get(0));
+    }
+
+    @Test
+    @DisplayName("Parse query with GROUP BY multiple columns")
+    void parseGroupByMultipleColumns() throws QueryParseException {
+        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia GROUP BY category, region";
+        Query query = parser.parse(queryStr);
+        assertNotNull(query.groupByColumns());
+        assertEquals(2, query.groupByColumns().size());
+        assertEquals(List.of("$main.category", "$main.region"), query.groupByColumns());
+    }
+
+    @Test
+    @DisplayName("Parse query with GROUP BY qualified column")
+    void parseGroupByQualifiedColumn() throws QueryParseException {
+        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia ALIAS w GROUP BY w.category";
+        Query query = parser.parse(queryStr);
+        assertNotNull(query.groupByColumns());
+        assertEquals(1, query.groupByColumns().size());
+        assertEquals("w.category", query.groupByColumns().get(0));
+    }
+
+    @Test
+    @DisplayName("Parse query with GROUP BY unqualified column in aliased query")
+    void parseGroupByUnqualifiedInAliasedQuery() throws QueryParseException {
+        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia ALIAS w GROUP BY category";
+        // QueryModelBuilder should throw an error if an unqualified variable is used in GROUP BY with an alias.
+        QueryParseException exception = assertThrows(QueryParseException.class, () -> parser.parse(queryStr));
+        assertTrue(exception.getMessage().contains("Unqualified variable 'category' used in GROUP BY where qualification is required. Use 'alias.category'."),
+                   "Error message should indicate 'category' needs qualification as 'alias.category'. Actual: " + exception.getMessage());
+    }
+
+    @Test
+    @DisplayName("Parse query with GROUP BY structural column (e.g., DOCUMENT_ID)")
+    void parseGroupByStructuralColumn() throws QueryParseException {
+        String queryStr = "SELECT COUNT(*) FROM wikipedia GROUP BY DOCUMENT_ID";
+        Query query = parser.parse(queryStr);
+        assertNotNull(query.groupByColumns());
+        assertEquals(1, query.groupByColumns().size());
+        assertEquals("$main.DOCUMENT_ID", query.groupByColumns().get(0));
+    }
+
+    @Test
+    @DisplayName("Parse query with GROUP BY structural column in aliased query")
+    void parseGroupByStructuralColumnAliased() throws QueryParseException {
+        String queryStr = "SELECT COUNT(*) FROM wikipedia ALIAS w GROUP BY w.DOCUMENT_ID";
+        Query query = parser.parse(queryStr);
+        assertNotNull(query.groupByColumns());
+        assertEquals(1, query.groupByColumns().size());
+        assertEquals("w.DOCUMENT_ID", query.groupByColumns().get(0));
+    }
+
+    @Test
+    @DisplayName("Parse query with GROUP BY unqualified structural column in aliased query")
+    void parseGroupByUnqualifiedStructuralColumnAliased() throws QueryParseException {
+        String queryStr = "SELECT COUNT(*) FROM wikipedia ALIAS w GROUP BY DOCUMENT_ID";
+        // QueryModelBuilder should throw an error for unqualified structural columns as well if an alias is present.
+        QueryParseException exception = assertThrows(QueryParseException.class, () -> parser.parse(queryStr));
+        assertTrue(exception.getMessage().contains("Unqualified variable 'DOCUMENT_ID' used in GROUP BY where qualification is required. Use 'alias.DOCUMENT_ID'."),
+                   "Error message should indicate 'DOCUMENT_ID' needs qualification as 'alias.DOCUMENT_ID'. Actual: " + exception.getMessage());
+    }
+    // --- END GROUP BY Parsing Tests ---
 } 

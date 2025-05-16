@@ -19,6 +19,7 @@ import com.example.query.model.SubquerySpec;
 import com.example.query.model.JoinCondition;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.binding.VariableRegistry;
+import com.example.query.model.CountColumn;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import tech.tablesaw.api.*;
@@ -83,7 +84,12 @@ class TableResultServiceTest {
             Optional.empty(),
             Query.Granularity.DOCUMENT,
             Optional.empty(),
-            select
+            select,
+            new VariableRegistry(),
+            List.of(),
+            Optional.empty(),
+            Optional.empty(),
+            List.of()
         );
         List<MatchDetail> details = List.of(
             createMatchDetail(1, -1, "apple", ValueType.TERM, null),
@@ -117,7 +123,12 @@ class TableResultServiceTest {
             Optional.empty(),
             Query.Granularity.SENTENCE,
             Optional.empty(),
-            select
+            select,
+            new VariableRegistry(),
+            List.of(),
+            Optional.empty(),
+            Optional.empty(),
+            List.of()
         );
          List<MatchDetail> details = List.of(
             createMatchDetail(1, 1, "apple", ValueType.TERM, null),
@@ -153,7 +164,12 @@ class TableResultServiceTest {
              Optional.empty(),
              Query.Granularity.DOCUMENT,
              Optional.empty(),
-             select
+             select,
+             new VariableRegistry(),
+             List.of(),
+             Optional.empty(),
+             Optional.empty(),
+             List.of()
          );
          
          List<MatchDetail> details = List.of(
@@ -191,7 +207,19 @@ class TableResultServiceTest {
 
     @Test
     void testGenerateTableEmptyResult() throws ResultGenerationException {
-        Query query = new Query("testSource", Collections.emptyList(), Query.Granularity.DOCUMENT);
+        Query query = new Query("testSource", 
+            Collections.emptyList(), // conditions
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
+        );
         QueryResult emptyResult = createQueryResult(Query.Granularity.DOCUMENT, Collections.emptyList());
         
         Table table = tableResultService.generateTable(query, emptyResult, indexes);
@@ -204,7 +232,19 @@ class TableResultServiceTest {
     @Test
     void testGenerateTableForJoinDocumentGranularity() throws ResultGenerationException {
         // Query has no explicit SELECT clause
-        Query subquery = new Query("subSource", Collections.emptyList(), Query.Granularity.DOCUMENT);
+        Query subquery = new Query("subSource", 
+            Collections.emptyList(), // conditions
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
+        );
         SubquerySpec subquerySpec = new SubquerySpec(subquery, "sub");
         
         // Create main query with join
@@ -219,7 +259,8 @@ class TableResultServiceTest {
             new VariableRegistry(),    // variableRegistry
             List.of(subquerySpec),   // subqueries
             Optional.of(JoinCondition.createTemporalJoin("$main.date", "sub.date", JoinCondition.JoinType.INNER, TemporalPredicate.CONTAINS)), 
-            Optional.empty()         // mainAlias
+            Optional.empty(),         // mainAlias
+            List.of() // groupByColumns
         );
 
         // Register variables as produced in respective registries
@@ -289,7 +330,19 @@ class TableResultServiceTest {
     @Test
     void testGenerateTableForJoinSentenceGranularity() throws ResultGenerationException {
         // Assume a mock subquery for context
-        Query subquery = new Query("subSource", Collections.emptyList(), Query.Granularity.SENTENCE);
+        Query subquery = new Query("subSource", 
+            Collections.emptyList(), // conditions
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.SENTENCE, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
+        );
         SubquerySpec subquerySpec = new SubquerySpec(subquery, "sub");
 
         // Create main query with join
@@ -304,7 +357,8 @@ class TableResultServiceTest {
             new VariableRegistry(),    // variableRegistry
             List.of(subquerySpec),   // subqueries
             Optional.of(JoinCondition.createTemporalJoin("$main.date", "sub.date", JoinCondition.JoinType.INNER, TemporalPredicate.CONTAINS)), 
-            Optional.empty()         // mainAlias
+            Optional.empty(),         // mainAlias
+            List.of() // groupByColumns
         );
 
         // Register variables as produced in respective registries
@@ -341,7 +395,19 @@ class TableResultServiceTest {
 
     @Test
     void testGenerateTableForJoinEmptyResult() throws ResultGenerationException {
-        Query query = new Query("testSource", Collections.emptyList(), Query.Granularity.DOCUMENT);
+        Query query = new Query("testSource", 
+            Collections.emptyList(), // conditions
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
+        );
         List<JoinedMatch> joined = Collections.emptyList();
         Table table = tableResultService.generateTableForJoin(query, joined, indexes);
         assertNotNull(table);
@@ -359,7 +425,12 @@ class TableResultServiceTest {
             Optional.empty(),
             Query.Granularity.DOCUMENT,
             Optional.empty(),
-            select
+            select,
+            new VariableRegistry(),
+            List.of(),
+            Optional.empty(),
+            Optional.empty(),
+            List.of()
         );
         
         List<MatchDetail> details = List.of(createMatchDetail(101, -1, "val", ValueType.TERM, null));
@@ -383,7 +454,12 @@ class TableResultServiceTest {
             Optional.empty(),
             Query.Granularity.SENTENCE, // Must be sentence granularity for sentence id
             Optional.empty(),
-            select
+            select,
+            new VariableRegistry(),
+            List.of(),
+            Optional.empty(),
+            Optional.empty(),
+            List.of()
         );
         
         List<MatchDetail> details = List.of(createMatchDetail(1, 55, "val", ValueType.TERM, null));
@@ -404,7 +480,19 @@ class TableResultServiceTest {
              new StructuralColumn("sub", "SENTENCE_ID")
          );
 
-         Query subquery = new Query("subSource", Collections.emptyList(), Query.Granularity.SENTENCE);
+         Query subquery = new Query("subSource", 
+            Collections.emptyList(), // conditions
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.SENTENCE, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
+         );
          SubquerySpec subquerySpec = new SubquerySpec(subquery, "sub");
 
          Query query = new Query(
@@ -418,7 +506,8 @@ class TableResultServiceTest {
              new VariableRegistry(),    // variableRegistry
              List.of(subquerySpec),   // subqueries
              Optional.of(JoinCondition.createTemporalJoin("$main.date", "sub.date", JoinCondition.JoinType.INNER, TemporalPredicate.CONTAINS)), 
-             Optional.empty()         // mainAlias
+             Optional.empty(),         // mainAlias
+             List.of() // groupByColumns
          );
 
          List<JoinedMatch> joined = List.of(
@@ -434,4 +523,277 @@ class TableResultServiceTest {
          assertEquals(1, table.intColumn("$main.DOCUMENT_ID").get(0));
          assertEquals(20, table.intColumn("sub.SENTENCE_ID").get(0));
     }
+
+    // --- GROUP BY Tests ---
+
+    @Test
+    void testGroupBySingleColumn() throws ResultGenerationException {
+        List<SelectColumn> select = List.of(
+            new StructuralColumn("$main", "DOCUMENT_ID"),
+            new VariableColumn("$main.category")
+        );
+        List<String> groupBy = List.of("$main.category");
+        Query query = new Query(
+            "testSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(),
+            Query.Granularity.DOCUMENT, Optional.empty(), select, new VariableRegistry(),
+            List.of(), Optional.empty(), Optional.empty(), groupBy
+        );
+
+        query.variableRegistry().registerProducer("$main.category", VariableType.TEXT_SPAN, "TEST");
+
+        List<MatchDetail> details = List.of(
+            createMatchDetail(1, -1, "electronics", ValueType.TERM, "$main.category"),
+            createMatchDetail(2, -1, "books", ValueType.TERM, "$main.category"),
+            createMatchDetail(3, -1, "electronics", ValueType.TERM, "$main.category"),
+            createMatchDetail(4, -1, "books", ValueType.TERM, "$main.category"),
+            createMatchDetail(5, -1, "apparel", ValueType.TERM, "$main.category")
+        );
+        QueryResult queryResult = createQueryResult(Query.Granularity.DOCUMENT, details);
+        Table table = tableResultService.generateTable(query, queryResult, indexes);
+
+        assertNotNull(table);
+        assertEquals(3, table.rowCount(), "Should have 3 rows for 3 distinct categories");
+        assertTrue(table.columnNames().contains("$main.category"));
+        assertTrue(table.columnNames().contains("$main.DOCUMENT_ID")); // Document ID is selected
+
+        // Verify that values for non-grouped columns are taken from the first encountered row in each group (after sorting)
+        // electronics: doc 1 or 3. books: doc 2 or 4. apparel: doc 5
+        // The exact doc ID depends on internal sorting during grouping if not otherwise specified.
+        // We expect values to be consistent if input order to grouping is consistent.
+        // Let's check distinct categories are present
+        Set<String> categories = new HashSet<>(table.stringColumn("$main.category").asList());
+        assertEquals(Set.of("electronics", "books", "apparel"), categories);
+    }
+
+    @Test
+    void testGroupByMultipleColumns() throws ResultGenerationException {
+        List<SelectColumn> select = List.of(
+            new StructuralColumn("$main", "DOCUMENT_ID"),
+            new VariableColumn("$main.category"),
+            new VariableColumn("$main.region")
+        );
+        List<String> groupBy = List.of("$main.category", "$main.region");
+        Query query = new Query(
+            "testSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(),
+            Query.Granularity.DOCUMENT, Optional.empty(), select, new VariableRegistry(),
+            List.of(), Optional.empty(), Optional.empty(), groupBy
+        );
+
+        query.variableRegistry().registerProducer("$main.category", VariableType.TEXT_SPAN, "TEST");
+        query.variableRegistry().registerProducer("$main.region", VariableType.TEXT_SPAN, "TEST");
+
+        List<MatchDetail> details = List.of(
+            createMatchDetail(1, -1, "electronics", ValueType.TERM, "$main.category"), // Doc 1, region null
+            createMatchDetail(1, -1, "USA", ValueType.TERM, "$main.region"),
+            createMatchDetail(2, -1, "books", ValueType.TERM, "$main.category"),       // Doc 2, region null
+            createMatchDetail(2, -1, "UK", ValueType.TERM, "$main.region"),
+            createMatchDetail(3, -1, "electronics", ValueType.TERM, "$main.category"), // Doc 3, region null
+            createMatchDetail(3, -1, "USA", ValueType.TERM, "$main.region"),
+            createMatchDetail(4, -1, "electronics", ValueType.TERM, "$main.category"), // Doc 4, region null
+            createMatchDetail(4, -1, "CAN", ValueType.TERM, "$main.region")
+        );
+        // Simplification: Create combined MatchDetails for easier setup
+        // Assuming TableResultService populates columns correctly based on variable names.
+        // For this test, the raw QueryResult will be built differently.
+        // The service needs to handle MatchDetails that might not have all variables.
+
+        // Re-construct details to have one MatchDetail per "row" for easier table setup
+        // This simulates how the initial table might look before grouping.
+        // The current TableResultService.createInitialTable will create columns for all *selected*
+        // columns and populate them. So we need to supply MatchDetails that make sense for that.
+        // The grouping happens *after* this initial table is built.
+
+        Table initialTable = Table.create("initial");
+        initialTable.addColumns(
+            IntColumn.create("$main.DOCUMENT_ID", 1, 2, 3, 4),
+            StringColumn.create("$main.category", "electronics", "books", "electronics", "electronics"),
+            StringColumn.create("$main.region", "USA", "UK", "USA", "CAN")
+        );
+        // The actual QueryResult building is complex for this test.
+        // Let's mock the table *after* createInitialTable and *before* applyGroupBy.
+        // This requires refactoring or a different test approach.
+
+        // For now, let's simplify and test the applyGroupBy method more directly if possible,
+        // or ensure QueryResult and SelectColumns align with how populateColumn works.
+
+        // Simplified approach: Use a QueryResult that would produce the above `initialTable`.
+        // Let's use the createMatchDetail logic, but ensure variable names are consistent.
+        List<MatchDetail> testDetails = new ArrayList<>();
+        // Doc 1: electronics, USA
+        testDetails.add(createMatchDetail(1, -1, "electronics", ValueType.TERM, "$main.category"));
+        testDetails.add(createMatchDetail(1, -1, "USA", ValueType.TERM, "$main.region"));
+        // Doc 2: books, UK
+        testDetails.add(createMatchDetail(2, -1, "books", ValueType.TERM, "$main.category"));
+        testDetails.add(createMatchDetail(2, -1, "UK", ValueType.TERM, "$main.region"));
+        // Doc 3: electronics, USA
+        testDetails.add(createMatchDetail(3, -1, "electronics", ValueType.TERM, "$main.category"));
+        testDetails.add(createMatchDetail(3, -1, "USA", ValueType.TERM, "$main.region"));
+        // Doc 4: electronics, CAN
+        testDetails.add(createMatchDetail(4, -1, "electronics", ValueType.TERM, "$main.category"));
+        testDetails.add(createMatchDetail(4, -1, "CAN", ValueType.TERM, "$main.region"));
+
+        QueryResult queryResult = createQueryResult(Query.Granularity.DOCUMENT, testDetails);
+        Table table = tableResultService.generateTable(query, queryResult, indexes);
+
+        assertNotNull(table);
+        // Expected groups: (electronics, USA), (books, UK), (electronics, CAN)
+        assertEquals(3, table.rowCount(), "Should have 3 distinct (category, region) groups");
+        assertTrue(table.columnNames().contains("$main.category"));
+        assertTrue(table.columnNames().contains("$main.region"));
+        assertTrue(table.columnNames().contains("$main.DOCUMENT_ID"));
+
+        // Check one group: electronics, USA (should have doc 1 or 3)
+        Table group1 = table.where(table.stringColumn("$main.category").isEqualTo("electronics")
+                               .and(table.stringColumn("$main.region").isEqualTo("USA")));
+        assertEquals(1, group1.rowCount());
+        assertTrue(Set.of(1, 3).contains(group1.intColumn("$main.DOCUMENT_ID").get(0)));
+
+
+        // Check another group: books, UK (should have doc 2)
+        Table group2 = table.where(table.stringColumn("$main.category").isEqualTo("books")
+                               .and(table.stringColumn("$main.region").isEqualTo("UK")));
+        assertEquals(1, group2.rowCount());
+        assertEquals(2, group2.intColumn("$main.DOCUMENT_ID").get(0));
+    }
+
+
+    @Test
+    void testGroupByWithCountAll() throws ResultGenerationException {
+        List<SelectColumn> select = new ArrayList<>();
+        CountColumn countAllColumn = CountColumn.countAll(); // Use factory method
+        select.add(countAllColumn);
+        select.add(new VariableColumn("$main.category"));
+        
+        List<String> groupBy = List.of("$main.category");
+        Query query = new Query(
+            "testSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(),
+            Query.Granularity.DOCUMENT, Optional.empty(), select, new VariableRegistry(),
+            List.of(), Optional.empty(), Optional.empty(), groupBy
+        );
+        query.variableRegistry().registerProducer("$main.category", VariableType.TEXT_SPAN, "TEST");
+
+        List<MatchDetail> details = List.of(
+            createMatchDetail(1, -1, "electronics", ValueType.TERM, "$main.category"),
+            createMatchDetail(2, -1, "books", ValueType.TERM, "$main.category"),
+            createMatchDetail(3, -1, "electronics", ValueType.TERM, "$main.category")
+        );
+        QueryResult queryResult = createQueryResult(Query.Granularity.DOCUMENT, details);
+        Table table = tableResultService.generateTable(query, queryResult, indexes);
+
+        assertNotNull(table);
+        assertEquals(2, table.rowCount(), "Should have 2 groups (electronics, books)");
+        assertTrue(table.columnNames().contains("$main.category"));
+        assertTrue(table.columnNames().contains(countAllColumn.toString()), "Should have " + countAllColumn.toString() + " column"); // Assert using toString()
+        
+        Table electronicsGroup = table.where(table.stringColumn("$main.category").isEqualTo("electronics"));
+        assertEquals(1, electronicsGroup.rowCount());
+        assertEquals(2, electronicsGroup.intColumn(countAllColumn.toString()).get(0), "Count for electronics should be 2"); // Assert using toString()
+
+        Table booksGroup = table.where(table.stringColumn("$main.category").isEqualTo("books"));
+        assertEquals(1, booksGroup.rowCount());
+        assertEquals(1, booksGroup.intColumn(countAllColumn.toString()).get(0), "Count for books should be 1"); // Assert using toString()
+    }
+
+    @Test
+    void testGroupByWithCountUnique() throws ResultGenerationException {
+        String uniqueProductVar = "$main.uniqueProduct"; // Renamed from уникальныйТоварVar
+        List<SelectColumn> select = new ArrayList<>();
+        CountColumn countUniqueColumn = CountColumn.countUnique(uniqueProductVar); // Use factory method
+        select.add(countUniqueColumn);
+        select.add(new VariableColumn("$main.category"));
+
+        List<String> groupBy = List.of("$main.category");
+        Query query = new Query(
+            "testSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(),
+            Query.Granularity.DOCUMENT, Optional.empty(), select, new VariableRegistry(),
+            List.of(), Optional.empty(), Optional.empty(), groupBy
+        );
+        query.variableRegistry().registerProducer("$main.category", VariableType.TEXT_SPAN, "TEST");
+        query.variableRegistry().registerProducer(uniqueProductVar, VariableType.TEXT_SPAN, "TEST"); // Updated var name
+
+
+        List<MatchDetail> details = List.of(
+            // Category: electronics
+            createMatchDetail(1, -1, "electronics", ValueType.TERM, "$main.category"),
+            createMatchDetail(1, -1, "Laptop", ValueType.TERM, uniqueProductVar), // Updated var name
+            createMatchDetail(2, -1, "electronics", ValueType.TERM, "$main.category"),
+            createMatchDetail(2, -1, "Mouse", ValueType.TERM, uniqueProductVar),    // Updated var name
+            createMatchDetail(3, -1, "electronics", ValueType.TERM, "$main.category"),
+            createMatchDetail(3, -1, "Laptop", ValueType.TERM, uniqueProductVar), // Updated var name, Duplicate Laptop for electronics
+            // Category: books
+            createMatchDetail(4, -1, "books", ValueType.TERM, "$main.category"),
+            createMatchDetail(4, -1, "Novel A", ValueType.TERM, uniqueProductVar),   // Updated var name
+            createMatchDetail(5, -1, "books", ValueType.TERM, "$main.category"),
+            createMatchDetail(5, -1, "Novel B", ValueType.TERM, uniqueProductVar)    // Updated var name
+        );
+        QueryResult queryResult = createQueryResult(Query.Granularity.DOCUMENT, details);
+        Table table = tableResultService.generateTable(query, queryResult, indexes);
+
+        assertNotNull(table);
+        assertEquals(2, table.rowCount(), "Should have 2 groups (electronics, books)");
+        assertTrue(table.columnNames().contains("$main.category"));
+        assertTrue(table.columnNames().contains(countUniqueColumn.toString()), "Should have " + countUniqueColumn.toString() + " column"); // Assert using toString()
+        
+        Table electronicsGroup = table.where(table.stringColumn("$main.category").isEqualTo("electronics"));
+        assertEquals(1, electronicsGroup.rowCount());
+        assertEquals(2, electronicsGroup.intColumn(countUniqueColumn.toString()).get(0), "Count Unique for electronics should be 2 (Laptop, Mouse)"); // Assert using toString()
+
+        Table booksGroup = table.where(table.stringColumn("$main.category").isEqualTo("books"));
+        assertEquals(1, booksGroup.rowCount());
+        assertEquals(2, booksGroup.intColumn(countUniqueColumn.toString()).get(0), "Count Unique for books should be 2 (Novel A, Novel B)"); // Assert using toString()
+    }
+
+    @Test
+    void testGroupByEmptyResult() throws ResultGenerationException {
+        List<SelectColumn> select = List.of(new VariableColumn("$main.category"));
+        List<String> groupBy = List.of("$main.category");
+        Query query = new Query(
+            "testSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(),
+            Query.Granularity.DOCUMENT, Optional.empty(), select, new VariableRegistry(),
+            List.of(), Optional.empty(), Optional.empty(), groupBy
+        );
+        QueryResult emptyResult = createQueryResult(Query.Granularity.DOCUMENT, Collections.emptyList());
+        Table table = tableResultService.generateTable(query, emptyResult, indexes);
+
+        assertNotNull(table);
+        assertEquals(0, table.rowCount());
+         // Even if empty, if columns were selected, they should exist.
+         // However, applyGroupBy might return the original empty table structure from createInitialTable.
+         // Let's assume if the input table to applyGroupBy is empty, the output is also empty with same columns.
+        if (!table.isEmpty()) { // Only check columns if table is not truly empty (0 rows, 0 cols)
+            assertTrue(table.columnNames().contains("$main.category"));
+        } else {
+            // If table is truly empty (e.g. from name "EmptyQueryResults*"), it might have no columns
+            assertTrue(table.name().contains("EmptyQueryResults") || table.columnCount() == 0, "Table should be empty or named as such");
+        }
+    }
+
+    @Test
+    void testGroupByNoGroupColumns() throws ResultGenerationException {
+        // Effectively a normal query, GROUP BY clause is empty
+        List<SelectColumn> select = List.of(
+            new StructuralColumn("$main", "DOCUMENT_ID"),
+            new VariableColumn("$main.category")
+        );
+        List<String> groupBy = Collections.emptyList(); // No group by columns
+        Query query = new Query(
+            "testSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(),
+            Query.Granularity.DOCUMENT, Optional.empty(), select, new VariableRegistry(),
+            List.of(), Optional.empty(), Optional.empty(), groupBy
+        );
+        query.variableRegistry().registerProducer("$main.category", VariableType.TEXT_SPAN, "TEST");
+
+        List<MatchDetail> details = List.of(
+            createMatchDetail(1, -1, "electronics", ValueType.TERM, "$main.category"),
+            createMatchDetail(2, -1, "books", ValueType.TERM, "$main.category")
+        );
+        QueryResult queryResult = createQueryResult(Query.Granularity.DOCUMENT, details);
+        Table table = tableResultService.generateTable(query, queryResult, indexes);
+
+        assertNotNull(table);
+        assertEquals(2, table.rowCount(), "Should have 2 rows as no grouping applied");
+        assertTrue(table.columnNames().contains("$main.category"));
+        assertTrue(table.columnNames().contains("$main.DOCUMENT_ID"));
+    }
+    // --- END GROUP BY Tests ---
 } 

@@ -63,6 +63,7 @@ LEFT: 'LEFT';
 RIGHT: 'RIGHT';
 BEGIN: 'BEGIN';
 END: 'END';
+GROUP: 'GROUP';
 
 // NER Entity Type Keywords (Must match VALID_NER_TYPES in validator, case-insensitive)
 PERSON: 'PERSON';
@@ -119,6 +120,7 @@ query
       FROM identifier (ALIAS alias=identifier)?
       joinClause*
       whereClause?
+      groupByClause?
       granularityClause?
       orderByClause?
       limitClause?
@@ -235,7 +237,7 @@ orderByClause
 // The visitor implementation converts this to strings with "-" prefix for DESC order
 // Example: "column_name" for ASC, "-column_name" for DESC
 orderSpec
-    : (qualifiedIdentifier | identifier | variable) (ASC | DESC)?
+    : (qualifiedIdentifier | identifier | variable | countExpression) (ASC | DESC)?
     ;
 
 qualifiedIdentifier
@@ -369,4 +371,19 @@ posTag
 // Define DOCUMENT_ID and SENTENCE_ID if they are not already keywords
 // Assuming they are needed for qualifiedStructuralColumn but not elsewhere as keywords yet
 DOCUMENT_ID: 'DOCUMENT_ID';
-SENTENCE_ID: 'SENTENCE_ID'; 
+SENTENCE_ID: 'SENTENCE_ID';
+
+// New: groupByClause rules
+groupByClause
+    : GROUP BY groupByItemList
+    ;
+
+groupByItemList
+    : groupByItem (COMMA groupByItem)*
+    ;
+
+groupByItem
+    : qualifiedIdentifier  // e.g., alias.myVar, alias.DOCUMENT_ID
+    | variable             // e.g., myVar (implicitly $main.myVar)
+    | identifier           // Potentially for simple, unqualified column names if design evolves
+    ; 

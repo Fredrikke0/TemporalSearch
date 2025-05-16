@@ -74,6 +74,16 @@ public class QuerySemanticValidator {
             validateSubqueries(query);
             validateJoinConditions(query);
         }
+
+        // Validate GROUP BY clause if present
+        if (!query.groupByColumns().isEmpty()) {
+            validateGroupByClause(query);
+        }
+        
+        // Validate ORDER BY clause if present
+        if (!query.orderBy().isEmpty()) {
+            validateOrderByClause(query);
+        }
         
         logger.debug("Semantic validation completed successfully");
     }
@@ -381,5 +391,183 @@ public class QuerySemanticValidator {
                 throw new RuntimeException(e);
             }
         });
+    }
+
+    // New: Method to validate the GROUP BY clause
+    private void validateGroupByClause(Query query) throws QueryParseException {
+        logger.debug("Validating GROUP BY clause: {}", query.groupByColumns());
+        VariableRegistry registry = query.variableRegistry();
+        List<String> groupByColumns = query.groupByColumns();
+        Set<String> groupBySet = new HashSet<>(groupByColumns); // For efficient lookup
+
+        // 2. Validate that each GROUP BY item is a valid, selectable column (MOVED TO TOP)
+        // This means it must be a known variable or a known structural column.
+        String mainAlias = query.mainAlias().orElse("$main");
+        Map<String, SubquerySpec> subqueryMap = query.subqueries().stream()
+                .collect(Collectors.toMap(SubquerySpec::alias, sq -> sq));
+
+        for (String groupByColumnName : groupByColumns) {
+            // Attempt to parse as alias.field
+            String[] parts = groupByColumnName.split("\\.", 2);
+            if (parts.length != 2) {
+                throw new QueryParseException(String.format(
+                    "Invalid GROUP BY item '%s'. Expected format: alias.variable or alias.FIELD", groupByColumnName));
+            }
+            String alias = parts[0];
+            String field = parts[1];
+
+            boolean isStructural = Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID", "BEGIN", "END").contains(field.toUpperCase());
+
+            if (isStructural) {
+                // For structural columns, check if alias is valid (main or a subquery)
+                if (!alias.equals(mainAlias) && !subqueryMap.containsKey(alias)) {
+                    throw new QueryParseException(String.format(
+                        "Invalid alias '%s' in GROUP BY item '%s'. Alias must be the main query alias or a subquery alias.",
+                        alias, groupByColumnName));
+                }
+                // Further validation for structural fields (e.g. field name is valid) is implicitly handled by parser/model
+            } else {
+                // For variables, first determine the target registry
+                VariableRegistry targetRegistry;
+                String contextDesc;
+                if (alias.equals(mainAlias)) {
+                    targetRegistry = registry; // Main query registry
+                    contextDesc = String.format("main query (alias %s) for GROUP BY item '%s'", alias, groupByColumnName);
+                } else if (subqueryMap.containsKey(alias)) {
+                    targetRegistry = subqueryMap.get(alias).subquery().variableRegistry();
+                    contextDesc = String.format("subquery '%s' for GROUP BY item '%s'", alias, groupByColumnName);
+                } else {
+                    throw new QueryParseException(String.format(
+                        "Unknown alias '%s' in GROUP BY item '%s'.", alias, groupByColumnName));
+                }
+
+                // Now, check if the variable is known in that registry before validating if it's produced
+                if (!targetRegistry.getAllVariableNames().contains(groupByColumnName)) {
+                    throw new QueryParseException(String.format(
+                        "GROUP BY column '%s' is not a known variable or structural column.", groupByColumnName
+                    ));
+                }
+                // If known, then validate it's produced (as it's not structural)
+                validateVariableInRegistry(groupByColumnName, targetRegistry, contextDesc);
+            }
+        }
+        // If all GROUP BY items are valid, now proceed to validate SELECT columns.
+
+        // 1. Validate SELECT columns against the GROUP BY clause (NOW SECOND)
+        for (SelectColumn selectColumn : query.selectColumns()) {
+            if (selectColumn instanceof CountColumn) {
+                // Aggregate functions are always allowed with GROUP BY
+                continue;
+            } else if (selectColumn instanceof SnippetColumn snippetColumn) {
+                String snippetVarName = snippetColumn.getVariableName(); // This is qualified, e.g., $main.date
+                if (!groupBySet.contains(snippetVarName)) {
+                    throw new QueryParseException(String.format(
+                        "SNIPPET variable '%s' must be included in the GROUP BY clause when GROUP BY is present.",
+                        snippetVarName));
+                }
+            } else if (selectColumn instanceof VariableColumn variableColumn) {
+                String varName = variableColumn.getColumnName(); // This is qualified, e.g., $main.date
+                if (!groupBySet.contains(varName)) {
+                    throw new QueryParseException(String.format(
+                        "SELECT column '%s' must be an aggregate function or appear in the GROUP BY clause.",
+                        varName));
+                }
+            } else if (selectColumn instanceof StructuralColumn structuralColumn) {
+                String structName = structuralColumn.getColumnName(); // This is qualified, e.g., $main.TITLE
+                if (!groupBySet.contains(structName)) {
+                    throw new QueryParseException(String.format(
+                        "SELECT column '%s' must be an aggregate function or appear in the GROUP BY clause.",
+                        structName));
+                }
+            } else {
+                // Should not happen if all SelectColumn types are handled
+                throw new QueryParseException("Unknown SelectColumn type encountered during GROUP BY validation: " + selectColumn.getClass().getName());
+            }
+        }
+        logger.debug("GROUP BY clause validated successfully.");
+    }
+
+    // New method: validateOrderByClause
+    private void validateOrderByClause(Query query) throws QueryParseException {
+        VariableRegistry registry = query.variableRegistry();
+        List<String> groupByColumnNames = query.groupByColumns(); // These are already fully qualified
+        Set<String> groupByKeySet = new HashSet<>(groupByColumnNames);
+
+        for (String orderSpecifier : query.orderBy()) {
+            String rawColumnName = orderSpecifier.startsWith("-") ? orderSpecifier.substring(1) : orderSpecifier;
+            
+            // crude check for aggregate, expand if more aggregates are supported.
+            boolean isAggregate = rawColumnName.startsWith("COUNT("); 
+
+            if (isAggregate) {
+                if (groupByColumnNames.isEmpty()) {
+                    // If ordering by aggregate without GROUP BY, all SELECT items should also be aggregates.
+                    // This is a common SQL rule to prevent ambiguity.
+                    boolean allSelectAlsoAggregates = query.selectColumns().stream()
+                        .allMatch(sc -> sc instanceof CountColumn /* || other aggregate types like SumColumn, AvgColumn */);
+                    
+                    // More precise: if there's any non-aggregate in SELECT, it's an error.
+                    boolean hasNonAggregateInSelect = query.selectColumns().stream()
+                        .anyMatch(sc -> !(sc instanceof CountColumn /* || other aggregate types */));
+
+                    if (hasNonAggregateInSelect) {
+                        throw new QueryParseException(String.format(
+                            "Cannot ORDER BY aggregate function '%s' without a GROUP BY clause when non-aggregate columns are present in the SELECT list.", rawColumnName
+                        ));
+                    }
+                }
+                // If GROUP BY is present, or if no GROUP BY but SELECT list is all aggregates, then it's fine.
+                continue; 
+            }
+
+            // If not an aggregate, it's a column/variable name.
+            // The name `rawColumnName` from `orderColumns` list should be fully qualified by QueryModelBuilder.
+            
+            boolean isKnownVar = registry.isProduced(rawColumnName);
+            boolean isStructCol = isStructuralColumn(rawColumnName, query.mainAlias(), query.subqueries());
+
+            if (!isKnownVar && !isStructCol) {
+                // Before throwing, check if it matches a SELECT column alias (if we support that).
+                // For now, assuming rawColumnName must be a direct resolvable item or aggregate.
+                throw new QueryParseException(String.format(
+                    "ORDER BY column '%s' is not a recognized variable, structural column, or aggregate function.", rawColumnName
+                ));
+            }
+
+            // If GROUP BY is present, non-aggregate ORDER BY items must be in GROUP BY keys.
+            if (!groupByColumnNames.isEmpty()) {
+                if (!groupByKeySet.contains(rawColumnName)) {
+                    throw new QueryParseException(String.format(
+                        "ORDER BY column '%s' must be in the GROUP BY clause or be an aggregate function when GROUP BY is present.", rawColumnName
+                    ));
+                }
+            }
+            // If no GROUP BY, ordering by a regular valid column (var or struct) is fine.
+        }
+    }
+
+    // New helper method: isStructuralColumn
+    private boolean isStructuralColumn(String qualifiedName, Optional<String> mainAliasOpt, List<SubquerySpec> subqueries) {
+        if (qualifiedName == null) return false;
+        String[] parts = qualifiedName.split("\\\\.", 2); // Use \\. for literal dot in regex
+        if (parts.length != 2) {
+            return false; // Not in alias.FIELD format
+        }
+        String alias = parts[0];
+        String field = parts[1].toUpperCase(); // Structural fields are typically case-insensitive or stored uppercase
+
+        // Define known structural fields
+        Set<String> knownStructuralFields = Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID", "BEGIN", "END");
+        if (!knownStructuralFields.contains(field)) {
+            return false;
+        }
+
+        // Check if the alias matches the main query's alias or any subquery's alias
+        String mainAlias = mainAliasOpt.orElse("$main");
+        if (alias.equals(mainAlias)) {
+            return true;
+        }
+
+        return subqueries.stream().anyMatch(sq -> sq.alias().equals(alias));
     }
 } 

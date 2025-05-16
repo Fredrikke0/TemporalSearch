@@ -51,6 +51,7 @@ import com.example.query.model.JoinCondition.JoinType;
 import com.example.query.model.JoinCondition.JoinOperatorType;
 import org.mockito.ArgumentCaptor;
 import com.example.query.binding.JoinedMatch; // Added for Join results
+import java.io.IOException; // Added import for IOException
 
 @ExtendWith(MockitoExtension.class)
 class QueryExecutorTest {
@@ -75,7 +76,7 @@ class QueryExecutorTest {
     private Map<String, IndexAccessInterface> indexes;
     
     @BeforeEach
-    void setUp() throws IndexAccessException {
+    void setUp() throws IndexAccessException, IOException {
         indexes = new HashMap<>();
         indexes.put("unigram", unigramIndex);
         indexes.put("ner", nerIndex);
@@ -190,11 +191,16 @@ class QueryExecutorTest {
         Query query = new Query(
             "test_source",
             Collections.singletonList(andCondition),
-            Collections.emptyList(),
-            Optional.empty(),
-            Query.Granularity.DOCUMENT,
-            Optional.empty(),
-            Collections.emptyList()
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
         );
         
         // Mock the factory to return the mock LogicalExecutor for the top-level condition
@@ -232,11 +238,16 @@ class QueryExecutorTest {
         Query query = new Query(
             "test_source",
             Collections.singletonList(orCondition),
-            Collections.emptyList(),
-            Optional.empty(),
-            Query.Granularity.DOCUMENT,
-            Optional.empty(),
-            Collections.emptyList()
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
         );
         
         // Mock the factory to return the mock LogicalExecutor for the top-level condition
@@ -270,11 +281,16 @@ class QueryExecutorTest {
         Query query = new Query(
             "test_source",
             Collections.singletonList(notCondition),
-            Collections.emptyList(),
-            Optional.empty(),
-            Query.Granularity.DOCUMENT,
-            Optional.empty(),
-            Collections.emptyList()
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
         );
         
         // Setup mocks
@@ -320,8 +336,18 @@ class QueryExecutorTest {
         Not notTestCondition = new Not(testCondition);
         Logical orCondition = new Logical(Logical.LogicalOperator.OR, Arrays.asList(andCondition, notTestCondition));
         Query query = new Query(
-            "test_source", Collections.singletonList(orCondition), Collections.emptyList(),
-            Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList()
+            "test_source", 
+            Collections.singletonList(orCondition), 
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
         );
 
         // Mock the factory to return the mock LogicalExecutor for the top-level OR condition
@@ -373,13 +399,13 @@ class QueryExecutorTest {
     @Test
     void testJoinHandlerOnDocumentId() throws QueryExecutionException {
         Contains containsConditionLeft = new Contains("apple");
-        Query subQueryLeft = new Query("subSource", Collections.singletonList(containsConditionLeft), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
+        Query subQueryLeft = new Query("subSource", Collections.singletonList(containsConditionLeft), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty(), List.of());
         SubquerySpec subquerySpecLeft = new SubquerySpec(subQueryLeft, "leftAlias");
         Contains containsConditionRight = new Contains("banana");
-        Query subQueryRight = new Query("subSource", Collections.singletonList(containsConditionRight), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
+        Query subQueryRight = new Query("subSource", Collections.singletonList(containsConditionRight), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty(), List.of());
         SubquerySpec subquerySpecRight = new SubquerySpec(subQueryRight, "rightAlias");
         JoinCondition joinCondition = JoinCondition.createEqualityJoin("leftAlias.DOCUMENT_ID", "rightAlias.DOCUMENT_ID", JoinCondition.JoinType.INNER);
-        Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty());
+        Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty(), List.of());
         QueryResult mockLeftResult = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(
                 createMatchDetail(1, "apple"), createMatchDetail(2, "apple")
         ));
@@ -410,13 +436,13 @@ class QueryExecutorTest {
     @Test
     void testJoinHandlerOnSentenceId() throws QueryExecutionException {
         Contains containsConditionLeft = new Contains("foo");
-        Query subQueryLeft = new Query("subSource", Collections.singletonList(containsConditionLeft), Collections.emptyList(), Optional.empty(), Query.Granularity.SENTENCE, Optional.of(0), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
+        Query subQueryLeft = new Query("subSource", Collections.singletonList(containsConditionLeft), Collections.emptyList(), Optional.empty(), Query.Granularity.SENTENCE, Optional.of(0), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty(), List.of());
         SubquerySpec subquerySpecLeft = new SubquerySpec(subQueryLeft, "leftAlias");
         Contains containsConditionRight = new Contains("bar");
-        Query subQueryRight = new Query("subSource", Collections.singletonList(containsConditionRight), Collections.emptyList(), Optional.empty(), Query.Granularity.SENTENCE, Optional.of(0), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
+        Query subQueryRight = new Query("subSource", Collections.singletonList(containsConditionRight), Collections.emptyList(), Optional.empty(), Query.Granularity.SENTENCE, Optional.of(0), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty(), List.of());
         SubquerySpec subquerySpecRight = new SubquerySpec(subQueryRight, "rightAlias");
         JoinCondition joinCondition = JoinCondition.createEqualityJoin("leftAlias.SENTENCE_ID", "rightAlias.SENTENCE_ID", JoinCondition.JoinType.INNER);
-        Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.SENTENCE, Optional.of(0), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty());
+        Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.SENTENCE, Optional.of(0), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty(), List.of());
         QueryResult mockLeftResult = createMockQueryResult(Query.Granularity.SENTENCE, 0, List.of(
                 createMatchDetail(1, 5, "foo"), createMatchDetail(2, 8, "foo")
         ));
@@ -448,13 +474,13 @@ class QueryExecutorTest {
     void testJoinHandlerOnCustomStringKey() throws QueryExecutionException {
         // Here we simulate a custom variable name as the join key
         Contains containsConditionLeft = new Contains("x");
-        Query subQueryLeft = new Query("subSource", Collections.singletonList(containsConditionLeft), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
+        Query subQueryLeft = new Query("subSource", Collections.singletonList(containsConditionLeft), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty(), List.of());
         SubquerySpec subquerySpecLeft = new SubquerySpec(subQueryLeft, "leftAlias");
         Contains containsConditionRight = new Contains("y");
-        Query subQueryRight = new Query("subSource", Collections.singletonList(containsConditionRight), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty());
+        Query subQueryRight = new Query("subSource", Collections.singletonList(containsConditionRight), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Collections.emptyList(), Optional.empty(), Optional.empty(), List.of());
         SubquerySpec subquerySpecRight = new SubquerySpec(subQueryRight, "rightAlias");
         JoinCondition joinCondition = JoinCondition.createEqualityJoin("leftAlias.custom_key", "rightAlias.custom_key", JoinCondition.JoinType.INNER);
-        Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty());
+        Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty(), List.of());
         // Create MatchDetails with a custom variable name
         MatchDetail leftDetail = new MatchDetail("foo", ValueType.TERM, new Position(1, -1, 0, 3, java.time.LocalDate.now()), "leftAlias.custom_key");
         MatchDetail rightDetail = new MatchDetail("foo", ValueType.TERM, new Position(2, -1, 0, 3, java.time.LocalDate.now()), "rightAlias.custom_key");
@@ -484,7 +510,19 @@ class QueryExecutorTest {
         // Setup Query
         Contains containsCondition = new Contains(List.of("term"));
         Ner nerCondition = new Ner("PERSON", null, null, false);
-        Query query = new Query("wikipedia", List.of(containsCondition, nerCondition));
+        Query query = new Query("wikipedia", 
+            List.of(containsCondition, nerCondition), // conditions
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            Collections.emptyList(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
+        );
 
         // Setup Mock Executors
         QueryResult containsResult = new QueryResult(Query.Granularity.DOCUMENT, List.of(
@@ -568,7 +606,8 @@ class QueryExecutorTest {
             new VariableRegistry(),       // Default empty registry
             List.of(sub1, sub2),          // Subqueries
             Optional.of(joinCond),        // Join condition
-            Optional.empty()              // No explicit main alias
+            Optional.empty(),              // No explicit main alias
+            List.of()                     // groupByColumns
         );
 
         // Mock subquery results
@@ -634,7 +673,8 @@ class QueryExecutorTest {
             new VariableRegistry(),       // Default empty registry
             List.of(sub1, sub2),          // Subqueries
             Optional.of(joinCond),        // Join condition
-            Optional.empty()              // No explicit main alias
+            Optional.empty(),              // No explicit main alias
+            List.of()                     // groupByColumns
         );
 
         // Mock subquery results
@@ -679,7 +719,19 @@ class QueryExecutorTest {
         String dependentDateKey = "tx_date";
 
         Contains dependentCondition = new Contains("some_term"); 
-        Query dependentSubquery = new Query(mainSource, List.of(dependentCondition), Query.Granularity.DOCUMENT);
+        Query dependentSubquery = new Query(mainSource, 
+            List.of(dependentCondition), // conditions
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(), // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            List.of() // groupByColumns
+        );
         SubquerySpec dependentSubquerySpec = new SubquerySpec(dependentSubquery, dependentAlias);
 
         JoinCondition joinCondition = JoinCondition.createTemporalJoin(
@@ -690,9 +742,18 @@ class QueryExecutorTest {
         );
 
         Query overallQuery = new Query(
-            mainSource, Collections.emptyList(), Collections.emptyList(), Optional.empty(),        
-            Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), 
-            new VariableRegistry(), List.of(dependentSubquerySpec), Optional.of(joinCondition), Optional.of(leadingAlias)       
+            mainSource, 
+            Collections.emptyList(), // conditions
+            Collections.emptyList(), // orderBy
+            Optional.empty(), // limit       
+            Query.Granularity.DOCUMENT, // granularity
+            Optional.empty(), // granularitySize
+            Collections.emptyList(), // selectColumns
+            new VariableRegistry(), // variableRegistry
+            List.of(dependentSubquerySpec), // subqueries
+            Optional.of(joinCondition), // joinCondition
+            Optional.of(leadingAlias), // mainAlias
+            List.of() // groupByColumns
         );
 
         LocalDate date1 = LocalDate.of(2023, 1, 10);

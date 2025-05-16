@@ -8,11 +8,12 @@ import java.util.Arrays;
 import java.util.List;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import java.io.IOException;
 
 public class PositionSerializationTest {
 
     @Test
-    public void testSinglePositionSerialization() {
+    public void testSinglePositionSerialization() throws IOException {
         // Create a single position
         Position original = new Position(
                 193, // documentId
@@ -43,7 +44,7 @@ public class PositionSerializationTest {
     }
 
     @Test
-    public void testMultiplePositionsSerialization() {
+    public void testMultiplePositionsSerialization() throws IOException {
         // Create test data
         PositionList originalList = new PositionList();
         originalList.add(new Position(193, 1, 1, 3, LocalDate.of(1993, 10, 26)));
@@ -81,7 +82,7 @@ public class PositionSerializationTest {
     }
 
     @Test
-    public void testEmptyListSerialization() {
+    public void testEmptyListSerialization() throws IOException {
         PositionList emptyList = new PositionList();
         byte[] serialized = emptyList.serialize();
         PositionList deserialized = PositionList.deserialize(serialized);
@@ -90,7 +91,7 @@ public class PositionSerializationTest {
     }
 
     @Test
-    public void testLargeListSerialization() {
+    public void testLargeListSerialization() throws IOException {
         PositionList list = new PositionList();
         int numPositions = 10000;
         

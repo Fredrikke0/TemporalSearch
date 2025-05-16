@@ -23,7 +23,7 @@ import org.mockito.stubbing.OngoingStubbing;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
-
+import java.io.IOException;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -46,7 +46,7 @@ class NerConditionExecutorTest {
         lenient().when(mockIterator.hasNext()).thenReturn(false); 
     }
 
-    private void setupIteratorMock(DBIterator iterator, String prefix, List<Map.Entry<byte[], PositionList>> entries) throws IndexAccessException {
+    private void setupIteratorMock(DBIterator iterator, String prefix, List<Map.Entry<byte[], PositionList>> entries) throws IOException, IndexAccessException {
         lenient().when(nerIndex.iterator()).thenReturn(iterator);
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         doNothing().when(iterator).seek(argThat(k -> Arrays.equals(k, prefixBytes)));
@@ -62,7 +62,14 @@ class NerConditionExecutorTest {
         if (!entries.isEmpty()) {
             @SuppressWarnings("unchecked")
             Map.Entry<byte[], byte[]>[] entryArray = entries.stream()
-                 .map(e -> Map.entry(e.getKey(), e.getValue().serialize()))
+                 .map(e -> {
+                    try {
+                        return Map.entry(e.getKey(), e.getValue().serialize());
+                    } catch (IOException ioe) {
+                        // For test setup, rethrow as unchecked if direct handling is too verbose
+                        throw new RuntimeException("Failed to serialize PositionList in test setup", ioe);
+                    }
+                 })
                  .toArray(Map.Entry[]::new);
             OngoingStubbing<Map.Entry<byte[], byte[]>> nextStubbing = when(iterator.next()).thenReturn(entryArray[0]);
             for(int i = 1; i < entryArray.length; i++) {

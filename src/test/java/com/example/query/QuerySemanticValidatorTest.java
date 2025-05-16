@@ -226,7 +226,45 @@ class QuerySemanticValidatorTest {
             Query.Granularity.DOCUMENT,  // granularity
             Optional.empty(),  // granularitySize (Snippet size is handled in SnippetColumn)
             columns,       // selectColumns
-            registry       // variable registry
+            registry,       // variable registry
+            List.of(),      // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            Collections.emptyList() // groupByColumns - Default to empty list
         );
+    }
+
+    /**
+     * Helper method to create a Query object for testing with a provided registry and group by columns
+     */
+    private Query createQuery(List<SelectColumn> columns, List<Condition> conditions, VariableRegistry registry, List<String> groupByColumns) {
+        return new Query(
+            "wikipedia",   // source
+            conditions,    // conditions
+            List.of(),     // orderBy
+            Optional.empty(),  // limit
+            Query.Granularity.DOCUMENT,  // granularity
+            Optional.empty(),  // granularitySize
+            columns,       // selectColumns
+            registry,       // variable registry
+            List.of(),      // subqueries
+            Optional.empty(), // joinCondition
+            Optional.empty(), // mainAlias
+            groupByColumns  // groupByColumns
+        );
+    }
+
+    @Test
+    @DisplayName("GROUP BY: Invalid - Grouping by an unknown/unbound variable")
+    void validateGroupBy_Invalid_GroupByUnknownColumn() {
+        VariableRegistry registry = new VariableRegistry();
+        registry.registerProducer("$main.colA", VariableType.TEXT_SPAN, "TEST");
+
+        List<SelectColumn> select = List.of(new VariableColumn("$main.colA"));
+        List<String> groupBy = List.of("$main.colZ"); // colZ is not known
+        Query query = createQuery(select, List.of(), registry, groupBy);
+
+        QueryParseException exception = assertThrows(QueryParseException.class, () -> validator.validate(query));
+        assertTrue(exception.getMessage().contains("GROUP BY column '$main.colZ' is not a known variable or structural column."));
     }
 } 

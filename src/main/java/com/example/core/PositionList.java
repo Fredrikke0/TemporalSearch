@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import com.example.logging.LogSampler;
 import com.example.index.StitchPosition;
 import com.example.index.AnnotationType;
+import java.io.IOException;
 
 /**
  * Manages collections of Position objects with efficient compression and serialization capabilities.
@@ -46,7 +47,7 @@ public class PositionList {
         return Collections.unmodifiableList(positions);
     }
 
-    public byte[] serialize() {
+    public byte[] serialize() throws IOException {
         if (positions.isEmpty()) {
             logger.debug("Serializing empty position list");
             return new byte[0];
@@ -64,8 +65,8 @@ public class PositionList {
             long[] timestamps = new long[positions.size()];
             
             // Prepare type information and synonym IDs (for StitchPosition)
-            byte[] positionTypes = new byte[positions.size()];
-            int[] synonymIds = new int[positions.size()];
+            byte[] positionTypes = new byte[positions.size()]; // Allocated whether or not hasSpecialPositions is true, to simplify logic. Optimized out if not used.
+            int[] synonymIds = new int[positions.size()];    // Allocated whether or not hasSpecialPositions is true.
             boolean hasSpecialPositions = false;
             
             // Store original values
@@ -93,8 +94,52 @@ public class PositionList {
                     positions.size(), docIds[0], docIds[positions.size() - 1]);
             }
 
-            // Allocate buffer with estimated size
-            ByteBuffer buffer = ByteBuffer.allocate(positions.size() * 28 + 256);
+            // Calculate required capacity robustly
+            long calculatedCapacity = 4L; // count (int)
+            calculatedCapacity += 1L; // hasSpecialPositions (byte)
+            long numPositions = positions.size();
+            long paddedNumPositions = ((numPositions + 128L - 1L) / 128L) * 128L; // Padded size for compression blocks
+
+            // For the 4 main int arrays (docIds, sentenceIds, beginPositions, endPositions)
+            for (int i = 0; i < 4; i++) {
+                calculatedCapacity += 4L; // original length field (int)
+                if (numPositions <= 128) { // Uncompressed
+                    calculatedCapacity += numPositions * 4L; // data
+                } else { // Compressed
+                    calculatedCapacity += 4L; // compressed size field (int)
+                    // Max data size: FastPFOR's temporary compression buffer is paddedSize * 2 ints.
+                    // The actual written compressed data (outOffset.get()) will be <= paddedSize * 2 ints.
+                    calculatedCapacity += paddedNumPositions * 2L * 4L; // Max compressed data in bytes
+                }
+            }
+
+            calculatedCapacity += numPositions * 8L; // timestamps (long array)
+
+            if (hasSpecialPositions) {
+                calculatedCapacity += numPositions; // positionTypes (byte array)
+                
+                // synonymIds array (treated like other int arrays)
+                calculatedCapacity += 4L; // original length field (int)
+                if (numPositions <= 128) { // Uncompressed
+                    calculatedCapacity += numPositions * 4L;
+                } else { // Compressed
+                    calculatedCapacity += 4L; // compressed size field (int)
+                    calculatedCapacity += paddedNumPositions * 2L * 4L; // Max compressed data in bytes
+                }
+            }
+            
+            calculatedCapacity += 256L; // General buffer / contingency
+
+            if (calculatedCapacity > Integer.MAX_VALUE) {
+                String errorMessage = String.format(
+                    "Calculated serialized size (%d bytes) for %d positions exceeds maximum ByteBuffer capacity (%d bytes). " +
+                    "This PositionList is too large to be stored as a single entry.",
+                    calculatedCapacity, numPositions, Integer.MAX_VALUE);
+                logger.error(errorMessage);
+                throw new IOException(errorMessage);
+            }
+            
+            ByteBuffer buffer = ByteBuffer.allocate((int) calculatedCapacity);
 
             // Write metadata
             buffer.putInt(positions.size());
@@ -110,27 +155,30 @@ public class PositionList {
                     for (int i = 0; i < array.length; i++) {
                         buffer.putInt(array[i]);
                     }
-                    continue;
-                }
-                
-                // Calculate number of complete blocks
-                int blockSize = 128;
-                int numBlocks = (array.length + blockSize - 1) / blockSize;
-                int paddedSize = numBlocks * blockSize;
-                
-                // Create padded array
-                int[] paddedArray = Arrays.copyOf(array, paddedSize);
-                int[] compressed = new int[paddedSize * 2]; // Double size for safety
-                
-                // Try compression
-                codec.compress(paddedArray, inOffset, paddedSize, compressed, outOffset);
-                int compressedSize = outOffset.get();
-                
-                // Store the actual length and compressed size
-                buffer.putInt(array.length);  // Original length
-                buffer.putInt(compressedSize); // Compressed size
-                for (int i = 0; i < compressedSize; i++) {
-                    buffer.putInt(compressed[i]);
+                } else {
+                    // Calculate number of complete blocks
+                    int blockSize = 128;
+                    int numBlocks = (array.length + blockSize - 1) / blockSize;
+                    int paddedSize = numBlocks * blockSize;
+                    
+                    // Create padded array
+                    int[] paddedArray = Arrays.copyOf(array, paddedSize);
+                    // Ensure the temporary compression buffer itself doesn't exceed memory limits for int arrays
+                    if ((long)paddedSize * 2L > Integer.MAX_VALUE / 4) { // Check if paddedSize*2*sizeof(int) is too large
+                        throw new IOException("Temporary compression buffer for FastPFOR would exceed int array limits.");
+                    }
+                    int[] compressed = new int[paddedSize * 2]; // Double size for safety
+                    
+                    // Try compression
+                    codec.compress(paddedArray, inOffset, paddedSize, compressed, outOffset);
+                    int compressedSize = outOffset.get();
+                    
+                    // Store the actual length and compressed size
+                    buffer.putInt(array.length);  // Original length
+                    buffer.putInt(compressedSize); // Compressed size
+                    for (int i = 0; i < compressedSize; i++) {
+                        buffer.putInt(compressed[i]);
+                    }
                 }
             }
 
@@ -159,7 +207,10 @@ public class PositionList {
                     int numBlocks = (positions.size() + blockSize - 1) / blockSize;
                     int paddedSize = numBlocks * blockSize;
                     
-                    // Create padded array
+                    // Ensure the temporary compression buffer itself doesn't exceed memory limits for int arrays
+                     if ((long)paddedSize * 2L > Integer.MAX_VALUE / 4) { // Check if paddedSize*2*sizeof(int) is too large
+                        throw new IOException("Temporary compression buffer for FastPFOR (synonym IDs) would exceed int array limits.");
+                    }
                     int[] paddedArray = Arrays.copyOf(synonymIds, paddedSize);
                     int[] compressed = new int[paddedSize * 2]; // Double size for safety
                     
@@ -182,7 +233,18 @@ public class PositionList {
             return result;
         } catch (Exception e) {
             logger.error("Failed to serialize position list: {}", e.getMessage(), e);
-            throw e;
+            // If it's not already an IOException, wrap it to satisfy the method signature if necessary,
+            // or ensure all paths that can throw checked exceptions are handled.
+            // The primary concern was the calculatedCapacity leading to an IOException.
+            // Other exceptions like BufferOverflowException (if estimation is off) are RuntimeExceptions.
+            if (e instanceof IOException) {
+                 throw (IOException) e;
+            } else if (e instanceof RuntimeException) {
+                 throw (RuntimeException) e; // Re-throw runtime exceptions
+            } else {
+                 // Wrap other checked exceptions if any were introduced (though none are apparent here from the changes)
+                 throw new IOException("Serialization failed due to an unexpected error: " + e.getMessage(), e);
+            }
         }
     }
 
