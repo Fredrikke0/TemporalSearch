@@ -35,7 +35,6 @@ public final class NashSerializationUtils {
                 dos.writeInt(pos.getSentenceId());
                 dos.writeInt(pos.getBeginPosition());
                 dos.writeInt(pos.getEndPosition());
-                dos.writeLong(pos.getTimestamp().toEpochDay()); // Write timestamp as epoch day
 
                 dos.writeInt(entry.dateId());     // Write date ID
             }
@@ -58,10 +57,8 @@ public final class NashSerializationUtils {
                 int sentId = dis.readInt();
                 int beginPos = dis.readInt();
                 int endPos = dis.readInt();
-                long timestampEpochDay = dis.readLong();
-                LocalDate timestamp = LocalDate.ofEpochDay(timestampEpochDay);
 
-                Position position = new Position(docId, sentId, beginPos, endPos, timestamp);
+                Position position = new Position(docId, sentId, beginPos, endPos);
 
                 int dateId = dis.readInt();     // Read date ID
                 entries.add(new NashDateEntryWithId(position, dateId));

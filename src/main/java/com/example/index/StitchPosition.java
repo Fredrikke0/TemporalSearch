@@ -19,11 +19,10 @@ public class StitchPosition extends Position {
         int sentenceId,
         int beginPosition,
         int endPosition,
-        LocalDate timestamp,
         AnnotationType type,
         int synonymId
     ) {
-        super(documentId, sentenceId, beginPosition, endPosition, timestamp);
+        super(documentId, sentenceId, beginPosition, endPosition);
         this.synonymId = synonymId;
         this.type = type;
     }
@@ -50,7 +49,6 @@ public class StitchPosition extends Position {
             position.getSentenceId(),
             position.getBeginPosition(),
             position.getEndPosition(),
-            position.getTimestamp(),
             type,
             synonymId
         );
@@ -58,8 +56,8 @@ public class StitchPosition extends Position {
     
     @Override
     public String toString() {
-        return String.format("StitchPosition(doc=%d, sent=%d, begin=%d, end=%d, time=%s, type=%s, synonymId=%d)",
+        return String.format("StitchPosition(doc=%d, sent=%d, begin=%d, end=%d, type=%s, synonymId=%d)",
                 getDocumentId(), getSentenceId(), getBeginPosition(), getEndPosition(), 
-                getTimestamp(), type, synonymId);
+                type, synonymId);
     }
 } 

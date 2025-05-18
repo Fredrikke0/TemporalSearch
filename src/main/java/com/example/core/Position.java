@@ -1,7 +1,6 @@
 package com.example.core;
 
 import java.util.Objects;
-import java.time.LocalDate;
 
 /**
  * Represents the exact location of a word, phrase, or entity within the document collection. 
@@ -15,14 +14,12 @@ public class Position {
     private final int sentenceId;
     private final int beginPosition;
     private final int endPosition;
-    private final LocalDate timestamp;
 
-    public Position(int documentId, int sentenceId, int beginPosition, int endPosition, LocalDate timestamp) {
+    public Position(int documentId, int sentenceId, int beginPosition, int endPosition) {
         this.documentId = documentId;
         this.sentenceId = sentenceId;
         this.beginPosition = beginPosition;
         this.endPosition = endPosition;
-        this.timestamp = timestamp;
     }
 
     // Getters
@@ -42,14 +39,10 @@ public class Position {
         return endPosition;
     }
 
-    public LocalDate getTimestamp() {
-        return timestamp;
-    }
-
     @Override
     public String toString() {
-        return String.format("Position(doc=%d, sent=%d, begin=%d, end=%d, time=%s)",
-                documentId, sentenceId, beginPosition, endPosition, timestamp);
+        return String.format("Position(doc=%d, sent=%d, begin=%d, end=%d)",
+                documentId, sentenceId, beginPosition, endPosition);
     }
 
     @Override

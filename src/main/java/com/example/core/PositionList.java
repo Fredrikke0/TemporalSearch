@@ -62,7 +62,6 @@ public class PositionList {
             int[] sentenceIds = new int[positions.size()];
             int[] beginPositions = new int[positions.size()];
             int[] endPositions = new int[positions.size()];
-            long[] timestamps = new long[positions.size()];
             
             // Prepare type information and synonym IDs (for StitchPosition)
             byte[] positionTypes = new byte[positions.size()]; // Allocated whether or not hasSpecialPositions is true, to simplify logic. Optimized out if not used.
@@ -76,7 +75,6 @@ public class PositionList {
                 sentenceIds[i] = pos.getSentenceId();
                 beginPositions[i] = pos.getBeginPosition();
                 endPositions[i] = pos.getEndPosition();
-                timestamps[i] = pos.getTimestamp().toEpochDay();
                 
                 // Store position type and synonym ID if applicable
                 if (pos instanceof StitchPosition) {
@@ -107,13 +105,9 @@ public class PositionList {
                     calculatedCapacity += numPositions * 4L; // data
                 } else { // Compressed
                     calculatedCapacity += 4L; // compressed size field (int)
-                    // Max data size: FastPFOR's temporary compression buffer is paddedSize * 2 ints.
-                    // The actual written compressed data (outOffset.get()) will be <= paddedSize * 2 ints.
                     calculatedCapacity += paddedNumPositions * 2L * 4L; // Max compressed data in bytes
                 }
             }
-
-            calculatedCapacity += numPositions * 8L; // timestamps (long array)
 
             if (hasSpecialPositions) {
                 calculatedCapacity += numPositions; // positionTypes (byte array)
@@ -182,11 +176,6 @@ public class PositionList {
                 }
             }
 
-            // Write timestamps separately (not compressed)
-            for (long timestamp : timestamps) {
-                buffer.putLong(timestamp);
-            }
-            
             // Write position type information if needed
             if (hasSpecialPositions) {
                 // Write position types (1 byte per position)
@@ -248,144 +237,133 @@ public class PositionList {
         }
     }
 
-    public static PositionList deserialize(byte[] data) {
-        if (data.length == 0) {
-            logger.debug("Deserializing empty position list");
-            return new PositionList();
+    public static PositionList deserialize(byte[] data) throws IOException {
+        PositionList list = new PositionList();
+        if (data == null || data.length == 0) {
+            logger.debug("Deserializing empty or null data to empty PositionList");
+            return list;
         }
 
-        try {
-            ByteBuffer buffer = ByteBuffer.wrap(data);
-            PositionList result = new PositionList();
+        ByteBuffer buffer = ByteBuffer.wrap(data);
+        int count = buffer.getInt();
+        boolean hasSpecialPositions = buffer.get() == 1;
 
-            // Read metadata
-            int count = buffer.getInt();
-            boolean hasSpecialPositions = buffer.get() != 0;
-            //logger.debug("Deserializing {} positions, hasSpecialPositions: {}", count, hasSpecialPositions);
+        if (count == 0) {
+            logger.debug("Deserialized PositionList with zero positions");
+            return list;
+        }
 
-            // Prepare arrays
-            int[] docIds = new int[count];
-            int[] sentenceIds = new int[count];
-            int[] beginPositions = new int[count];
-            int[] endPositions = new int[count];
-            long[] timestamps = new long[count];
-            byte[] positionTypes = hasSpecialPositions ? new byte[count] : null;
-            int[] synonymIds = hasSpecialPositions ? new int[count] : null;
+        int[] docIds = new int[count];
+        int[] sentenceIds = new int[count];
+        int[] beginPositions = new int[count];
+        int[] endPositions = new int[count];
+        
+        byte[] positionTypes = null;
+        int[] synonymIds = null;
+        
+        if (hasSpecialPositions) {
+            positionTypes = new byte[count];
+            synonymIds = new int[count];
+        }
 
+        // Decompress each array
+        for (int[] array : new int[][]{docIds, sentenceIds, beginPositions, endPositions}) {
             IntWrapper inOffset = new IntWrapper(0);
             IntWrapper outOffset = new IntWrapper(0);
 
-            // Read and decompress each array
-            for (int[] array : new int[][]{docIds, sentenceIds, beginPositions, endPositions}) {
-                int size = buffer.getInt();
-                
-                if (size < 0) {  // Uncompressed data
-                    size = -size;
-                    for (int i = 0; i < size; i++) {
-                        array[i] = buffer.getInt();
-                    }
-                } else {
-                    int originalLength = size;
-                    int compressedSize = buffer.getInt();
-                    
-                    // Calculate padded size
-                    int blockSize = 128;
-                    int numBlocks = (originalLength + blockSize - 1) / blockSize;
-                    int paddedSize = numBlocks * blockSize;
-                    
-                    int[] compressed = new int[compressedSize];
-                    int[] decompressed = new int[paddedSize];
-                    
-                    for (int i = 0; i < compressedSize; i++) {
-                        compressed[i] = buffer.getInt();
-                    }
-                    
-                    inOffset.set(0);
-                    outOffset.set(0);
-                    
-                    // Decompress to padded array
-                    codec.uncompress(compressed, inOffset, compressedSize, decompressed, outOffset);
-                    
-                    // Copy only the needed values
-                    System.arraycopy(decompressed, 0, array, 0, originalLength);
-                }
-            }
+            int storedLengthMarker = buffer.getInt(); // If negative, it's uncompressed data length & data follows directly.
+                                                  // If positive, it's original_length, followed by compressed_size & compressed data.
 
-            // Read timestamps
-            for (int i = 0; i < count; i++) {
-                timestamps[i] = buffer.getLong();
-            }
-            
-            // Read position type information if present
-            if (hasSpecialPositions) {
-                // Read position types
-                buffer.get(positionTypes);
-                
-                // Read synonym IDs
-                int size = buffer.getInt();
-                
-                if (size < 0) {  // Uncompressed data
-                    size = -size;
-                    for (int i = 0; i < size; i++) {
-                        synonymIds[i] = buffer.getInt();
-                    }
-                } else {
-                    int originalLength = size;
-                    int compressedSize = buffer.getInt();
-                    
-                    // Calculate padded size
-                    int blockSize = 128;
-                    int numBlocks = (originalLength + blockSize - 1) / blockSize;
-                    int paddedSize = numBlocks * blockSize;
-                    
-                    int[] compressed = new int[compressedSize];
-                    int[] decompressed = new int[paddedSize];
-                    
-                    for (int i = 0; i < compressedSize; i++) {
-                        compressed[i] = buffer.getInt();
-                    }
-                    
-                    inOffset.set(0);
-                    outOffset.set(0);
-                    
-                    // Decompress to padded array
-                    codec.uncompress(compressed, inOffset, compressedSize, decompressed, outOffset);
-                    
-                    // Copy only the needed values
-                    System.arraycopy(decompressed, 0, synonymIds, 0, originalLength);
+            if (storedLengthMarker < 0) { // Uncompressed
+                int length = -storedLengthMarker;
+                // Ensure 'length' matches 'count' for these arrays, or handle error
+                if (length != count && array != synonymIds) { // synonymIds might have a different check if it can be shorter than count
+                    throw new IOException(String.format("Uncompressed data length mismatch. Expected %d, got %d", count, length));
                 }
-            }
-
-            // Create Position objects
-            for (int i = 0; i < count; i++) {
-                if (hasSpecialPositions && positionTypes[i] == StitchPosition.POSITION_TYPE) {
-                    // Create StitchPosition with DATE type for backward compatibility
-                    result.add(new StitchPosition(
-                        docIds[i],
-                        sentenceIds[i],
-                        beginPositions[i],
-                        endPositions[i],
-                        LocalDate.ofEpochDay(timestamps[i]),
-                        AnnotationType.DATE, // Default to DATE for backward compatibility
-                        synonymIds[i]
-                    ));
-                } else {
-                    // Create regular Position
-                    result.add(new Position(
-                        docIds[i],
-                        sentenceIds[i],
-                        beginPositions[i],
-                        endPositions[i],
-                        LocalDate.ofEpochDay(timestamps[i])
-                    ));
+                for (int i = 0; i < length; i++) {
+                     array[i] = buffer.getInt();
                 }
-            }
+            } else { // Compressed
+                // Ensure 'storedLengthMarker' matches 'count' for these arrays
+                 if (storedLengthMarker != count && array != synonymIds) {
+                    throw new IOException(String.format("Compressed data original length mismatch. Expected %d, got %d", count, storedLengthMarker));
+                }
+                int compressedSize = buffer.getInt();
+                
+                int blockSize = 128;
+                int numBlocks = (storedLengthMarker + blockSize - 1) / blockSize;
+                int paddedSize = numBlocks * blockSize;
 
-            return result;
-        } catch (Exception e) {
-            logger.error("Failed to deserialize position list: {}", e.getMessage(), e);
-            throw e;
+                if ((long)paddedSize * 2L > Integer.MAX_VALUE / 4) { 
+                    throw new IOException("Temporary decompression buffer for FastPFOR would exceed int array limits.");
+                }
+                int[] compressedData = new int[compressedSize];
+                for (int i = 0; i < compressedSize; i++) {
+                    compressedData[i] = buffer.getInt();
+                }
+                
+                int[] decompressedPadded = new int[paddedSize]; 
+                codec.uncompress(compressedData, inOffset, compressedSize, decompressedPadded, outOffset);
+                
+                System.arraycopy(decompressedPadded, 0, array, 0, storedLengthMarker); 
+            }
         }
+
+        if (hasSpecialPositions) {
+            buffer.get(positionTypes);
+            
+            IntWrapper inOffset = new IntWrapper(0);
+            IntWrapper outOffset = new IntWrapper(0);
+
+            int storedLengthMarker = buffer.getInt(); 
+
+            if (storedLengthMarker < 0) { // Uncompressed
+                int length = -storedLengthMarker;
+                 if (length != count ) {
+                    throw new IOException(String.format("Uncompressed synonymId data length mismatch. Expected %d, got %d", count, length));
+                }
+                for (int i = 0; i < length; i++) {
+                     synonymIds[i] = buffer.getInt();
+                }
+            } else { // Compressed
+                 if (storedLengthMarker != count ) {
+                    throw new IOException(String.format("Compressed synonymId data original length mismatch. Expected %d, got %d", count, storedLengthMarker));
+                }
+                int compressedSize = buffer.getInt();
+
+                int blockSize = 128;
+                int numBlocks = (storedLengthMarker + blockSize - 1) / blockSize;
+                int paddedSize = numBlocks * blockSize;
+
+                if ((long)paddedSize * 2L > Integer.MAX_VALUE / 4) { 
+                    throw new IOException("Temporary decompression buffer for FastPFOR (synonym IDs) would exceed int array limits.");
+                }
+                int[] compressedData = new int[compressedSize]; 
+                for (int i = 0; i < compressedSize; i++) {
+                    compressedData[i] = buffer.getInt();
+                }
+                
+                int[] decompressedPadded = new int[paddedSize];
+                codec.uncompress(compressedData, inOffset, compressedSize, decompressedPadded, outOffset);
+                
+                System.arraycopy(decompressedPadded, 0, synonymIds, 0, storedLengthMarker); 
+            }
+        }
+
+        // Reconstruct positions
+        for (int i = 0; i < count; i++) {
+            if (hasSpecialPositions && positionTypes[i] == StitchPosition.POSITION_TYPE) {
+                 list.add(new StitchPosition(docIds[i], sentenceIds[i], beginPositions[i], endPositions[i], 
+                                            AnnotationType.DATE,
+                                            synonymIds[i]));
+            } else {
+                list.add(new Position(docIds[i], sentenceIds[i], beginPositions[i], endPositions[i]));
+            }
+        }
+        if (logSampler.shouldLog()) {
+            logger.debug("Deserialized {} positions successfully.", list.size());
+        }
+        return list;
     }
 
     public synchronized void merge(PositionList other) {
