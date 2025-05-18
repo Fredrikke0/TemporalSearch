@@ -99,8 +99,7 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
                         rs.getInt("end_char"),
                         headToken,
                         dependentToken,
-                        relation,
-                        LocalDate.parse(rs.getString("timestamp").substring(0, 10))
+                        relation
                     ));
                 }
             }
@@ -131,8 +130,7 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
                 entry.getDocumentId(),
                 entry.getSentenceId(),
                 entry.getBeginChar(),
-                entry.getEndChar(),
-                entry.getTimestamp()
+                entry.getEndChar()
             );
 
             // Get or create position list for this dependency

@@ -74,8 +74,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         rs.getString("token"),
-                        rs.getString("pos"),
-                        LocalDate.parse(rs.getString("timestamp").substring(0, 10))
+                        rs.getString("pos")
                     );
                     batch.add(entry);
                 }
@@ -100,7 +99,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
             String key = entry.getPos().toLowerCase().trim();
             
             Position position = new Position(entry.getDocumentId(), entry.getSentenceId(),
-                entry.getBeginChar(), entry.getEndChar(), entry.getTimestamp());
+                entry.getBeginChar(), entry.getEndChar());
             
             // Get or create position list for this POS tag
             PositionList posList = positionLists.computeIfAbsent(key, k -> new PositionList());

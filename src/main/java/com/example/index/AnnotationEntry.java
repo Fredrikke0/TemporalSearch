@@ -14,10 +14,9 @@ public final class AnnotationEntry implements IndexEntry {
     private final int endChar;
     private final String token;
     private final String pos;
-    private final LocalDate timestamp;
 
     public AnnotationEntry(int annotationId, int documentId, int sentenceId, int beginChar, int endChar,
-            String token, String pos, LocalDate timestamp) {
+            String token, String pos) {
         this.annotationId = annotationId;
         this.documentId = documentId;
         this.sentenceId = sentenceId;
@@ -25,7 +24,6 @@ public final class AnnotationEntry implements IndexEntry {
         this.endChar = endChar;
         this.token = token;
         this.pos = pos;
-        this.timestamp = timestamp;
     }
 
     /**
@@ -53,11 +51,6 @@ public final class AnnotationEntry implements IndexEntry {
     @Override
     public int getEndChar() {
         return endChar;
-    }
-
-    @Override
-    public LocalDate getTimestamp() {
-        return timestamp;
     }
 
     /**

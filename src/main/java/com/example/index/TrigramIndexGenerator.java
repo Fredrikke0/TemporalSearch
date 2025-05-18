@@ -69,8 +69,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         token,
-                        rs.getString("pos"),
-                        LocalDate.parse(rs.getString("timestamp").substring(0, 10))
+                        rs.getString("pos")
                     );
                     batch.add(entry);
                 }
@@ -108,7 +107,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                     thirdEntry.getToken().toLowerCase());
 
                 Position position = new Position(thirdEntry.getDocumentId(), thirdEntry.getSentenceId(),
-                    firstEntry.getBeginChar(), thirdEntry.getEndChar(), thirdEntry.getTimestamp());
+                    firstEntry.getBeginChar(), thirdEntry.getEndChar());
 
                 PositionList posList = positionLists.computeIfAbsent(key, k -> new PositionList());
                 posList.add(position);

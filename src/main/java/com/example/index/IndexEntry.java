@@ -26,9 +26,4 @@ public interface IndexEntry {
      * @return The character offset where this entry ends in the document
      */
     int getEndChar();
-
-    /**
-     * @return The timestamp associated with this entry's document
-     */
-    LocalDate getTimestamp();
 } 

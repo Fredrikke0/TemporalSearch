@@ -81,8 +81,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         token,
-                        sanitizeText(rs.getString("pos")),
-                        LocalDate.parse(rs.getString("timestamp").substring(0, 10))
+                        sanitizeText(rs.getString("pos"))
                     ));
                 }
             }
@@ -109,7 +108,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             }
 
             Position position = new Position(entry.getDocumentId(), entry.getSentenceId(),
-                entry.getBeginChar(), entry.getEndChar(), entry.getTimestamp());
+                entry.getBeginChar(), entry.getEndChar());
 
             PositionList posList = positionLists.computeIfAbsent(token, k -> new PositionList());
             posList.add(position);

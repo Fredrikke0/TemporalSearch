@@ -38,11 +38,9 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
 
     private static class DocumentInfo {
         final int documentId;
-        final LocalDate timestamp;
 
-        DocumentInfo(int documentId, LocalDate timestamp) {
+        DocumentInfo(int documentId) {
             this.documentId = documentId;
-            this.timestamp = timestamp;
         }
     }
 
@@ -260,9 +258,9 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
             DocumentInfo currentDocument = null;
 
             if (this.lastProcessedDocumentIdForStitch == null) { // First document batch for this generator instance
-                sql = "SELECT document_id, timestamp FROM documents ORDER BY document_id LIMIT 1";
+                sql = "SELECT document_id FROM documents ORDER BY document_id LIMIT 1";
             } else { // Subsequent document batches
-                sql = "SELECT document_id, timestamp FROM documents WHERE document_id > ? ORDER BY document_id LIMIT 1";
+                sql = "SELECT document_id FROM documents WHERE document_id > ? ORDER BY document_id LIMIT 1";
             }
 
             try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
@@ -273,20 +271,8 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
                 try (ResultSet rs = stmt.executeQuery()) {
                     if (rs.next()) {
                         int docId = rs.getInt("document_id");
-                        String timestampStr = rs.getString("timestamp");
-                        if (timestampStr != null && timestampStr.length() >= 10) {
-                            try {
-                                LocalDate timestamp = LocalDate.parse(timestampStr.substring(0, 10));
-                                currentDocument = new DocumentInfo(docId, timestamp);
-                                this.lastProcessedDocumentIdForStitch = docId; // Update for next iteration
-                            } catch (DateTimeParseException e) {
-                                logger.warn("Skipping document_id {} due to invalid timestamp format: {} during stitch batching", docId, timestampStr, e);
-                            }
-                        } else {
-                            logger.warn("Skipping document_id {} due to missing or short timestamp during stitch batching: {}", docId, timestampStr);
-                            // If we skip, we still need to advance lastProcessedDocumentId to avoid an infinite loop on this bad document
-                            this.lastProcessedDocumentIdForStitch = docId; 
-                        }
+                        currentDocument = new DocumentInfo(docId);
+                        this.lastProcessedDocumentIdForStitch = docId; // Update for next iteration
                     } else {
                         // No more documents found
                         break; // Exit the while loop
@@ -294,9 +280,9 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
                 }
             }
 
-            if (currentDocument != null && currentDocument.timestamp != null) {
+            if (currentDocument != null) {
                 // This method appends entries to currentStitchEntriesForBatch
-                processDocumentForStitchIndex(currentDocument.documentId, currentDocument.timestamp, currentStitchEntriesForBatch);
+                processDocumentForStitchIndex(currentDocument.documentId, currentStitchEntriesForBatch);
             } else if (currentDocument == null) {
                 // This means no more documents were found by the query, already handled by the break above
             } else {
@@ -312,24 +298,18 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
      * Processes a single document, fetching its unigrams and annotations separately
      * and then joining them in memory to create StitchEntries
      */
-    private void processDocumentForStitchIndex(int documentId, LocalDate documentTimestamp, List<StitchEntry> entries) throws SQLException {
-        // Step 1: Get document timestamp
-        if (documentTimestamp == null) {
-            logger.warn("Skipping document_id {} due to null timestamp provided to processDocumentForStitchIndex", documentId);
-            return; // Skip if we can't get timestamp
-        }
-        
-        // Step 2: Fetch unigrams for this document
+    private void processDocumentForStitchIndex(int documentId, List<StitchEntry> entries) throws SQLException {
+        // Step 1: Fetch unigrams for this document
         Map<Integer, List<UnigramData>> unigramsBySentence = fetchUnigrams(documentId);
         if (unigramsBySentence.isEmpty()) {
             return; // No unigrams to process
         }
         
-        // Step 3: Fetch and process each annotation type separately
-        processDateAnnotations(documentId, documentTimestamp, unigramsBySentence, entries);
-        processNerAnnotations(documentId, documentTimestamp, unigramsBySentence, entries);
-        processPosAnnotations(documentId, documentTimestamp, unigramsBySentence, entries);
-        processDependencyAnnotations(documentId, documentTimestamp, unigramsBySentence, entries);
+        // Step 2: Fetch and process each annotation type separately
+        processDateAnnotations(documentId, unigramsBySentence, entries);
+        processNerAnnotations(documentId, unigramsBySentence, entries);
+        processPosAnnotations(documentId, unigramsBySentence, entries);
+        processDependencyAnnotations(documentId, unigramsBySentence, entries);
     }
 
     /**
@@ -387,8 +367,7 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
      * Process DATE annotations for a document
      */
     private void processDateAnnotations(
-            int documentId, 
-            LocalDate documentTimestamp,
+            int documentId,
             Map<Integer, List<UnigramData>> unigramsBySentence,
             List<StitchEntry> entries) throws SQLException {
         
@@ -448,7 +427,6 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
                             sentenceId,
                             unigram.beginChar,
                             unigram.endChar,
-                            documentTimestamp,
                             unigram.token,
                             AnnotationType.DATE,
                             synonymId
@@ -463,8 +441,7 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
      * Process NER annotations for a document
      */
     private void processNerAnnotations(
-            int documentId, 
-            LocalDate documentTimestamp,
+            int documentId,
             Map<Integer, List<UnigramData>> unigramsBySentence,
             List<StitchEntry> entries) throws SQLException {
         
@@ -503,7 +480,6 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
                             sentenceId,
                             unigram.beginChar,
                             unigram.endChar,
-                            documentTimestamp,
                             unigram.token,
                             AnnotationType.NER,
                             synonymId
@@ -518,8 +494,7 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
      * Process POS annotations for a document
      */
     private void processPosAnnotations(
-            int documentId, 
-            LocalDate documentTimestamp,
+            int documentId,
             Map<Integer, List<UnigramData>> unigramsBySentence,
             List<StitchEntry> entries) throws SQLException {
         
@@ -557,7 +532,6 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
                             sentenceId,
                             unigram.beginChar,
                             unigram.endChar,
-                            documentTimestamp,
                             unigram.token,
                             AnnotationType.POS,
                             synonymId
@@ -572,8 +546,7 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
      * Process dependency annotations for a document
      */
     private void processDependencyAnnotations(
-            int documentId, 
-            LocalDate documentTimestamp,
+            int documentId,
             Map<Integer, List<UnigramData>> unigramsBySentence,
             List<StitchEntry> entries) throws SQLException {
         
@@ -610,7 +583,6 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
                             sentenceId,
                             unigram.beginChar,
                             unigram.endChar,
-                            documentTimestamp,
                             unigram.token,
                             AnnotationType.DEPENDENCY,
                             synonymId
@@ -646,7 +618,6 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
                 entry.sentenceId(),
                 entry.beginChar(),
                 entry.endChar(),
-                entry.timestamp(),
                 entry.type(),
                 entry.synonymId()
                 );

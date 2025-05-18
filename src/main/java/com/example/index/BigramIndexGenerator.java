@@ -69,8 +69,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         token,
-                        rs.getString("pos"),
-                        LocalDate.parse(rs.getString("timestamp").substring(0, 10))
+                        rs.getString("pos")
                     );
                     batch.add(entry);
                 }
@@ -102,7 +101,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                     secondEntry.getToken().toLowerCase());
 
                 Position position = new Position(secondEntry.getDocumentId(), secondEntry.getSentenceId(),
-                    firstEntry.getBeginChar(), secondEntry.getEndChar(), secondEntry.getTimestamp());
+                    firstEntry.getBeginChar(), secondEntry.getEndChar());
 
                 PositionList posList = positionLists.computeIfAbsent(key, k -> new PositionList());
                 posList.add(position);

@@ -15,10 +15,9 @@ public final class DependencyEntry implements IndexEntry {
     private final String headToken;
     private final String dependentToken;
     private final String relation;
-    private final LocalDate timestamp; // From joined 'documents' table
 
     public DependencyEntry(int dependencyId, int documentId, int sentenceId, int beginChar, int endChar,
-                           String headToken, String dependentToken, String relation, LocalDate timestamp) {
+                           String headToken, String dependentToken, String relation) {
         this.dependencyId = dependencyId;
         this.documentId = documentId;
         this.sentenceId = sentenceId;
@@ -27,7 +26,6 @@ public final class DependencyEntry implements IndexEntry {
         this.headToken = headToken;
         this.dependentToken = dependentToken;
         this.relation = relation;
-        this.timestamp = timestamp;
     }
 
     // Getter for dependencyId
@@ -77,11 +75,6 @@ public final class DependencyEntry implements IndexEntry {
     }
 
     @Override
-    public LocalDate getTimestamp() {
-        return timestamp;
-    }
-
-    @Override
     public String toString() {
         return "DependencyEntry{" +
                "dependencyId=" + dependencyId +
@@ -92,7 +85,6 @@ public final class DependencyEntry implements IndexEntry {
                ", headToken='" + headToken + '\'' +
                ", dependentToken='" + dependentToken + '\'' +
                ", relation='" + relation + '\'' +
-               ", timestamp=" + timestamp +
                '}';
     }
 
@@ -108,12 +100,11 @@ public final class DependencyEntry implements IndexEntry {
                endChar == that.endChar &&
                Objects.equals(headToken, that.headToken) &&
                Objects.equals(dependentToken, that.dependentToken) &&
-               Objects.equals(relation, that.relation) &&
-               Objects.equals(timestamp, that.timestamp);
+               Objects.equals(relation, that.relation);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(dependencyId, documentId, sentenceId, beginChar, endChar, headToken, dependentToken, relation, timestamp);
+        return Objects.hash(dependencyId, documentId, sentenceId, beginChar, endChar, headToken, dependentToken, relation);
     }
 } 

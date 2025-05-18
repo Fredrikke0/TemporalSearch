@@ -82,8 +82,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         entityText.toLowerCase(), // Entity text (lowercased token)
-                        nerType,                 // NER type
-                        LocalDate.parse(rs.getString("timestamp").substring(0, 10))
+                        nerType                 // NER type
                     ));
                 }
             }
@@ -105,7 +104,6 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         StringBuilder currentEntityText = new StringBuilder();
         int entityBeginChar = -1;
         int entityEndChar = -1;
-        LocalDate currentTimestamp = null;
         int lastAnnotationId = -1; // Track the last processed annotation ID
         
         // Process annotations in sequence (they are already ordered by document, sentence, and position)
@@ -134,7 +132,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 // Finalize the previous entity if it exists
                 if (currentEntityType != null) {
                     addEntityToIndex(positionLists, currentEntityType, currentEntityText.toString(),
-                        currentDocId, currentSentenceId, entityBeginChar, entityEndChar, currentTimestamp);
+                        currentDocId, currentSentenceId, entityBeginChar, entityEndChar);
                 }
                 
                 // Start a new entity
@@ -144,7 +142,6 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 currentEntityText = new StringBuilder(token);
                 entityBeginChar = beginChar;
                 entityEndChar = endChar;
-                currentTimestamp = entry.getTimestamp();
             }
             
             // Update the last annotation ID
@@ -153,7 +150,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             // If this is the last entry, finalize the current entity
             if (i == batch.size() - 1 && currentEntityType != null) {
                 addEntityToIndex(positionLists, currentEntityType, currentEntityText.toString(),
-                    currentDocId, currentSentenceId, entityBeginChar, entityEndChar, currentTimestamp);
+                    currentDocId, currentSentenceId, entityBeginChar, entityEndChar);
             }
         }
         
@@ -171,7 +168,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
      */
     private void addEntityToIndex(Map<String, PositionList> positionLists, String entityType, 
                                  String entityText, int docId, int sentenceId, 
-                                 int beginChar, int endChar, LocalDate timestamp) {
+                                 int beginChar, int endChar) {
         // Create composite key with format "ENTITY_TYPE\0entityText"
         // Ensure entityType is uppercase to match NerExecutor expectations
         String compositeKey = entityType.toUpperCase() + IndexAccessInterface.DELIMITER + entityText;
@@ -180,8 +177,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             docId, 
             sentenceId, 
             beginChar, 
-            endChar, 
-            timestamp
+            endChar 
         );
 
         // Get or create position list for this entity

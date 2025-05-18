@@ -11,7 +11,6 @@ public record StitchEntry(
     int sentenceId,
     int beginChar,
     int endChar,
-    LocalDate timestamp,
     String value,         // The unigram text
     AnnotationType type,  // The type of annotation (DATE, NER, POS, DEPENDENCY)
     int synonymId         // ID from the appropriate synonym table
@@ -34,10 +33,5 @@ public record StitchEntry(
     @Override
     public int getEndChar() {
         return endChar;
-    }
-
-    @Override
-    public LocalDate getTimestamp() {
-        return timestamp;
     }
 } 

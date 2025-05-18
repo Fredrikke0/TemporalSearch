@@ -125,8 +125,7 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
                         rs.getInt("end_char"),
                         headLemma,     // Store original (non-lowercased here) lemma for DependencyEntry if needed elsewhere
                         dependentLemma, // Store original (non-lowercased here) lemma for DependencyEntry
-                        relation,
-                        LocalDate.parse(rs.getString("timestamp").substring(0, 10))
+                        relation
                     ));
                 }
             }
@@ -145,8 +144,7 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
                 entry.getDocumentId(),
                 entry.getSentenceId(),
                 entry.getBeginChar(),
-                entry.getEndChar(),
-                entry.getTimestamp()
+                entry.getEndChar()
             );
 
             // Create key in format: category\0instance

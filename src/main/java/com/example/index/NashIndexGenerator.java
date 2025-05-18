@@ -85,7 +85,6 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
         String currentNormalizedNer = null;
         int currentStartChar = -1;
         int currentEndChar = -1;
-        LocalDate currentTimestamp = null;
         int currentDateId = -1; // Track the dateId for the current mention
 
         // 1. Fetch ALL relevant annotations (potentially memory-intensive)
@@ -105,7 +104,6 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 int beginChar = rs.getInt("begin_char");
                 int endChar = rs.getInt("end_char");
                 String normalizedNer = rs.getString("normalized_ner");
-                LocalDate timestamp = LocalDate.parse(rs.getString("timestamp").substring(0, 10)); // Assuming timestamp is valid
 
                 if (docId == currentDocId && sentId == currentSentId && Objects.equals(normalizedNer, currentNormalizedNer)) {
                     // --- Part of the same logical mention ---
@@ -121,8 +119,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                                 currentDocId,
                                 currentSentId,
                                 currentStartChar,
-                                currentEndChar,
-                                currentTimestamp // Use timestamp from the start of the mention
+                                currentEndChar
                         );
                         // Add the entry (finalized position + dateId) to the list associated with its dateId
                         listIndexToEntries.get(currentDateId).add(new NashDateEntryWithId(finalizedPosition, currentDateId));
@@ -134,7 +131,6 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                     currentNormalizedNer = normalizedNer;
                     currentStartChar = beginChar;
                     currentEndChar = endChar;
-                    currentTimestamp = timestamp;
                     currentDateId = -1; // Reset dateId, will be set below if date is valid
 
                     // Process the date for the new mention (normalizedNer is non-null here)
@@ -170,8 +166,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                         currentDocId,
                         currentSentId,
                         currentStartChar,
-                        currentEndChar,
-                        currentTimestamp
+                        currentEndChar
                 );
                  listIndexToEntries.get(currentDateId).add(new NashDateEntryWithId(finalizedPosition, currentDateId));
             }

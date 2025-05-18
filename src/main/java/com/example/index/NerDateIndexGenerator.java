@@ -110,8 +110,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         normalizedDate, // Store normalized date in lemma field
-                        "DATE", // Store NER type in pos field
-                        LocalDate.parse(rs.getString("timestamp").substring(0, 10))
+                        "DATE" // Store NER type in pos field
                     ));
                 }
             }
@@ -132,7 +131,6 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         String currentRawNormalizedDate = null; // Store the original YYYY-MM-DD
         int currentStartChar = -1;
         int currentEndChar = -1;
-        LocalDate currentTimestamp = null;
 
         for (AnnotationEntry entry : batch) {
             // Basic validation (redundant with fetchBatch, but safe)
@@ -158,8 +156,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                                 currentDocId,
                                 currentSentId,
                                 currentStartChar,
-                                currentEndChar,
-                                currentTimestamp
+                                currentEndChar
                         );
                         // Add to the set for tracking unique dates across the whole run
                         this.uniqueDatesProcessed.add(normalizedDateKey);
@@ -179,7 +176,6 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                 currentRawNormalizedDate = rawNormalizedDate;
                 currentStartChar = entry.getBeginChar();
                 currentEndChar = entry.getEndChar();
-                currentTimestamp = entry.getTimestamp();
             }
         }
 
@@ -191,8 +187,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                          currentDocId,
                          currentSentId,
                          currentStartChar,
-                         currentEndChar,
-                         currentTimestamp
+                         currentEndChar
                  );
                  this.uniqueDatesProcessed.add(normalizedDateKey);
                  PositionList posListForFinalMention = new PositionList();
