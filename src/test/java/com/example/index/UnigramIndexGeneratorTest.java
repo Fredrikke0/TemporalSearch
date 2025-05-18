@@ -92,7 +92,6 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         assertEquals(4, first.getEndChar());
         assertEquals("test", first.getToken());
         assertEquals("NN", first.getPos());
-        assertEquals(LocalDate.parse("2024-03-20"), first.getTimestamp());
 
         AnnotationEntry second = entries.get(1);
         assertEquals(1, second.getDocumentId());
@@ -101,16 +100,15 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         assertEquals(9, second.getEndChar());
         assertEquals("word", second.getToken());
         assertEquals("NN", second.getPos());
-        assertEquals(LocalDate.parse("2024-03-20"), second.getTimestamp());
     }
 
     @Test
     void testProcessBatch() throws IOException {
         // Create test entries
         List<AnnotationEntry> batch = List.of(
-            new AnnotationEntry(1, 1, 1, 0, 4, "Test", "NN", LocalDate.parse("2024-03-20")),
-            new AnnotationEntry(2, 1, 1, 5, 9, "word", "NN", LocalDate.parse("2024-03-20")),
-            new AnnotationEntry(3, 1, 1, 10, 13, "the", "DT", LocalDate.parse("2024-03-20")) // stopword
+            new AnnotationEntry(1, 1, 1, 0, 4, "Test", "NN"),
+            new AnnotationEntry(2, 1, 1, 5, 9, "word", "NN"),
+            new AnnotationEntry(3, 1, 1, 10, 13, "the", "DT") // stopword
         );
 
         // Process batch
@@ -138,12 +136,12 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
     void testProcessBatchWithOverlaps() throws IOException {
         // Create test entries with overlapping and adjacent positions
         List<AnnotationEntry> batch = List.of(
-            new AnnotationEntry(1, 1, 1, 0, 4, "test", "NN", LocalDate.parse("2024-03-20")),
-            new AnnotationEntry(2, 1, 1, 2, 6, "test", "NN", LocalDate.parse("2024-03-20")), // overlaps first "test"
-            new AnnotationEntry(3, 1, 1, 10, 14, "word", "NN", LocalDate.parse("2024-03-20")),
-            new AnnotationEntry(4, 1, 1, 15, 19, "word", "NN", LocalDate.parse("2024-03-20")), // adjacent to first "word"
-            new AnnotationEntry(5, 1, 1, 20, 26, "repeat", "NN", LocalDate.parse("2024-03-20")),
-            new AnnotationEntry(6, 1, 1, 20, 26, "repeat", "NN", LocalDate.parse("2024-03-20")) // exact match with previous
+            new AnnotationEntry(1, 1, 1, 0, 4, "test", "NN"),
+            new AnnotationEntry(2, 1, 1, 2, 6, "test", "NN"), // overlaps first "test"
+            new AnnotationEntry(3, 1, 1, 10, 14, "word", "NN"),
+            new AnnotationEntry(4, 1, 1, 15, 19, "word", "NN"), // adjacent to first "word"
+            new AnnotationEntry(5, 1, 1, 20, 26, "repeat", "NN"),
+            new AnnotationEntry(6, 1, 1, 20, 26, "repeat", "NN") // exact match with previous
         );
 
         // Process batch

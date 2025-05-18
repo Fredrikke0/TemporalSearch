@@ -147,7 +147,6 @@ class StitchIndexGeneratorTest extends BaseIndexTest {
                     foundDateStitch = true;
                     assertEquals(1, entry.documentId());
                     assertEquals(1, entry.sentenceId());
-                    assertEquals(LocalDate.parse("2024-03-20"), entry.timestamp());
                     assertEquals(1, entry.synonymId()); // The synonymId should be 1 for the date
                     break;
                 }
@@ -160,8 +159,8 @@ class StitchIndexGeneratorTest extends BaseIndexTest {
     void testProcessBatch() throws IOException {
         // Create test entries with both unigram value, annotation type, and synonym ID
         List<StitchEntry> batch = List.of(
-            new StitchEntry(1, 1, 0, 20, LocalDate.parse("2024-03-20"), "company", AnnotationType.DATE, 1),
-            new StitchEntry(1, 1, 25, 45, LocalDate.parse("2024-03-20"), "founded", AnnotationType.DATE, 2)
+            new StitchEntry(1, 1, 0, 20, "company", AnnotationType.DATE, 1),
+            new StitchEntry(1, 1, 25, 45, "founded", AnnotationType.DATE, 2)
         );
 
         // Process batch

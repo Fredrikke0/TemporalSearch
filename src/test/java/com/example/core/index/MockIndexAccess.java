@@ -49,7 +49,7 @@ public class MockIndexAccess implements IndexAccessInterface {
     public void addTestData(String key, int docId, int sentenceId, int begin, int end) throws IOException {
         if (closed) throw new IllegalStateException("Index is closed");
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
-        Position pos = new Position(docId, sentenceId, begin, end, LocalDate.now());
+        Position pos = new Position(docId, sentenceId, begin, end);
 
         // Retrieve existing list or create a new one
         byte[] existingData = dataStore.get(wrappedKey);
@@ -83,10 +83,20 @@ public class MockIndexAccess implements IndexAccessInterface {
     
      /**
      * Helper method to add pre-serialized test data with byte key.
+     * Renamed from addTestData to addRawTestData.
      */
-    public void addTestData(byte[] key, byte[] value) {
+    public void addRawTestData(byte[] key, byte[] value) {
         if (closed) throw new IllegalStateException("Index is closed");
         dataStore.put(new ByteArrayWrapper(key), value);
+    }
+
+    /**
+     * Clears all data from the mock index.
+     */
+    public void clearAllData() {
+        if (closed) throw new IllegalStateException("Index is closed. Cannot clear data.");
+        dataStore.clear();
+        System.out.println("MockIndexAccess [" + indexType + "] data cleared.");
     }
 
     @Override
@@ -98,7 +108,14 @@ public class MockIndexAccess implements IndexAccessInterface {
         }
         try {
             return Optional.of(PositionList.deserialize(value));
-        } catch (RuntimeException e) { // Catch potential deserialization errors
+        } catch (IOException e) { // Catch IOException specifically
+            throw new IndexAccessException(
+                "Failed to deserialize PositionList due to IO error for key", 
+                indexType, 
+                IndexAccessException.ErrorType.READ_ERROR,
+                e
+            );
+        } catch (RuntimeException e) { // Catch other potential deserialization errors
             throw new IndexAccessException(
                 "Failed to deserialize PositionList for key", 
                 indexType, 

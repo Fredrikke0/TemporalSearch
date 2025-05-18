@@ -101,11 +101,11 @@ public final class NotExecutor implements ConditionExecutor<Not> {
         Position pos;
         if (granularity == Query.Granularity.DOCUMENT) {
             Integer docId = (Integer) id;
-            pos = new Position(docId, -1, -1, -1, null);
+            pos = new Position(docId, -1, -1, -1);
         } else { // SENTENCE granularity
             @SuppressWarnings("unchecked")
             SimpleEntry<Integer, Integer> pair = (SimpleEntry<Integer, Integer>) id;
-            pos = new Position(pair.getKey(), pair.getValue(), -1, -1, null);
+            pos = new Position(pair.getKey(), pair.getValue(), -1, -1);
         }
         return new MatchDetail("NOT_MATCH", ValueType.TERM, pos, (String) null);
     }

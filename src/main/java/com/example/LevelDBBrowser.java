@@ -324,21 +324,19 @@ public class LevelDBBrowser {
                     .getOrDefault(annotationType, Map.of())
                     .getOrDefault(synonymId, "unknown");
                 
-                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][time:%s][%s:%s]%n",
+                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][%s:%s]%n",
                     pos.getDocumentId(),
                     pos.getSentenceId(),
                     pos.getBeginPosition(),
                     pos.getEndPosition(),
-                    pos.getTimestamp(),
                     annotationType,
                     value);
                 } else {
-                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][time:%s]%n",
+                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d]%n",
                     pos.getDocumentId(),
                     pos.getSentenceId(),
                     pos.getBeginPosition(),
-                    pos.getEndPosition(),
-                    pos.getTimestamp());
+                    pos.getEndPosition());
             }
             count++;
         }
@@ -421,12 +419,11 @@ public class LevelDBBrowser {
                  break;
              }
              Position pos = entry.position();
-             System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][time:%s][dateId:%d]%n",
+             System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][dateId:%d]%n",
                      pos.getDocumentId(),
                      pos.getSentenceId(),
                      pos.getBeginPosition(),
                      pos.getEndPosition(),
-                     pos.getTimestamp(),
                      entry.dateId());
              count++;
          }

@@ -12,6 +12,7 @@ import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.Optional;
+import java.time.LocalDate;
 
 /**
  * Represents a structural column like alias.TITLE or alias.TIMESTAMP.
@@ -115,8 +116,35 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "TIMESTAMP":
                      if (column instanceof DateColumn dateCol) {
-                         dateCol.set(rowIndex, relevantDetail.position().getTimestamp());
-                         logger.trace("Set TIMESTAMP '{}' for {}.{} at row {}", relevantDetail.position().getTimestamp(), alias, fieldName, rowIndex);
+                         String cacheKey = "timestamp_" + relevantDetail.getDocumentId();
+                         LocalDate docTimestamp = (LocalDate) contextCache.get(cacheKey);
+                         if (docTimestamp == null) {
+                             String timestampStr = SqliteAccessor.getInstance().getMetadata(source, relevantDetail.getDocumentId(), "timestamp");
+                             if (timestampStr != null && !timestampStr.isEmpty()) {
+                                 try {
+                                     docTimestamp = LocalDate.parse(timestampStr); // Assuming ISO_LOCAL_DATE format
+                                 } catch (java.time.format.DateTimeParseException e) {
+                                     logger.warn("Failed to parse timestamp string '{}' for docId {}. Setting missing.", timestampStr, relevantDetail.getDocumentId(), e);
+                                     docTimestamp = null; // Explicitly set to null if parsing fails
+                                 }
+                             }
+                             if (docTimestamp != null) { // Only cache if successfully parsed
+                                contextCache.put(cacheKey, docTimestamp);
+                                logger.trace("Fetched and cached TIMESTAMP '{}' for docId {}", docTimestamp, relevantDetail.getDocumentId());
+                             } else {
+                                logger.trace("Timestamp was null or unparseable for docId {}. Not caching.", relevantDetail.getDocumentId());
+                             }
+                         } else {
+                             logger.trace("Retrieved TIMESTAMP '{}' from cache for docId {}", docTimestamp, relevantDetail.getDocumentId());
+                         }
+
+                         if (docTimestamp != null) {
+                            dateCol.set(rowIndex, docTimestamp);
+                            logger.trace("Set TIMESTAMP '{}' for {}.{} at row {}", docTimestamp, alias, fieldName, rowIndex);
+                         } else {
+                            dateCol.setMissing(rowIndex);
+                            logger.trace("Set TIMESTAMP to missing for {}.{} at row {} due to null/unparseable date", alias, fieldName, rowIndex);
+                         }
                      } else {
                          logger.error("Expected DateColumn for TIMESTAMP but got {} for column {}", column.type(), getColumnName());
                          column.setMissing(rowIndex);

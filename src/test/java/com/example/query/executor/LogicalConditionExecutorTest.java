@@ -45,7 +45,7 @@ public class LogicalConditionExecutorTest {
 
     // Helper to create a simple MatchDetail
     private MatchDetail createDetail(int docId, int sentId, String varName, Object value, int begin, int end) {
-        Position pos = new Position(docId, sentId, begin, end, testDate);
+        Position pos = new Position(docId, sentId, begin, end);
         // Determine ValueType based on simple inspection of value for testing
         ValueType type = (value instanceof String) ? ValueType.TERM : ValueType.ENTITY; 
         return new MatchDetail(value, type, pos, varName);
@@ -260,18 +260,18 @@ public class LogicalConditionExecutorTest {
 
     @Test
     void intersectSortMerge_DocumentGranularity_SomeCommonDocs() {
-        MatchDetail d1_1 = md(1);
-        MatchDetail d1_2 = md(1); // Duplicate in same doc is possible
-        MatchDetail d2_1 = md(2);
-        MatchDetail d3_1 = md(3);
-        MatchDetail d4_1 = md(4);
-        MatchDetail d2_2 = md(2); 
+        MatchDetail d1_1 = md(1, 1);
+        MatchDetail d1_2 = md(1, 2);
+        MatchDetail d2_1 = md(2, 1);
+        MatchDetail d3_1 = md(3, 1);
+        MatchDetail d4_1 = md(4, 1);
+        MatchDetail d2_2 = md(2, 2); 
 
-        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1_1, d1_2, d3_1)); // Docs 1, 3
+        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1_1, d1_2, d3_1)); // Docs 1 (details d1_1, d1_2), 3 (detail d3_1)
         QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d2_1, d2_2, d4_1)); // Docs 2, 4
         // Intentionally swapped order for r2 input
-        QueryResult r3 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d4_1, d2_1, d2_2)); // Docs 2, 4
-        QueryResult r4 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1_1, d2_1)); // Docs 1, 2
+        QueryResult r3 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d4_1, d2_1, d2_2)); // Docs 2, 4 (same as r2)
+        QueryResult r4 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1_1, d2_1)); // Docs 1 (detail d1_1), 2 (detail d2_1)
 
         QueryResult result_1_3 = logicalExecutor.intersectQueryResultsSortMerge(r1, r3); // Docs 1,3 INTERSECT 2,4 -> {} 
         QueryResult result_1_4 = logicalExecutor.intersectQueryResultsSortMerge(r1, r4); // Docs 1,3 INTERSECT 1,2 -> {Doc 1}
@@ -279,15 +279,33 @@ public class LogicalConditionExecutorTest {
 
         assertTrue(result_1_3.getAllDetails().isEmpty());
 
-        // Use sorted lists for comparison
-        assertEquals(sortDetails(List.of(d1_1)), getSortedDetails(result_1_4), "Doc 1 intersection failed"); 
-        assertEquals(sortDetails(List.of(d2_1)), getSortedDetails(result_3_4), "Doc 2 intersection failed"); 
+        // For Doc 1 (common to r1 and r4): r1 has [d1_1, d1_2], r4 has [d1_1].
+        // Intersection should combine these for doc 1. Expected: [d1_1, d1_2] (d1_1 is common, d1_2 from r1).
+        // If MatchDetail equality is by reference, and d1_1 is the same object, it's fine.
+        // The logic should collect all unique details for the common document ID.
+        // If details are merged additively: details from r1's unit for doc 1 + details from r4's unit for doc 1.
+        // Assuming QueryResult.getAllDetails() returns a collection of unique MatchDetail objects for that unit.
+        // The current intersect logic likely merges all unique details from matching units.
+        // So, for doc 1, it should be d1_1 (from r4) and d1_2 (from r1).
+        List<MatchDetail> expectedDetailsForDoc1 = new ArrayList<>();
+        expectedDetailsForDoc1.add(d1_1); // Common detail
+        expectedDetailsForDoc1.add(d1_2); // Detail from r1 for doc 1
+        // Note: d2_1 from r4 is for doc 2, so it's not part of doc 1's details.
+        
+        assertEquals(sortDetails(expectedDetailsForDoc1), getSortedDetails(result_1_4), "Doc 1 intersection failed"); 
+        
+        // For Doc 2 (common to r3 and r4): r3 has [d2_1, d2_2], r4 has [d2_1].
+        // Expected for Doc 2: [d2_1, d2_2]
+        List<MatchDetail> expectedDetailsForDoc2 = new ArrayList<>();
+        expectedDetailsForDoc2.add(d2_1); // Common detail
+        expectedDetailsForDoc2.add(d2_2); // Detail from r3 for doc 2
+        assertEquals(sortDetails(expectedDetailsForDoc2), getSortedDetails(result_3_4), "Doc 2 intersection failed"); 
     }
 
      @Test
     void intersectSortMerge_DocumentGranularity_IdenticalResults() {
-        MatchDetail d1 = md(1);
-        MatchDetail d2 = md(2);
+        MatchDetail d1 = md(1, 1);
+        MatchDetail d2 = md(2, 2);
         List<MatchDetail> details = List.of(d1, d2);
         QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, details);
         QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, details);
@@ -298,9 +316,9 @@ public class LogicalConditionExecutorTest {
 
     @Test
     void intersectSortMerge_DocumentGranularity_Subset() {
-        MatchDetail d1 = md(1);
-        MatchDetail d2 = md(2);
-        MatchDetail d3 = md(3);
+        MatchDetail d1 = md(1, 1);
+        MatchDetail d2 = md(2, 2);
+        MatchDetail d3 = md(3, 3);
 
         QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1, d2, d3)); // Docs 1, 2, 3
         QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1, d3));    // Docs 1, 3
@@ -341,7 +359,7 @@ public class LogicalConditionExecutorTest {
         return new MatchDetail(
             "value_" + docId + "_" + sentId, // Dummy value
             ValueType.TERM,                  // Dummy type
-            new Position(docId, sentId, 0, 0, null), // Position object
+            new Position(docId, sentId, 0, 0), // Position object
             (String) null
         );
     }

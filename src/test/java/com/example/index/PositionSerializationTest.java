@@ -19,8 +19,7 @@ public class PositionSerializationTest {
                 193, // documentId
                 1, // sentenceId
                 10, // beginPosition
-                15, // endPosition
-                LocalDate.of(1993, 10, 26) // timestamp
+                15 // endPosition
         );
 
         // Create PositionList with single position
@@ -40,17 +39,16 @@ public class PositionSerializationTest {
         assertEquals(original.getSentenceId(), deserialized.getSentenceId(), "Sentence ID mismatch");
         assertEquals(original.getBeginPosition(), deserialized.getBeginPosition(), "Begin position mismatch");
         assertEquals(original.getEndPosition(), deserialized.getEndPosition(), "End position mismatch");
-        assertEquals(original.getTimestamp(), deserialized.getTimestamp(), "Timestamp mismatch");
     }
 
     @Test
     public void testMultiplePositionsSerialization() throws IOException {
         // Create test data
         PositionList originalList = new PositionList();
-        originalList.add(new Position(193, 1, 1, 3, LocalDate.of(1993, 10, 26)));
-        originalList.add(new Position(222, 3, 3, 5, LocalDate.of(1995, 4, 1)));
-        originalList.add(new Position(3013, 1, 1, 3, LocalDate.of(2001, 9, 11)));
-        originalList.add(new Position(9999, 15, 15, 18, LocalDate.of(2020, 4, 20)));
+        originalList.add(new Position(193, 1, 1, 3));
+        originalList.add(new Position(222, 3, 3, 5));
+        originalList.add(new Position(3013, 1, 1, 3));
+        originalList.add(new Position(9999, 15, 15, 18));
 
         // Serialize
         byte[] serialized = originalList.serialize();
@@ -76,8 +74,6 @@ public class PositionSerializationTest {
                     "Begin position mismatch at index " + i);
             assertEquals(op.getEndPosition(), dp.getEndPosition(),
                     "End position mismatch at index " + i);
-            assertEquals(op.getTimestamp(), dp.getTimestamp(),
-                    "Timestamp mismatch at index " + i);
         }
     }
 
@@ -104,8 +100,7 @@ public class PositionSerializationTest {
                 docId,
                 sentId,
                 i * 5,
-                i * 5 + 4,
-                LocalDate.of(2024, 1, 1)
+                i * 5 + 4
             ));
         }
 
@@ -134,10 +129,10 @@ public class PositionSerializationTest {
         PositionList list = new PositionList();
 
         // Add positions in random order
-        list.add(new Position(2, 1, 5, 8, LocalDate.of(2000, 1, 1)));
-        list.add(new Position(1, 2, 3, 6, LocalDate.of(2000, 1, 1)));
-        list.add(new Position(1, 1, 7, 9, LocalDate.of(2000, 1, 1)));
-        list.add(new Position(1, 1, 1, 4, LocalDate.of(2000, 1, 1)));
+        list.add(new Position(2, 1, 5, 8));
+        list.add(new Position(1, 2, 3, 6));
+        list.add(new Position(1, 1, 7, 9));
+        list.add(new Position(1, 1, 1, 4));
 
         // Sort
         list.sort();

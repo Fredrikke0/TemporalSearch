@@ -22,7 +22,7 @@ class AnnotationEntryTest extends BaseIndexTest {
         int annotationId = 101;
         String token = "cat";
         String pos = "NOUN";
-        AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, token, pos, timestamp);
+        AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, token, pos);
         
         assertEquals(annotationId, entry.getAnnotationId());
         assertEquals(1, entry.getDocumentId());
@@ -31,13 +31,12 @@ class AnnotationEntryTest extends BaseIndexTest {
         assertEquals(3, entry.getEndChar());
         assertEquals(token, entry.getToken()); // Check token
         assertEquals(pos, entry.getPos());
-        assertEquals(timestamp, entry.getTimestamp());
     }
 
     @Test
     void testNullHandling() {
         // Test with null token and POS
-        AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, null, null, LocalDate.now());
+        AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, null, null);
         assertNull(entry.getToken()); // Check token
         assertNull(entry.getPos());
     }
@@ -45,23 +44,21 @@ class AnnotationEntryTest extends BaseIndexTest {
     @Test
     void testEmptyStrings() {
         // Test with empty strings
-        AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, "", "", LocalDate.now());
+        AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, "", "");
         assertEquals("", entry.getToken()); // Check token
         assertEquals("", entry.getPos());
     }
 
     @Test
     void testTimestampHandling() {
-        LocalDate timestamp = LocalDate.of(2024, 1, 20);
-        AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, "test", "NOUN", timestamp);
-        assertEquals(timestamp, entry.getTimestamp());
+        // This test is no longer relevant as AnnotationEntry does not handle timestamps directly.
     }
     
     @Test
     void testAnnotationId() {
         // Test annotation ID getter
         int annotationId = 42;
-        AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, "test", "NOUN", LocalDate.now());
+        AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, "test", "NOUN");
         assertEquals(annotationId, entry.getAnnotationId());
     }
 } 

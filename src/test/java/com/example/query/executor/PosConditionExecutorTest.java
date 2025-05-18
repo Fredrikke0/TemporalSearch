@@ -57,9 +57,9 @@ class PosConditionExecutorTest {
         String expectedKey = "nn" + IndexAccessInterface.DELIMITER + "test";
 
         PositionList positions = new PositionList();
-        positions.add(new Position(1, 0, 5, 10, LocalDate.now()));
-        positions.add(new Position(2, 1, 15, 20, LocalDate.now()));
-        positions.add(new Position(1, 1, 25, 30, LocalDate.now()));
+        positions.add(new Position(1, 0, 5, 10));
+        positions.add(new Position(2, 1, 15, 20));
+        positions.add(new Position(1, 1, 25, 30));
         when(posIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
 
         QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
@@ -81,10 +81,10 @@ class PosConditionExecutorTest {
         String expectedKey = "vb" + IndexAccessInterface.DELIMITER + "run";
 
         PositionList positions = new PositionList();
-        positions.add(new Position(1, 1, 1, 2, null));
-        positions.add(new Position(1, 2, 3, 4, null));
-        positions.add(new Position(2, 1, 5, 6, null));
-        positions.add(new Position(1, 1, 10, 15, null));
+        positions.add(new Position(1, 1, 1, 2));
+        positions.add(new Position(1, 2, 3, 4));
+        positions.add(new Position(2, 1, 5, 6));
+        positions.add(new Position(1, 1, 10, 15));
         
         when(posIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
 
@@ -108,10 +108,10 @@ class PosConditionExecutorTest {
         String expectedKey = "nn" + IndexAccessInterface.DELIMITER + "noun";
 
         PositionList positions = new PositionList();
-        positions.add(new Position(1, 0, 1, 2, null));
-        positions.add(new Position(1, 2, 3, 4, null));
-        positions.add(new Position(1, 3, 5, 6, null));
-        positions.add(new Position(2, 1, 7, 8, null));
+        positions.add(new Position(1, 0, 1, 2));
+        positions.add(new Position(1, 2, 3, 4));
+        positions.add(new Position(1, 3, 5, 6));
+        positions.add(new Position(2, 1, 7, 8));
         
         when(posIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
 
@@ -138,9 +138,9 @@ class PosConditionExecutorTest {
 
         // Define the expected positions combined into one list for the 'jj' tag
         PositionList positions = new PositionList(); 
-        positions.add(new Position(1, 1, 5, 10, LocalDate.now())); // From original posList1
-        positions.add(new Position(2, 1, 15, 20, LocalDate.now())); // From original posList2
-        positions.add(new Position(1, 2, 25, 30, LocalDate.now())); // From original posList3
+        positions.add(new Position(1, 1, 5, 10)); // From original posList1
+        positions.add(new Position(2, 1, 15, 20)); // From original posList2
+        positions.add(new Position(1, 2, 25, 30)); // From original posList3
         
         // Mock the direct get() call
         when(posIndex.get(eq(expectedKeyBytes))).thenReturn(Optional.of(positions));

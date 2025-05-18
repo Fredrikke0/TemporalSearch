@@ -43,9 +43,6 @@ public record MatchDetail(
     /** End position */
     public int getEndPosition() { return position.getEndPosition(); }
 
-    /** Document Date */
-    public LocalDate getDocumentDate() { return position.getTimestamp(); }
-
     // --- Helper Methods --- 
 
     /** Check if this detail represents a variable binding */

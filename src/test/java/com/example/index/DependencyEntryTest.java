@@ -27,13 +27,12 @@ class DependencyEntryTest extends BaseIndexTest {
         assertEquals("chases", entry.getHeadToken());
         assertEquals("cat", entry.getDependentToken());
         assertEquals("nsubj", entry.getRelation());
-        assertNotNull(entry.getTimestamp());
     }
 
     @Test
     void testNullHandling() {
         // Test with null tokens and relation
-        DependencyEntry entry = new DependencyEntry(0, 1, 1, 0, 10, null, null, null, LocalDate.now());
+        DependencyEntry entry = new DependencyEntry(0, 1, 1, 0, 10, null, null, null);
         assertNull(entry.getHeadToken());
         assertNull(entry.getDependentToken());
         assertNull(entry.getRelation());
@@ -42,7 +41,7 @@ class DependencyEntryTest extends BaseIndexTest {
     @Test
     void testEmptyStrings() {
         // Test with empty strings
-        DependencyEntry entry = new DependencyEntry(0, 1, 1, 0, 10, "", "", "", LocalDate.now());
+        DependencyEntry entry = new DependencyEntry(0, 1, 1, 0, 10, "", "", "");
         assertEquals("", entry.getHeadToken());
         assertEquals("", entry.getDependentToken());
         assertEquals("", entry.getRelation());
@@ -50,8 +49,6 @@ class DependencyEntryTest extends BaseIndexTest {
 
     @Test
     void testTimestampHandling() {
-        LocalDate timestamp = LocalDate.of(2024, 1, 20);
-        DependencyEntry entry = new DependencyEntry(0, 1, 1, 0, 10, "head", "dep", "rel", timestamp);
-        assertEquals(timestamp, entry.getTimestamp());
+        // This test is no longer relevant as DependencyEntry does not handle timestamps directly.
     }
 } 

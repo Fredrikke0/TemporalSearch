@@ -47,8 +47,8 @@ class DependencyConditionExecutorTest {
                              "vb" + IndexAccessInterface.DELIMITER +
                              "nn";
         PositionList positions = new PositionList();
-        positions.add(new Position(1, 1, 10, 15, LocalDate.now()));
-        positions.add(new Position(2, 1, 5, 10, LocalDate.now()));
+        positions.add(new Position(1, 1, 10, 15));
+        positions.add(new Position(2, 1, 5, 10));
         when(dependencyIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
 
         QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
@@ -70,9 +70,9 @@ class DependencyConditionExecutorTest {
                              "jj";
         
         PositionList positions = new PositionList();
-        positions.add(new Position(1, 1, 10, 15, LocalDate.now())); 
-        positions.add(new Position(1, 2, 5, 10, LocalDate.now()));   
-        positions.add(new Position(2, 1, 20, 25, LocalDate.now())); 
+        positions.add(new Position(1, 1, 10, 15)); 
+        positions.add(new Position(1, 2, 5, 10));   
+        positions.add(new Position(2, 1, 20, 25)); 
         when(dependencyIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
 
         QueryResult result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus");

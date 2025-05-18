@@ -96,7 +96,7 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
     @Test
     public void testNashEntrySerializationRoundTrip() throws Exception {
         // Create a sample NashDateEntryWithId list
-        var pos = new com.example.core.Position(1, 0, 18, 33, LocalDate.parse("2024-01-28"));
+        var pos = new com.example.core.Position(1, 0, 18, 33);
         var entry = new NashDateEntryWithId(pos, 0);
         var entries = List.of(entry);
         byte[] serialized = NashSerializationUtils.serializeNashEntries(entries);

@@ -88,8 +88,8 @@ class NerConditionExecutorTest {
         Ner condition = new Ner("PERSON");
         String expectedKeyPrefix = "PERSON" + IndexAccessInterface.DELIMITER;
         
-        PositionList posList1 = new PositionList(); posList1.add(new Position(1, 1, 0, 5, testDate));
-        PositionList posList2 = new PositionList(); posList2.add(new Position(3, 1, 10, 15, testDate));
+        PositionList posList1 = new PositionList(); posList1.add(new Position(1, 1, 0, 5));
+        PositionList posList2 = new PositionList(); posList2.add(new Position(3, 1, 10, 15));
         
         List<Map.Entry<byte[], PositionList>> mockEntries = List.of(
             Map.entry((expectedKeyPrefix + "Alice").getBytes(), posList1),
@@ -122,7 +122,7 @@ class NerConditionExecutorTest {
         Ner conditionLocation = new Ner("LOCATION");
         
         String personPrefix = "PERSON" + IndexAccessInterface.DELIMITER;
-        PositionList personPos = new PositionList(); personPos.add(new Position(1, 1, 0, 5, testDate));
+        PositionList personPos = new PositionList(); personPos.add(new Position(1, 1, 0, 5));
         List<Map.Entry<byte[], PositionList>> personEntries = List.of(
             Map.entry((personPrefix + "Alice").getBytes(), personPos)
         );
@@ -132,8 +132,8 @@ class NerConditionExecutorTest {
         QueryResult resultPerson = executor.execute(conditionPerson, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
 
         String locationPrefix = "LOCATION" + IndexAccessInterface.DELIMITER;
-        PositionList locPos1 = new PositionList(); locPos1.add(new Position(2, 1, 10, 15, testDate));
-        PositionList locPos2 = new PositionList(); locPos2.add(new Position(2, 2, 20, 25, testDate));
+        PositionList locPos1 = new PositionList(); locPos1.add(new Position(2, 1, 10, 15));
+        PositionList locPos2 = new PositionList(); locPos2.add(new Position(2, 2, 20, 25));
         List<Map.Entry<byte[], PositionList>> locationEntries = List.of(
             Map.entry((locationPrefix + "Paris").getBytes(), locPos1),
             Map.entry((locationPrefix + "London").getBytes(), locPos2)
@@ -169,8 +169,8 @@ class NerConditionExecutorTest {
         Ner condition = new Ner("ORGANIZATION", "?orgVar", true); 
         String expectedKeyPrefix = "ORGANIZATION" + IndexAccessInterface.DELIMITER;
         
-        PositionList posList1 = new PositionList(); posList1.add(new Position(4, 1, 0, 10, testDate));
-        PositionList posList2 = new PositionList(); posList2.add(new Position(4, 2, 15, 25, testDate)); 
+        PositionList posList1 = new PositionList(); posList1.add(new Position(4, 1, 0, 10));
+        PositionList posList2 = new PositionList(); posList2.add(new Position(4, 2, 15, 25)); 
         
         List<Map.Entry<byte[], PositionList>> mockEntries = List.of(
             Map.entry((expectedKeyPrefix + "AcmeInc").getBytes(), posList1),

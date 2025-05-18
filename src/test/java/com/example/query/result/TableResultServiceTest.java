@@ -59,15 +59,15 @@ class TableResultServiceTest {
     
     // Helper to create MatchDetail
     private MatchDetail createMatchDetail(int docId, int sentenceId, String value, ValueType type, String varName) {
-        Position pos = new Position(docId, sentenceId, 0, 0, LocalDate.now());
+        Position pos = new Position(docId, sentenceId, 0, 0);
         return new MatchDetail(value, type, pos, varName);
     }
 
     // Helper to create JoinedMatch
     private JoinedMatch createJoinedMatch(int leftDocId, int leftSentId, String leftValue, String leftVar,
                                           int rightDocId, int rightSentId, String rightValue, String rightVar) {
-        Position leftPos = new Position(leftDocId, leftSentId, 0, 0, LocalDate.now());
-        Position rightPos = new Position(rightDocId, rightSentId, 0, 0, LocalDate.now());
+        Position leftPos = new Position(leftDocId, leftSentId, 0, 0);
+        Position rightPos = new Position(rightDocId, rightSentId, 0, 0);
         MatchDetail left = new MatchDetail(leftValue, ValueType.TERM, leftPos, leftVar);
         MatchDetail right = new MatchDetail(rightValue, ValueType.TERM, rightPos, rightVar);
         return new JoinedMatch(left, right);

@@ -61,8 +61,8 @@ public class ContainsConditionExecutorTest {
         // Setup
         Contains condition = new Contains("test");
         PositionList positionList = new PositionList();
-        positionList.add(new Position(1, 1, 0, 4, LocalDate.now()));
-        positionList.add(new Position(2, 1, 5, 9, LocalDate.now()));
+        positionList.add(new Position(1, 1, 0, 4));
+        positionList.add(new Position(2, 1, 5, 9));
         
         // Expect unigram index to be used for single term
         when(mockUnigramIndex.get(any())).thenReturn(Optional.of(positionList));
@@ -89,8 +89,8 @@ public class ContainsConditionExecutorTest {
         Contains condition = new Contains(Arrays.asList("test", "example"));
         
         PositionList positionList = new PositionList();
-        positionList.add(new Position(1, 1, 0, 12, LocalDate.now()));
-        positionList.add(new Position(2, 1, 5, 17, LocalDate.now()));
+        positionList.add(new Position(1, 1, 0, 12));
+        positionList.add(new Position(2, 1, 5, 17));
         
         // Expect bigram index to be used with the combined terms
         when(mockBigramIndex.get(any())).thenReturn(Optional.of(positionList));
@@ -120,8 +120,8 @@ public class ContainsConditionExecutorTest {
         // Setup - using a list of terms instead of a space-separated string
         Contains condition = new Contains(Arrays.asList("another", "test"));
         PositionList positionList = new PositionList();
-        positionList.add(new Position(1, 1, 0, 12, LocalDate.now()));
-        positionList.add(new Position(2, 1, 5, 17, LocalDate.now()));
+        positionList.add(new Position(1, 1, 0, 12));
+        positionList.add(new Position(2, 1, 5, 17));
         
         // Expect bigram index to be used
         when(mockBigramIndex.get(any())).thenReturn(Optional.of(positionList));
@@ -148,8 +148,8 @@ public class ContainsConditionExecutorTest {
         // Setup - using a list of three terms
         Contains condition = new Contains(Arrays.asList("test", "example", "phrase"));
         PositionList positionList = new PositionList();
-        positionList.add(new Position(1, 1, 0, 19, LocalDate.now()));
-        positionList.add(new Position(2, 1, 5, 24, LocalDate.now()));
+        positionList.add(new Position(1, 1, 0, 19));
+        positionList.add(new Position(2, 1, 5, 24));
         
         // Expect trigram index to be used
         when(mockTrigramIndex.get(any())).thenReturn(Optional.of(positionList));
@@ -239,8 +239,8 @@ public class ContainsConditionExecutorTest {
         Contains condition = new Contains(Arrays.asList("test", "example"));
         
         PositionList positionList = new PositionList();
-        positionList.add(new Position(1, 1, 0, 12, LocalDate.now()));
-        positionList.add(new Position(2, 1, 5, 17, LocalDate.now()));
+        positionList.add(new Position(1, 1, 0, 12));
+        positionList.add(new Position(2, 1, 5, 17));
         
         // Use lenient stubbing to avoid UnnecessaryStubbingException
         lenient().when(mockUnigramIndex.get(any())).thenReturn(Optional.of(positionList));
@@ -265,9 +265,9 @@ public class ContainsConditionExecutorTest {
         String searchTerm = "keyword";
         Contains condition = new Contains(searchTerm, variableName, true);
         PositionList positionList = new PositionList();
-        Position pos1 = new Position(1, 1, 10, 17, LocalDate.now());
-        Position pos2 = new Position(1, 2, 5, 12, LocalDate.now()); // Same doc, different sentence
-        Position pos3 = new Position(2, 1, 0, 7, LocalDate.now());   // Different doc
+        Position pos1 = new Position(1, 1, 10, 17);
+        Position pos2 = new Position(1, 2, 5, 12); // Same doc, different sentence
+        Position pos3 = new Position(2, 1, 0, 7);   // Different doc
         positionList.add(pos1);
         positionList.add(pos2);
         positionList.add(pos3);
@@ -301,7 +301,7 @@ public class ContainsConditionExecutorTest {
 
     // Helper to create simple MatchDetail (from QueryExecutorTest)
     private MatchDetail createMatchDetail(int docId, int sentenceId, int begin, int end, String value) {
-        Position pos = new Position(docId, sentenceId, begin, end, LocalDate.now());
+        Position pos = new Position(docId, sentenceId, begin, end);
         return new MatchDetail(value, ValueType.TERM, pos, (String) null);
     }
 
@@ -311,8 +311,8 @@ public class ContainsConditionExecutorTest {
         Contains condition = new Contains(searchTerm);
         
         PositionList positions = new PositionList();
-        positions.add(new Position(1, 1, 0, 5, LocalDate.parse("2023-01-10")));
-        positions.add(new Position(2, 3, 10, 15, LocalDate.parse("2023-01-12")));
+        positions.add(new Position(1, 1, 0, 5));
+        positions.add(new Position(2, 3, 10, 15));
         when(mockUnigramIndex.get(searchTerm.toLowerCase().getBytes())).thenReturn(Optional.of(positions));
         
         QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus"); // Changed type
@@ -332,7 +332,7 @@ public class ContainsConditionExecutorTest {
         Contains condition = new Contains(List.of(term1, term2)); // Use List constructor
         
         PositionList positions = new PositionList();
-        positions.add(new Position(1, 1, 0, 9, LocalDate.parse("2023-01-10")));
+        positions.add(new Position(1, 1, 0, 9));
         when(mockBigramIndex.get((term1.toLowerCase() + "\0" + term2.toLowerCase()).getBytes())).thenReturn(Optional.of(positions));
 
         QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus"); // Changed type
@@ -351,7 +351,7 @@ public class ContainsConditionExecutorTest {
         Contains condition = new Contains(List.of(term1, term2, term3)); // Use List constructor
         
         PositionList positions = new PositionList();
-        positions.add(new Position(3, 5, 20, 33, LocalDate.parse("2023-01-15")));
+        positions.add(new Position(3, 5, 20, 33));
         String trigramKey = term1.toLowerCase() + "\0" + term2.toLowerCase() + "\0" + term3.toLowerCase();
         when(mockTrigramIndex.get(trigramKey.getBytes())).thenReturn(Optional.of(positions));
 
@@ -424,7 +424,7 @@ public class ContainsConditionExecutorTest {
         Contains condition = new Contains(searchTerm, variableName, true);
         
         PositionList positions = new PositionList();
-        positions.add(new Position(5, 1, 0, 6, LocalDate.now()));
+        positions.add(new Position(5, 1, 0, 6));
         when(mockUnigramIndex.get(searchTerm.toLowerCase().getBytes())).thenReturn(Optional.of(positions));
         
         QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus"); // Changed type

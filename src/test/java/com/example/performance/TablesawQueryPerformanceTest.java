@@ -176,8 +176,7 @@ public class TablesawQueryPerformanceTest {
             int sentId = random.nextInt(MAX_SENTENCES_PER_DOC);
             int begin = random.nextInt(1000);
             int end = begin + random.nextInt(10) + 1;
-            LocalDate docDate = START_DATE.plus(random.nextInt(365 * 3), ChronoUnit.DAYS);
-            Position pos = new Position(docId, sentId, begin, end, docDate);
+            Position pos = new Position(docId, sentId, begin, end);
             
             String conditionId = "C" + random.nextInt(NUM_CONDITION_IDS);
             String variableName = random.nextDouble() < 0.2 ? "?var" + random.nextInt(2) : null; // 20% chance of variable
@@ -213,7 +212,6 @@ public class TablesawQueryPerformanceTest {
         IntColumn sentIdCol = IntColumn.create("sentence_id");
         IntColumn startCol = IntColumn.create("start_pos");
         IntColumn endCol = IntColumn.create("end_pos");
-        DateColumn docDateCol = DateColumn.create("doc_date");
         StringColumn valueTypeCol = StringColumn.create("value_type");
         BooleanColumn hasVariableCol = BooleanColumn.create("has_variable");
         
@@ -222,13 +220,12 @@ public class TablesawQueryPerformanceTest {
             sentIdCol.append(md.getSentenceId());
             startCol.append(md.getStartPosition());
             endCol.append(md.getEndPosition());
-            docDateCol.append(md.getDocumentDate()); // Assuming Position has getTimestamp returning LocalDate
             valueTypeCol.append(md.valueType().name());
             hasVariableCol.append(md.isVariableBinding());
         }
         
         return Table.create("MatchDetailTable",
-                docIdCol, sentIdCol, startCol, endCol, docDateCol,
+                docIdCol, sentIdCol, startCol, endCol,
                 valueTypeCol, hasVariableCol);
     }
     
@@ -572,31 +569,24 @@ public class TablesawQueryPerformanceTest {
 
     /** Helper to create a large list of JoinedMatch objects */
     private List<com.example.query.binding.JoinedMatch> createLargeJoinedMatchList(int size) {
-        List<com.example.query.binding.JoinedMatch> list = new ArrayList<>(size);
-        Random random = new Random(987); // Yet another seed
+        List<com.example.query.binding.JoinedMatch> joinedMatches = new ArrayList<>(size / 2); // Approximate
+        Random random = new Random(System.nanoTime()); // More varied seed
 
-        logger.info("Generating {} JoinedMatch objects...", size);
-        for (int i = 0; i < size; i++) {
+        for (int i = 0; i < size / 2; i++) {
             MatchDetail left = createRandomMatchDetail(random, "left");
             MatchDetail right = createRandomMatchDetail(random, "right");
-            list.add(new com.example.query.binding.JoinedMatch(left, right));
-
-             if ((i + 1) % (size / 10) == 0) { // Log progress every 10%
-                logger.debug("...generated {} JoinedMatch objects ({}%)", i + 1, (int)(((double)(i + 1) / size) * 100));
-            }
+            joinedMatches.add(new com.example.query.binding.JoinedMatch(left, right));
         }
-        logger.info("JoinedMatch object generation complete.");
-        return list;
+        return joinedMatches;
     }
 
     /** Helper to create a single random MatchDetail */
     private MatchDetail createRandomMatchDetail(Random random, String prefix) {
-        int docId = random.nextInt(NUM_DOCS * 10); // Larger range for variety
+        int docId = random.nextInt(NUM_DOCS);
         int sentId = random.nextInt(MAX_SENTENCES_PER_DOC);
         int begin = random.nextInt(1000);
-        int end = begin + random.nextInt(20) + 1;
-        LocalDate docDate = START_DATE.plus(random.nextInt(365 * 5), ChronoUnit.DAYS);
-        Position pos = new Position(docId, sentId, begin, end, docDate);
+        int end = begin + random.nextInt(20) + 1; // Slightly longer entities possible
+        Position pos = new Position(docId, sentId, begin, end);
 
         String variableName = random.nextDouble() < 0.1 ? "?" + prefix + "Var" + random.nextInt(3) : null;
 

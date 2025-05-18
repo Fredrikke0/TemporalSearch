@@ -28,15 +28,15 @@ class JoinHandlerTest {
         joinHandler = new JoinHandler();
     }
 
-    // Helper to create a Position object with a date
+    // Helper to create a Position object
     // Using dummy IDs and char positions as they aren't directly used by the tested join logic
-    private Position createPosition(int docId, int sentenceId, LocalDate date) {
-        return new Position(docId, sentenceId, 0, 0, date); // Using 0, 0 for char positions
+    private Position createPosition(int docId, int sentenceId) {
+        return new Position(docId, sentenceId, 0, 0); // Using 0, 0 for char positions
     }
 
     // Helper to create MatchDetail with a LocalDate value bound to a variable
     private MatchDetail createMatchDetailWithDate(int docId, int sentenceId, LocalDate date, String variableAlias) {
-        Position pos = createPosition(docId, sentenceId, date);
+        Position pos = createPosition(docId, sentenceId);
         // The LocalDate is the 'value', type is DATE, Position holds metadata
         // Variable name includes alias prefix expected by extractor (e.g., "l.date")
         return new MatchDetail(date, ValueType.DATE, pos, Optional.of(variableAlias + "." + DATE_KEY));
@@ -45,8 +45,8 @@ class JoinHandlerTest {
     // Helper to create a simple MatchDetail without the specific date value we are joining on
     // (e.g., represents a match for a different condition)
      private MatchDetail createMatchDetailNoDateValue(int docId, int sentenceId) {
-         // Still needs a Position, use placeholder date
-         Position pos = createPosition(docId, sentenceId, LocalDate.EPOCH);
+         // Still needs a Position
+         Position pos = createPosition(docId, sentenceId);
          // Value is something else, not the date we query/join on
          return new MatchDetail("some other value", ValueType.TERM, pos, Optional.empty());
      }
@@ -151,7 +151,7 @@ class JoinHandlerTest {
         MatchDetail left1 = createMatchDetailWithDate(1, 1, LocalDate.of(2023, 1, 10), "l");
         MatchDetail left2NoDate = createMatchDetailNoDateValue(1, 2); // Does not have DATE_KEY variable
         // Detail with correct key but wrong type (should be filtered)
-        Position wrongTypePos = createPosition(1, 3, LocalDate.EPOCH);
+        Position wrongTypePos = createPosition(1, 3);
         MatchDetail left3WrongType = new MatchDetail("not-a-date", ValueType.TERM, wrongTypePos, Optional.of("l." + DATE_KEY));
 
         MatchDetail right1 = createMatchDetailWithDate(2, 1, LocalDate.of(2023, 1, 12), "r");

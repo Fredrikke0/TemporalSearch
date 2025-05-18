@@ -4,6 +4,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.index.MockIndexAccess;
+import com.example.core.Position;
 import com.example.query.executor.ConditionExecutorFactory;
 import com.example.query.executor.QueryExecutionException;
 import com.example.query.executor.QueryExecutor;
@@ -15,6 +16,7 @@ import com.example.query.result.ResultGenerationException;
 import com.example.query.result.TableResultService;
 import com.example.query.sqlite.SqliteAccessor;
 import com.example.index.NashDateEntryWithId;
+import com.example.query.binding.MatchDetail;
 import com.example.index.util.NashSerializationUtils;
 import no.ntnu.sandbox.Nash;
 
@@ -117,18 +119,16 @@ public class QueryEndToEndTest {
         mockNerIndex.addTestData("PERSON" + DELIMITER + "albrecht kossel", 12, 1, 5, 20); // Added for partial match test
 
         // Create and populate mock NER_DATE index for date expressions
-        mockNerDateIndex = new MockIndexAccess();
-        // Format: "DATE\0interval_string\0normalized_text"
-        // 1980s dates
-        mockNerDateIndex.addTestData("DATE" + DELIMITER + "1985-01-01T00:00/1985-12-31T23:59:59" + DELIMITER + "1985", 20, 1, 0, 4);
-        mockNerDateIndex.addTestData("DATE" + DELIMITER + "1988-05-01T00:00/1988-05-31T23:59:59" + DELIMITER + "May 1988", 21, 1, 10, 18);
-        // 1990s dates
-        mockNerDateIndex.addTestData("DATE" + DELIMITER + "1995-01-01T00:00/1995-12-31T23:59:59" + DELIMITER + "1995", 22, 1, 5, 9);
-        mockNerDateIndex.addTestData("DATE" + DELIMITER + "1998-06-15T00:00/1998-06-15T23:59:59" + DELIMITER + "June 15, 1998", 22, 2, 15, 28);
-        // 2000s dates
-        mockNerDateIndex.addTestData("DATE" + DELIMITER + "2000-01-01T00:00/2000-12-31T23:59:59" + DELIMITER + "2000", 23, 1, 0, 4);
-        mockNerDateIndex.addTestData("DATE" + DELIMITER + "2001-03-01T00:00/2001-03-31T23:59:59" + DELIMITER + "March 2001", 24, 1, 5, 15);
-        mockNerDateIndex.addTestData("DATE" + DELIMITER + "2005-07-04T00:00/2005-07-04T23:59:59" + DELIMITER + "July 4, 2005", 25, 1, 0, 12);
+        mockNerDateIndex = new MockIndexAccess("ner_date"); // Initialize before use
+
+        // Populate mockNerDateIndex with some date entities
+        // Key format for ner_date is TYPE<delim>NORMALIZED_DATE
+        // The 5-argument addTestData(key, docId, sentId, begin, end) is used.
+        mockNerDateIndex.addTestData("DATE" + DELIMITER + "2023-01-15", 2, 1, 0, 10);
+        mockNerDateIndex.addTestData("DATE" + DELIMITER + "2023-03-20", 1, 1, 30, 40);
+        mockNerDateIndex.addTestData("DATE" + DELIMITER + "2024-01-01", 3, 1, 50, 60);
+        // Add a different NER type to ner_date to ensure it's handled if it occurs (though typically it's for dates)
+        mockNerDateIndex.addTestData("EVENT" + DELIMITER + "Conference", 4, 1, 0, 10);
 
         // Create and populate mock Nash index
         mockNashIndex = new MockIndexAccess();
@@ -137,7 +137,7 @@ public class QueryEndToEndTest {
         String dataPointInterval = "[2024-01-15 , 2024-01-15]";
         LocalDate dataPointDate = java.time.LocalDate.parse("2024-01-15");
         int dataPointDateId = 0; // Corresponds to the lookup table entry
-        var dataPos = new com.example.core.Position(30, 1, 0, 10, dataPointDate);
+        var dataPos = new com.example.core.Position(30, 1, 0, 10);
         var dataEntry = new NashDateEntryWithId(dataPos, dataPointDateId);
         var dataEntriesList = java.util.List.of(dataEntry);
         byte[] serializedDataEntries = NashSerializationUtils.serializeNashEntries(dataEntriesList);
@@ -202,8 +202,9 @@ public class QueryEndToEndTest {
         
         // Initialize executor and result service
         factory = new ConditionExecutorFactory();
-        // Set the default strategy before creating the executor, if needed
-        // factory.setTemporalStrategy("naive"); // Example: Set default if not testing Nash
+        factory.setTemporalStrategy("nash"); // Configure factory for Nash strategy
+        System.out.println("QueryEndToEndTest: ConditionExecutorFactory temporal strategy set to NASH.");
+        
         queryExecutor = new QueryExecutor(factory);
         tableResultService = new TableResultService();
         queryParser = new QueryParser();
@@ -632,21 +633,47 @@ public class QueryEndToEndTest {
 
     @Test
     public void testNashTemporalQuery() throws Exception {
-        // Set the temporal strategy to Nash for this test
-        factory.setTemporalStrategy("nash");
-        String queryString = "SELECT DOCUMENT_ID FROM source WHERE DATE(< 2025) BIND date";
+        // The ConditionExecutorFactory is configured in @BeforeAll to use the "nash" strategy 
+        // for TemporalExecutor. This test will use a DATE condition, which should be routed 
+        // to NashTemporalStrategy.
+        // The global mockNashIndex (populated in @BeforeAll) contains an entry for "2024-01-15"
+        // (dateId=0 in its lookup table) associated with Position(docId=30, sentId=1, ...).
+
+        String queryString = "SELECT DOCUMENT_ID, SENTENCE_ID, event_date FROM simplewiki WHERE DATE(= 2024-01-15) BIND event_date";
         Query query = queryParser.parse(queryString);
+
+        // Ensure the factory's temporal strategy is indeed "nash" for this test context if needed for explicit check.
+        // This is mainly to confirm the @BeforeAll setup.
+        assertEquals("nash", factory.getTemporalStrategy(), "Temporal strategy should be 'nash' for this test.");
+
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
-        assertNotNull(result);
-        // Should find the entry we put in the Nash index
-        assertTrue(result.getAllDetails().isEmpty() == false, "Expected results from Nash index");
-        assertEquals(1, result.getAllDetails().size());
-        assertEquals(30, result.getAllDetails().get(0).getDocumentId());
-        assertEquals(java.time.LocalDate.parse("2024-01-15"), result.getAllDetails().get(0).value());
+
+        assertNotNull(result, "QueryResult should not be null");
+        assertFalse(result.getAllDetails().isEmpty(), "Expected results from Nash index via DATE condition");
         
+        // We expect one MatchDetail corresponding to the Position(30,1,0,10) and date "2024-01-15"
+        // that was put into the mockNashIndex during the @BeforeAll global setup.
+        assertEquals(1, result.getAllDetails().size(), "Expected one match from Nash index");
+        
+        MatchDetail match = result.getAllDetails().get(0);
+        assertEquals(30, match.getDocumentId(), "Document ID should match the Position data in Nash index");
+        assertEquals(1, match.getSentenceId(), "Sentence ID should match the Position data in Nash index");
+        
+        // The value bound to 'event_date' should be the LocalDate object
+        assertTrue(match.value() instanceof LocalDate, "Bound value should be a LocalDate");
+        assertEquals(java.time.LocalDate.parse("2024-01-15"), match.value(), "Date value should match");
+        assertEquals("$main.event_date", match.variableName().orElse(null), "Variable name should be '$main.event_date'");
+
+        // Verify table generation if needed, e.g., check for the bound 'event_date' column
         Table resultTable = tableResultService.generateTable(query, result, mockIndexes);
+        assertNotNull(resultTable);
         assertEquals(1, resultTable.rowCount());
         assertTrue(resultTable.columnNames().contains("$main.DOCUMENT_ID"));
+        assertTrue(resultTable.columnNames().contains("$main.SENTENCE_ID"));
+        assertTrue(resultTable.columnNames().contains("$main.event_date"), "Table should contain the bound date column");
         assertEquals(30, resultTable.intColumn("$main.DOCUMENT_ID").get(0));
+        assertEquals(1, resultTable.intColumn("$main.SENTENCE_ID").get(0));
+        // Expect StringColumn due to current VariableColumn behavior, parse to LocalDate for comparison.
+        assertEquals(LocalDate.parse("2024-01-15"), LocalDate.parse(resultTable.stringColumn("$main.event_date").get(0)));
     }
 } 

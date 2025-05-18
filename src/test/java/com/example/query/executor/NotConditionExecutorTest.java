@@ -65,10 +65,10 @@ class NotConditionExecutorTest {
         when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
             .thenReturn(innerResult);
 
-        PositionList posList1 = createPositionList(new Position(1, 0, 0, 0, LocalDate.now()));
-        PositionList posList2 = createPositionList(new Position(2, 0, 0, 0, LocalDate.now()));
-        PositionList posList3 = createPositionList(new Position(3, 0, 0, 0, LocalDate.now()));
-        PositionList posList4 = createPositionList(new Position(4, 0, 0, 0, LocalDate.now()));
+        PositionList posList1 = createPositionList(new Position(1, 0, 0, 0));
+        PositionList posList2 = createPositionList(new Position(2, 0, 0, 0));
+        PositionList posList3 = createPositionList(new Position(3, 0, 0, 0));
+        PositionList posList4 = createPositionList(new Position(4, 0, 0, 0));
         
         when(unigramIterator.hasNext()).thenReturn(true, true, true, true, false);
         when(unigramIterator.next()).thenReturn(
@@ -107,12 +107,12 @@ class NotConditionExecutorTest {
         when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), anyInt(), anyString()))
             .thenReturn(innerResult);
 
-        PositionList posListD1S0 = createPositionList(new Position(1, 0, 0, 0, LocalDate.now())); 
-        PositionList posListD1S1 = createPositionList(new Position(1, 1, 0, 0, LocalDate.now())); 
-        PositionList posListD2S0 = createPositionList(new Position(2, 0, 0, 0, LocalDate.now())); 
-        PositionList posListD2S1 = createPositionList(new Position(2, 1, 0, 0, LocalDate.now())); 
-        PositionList posListD2S2 = createPositionList(new Position(2, 2, 0, 0, LocalDate.now())); 
-        PositionList posListD3S0 = createPositionList(new Position(3, 0, 0, 0, LocalDate.now())); 
+        PositionList posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
+        PositionList posListD1S1 = createPositionList(new Position(1, 1, 0, 0)); 
+        PositionList posListD2S0 = createPositionList(new Position(2, 0, 0, 0)); 
+        PositionList posListD2S1 = createPositionList(new Position(2, 1, 0, 0)); 
+        PositionList posListD2S2 = createPositionList(new Position(2, 2, 0, 0)); 
+        PositionList posListD3S0 = createPositionList(new Position(3, 0, 0, 0)); 
         
         when(unigramIterator.hasNext()).thenReturn(true, true, true, true, true, true, false);
         when(unigramIterator.next()).thenReturn(
@@ -164,9 +164,9 @@ class NotConditionExecutorTest {
         when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), eq(windowSize), anyString()))
             .thenReturn(innerResult);
 
-        PositionList posListD1S0 = createPositionList(new Position(1, 0, 0, 0, LocalDate.now())); 
-        PositionList posListD1S1 = createPositionList(new Position(1, 1, 0, 0, LocalDate.now())); 
-        PositionList posListD1S2 = createPositionList(new Position(1, 2, 0, 0, LocalDate.now())); 
+        PositionList posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
+        PositionList posListD1S1 = createPositionList(new Position(1, 1, 0, 0)); 
+        PositionList posListD1S2 = createPositionList(new Position(1, 2, 0, 0)); 
 
         when(unigramIterator.hasNext()).thenReturn(true, true, true, false);
         when(unigramIterator.next()).thenReturn(
@@ -198,18 +198,18 @@ class NotConditionExecutorTest {
         ));
         ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
         when(executorFactory.getExecutor(any(Contains.class))).thenReturn(mockContainsExecutor);
-        Position pos1 = new Position(1, 1, 0, 5, LocalDate.now());
-        Position pos2 = new Position(2, 1, 0, 5, LocalDate.now());
+        Position pos1 = new Position(1, 1, 0, 5);
+        Position pos2 = new Position(2, 1, 0, 5);
         when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
                 .thenReturn(new QueryResult(Query.Granularity.DOCUMENT, 0,
                     List.of(createMatchDetail(pos1.getDocumentId(), "test"), 
                             createMatchDetail(pos2.getDocumentId(), "test"))
                 ));
 
-        PositionList posList1 = createPositionList(new Position(1, 0, 0, 0, LocalDate.now()));
-        PositionList posList2 = createPositionList(new Position(2, 0, 0, 0, LocalDate.now()));
-        PositionList posList3 = createPositionList(new Position(3, 0, 0, 0, LocalDate.now()));
-        PositionList posList4 = createPositionList(new Position(4, 0, 0, 0, LocalDate.now()));
+        PositionList posList1 = createPositionList(new Position(1, 0, 0, 0));
+        PositionList posList2 = createPositionList(new Position(2, 0, 0, 0));
+        PositionList posList3 = createPositionList(new Position(3, 0, 0, 0));
+        PositionList posList4 = createPositionList(new Position(4, 0, 0, 0));
         
         when(unigramIterator.hasNext()).thenReturn(true, true, true, true, false);
         when(unigramIterator.next()).thenReturn(
@@ -235,7 +235,7 @@ class NotConditionExecutorTest {
     }
 
     private MatchDetail createMatchDetail(int docId, int sentenceId, String value) {
-        Position pos = new Position(docId, sentenceId, 0, 0, LocalDate.now());
+        Position pos = new Position(docId, sentenceId, 0, 0);
         return new MatchDetail(value, ValueType.TERM, pos, (String) null);
     }
 

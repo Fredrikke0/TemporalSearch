@@ -111,8 +111,8 @@ public class SentenceGranularityTest {
         // Setup mock data and mock index for this test
         Map<String, PositionList> mockData = new HashMap<>();
         PositionList testPositions = new PositionList();
-        testPositions.add(new Position(0, 0, 0, 4, LocalDate.now())); // Doc 0, Sent 0
-        testPositions.add(new Position(1, 1, 0, 4, LocalDate.now())); // Doc 1, Sent 1
+        testPositions.add(new Position(0, 0, 0, 4)); // Doc 0, Sent 0
+        testPositions.add(new Position(1, 1, 0, 4)); // Doc 1, Sent 1
         mockData.put("test", testPositions);
         IndexAccess mockIndex = setupMockIndexBehavior(mockData);
         Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndex); // Use the mock with correct type
@@ -132,8 +132,8 @@ public class SentenceGranularityTest {
         
         Map<String, PositionList> mockData = new HashMap<>();
         PositionList windowPositions = new PositionList();
-        windowPositions.add(new Position(0, 1, 0, 6, LocalDate.now())); // Doc 0, Sent 1
-        windowPositions.add(new Position(0, 3, 0, 6, LocalDate.now())); // Doc 0, Sent 3
+        windowPositions.add(new Position(0, 1, 0, 6)); // Doc 0, Sent 1
+        windowPositions.add(new Position(0, 3, 0, 6)); // Doc 0, Sent 3
         mockData.put("window", windowPositions);
         IndexAccess mockIndex = setupMockIndexBehavior(mockData);
         Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndex); // Use the mock with correct type
@@ -155,8 +155,8 @@ public class SentenceGranularityTest {
 
         Map<String, PositionList> mockData = new HashMap<>();
         PositionList windowPositions = new PositionList();
-        windowPositions.add(new Position(0, 1, 0, 6, LocalDate.now())); // Doc 0, Sent 1
-        windowPositions.add(new Position(0, 3, 0, 6, LocalDate.now())); // Doc 0, Sent 3
+        windowPositions.add(new Position(0, 1, 0, 6)); // Doc 0, Sent 1
+        windowPositions.add(new Position(0, 3, 0, 6)); // Doc 0, Sent 3
         mockData.put("window", windowPositions);
         IndexAccess mockIndex = setupMockIndexBehavior(mockData);
         Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndex); // Use the mock with correct type

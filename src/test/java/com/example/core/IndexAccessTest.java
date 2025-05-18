@@ -54,8 +54,8 @@ public class IndexAccessTest {
     @Test
     void testBasicOperations() throws Exception {
         // Create test data
-        Position pos1 = new Position(1, 1, 0, 5, LocalDate.of(2024, 1, 1));
-        Position pos2 = new Position(1, 2, 6, 10, LocalDate.of(2024, 1, 1));
+        Position pos1 = new Position(1, 1, 0, 5);
+        Position pos2 = new Position(1, 2, 6, 10);
         PositionList positions = new PositionList();
         positions.add(pos1);
         positions.add(pos2);
@@ -74,7 +74,6 @@ public class IndexAccessTest {
         assertEquals(pos1.getSentenceId(), retrievedPos.getSentenceId());
         assertEquals(pos1.getBeginPosition(), retrievedPos.getBeginPosition());
         assertEquals(pos1.getEndPosition(), retrievedPos.getEndPosition());
-        assertEquals(pos1.getTimestamp(), retrievedPos.getTimestamp());
     }
 
     @Test
@@ -82,7 +81,7 @@ public class IndexAccessTest {
         // Create test data
         Map<String, PositionList> entries = new HashMap<>();
         for (int i = 0; i < 5; i++) {
-            Position pos = new Position(i, 1, 0, 5, LocalDate.now());
+            Position pos = new Position(i, 1, 0, 5);
             PositionList positions = new PositionList();
             positions.add(pos);
             entries.put("key" + i, positions);
@@ -116,13 +115,13 @@ public class IndexAccessTest {
         byte[] key = "merge-test".getBytes();
         
         // Create first position list
-        Position pos1 = new Position(1, 1, 0, 5, LocalDate.now());
+        Position pos1 = new Position(1, 1, 0, 5);
         PositionList positions1 = new PositionList();
         positions1.add(pos1);
         indexAccess.put(key, positions1);
 
         // Create second position list
-        Position pos2 = new Position(1, 2, 6, 10, LocalDate.now());
+        Position pos2 = new Position(1, 2, 6, 10);
         PositionList positions2 = new PositionList();
         positions2.add(pos2);
         indexAccess.put(key, positions2);
@@ -137,7 +136,7 @@ public class IndexAccessTest {
     void testIterator() throws Exception {
         // Create test data
         for (int i = 0; i < 5; i++) {
-            Position pos = new Position(i, 1, 0, 5, LocalDate.now());
+            Position pos = new Position(i, 1, 0, 5);
             PositionList positions = new PositionList();
             positions.add(pos);
             indexAccess.put(("key" + i).getBytes(), positions);
