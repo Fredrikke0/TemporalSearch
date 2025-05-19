@@ -31,13 +31,14 @@ import java.io.IOException;
  * @param <T> The type of index entry this generator processes
  */
 public abstract class IndexGenerator<T extends IndexEntry> implements AutoCloseable {
-    protected static final Logger logger = LoggerFactory.getLogger(IndexGenerator.class);
+    private static final Logger logger = LoggerFactory.getLogger(IndexGenerator.class);
     public static final String DELIMITER = "\0";
+    public static final String TEMP_SUBDIR_NAME = "temp-sort-files";
     public static final char ESCAPE_CHAR = '\u001F';
 
     protected final IndexAccess indexAccess;
-    private final Set<String> stopwords;
     protected final Connection sqliteConn;
+    private Set<String> stopwords;
     protected final ProgressTracker progress;
     private final Path tempDir;
     private long totalNGramsGenerated = 0;
@@ -55,22 +56,87 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     protected abstract String getIndexName();
 
+    /**
+     * Fetches a batch of entries from the database.
+     * @param lastEntryFromPreviousBatch The last entry processed in the previous overall batch, used for pagination.
+     *                                   Null if this is the first batch.
+     * @return A list of entries.
+     * @throws SQLException if a database error occurs.
+     */
+    protected abstract List<T> fetchBatch(T lastEntryFromPreviousBatch) throws SQLException;
+
+    /**
+     * Processes a raw batch of entries into an intermediate, aggregated form suitable for writing to a temp file.
+     * @param batch The list of entries fetched from the database.
+     * @return A ListMultimap সেরা<String, PositionList>, where keys are terms and values are their positions.
+     */
+    protected abstract ListMultimap<String, PositionList> processBatch(List<T> batch);
+
+    /**
+     * Estimates or retrieves the total number of documents/items to be processed for this index.
+     * This is used for progress tracking.
+     * @return Total count of items.
+     * @throws SQLException if a database error occurs.
+     */
+    public abstract long getDocumentCountForIndex() throws SQLException;
+
     protected IndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    }
+
+    protected IndexGenerator(String indexBaseDir, String stopwordsPath,
+            Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
         // Initialize IndexAccess with optimized options from LevelDBConfig
         Options options = LevelDBConfig.createOptimizedOptions();
 
         try {
             this.indexAccess = new IndexAccess(Path.of(indexBaseDir), getIndexName(), options);
         } catch (IndexAccessException e) {
-            throw new IOException("Failed to initialize IndexAccess", e);
+            throw new IOException("Failed to initialize IndexAccess for " + getIndexName(), e);
         }
 
-        this.stopwords = loadStopwords(stopwordsPath);
         this.sqliteConn = sqliteConn;
         this.progress = progress;
-        this.tempDir = Files.createTempDirectory("index-");
         this.batchSize = batchSize;
+        loadStopwords(stopwordsPath);
+
+        Path resolvedTempDir;
+        if (customTempPath != null) {
+            try {
+                if (!Files.exists(customTempPath)) {
+                    Files.createDirectories(customTempPath);
+                }
+                if (!Files.isDirectory(customTempPath) || !Files.isWritable(customTempPath)) {
+                    throw new IOException("Custom temporary path is not a writable directory: " + customTempPath);
+                }
+                resolvedTempDir = Files.createTempDirectory(customTempPath, getIndexName() + "-index-temp-");
+                logger.info("IndexGenerator for [{}] using custom temp directory: {}", getIndexName(), resolvedTempDir.toAbsolutePath());
+            } catch (IOException e) {
+                logger.error("Failed to create or use custom temp directory '{}'. Falling back to system default.", customTempPath, e);
+                // Fallback to system default temp directory
+                resolvedTempDir = Files.createTempDirectory(getIndexName() + "-index-temp-");
+                logger.info("IndexGenerator for [{}] using system default temp directory: {}", getIndexName(), resolvedTempDir.toAbsolutePath());
+            }
+        } else {
+            resolvedTempDir = Files.createTempDirectory(getIndexName() + "-index-temp-");
+            logger.info("IndexGenerator for [{}] using system default temp directory: {}", getIndexName(), resolvedTempDir.toAbsolutePath());
+        }
+        this.tempDir = resolvedTempDir;
+        
+        try {
+            long totalDocs = getDocumentCountForIndex();
+            this.progress.startIndex(getIndexName(), totalDocs);
+        } catch (SQLException e) {
+            throw new IOException("Failed to get document count for index: " + getIndexName(), e);
+        }
+        logger.debug("IndexGenerator for [{}] initialized. Temp dir: {}, Batch size: {}", getIndexName(), this.tempDir.toAbsolutePath(), this.batchSize);
+        try {
+            FileStore store = Files.getFileStore(tempDir);
+            logger.debug("Initial usable space in temp directory '{}': {} MB", tempDir.toAbsolutePath(), store.getUsableSpace() / (1024 * 1024));
+        } catch (IOException e) {
+            logger.warn("Could not determine usable space for temp directory '{}'", tempDir.toAbsolutePath(), e);
+        }
 
         // Register shutdown hook for cleanup
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -94,15 +160,26 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         }));
     }
 
-    private Set<String> loadStopwords(String path) throws IOException {
-        Set<String> words = new HashSet<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(path))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                words.add(line.trim().toLowerCase());
-            }
+    private void loadStopwords(String path) throws IOException {
+        if (path == null || path.trim().isEmpty()) {
+            logger.warn("Stopwords path is null or empty. Proceeding without stopwords.");
+            this.stopwords = Collections.emptySet();
+            return;
         }
-        return words;
+        Path filePath = Path.of(path);
+        if (!Files.exists(filePath) || !Files.isReadable(filePath)) {
+            logger.warn("Stopwords file not found or not readable: {}. Proceeding without stopwords.", filePath.toAbsolutePath());
+            this.stopwords = Collections.emptySet();
+            return;
+        }
+        try {
+            this.stopwords = new HashSet<>(Files.readAllLines(filePath, StandardCharsets.UTF_8));
+            logger.info("Loaded {} stopwords from {}", stopwords.size(), filePath.toAbsolutePath());
+        } catch (IOException e) {
+            logger.error("Error loading stopwords from {}. Proceeding without stopwords.", filePath.toAbsolutePath(), e);
+            this.stopwords = Collections.emptySet();
+            throw e;
+        }
     }
 
     /**
@@ -117,26 +194,24 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     }
 
     /**
-     * Fetches a batch of entries from the database for processing.
-     * @param lastProcessedEntry The last entry processed in the previous batch (null if first batch)
-     * @return List of entries for processing
-     */
-    protected abstract List<T> fetchBatch(T lastProcessedEntry) throws SQLException;
-
-    /**
-     * Process a batch of documents and return a map of terms to their position lists.
-     * @param batch The batch of documents to process
-     * @return A multimap of terms to their position lists
-     */
-    protected abstract ListMultimap<String, PositionList> processBatch(List<T> batch) throws IOException;
-
-    /**
      * Writes a batch of processed entries to a temporary file.
      * @param positions The processed position lists to write
      * @return The temporary file containing the sorted entries
      */
     protected File writeBatchToTempFile(ListMultimap<String, PositionList> positions) throws IOException {
         File tempFile = Files.createTempFile(tempDir, "batch-", ".tmp").toFile();
+        logger.info("Attempting to write batch to temp file: {}. Unique terms in batch: {}. Total PositionLists: {}",
+            tempFile.getAbsolutePath(), positions.keySet().size(), positions.size());
+
+        try {
+            FileStore store = Files.getFileStore(tempDir);
+            logger.debug("Usable space before writing [{}]: {} MB",
+                tempFile.getName(), store.getUsableSpace() / (1024 * 1024));
+        } catch (IOException e) {
+            logger.warn("Could not determine usable space before writing temp file [{}]: {}", tempFile.getName(), e.getMessage());
+        }
+
+        long bytesWrittenToFile = 0;
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
             // Sort the entries by term (key) before writing to ensure each batch file is sorted.
             List<Map.Entry<String, Collection<PositionList>>> sortedEntries =
@@ -153,9 +228,20 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 String line = String.format("%s\t%s\n", 
                     entry.getKey(), 
                     Base64.getEncoder().encodeToString(mergedList.serialize()));
+                if (line.length() > 10 * 1024 * 1024) { // Log if a single line is very large (e.g. >10MB)
+                    logger.warn("Very large line being written to temp file {} for key '{}'. Line length: {} bytes",
+                        tempFile.getName(), entry.getKey(), line.length());
+                }
                 writer.write(line);
+                bytesWrittenToFile += line.getBytes(StandardCharsets.UTF_8).length; // Approximate byte count
             }
+        } catch (IOException e) {
+            logger.error("IOException while writing to temp file {}. Bytes written before error (approx): {}. Error: {}",
+                tempFile.getAbsolutePath(), bytesWrittenToFile, e.getMessage(), e);
+            throw e; // Re-throw the exception
         }
+        logger.info("Successfully wrote batch to temp file: {}. Final size: {} bytes",
+            tempFile.getAbsolutePath(), tempFile.length());
         return tempFile;
     }
 
@@ -371,6 +457,12 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
             File outputFile = new File(tempDir.toFile(), "sorted.tmp");
             logger.info("Merging {} temporary files...", tempFiles.size());
+            long totalTempFilesSize = 0;
+            for (File f : tempFiles) {
+                if (f.exists()) totalTempFilesSize += f.length();
+            }
+            logger.info("Total size of {} temp files to be merged: {} MB", tempFiles.size(), totalTempFilesSize / (1024*1024));
+
             ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), false);
 
             logger.info("Writing merged entries to LevelDB index...");
@@ -391,23 +483,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             }
             logger.debug("Temporary file cleanup complete.");
         }
-    }
-
-    /**
-     * Helper method to get the relevant document count for the progress bar.
-     * Specific index types might override this if they process different units.
-     */
-    protected long getDocumentCountForIndex() throws SQLException {
-        String countTable = getTableName(); // Default to the generator's table
-        String countSql = "SELECT COUNT(*) FROM " + countTable;
-        
-        try (Statement stmt = sqliteConn.createStatement();
-             ResultSet rs = stmt.executeQuery(countSql)) {
-            if (rs.next()) {
-                return rs.getLong(1);
-            }
-        }
-        return 0;
     }
 
     /**

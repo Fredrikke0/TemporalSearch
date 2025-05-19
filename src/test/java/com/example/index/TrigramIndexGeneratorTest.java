@@ -176,17 +176,27 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         Options options = new Options();
         indexAccess = new IndexAccess(indexBaseDir.toPath(), "trigram", options);
 
-        // Test trigrams with stopwords (using tokens)
-        verifyTrigram("the" + IndexGenerator.DELIMITER + "black" + 
-            IndexGenerator.DELIMITER + "cat", 1, 0, 0, 13, 2);
-
-        // Test regular trigrams in first document (using tokens: "black" + "cat" + "sits", etc.)
+        // Test regular trigrams in first document (stopwords are filtered before trigram creation)
+        // Tokens from Doc 1, Sent 1 after filtering: "black", "cat", "sits", "quietly", "now"
         verifyTrigram("black" + IndexGenerator.DELIMITER + "cat" + 
-            IndexGenerator.DELIMITER + "sits", 1, 0, 4, 18, 1); // Use token "sits"
+            IndexGenerator.DELIMITER + "sits", 1, 0, 4, 18, 1);
         verifyTrigram("cat" + IndexGenerator.DELIMITER + "sits" + 
-            IndexGenerator.DELIMITER + "quietly", 1, 0, 10, 26, 1); // Use token "sits"
+            IndexGenerator.DELIMITER + "quietly", 1, 0, 10, 26, 1);
         verifyTrigram("sits" + IndexGenerator.DELIMITER + "quietly" + 
-            IndexGenerator.DELIMITER + "now", 1, 0, 14, 30, 1); // Use token "sits"
+            IndexGenerator.DELIMITER + "now", 1, 0, 14, 30, 1);
+        
+        // It would be good to add tests for trigrams from other sentences/documents here.
+        // For example, from Doc 1, Sent 2 ("It purrs very softly today."):
+        // Filtered: "it", "purrs", "very", "softly", "today"
+        // verifyTrigram("it" + DELIMITER + "purrs" + DELIMITER + "very", 1, 1, 31, 44, 1);
+        // verifyTrigram("purrs" + DELIMITER + "very" + DELIMITER + "softly", 1, 1, 34, 51, 1);
+        // verifyTrigram("very" + DELIMITER + "softly" + DELIMITER + "today", 1, 1, 40, 57, 1);
+
+        // And from Doc 2, Sent 1 ("The black cat runs quickly away."):
+        // Filtered: "black", "cat", "runs", "quickly", "away"
+        // verifyTrigram("black" + DELIMITER + "cat" + DELIMITER + "runs", 2, 0, 4, 18, 1); 
+        // verifyTrigram("cat" + DELIMITER + "runs" + DELIMITER + "quickly", 2, 0, 10, 26, 1);
+        // verifyTrigram("runs" + DELIMITER + "quickly" + DELIMITER + "away", 2, 0, 14, 31, 1);
     }
 
     @Test

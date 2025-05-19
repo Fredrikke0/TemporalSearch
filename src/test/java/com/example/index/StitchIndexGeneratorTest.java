@@ -137,7 +137,7 @@ class StitchIndexGeneratorTest extends BaseIndexTest {
         List<StitchEntry> entries = generator.fetchBatch(null);
 
         // Verify results
-        assertEquals(40, entries.size(), "Expected 40 stitch entries");
+        assertEquals(30, entries.size(), "Expected 30 stitch entries");
         
         // Verify DATE stitch entry is present
         boolean foundDateStitch = false;
@@ -242,7 +242,7 @@ class StitchIndexGeneratorTest extends BaseIndexTest {
                 }
                 
                 // With our complete sentence, we now expect entries after filtering
-                assertEquals(16, entryCount, "Expected 16 total stitch entries after filtering (4 unigrams (-1 since 'in' is a stopword) * 4 annotations)");
+                assertEquals(12, entryCount, "Expected 12 total stitch entries after filtering (4 unigrams (-1 since 'in' is a stopword) * 3 annotations)");
             }
     
             // Verify progress tracking

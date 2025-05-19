@@ -148,9 +148,17 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
         var result = generator.processBatch(entries);
 
         // Verify date normalization
-        String key3 = "20240115";
-        assertTrue(result.containsKey(key3), "Should contain normalized January date");
-        assertEquals(2, result.get(key3).size(), 
-            "Should have two PositionLists for normalized January date (one from doc1, one merged from doc2)");
+        String key3 = "20240115"; // Corresponds to "2024-01-15"
+        assertTrue(result.containsKey(key3), 
+            "Should contain normalized January date key '20240115'. Actual keys: " + result.keySet());
+        
+        // processBatch should produce one PositionList for this key within this batch
+        assertEquals(1, result.get(key3).size(), 
+            "Should be one PositionList for the key '" + key3 + "' in the batch result.");
+
+        // That one PositionList should contain all 4 occurrences from doc1 and doc2
+        PositionList positionsForDate = result.get(key3).get(0);
+        assertEquals(4, positionsForDate.getPositions().size(), 
+            "Should have collected 4 positions for date '2024-01-15' (1 from doc1, 3 from doc2) in the batch.");
     }
 } 

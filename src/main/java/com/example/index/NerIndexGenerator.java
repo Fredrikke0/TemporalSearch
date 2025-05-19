@@ -11,6 +11,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessInterface;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -32,157 +33,144 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
     
     public NerIndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize);
+        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    }
+
+    public NerIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
     protected List<AnnotationEntry> fetchBatch(AnnotationEntry lastProcessedEntry) throws SQLException {
         List<AnnotationEntry> batch = new ArrayList<>();
-        String query;
-        boolean isFirstBatch = (lastProcessedEntry == null);
-        String existingWhereClause = "a.ner IS NOT NULL AND a.ner != '' AND a.ner != 'DATE' AND a.ner != 'O'";
-
-        if (isFirstBatch) {
-            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
-                    "a.token, a.ner, d.timestamp " +
-                    "FROM annotations a " +
-                    "JOIN documents d ON a.document_id = d.document_id " +
-                    "WHERE " + existingWhereClause + " " +
-                    "ORDER BY a.annotation_id LIMIT ?";
+        String sql;
+        if (lastProcessedEntry == null) {
+            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
+                  "FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE' " +
+                  "ORDER BY document_id, sentence_id, begin_char, annotation_id LIMIT ?";
         } else {
-            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
-                    "a.token, a.ner, d.timestamp " +
-                    "FROM annotations a " +
-                    "JOIN documents d ON a.document_id = d.document_id " +
-                    "WHERE " + existingWhereClause + " AND a.annotation_id > ? " +
-                    "ORDER BY a.annotation_id LIMIT ?";
+            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
+                  "FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE' AND annotation_id > ? " +
+                  "ORDER BY document_id, sentence_id, begin_char, annotation_id LIMIT ?";
         }
-        
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            if (isFirstBatch) {
-                stmt.setInt(1, this.batchSize);
+
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
+            if (lastProcessedEntry == null) {
+                stmt.setInt(1, batchSize);
             } else {
                 stmt.setInt(1, lastProcessedEntry.getAnnotationId());
-                stmt.setInt(2, this.batchSize);
+                stmt.setInt(2, batchSize);
             }
-
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    String nerType = rs.getString("ner");
-                    String entityText = rs.getString("token");
-                    
-                    if (nerType == null || entityText == null || nerType.isEmpty() || entityText.isEmpty()) {
-                        continue;
-                    }
-
                     batch.add(new AnnotationEntry(
                         rs.getInt("annotation_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
-                        entityText.toLowerCase(), // Entity text (lowercased token)
-                        nerType                 // NER type
+                        rs.getString("token"),
+                        rs.getString("pos"),
+                        rs.getString("ner"),
+                        rs.getString("normalized_ner"),
+                        rs.getString("lemma")
                     ));
                 }
             }
         }
-        
-        logger.debug("Fetched batch of {} NER annotations", batch.size());
         return batch;
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
-        ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        Map<String, PositionList> positionLists = new HashMap<>();
-        
-        // Variables to track continuous entity spans
-        int currentDocId = -1;
-        int currentSentenceId = -1;
+    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) {
+        ListMultimap<String, PositionList> resultMultimap = ArrayListMultimap.create();
+        if (batch.isEmpty()) {
+            return resultMultimap;
+        }
+
+        Map<String, PositionList> currentBatchEntityPositions = new HashMap<>();
+
+        AnnotationEntry prevEntry = null;
+        List<String> currentEntityRawTokens = new ArrayList<>();
         String currentEntityType = null;
-        StringBuilder currentEntityText = new StringBuilder();
-        int entityBeginChar = -1;
-        int entityEndChar = -1;
-        int lastAnnotationId = -1; // Track the last processed annotation ID
-        
-        // Process annotations in sequence (they are already ordered by document, sentence, and position)
-        for (int i = 0; i < batch.size(); i++) {
-            AnnotationEntry entry = batch.get(i);
-            int docId = entry.getDocumentId();
-            int sentenceId = entry.getSentenceId();
-            String entityType = entry.getPos(); // NER type stored in pos field
-            String token = entry.getToken(); // Entity text (token) stored in token field
-            int beginChar = entry.getBeginChar();
-            int endChar = entry.getEndChar();
-            int annotationId = entry.getAnnotationId(); // Get the annotation ID
-            
-            // Check if this is a continuation of the current entity
-            // Now also check if the annotation ID is consecutive (exactly one more than the last one)
-            boolean isContinuation = docId == currentDocId && 
-                                     sentenceId == currentSentenceId && 
-                                     entityType.equals(currentEntityType) &&
-                                     annotationId == lastAnnotationId + 1;
-            
-            if (isContinuation) {
-                // Continue the current entity
-                currentEntityText.append(" ").append(token); 
-                entityEndChar = endChar;
-            } else {
-                // Finalize the previous entity if it exists
-                if (currentEntityType != null) {
-                    addEntityToIndex(positionLists, currentEntityType, currentEntityText.toString(),
-                        currentDocId, currentSentenceId, entityBeginChar, entityEndChar);
+        String currentEntityNormalizedTextFirstToken = null; 
+        int currentEntityDocId = -1;
+        int currentEntitySentId = -1;
+        int currentEntityBeginChar = -1;
+
+        for (AnnotationEntry entry : batch) {
+            String nerTag = entry.getNer();
+            boolean entityBreak = false;
+
+            if (currentEntityType != null) {
+                if (nerTag == null || "O".equals(nerTag) || "DATE".equals(nerTag) ||
+                    !nerTag.equals(currentEntityType) ||
+                    entry.getDocumentId() != currentEntityDocId ||
+                    entry.getSentenceId() != currentEntitySentId ||
+                    (prevEntry != null && entry.getBeginChar() > prevEntry.getEndChar() + 1)
+                   ) {
+                    entityBreak = true;
                 }
-                
-                // Start a new entity
-                currentDocId = docId;
-                currentSentenceId = sentenceId;
-                currentEntityType = entityType;
-                currentEntityText = new StringBuilder(token);
-                entityBeginChar = beginChar;
-                entityEndChar = endChar;
             }
-            
-            // Update the last annotation ID
-            lastAnnotationId = annotationId;
-            
-            // If this is the last entry, finalize the current entity
-            if (i == batch.size() - 1 && currentEntityType != null) {
-                addEntityToIndex(positionLists, currentEntityType, currentEntityText.toString(),
-                    currentDocId, currentSentenceId, entityBeginChar, entityEndChar);
+
+            if (entityBreak) {
+                if (!currentEntityRawTokens.isEmpty() && prevEntry != null) {
+                    addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
+                                            currentEntityNormalizedTextFirstToken, currentEntityRawTokens,
+                                            currentEntityDocId, currentEntitySentId,
+                                            currentEntityBeginChar, prevEntry.getEndChar());
+                }
+                currentEntityRawTokens.clear();
+                currentEntityType = null;
             }
+
+            if (nerTag != null && !nerTag.isEmpty() && !"O".equals(nerTag) && !"DATE".equals(nerTag)) {
+                if (currentEntityType == null) {
+                    currentEntityType = nerTag;
+                    currentEntityNormalizedTextFirstToken = entry.getNormalizedNer();
+                    currentEntityDocId = entry.getDocumentId();
+                    currentEntitySentId = entry.getSentenceId();
+                    currentEntityBeginChar = entry.getBeginChar();
+                }
+                currentEntityRawTokens.add(entry.getToken());
+            }
+            prevEntry = entry;
         }
-        
-        // Add all position lists to result
-        for (Map.Entry<String, PositionList> entry : positionLists.entrySet()) {
-            index.put(entry.getKey(), entry.getValue());
+
+        if (currentEntityType != null && !currentEntityRawTokens.isEmpty() && prevEntry != null) {
+             addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
+                                    currentEntityNormalizedTextFirstToken, currentEntityRawTokens,
+                                    currentEntityDocId, currentEntitySentId,
+                                    currentEntityBeginChar, prevEntry.getEndChar());
         }
-        
-        logger.debug("Processed batch with {} unique entity entries", positionLists.size());
-        return index;
+
+        for (Map.Entry<String, PositionList> mapEntry : currentBatchEntityPositions.entrySet()) {
+            resultMultimap.put(mapEntry.getKey(), mapEntry.getValue());
+        }
+        return resultMultimap;
     }
     
-    /**
-     * Helper method to add an entity to the index
-     */
-    private void addEntityToIndex(Map<String, PositionList> positionLists, String entityType, 
-                                 String entityText, int docId, int sentenceId, 
-                                 int beginChar, int endChar) {
-        // Create composite key with format "ENTITY_TYPE\0entityText"
-        // Ensure entityType is uppercase to match NerExecutor expectations
-        String compositeKey = entityType.toUpperCase() + IndexAccessInterface.DELIMITER + entityText;
-        
-        Position position = new Position(
-            docId, 
-            sentenceId, 
-            beginChar, 
-            endChar 
-        );
+    private void addProcessedEntityToMap(Map<String, PositionList> map,
+                                         String entityType, String normalizedTextFirstToken,
+                                         List<String> rawTokens, int docId, int sentId,
+                                         int beginChar, int endChar) {
+        if (entityType == null || rawTokens.isEmpty() || beginChar == -1 || endChar == -1 || endChar < beginChar) {
+            logger.warn("Skipping invalid entity: type={}, tokens={}, doc={}, sent={}, begin={}, end={}", 
+                        entityType, rawTokens, docId, sentId, beginChar, endChar);
+            return;
+        }
 
-        // Get or create position list for this entity
-        PositionList posList = positionLists.computeIfAbsent(compositeKey, k -> new PositionList());
-        posList.add(position);
+        String entityValue;
+        if (normalizedTextFirstToken != null && !normalizedTextFirstToken.isBlank()) {
+            entityValue = normalizedTextFirstToken.toLowerCase(); 
+        } else {
+            entityValue = String.join(" ", rawTokens).toLowerCase();
+        }
+
+        String compositeKey = entityType.toUpperCase() + IndexAccessInterface.DELIMITER + entityValue;
+
+        PositionList pl = map.computeIfAbsent(compositeKey, k -> new PositionList());
+        pl.add(new Position(docId, sentId, beginChar, endChar));
     }
 
     @Override
@@ -193,5 +181,17 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
     @Override
     protected String getIndexName() {
         return "ner";
+    }
+
+    @Override
+    public long getDocumentCountForIndex() throws SQLException {
+        String countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE'";
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
+             ResultSet rs = stmt.executeQuery()) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        }
+        return 0;
     }
 } 

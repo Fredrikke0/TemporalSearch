@@ -1,26 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
+    <!-- Suppress internal Logback status messages -->
     <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
-    
+
+    <!-- Console Appender -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %-5level - %msg%n</pattern>
         </encoder>
     </appender>
 
+    <!-- Main File Appender (for general application logs) -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>logs/indexer.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
             <fileNamePattern>logs/indexer.%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>10</maxHistory>
-            <totalSizeCap>3GB</totalSizeCap>
+            <maxHistory>10</maxHistory> <!-- Keep 10 days of logs -->
+            <totalSizeCap>3GB</totalSizeCap> <!-- Max total size of log files -->
         </rollingPolicy>
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <appender name="METRICS" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <!-- Metrics File Appender (optional, if you want separate metrics) -->
+    <appender name="METRICS_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>logs/metrics.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
             <fileNamePattern>logs/metrics.%d{yyyy-MM-dd}.log</fileNamePattern>
@@ -28,60 +32,30 @@
             <totalSizeCap>1GB</totalSizeCap>
         </rollingPolicy>
         <encoder>
+            <!-- Metrics might have a simpler pattern, e.g., just the message if it\'s structured -->
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %msg%n</pattern>
         </encoder>
     </appender>
 
-    <!-- Specific logger for metrics -->
+    <!-- Specific logger for metrics (optional) -->
     <logger name="com.example.logging.IndexingMetrics" level="INFO" additivity="false">
-        <appender-ref ref="METRICS"/>
+        <appender-ref ref="METRICS_FILE"/>
     </logger>
 
-    <!-- Suppress LevelDB configuration messages -->
+    <!-- Suppress non-critical messages from noisy libraries -->
     <logger name="com.example.index.LevelDBConfig" level="WARN"/>
-
-    <!-- Suppress verbose Stanford CoreNLP initialization messages -->
     <logger name="edu.stanford.nlp" level="WARN"/>
+    <logger name="org.iq80.leveldb" level="WARN"/> <!-- For LevelDB itself -->
+    <logger name="org.xerial.snappy" level="WARN"/> <!-- For Snappy compression -->
+    <!-- Add any other noisy libraries here -->
+
 
     <!-- Root logger configuration -->
+    <!-- This level applies to all loggers unless overridden by a more specific logger above. -->
+    <!-- All logs from com.example.* (except IndexingMetrics if configured above) will use this. -->
     <root level="DEBUG">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
     </root>
 
-    <!-- Keep specific loggers if needed, otherwise INFO will apply -->
-    <logger name="com.example.performance" level="INFO" additivity="false">
-        <appender-ref ref="CONSOLE"/> 
-    </logger>
-
-    <logger name="com.example.index" level="DEBUG" additivity="false">
-        <appender name="INDEX_LOG_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-            <file>logs/indexer.log</file>
-            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                <fileNamePattern>logs/indexer.%d{yyyy-MM-dd}.log</fileNamePattern>
-                <maxHistory>10</maxHistory>
-                <totalSizeCap>3GB</totalSizeCap>
-            </rollingPolicy>
-            <encoder>
-                <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-            </encoder>
-        </appender>
-        <appender name="CONSOLE_FOR_INDEX" class="ch.qos.logback.core.ConsoleAppender">
-            <encoder>
-                <pattern>%d{HH:mm:ss.SSS} %-5level - %msg%n</pattern>
-            </encoder>
-            <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
-                <level>DEBUG</level>
-            </filter>
-        </appender>
-    </logger>
-
-    <logger name="com.example.query" level="DEBUG" additivity="false"> 
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
-    </logger>
-    <logger name="com.example.core" level="INFO" additivity="false"> 
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
-    </logger>
 </configuration>

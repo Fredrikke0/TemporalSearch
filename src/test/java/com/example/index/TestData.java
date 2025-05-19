@@ -20,7 +20,10 @@ public class TestData {
     public static AnnotationEntry createAnnotation(int annotationId, int docId, String lemma, String pos) {
         return new AnnotationEntry(
             annotationId, docId, 1, 0, lemma.length(),
-            lemma, pos
+            lemma, pos,
+            null, // ner
+            null, // normalizedNer
+            lemma // Use lemma as lemma field for testing, or null if not applicable
         );
     }
 
@@ -34,13 +37,13 @@ public class TestData {
 
     public static void insertBasicAnnotations(Connection conn) throws SQLException {
         try (PreparedStatement stmt = conn.prepareStatement(
-            "INSERT INTO annotations (annotation_id, document_id, sentence_id, begin_char, end_char, lemma, pos) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO annotations (annotation_id, document_id, sentence_id, begin_char, end_char, token, lemma, pos, ner, normalized_ner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )) {
-            // Basic test data
+            // Basic test data: annotation_id, document_id, sentence_id, begin_char, end_char, token, lemma, pos, ner, normalized_ner
             Object[][] data = {
-                {1, 1, 1, 0, 3, "cat", "NOUN"},
-                {2, 1, 1, 4, 10, "chases", "VERB"},
-                {3, 1, 1, 11, 16, "mouse", "NOUN"}
+                {1, 1, 1, 0, 3, "cat", "cat", "NOUN", null, null},
+                {2, 1, 1, 4, 10, "chases", "chases", "VERB", null, null},
+                {3, 1, 1, 11, 16, "mouse", "mouse", "NOUN", null, null}
             };
 
             for (Object[] row : data) {
@@ -80,4 +83,8 @@ public class TestData {
             stmt.executeUpdate();
         }
     }
+
+    public static final AnnotationEntry ANNOTATION_ENTRY_1 = new AnnotationEntry(1, 1, 1, 0, 2, "He", "PRP", null, null, null);
+    public static final AnnotationEntry ANNOTATION_ENTRY_2 = new AnnotationEntry(2, 1, 1, 3, 5, "is", "VBZ", null, null, null);
+    public static final AnnotationEntry ANNOTATION_ENTRY_3 = new AnnotationEntry(3, 1, 1, 6, 10, "good", "JJ", null, null, null);
 } 

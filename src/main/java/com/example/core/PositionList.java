@@ -36,11 +36,11 @@ public class PositionList {
         }
         positions.add(position);
         
-        if (logSampler.shouldLog()) {
-            logger.debug("Added position - docId: {}, sentenceId: {}, begin: {}, end: {}",
-                position.getDocumentId(), position.getSentenceId(),
-                position.getBeginPosition(), position.getEndPosition());
-        }
+        // if (logSampler.shouldLog()) {
+        //     logger.debug("Added position - docId: {}, sentenceId: {}, begin: {}, end: {}",
+        //         position.getDocumentId(), position.getSentenceId(),
+        //         position.getBeginPosition(), position.getEndPosition());
+        // }
     }
 
     public List<Position> getPositions() {
@@ -360,9 +360,9 @@ public class PositionList {
                 list.add(new Position(docIds[i], sentenceIds[i], beginPositions[i], endPositions[i]));
             }
         }
-        if (logSampler.shouldLog()) {
-            logger.debug("Deserialized {} positions successfully.", list.size());
-        }
+        // if (logSampler.shouldLog()) {
+        //     logger.debug("Deserialized {} positions successfully.", list.size());
+        // }
         return list;
     }
 

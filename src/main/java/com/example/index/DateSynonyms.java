@@ -89,7 +89,7 @@ public class DateSynonyms implements AutoCloseable {
             idToDate.put(id, dateValue);
             modified = true;
             
-            logger.debug("Created new date synonym: {} -> {}", dateValue, id);
+            //logger.debug("Created new date synonym: {} -> {}", dateValue, id);
             return id;
         }
     }

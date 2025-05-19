@@ -14,6 +14,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import org.junit.jupiter.api.AfterEach;
@@ -106,9 +107,9 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
     void testProcessBatch() throws IOException {
         // Create test entries
         List<AnnotationEntry> batch = List.of(
-            new AnnotationEntry(1, 1, 1, 0, 4, "Test", "NN"),
-            new AnnotationEntry(2, 1, 1, 5, 9, "word", "NN"),
-            new AnnotationEntry(3, 1, 1, 10, 13, "the", "DT") // stopword
+            new AnnotationEntry(1, 1, 1, 0, 4, "Test", "NN", null, null, "test"),
+            new AnnotationEntry(2, 1, 1, 5, 9, "word", "NN", null, null, "word"),
+            new AnnotationEntry(3, 1, 1, 10, 13, "the", "DT", null, null, "the") // stopword
         );
 
         // Process batch
@@ -136,12 +137,12 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
     void testProcessBatchWithOverlaps() throws IOException {
         // Create test entries with overlapping and adjacent positions
         List<AnnotationEntry> batch = List.of(
-            new AnnotationEntry(1, 1, 1, 0, 4, "test", "NN"),
-            new AnnotationEntry(2, 1, 1, 2, 6, "test", "NN"), // overlaps first "test"
-            new AnnotationEntry(3, 1, 1, 10, 14, "word", "NN"),
-            new AnnotationEntry(4, 1, 1, 15, 19, "word", "NN"), // adjacent to first "word"
-            new AnnotationEntry(5, 1, 1, 20, 26, "repeat", "NN"),
-            new AnnotationEntry(6, 1, 1, 20, 26, "repeat", "NN") // exact match with previous
+            new AnnotationEntry(1, 1, 1, 0, 4, "test", "NN", null, null, "test"),
+            new AnnotationEntry(2, 1, 1, 2, 6, "test", "NN", null, null, "test"), // overlaps first "test"
+            new AnnotationEntry(3, 1, 1, 10, 14, "word", "NN", null, null, "word"),
+            new AnnotationEntry(4, 1, 1, 15, 19, "word", "NN", null, null, "word"), // adjacent to first "word"
+            new AnnotationEntry(5, 1, 1, 20, 26, "repeat", "NN", null, null, "repeat"),
+            new AnnotationEntry(6, 1, 1, 20, 26, "repeat", "NN", null, null, "repeat") // exact match with previous
         );
 
         // Process batch
@@ -205,5 +206,29 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
             sb.append((char) ('a' + random.nextInt(26)));
         }
         return sb.toString();
+    }
+
+    private List<AnnotationEntry> createSampleData() {
+        List<AnnotationEntry> entries = new ArrayList<>();
+        entries.add(new AnnotationEntry(1, 1, 1, 0, 3, "Cat", "NN", null, null, "cat"));
+        entries.add(new AnnotationEntry(2, 1, 1, 4, 6, "is", "VBZ", null, null, "be"));
+        entries.add(new AnnotationEntry(3, 1, 1, 7, 11, "cute", "JJ", null, null, "cute"));
+        return entries;
+    }
+
+    private List<AnnotationEntry> createComplexSampleData() {
+        List<AnnotationEntry> entries = new ArrayList<>();
+        // Sentence 1
+        entries.add(new AnnotationEntry(1, 1, 1, 0, 3, "The", "DT", null, null, "the"));
+        entries.add(new AnnotationEntry(2, 1, 1, 4, 8, "quick", "JJ", null, null, "quick"));
+        entries.add(new AnnotationEntry(3, 1, 1, 9, 14, "brown", "JJ", null, null, "brown"));
+        entries.add(new AnnotationEntry(4, 1, 1, 15, 18, "fox", "NN", null, null, "fox"));
+        // Sentence 2 (different document)
+        entries.add(new AnnotationEntry(5, 2, 1, 0, 4, "Lazy", "JJ", null, null, "lazy"));
+        entries.add(new AnnotationEntry(6, 2, 1, 5, 8, "dogs", "NNS", null, null, "dog"));
+        // Stopword and punctuation
+        entries.add(new AnnotationEntry(7, 3, 1, 0, 2, "in", "IN", null, null, "in")); // stopword
+        entries.add(new AnnotationEntry(8, 3, 1, 3, 4, ".", ".", null, null, "."));   // punctuation
+        return entries;
     }
 } 

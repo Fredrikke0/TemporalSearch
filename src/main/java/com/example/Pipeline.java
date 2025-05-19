@@ -1,6 +1,7 @@
 package com.example;
 
 import com.example.annotation.Annotations;
+import com.example.index.IndexGenerator;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
@@ -13,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.InvalidPathException;
+import java.util.Comparator;
 import java.util.stream.Stream;
 
 public class Pipeline {
@@ -126,6 +128,12 @@ public class Pipeline {
                       "  nash       - Specific index type (adjust description if needed)" + // Added nash
                       "  all        - Generate all available index types (default)");
 
+        indexGroup.addArgument("--custom-temp-dir")
+                .dest("custom_temp_dir")
+                .type(String.class)
+                .required(false)
+                .help("Path to a custom base directory for temporary files during index generation. If not specified, defaults to 'PROJECT_PATH/indexes/temp/'.");
+
         // Parse arguments
         Namespace ns = parser.parseArgs(args);
         
@@ -229,6 +237,45 @@ public class Pipeline {
             String indexType = ns.getString("index_type");
             String stopwordsPath = ns.getString("stopwords");
             int indexBatchSize = ns.getInt("idx_batch_size"); // Use the new argument
+            String customTempDirArg = ns.getString("custom_temp_dir"); // Get the argument value
+
+            String effectiveCustomTempDirStr;
+            if (customTempDirArg != null && !customTempDirArg.isBlank()) {
+                effectiveCustomTempDirStr = customTempDirArg;
+                logger.info("Using user-provided custom temporary directory: {}", effectiveCustomTempDirStr);
+            } else {
+                Path defaultTempPath = indexBasePath.resolve("temp");
+                effectiveCustomTempDirStr = defaultTempPath.toString();
+                logger.info("Using default temporary directory for indexing: {}", effectiveCustomTempDirStr);
+                // IndexRunner will create this path if it doesn't exist.
+            }
+
+            // --- Add Shutdown Hook for Temp Cleanup ---
+            final String finalEffectiveCustomTempDirStr = effectiveCustomTempDirStr; // Effectively final for lambda
+            Path sortTempDirToDeleteOnShutdown = Path.of(finalEffectiveCustomTempDirStr).resolve(IndexGenerator.TEMP_SUBDIR_NAME);
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                logger.info("Shutdown hook triggered. Attempting to clean up temporary sort directory: {}", sortTempDirToDeleteOnShutdown);
+                if (Files.exists(sortTempDirToDeleteOnShutdown) && Files.isDirectory(sortTempDirToDeleteOnShutdown)) {
+                    try (Stream<Path> walk = Files.walk(sortTempDirToDeleteOnShutdown)) {
+                        walk.sorted(Comparator.reverseOrder()) // Delete contents first, then directory
+                            .forEach(path -> {
+                                try {
+                                    Files.delete(path);
+                                    logger.debug("Shutdown hook: Deleted temporary file/directory: {}", path);
+                                } catch (IOException e) {
+                                    logger.error("Shutdown hook: Failed to delete temporary path {}: {}", path, e.getMessage());
+                                }
+                            });
+                        logger.info("Shutdown hook: Successfully cleaned up temporary sort directory: {}", sortTempDirToDeleteOnShutdown);
+                    } catch (IOException e) {
+                        logger.error("Shutdown hook: Error walking temporary sort directory {} for cleanup: {}", sortTempDirToDeleteOnShutdown, e.getMessage());
+                    }
+                } else {
+                    logger.info("Shutdown hook: Temporary sort directory {} does not exist or is not a directory. No cleanup needed.", sortTempDirToDeleteOnShutdown);
+                }
+            }));
+            // --- End Shutdown Hook ---
 
             // Determine the specific index directory path
             Path specificIndexDir = indexBasePath.resolve(indexType.equals("all") ? "" : indexType); // Base path if 'all'
@@ -298,14 +345,15 @@ public class Pipeline {
 
 
             if (needsIndexing) {
-                 logger.info("Running Indexer (type={}, stopwords='{}', batchSize={})",
-                             indexType, stopwordsPath, indexBatchSize);
+                 logger.info("Running Indexer (type={}, stopwords='{}', batchSize={}, customTempDir='{}')",
+                             indexType, stopwordsPath, indexBatchSize, effectiveCustomTempDirStr);
                  IndexRunner.runIndexing(
                      projectDbPath.toString(),
                      indexBasePath.toString(), // Pass base index dir
                      stopwordsPath,
                      indexBatchSize, // Pass specific index batch size
-                     indexType // Pass specific type ('all' or single)
+                     indexType, // Pass specific type ('all' or single)
+                     effectiveCustomTempDirStr // Pass the effective custom temp dir path
                  );
                  logger.info("Indexing stage completed.");
             }

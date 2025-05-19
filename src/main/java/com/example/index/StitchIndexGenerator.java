@@ -36,17 +36,14 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
     private static final Pattern DATE_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
     private Integer lastProcessedDocumentIdForStitch = null; // For keyset pagination on documents
 
-    private static class DocumentInfo {
-        final int documentId;
-
-        DocumentInfo(int documentId) {
-            this.documentId = documentId;
-        }
+    public StitchIndexGenerator(String indexBaseDir, String stopwordsPath,
+            java.sql.Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
     public StitchIndexGenerator(String indexBaseDir, String stopwordsPath,
-            java.sql.Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize);
+            java.sql.Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
         Path baseDir = Path.of(indexBaseDir);
         this.annotationSynonyms = new MultiAnnotationSynonyms(baseDir);
         try {
@@ -71,7 +68,6 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
         populateDateSynonyms();
         populateNerSynonyms();
         populatePosSynonyms();
-        populateDependencySynonyms();
         
         // Validate synonyms to ensure consistency
         annotationSynonyms.validateSynonyms();
@@ -204,93 +200,36 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
             logger.info("Populated {} POS synonyms", count);
         }
     }
-    
-    /**
-     * Populates dependency relation synonyms from the database.
-     * Fetches all unique dependency relation types.
-     */
-    private void populateDependencySynonyms() throws SQLException, IOException {
-        String query = """
-            SELECT DISTINCT relation
-            FROM dependencies
-            WHERE relation IS NOT NULL
-                AND LENGTH(relation) > 0
-            ORDER BY relation
-        """;
-
-        int count = 0;
-        int skipped = 0;
-        try (Statement stmt = sqliteConn.createStatement();
-             ResultSet rs = stmt.executeQuery(query)) {
-            while (rs.next()) {
-                String relationValue = rs.getString(1);
-                if (relationValue != null && !relationValue.isEmpty()) {
-                    try {
-                        annotationSynonyms.getOrCreateId(relationValue, AnnotationType.DEPENDENCY);
-                        count++;
-                    } catch (IllegalArgumentException e) {
-                        logger.debug("Filtered out invalid dependency relation: {} ({})", relationValue, e.getMessage());
-                        skipped++;
-                    }
-                }
-            }
-        }
-        
-        if (skipped > 0) {
-            logger.info("Populated {} dependency relation synonyms, filtered out {} invalid values", count, skipped);
-        } else {
-            logger.info("Populated {} dependency relation synonyms", count);
-        }
-    }
 
     @Override
     protected List<StitchEntry> fetchBatch(StitchEntry lastStitchEntryFromPreviousOverallBatch) throws SQLException {
-        // lastStitchEntryFromPreviousOverallBatch is from the superclass, not directly used here for document fetching.
-        // We use this.lastProcessedDocumentIdForStitch to manage document-level pagination.
-
         List<StitchEntry> currentStitchEntriesForBatch = new ArrayList<>();
-        
-        // The batchSize from constructor is the target number of StitchEntry items to return.
-        // Loop to fetch documents one by one until enough StitchEntry items are collected
-        // or no more documents are available.
         while (currentStitchEntriesForBatch.size() < this.batchSize) {
             String sql;
-            DocumentInfo currentDocument = null;
-
-            if (this.lastProcessedDocumentIdForStitch == null) { // First document batch for this generator instance
+            Integer currentDocumentId = null;
+            if (this.lastProcessedDocumentIdForStitch == null) {
                 sql = "SELECT document_id FROM documents ORDER BY document_id LIMIT 1";
-            } else { // Subsequent document batches
+            } else {
                 sql = "SELECT document_id FROM documents WHERE document_id > ? ORDER BY document_id LIMIT 1";
             }
-
             try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
                 if (this.lastProcessedDocumentIdForStitch != null) {
                     stmt.setInt(1, this.lastProcessedDocumentIdForStitch);
                 }
-
                 try (ResultSet rs = stmt.executeQuery()) {
                     if (rs.next()) {
                         int docId = rs.getInt("document_id");
-                        currentDocument = new DocumentInfo(docId);
-                        this.lastProcessedDocumentIdForStitch = docId; // Update for next iteration
+                        currentDocumentId = docId;
+                        this.lastProcessedDocumentIdForStitch = docId;
                     } else {
-                        // No more documents found
-                        break; // Exit the while loop
+                        break;
                     }
                 }
             }
-
-            if (currentDocument != null) {
-                // This method appends entries to currentStitchEntriesForBatch
-                processDocumentForStitchIndex(currentDocument.documentId, currentStitchEntriesForBatch);
-            } else if (currentDocument == null) {
-                // This means no more documents were found by the query, already handled by the break above
-            } else {
-                 // Document was found but had null timestamp or other issue, already logged.
-                 // Loop continues to fetch next document if condition currentStitchEntriesForBatch.size() < this.batchSize is met.
+            if (currentDocumentId != null) {
+                processDocumentForStitchIndex(currentDocumentId, currentStitchEntriesForBatch);
             }
         }
-        
         return currentStitchEntriesForBatch;
     }
 
@@ -309,7 +248,6 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
         processDateAnnotations(documentId, unigramsBySentence, entries);
         processNerAnnotations(documentId, unigramsBySentence, entries);
         processPosAnnotations(documentId, unigramsBySentence, entries);
-        processDependencyAnnotations(documentId, unigramsBySentence, entries);
     }
 
     /**
@@ -542,57 +480,6 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
         }
     }
 
-    /**
-     * Process dependency annotations for a document
-     */
-    private void processDependencyAnnotations(
-            int documentId,
-            Map<Integer, List<UnigramData>> unigramsBySentence,
-            List<StitchEntry> entries) throws SQLException {
-        
-        String sql = """
-            SELECT sentence_id, begin_char, end_char, relation
-            FROM dependencies
-            WHERE 
-                document_id = ?
-                AND relation IS NOT NULL
-                AND LENGTH(relation) > 0
-        """;
-        
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
-            stmt.setInt(1, documentId);
-            
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    int sentenceId = rs.getInt("sentence_id");
-                    String relationValue = rs.getString("relation");
-                    
-                    // Skip if the relation value is invalid
-                    if (relationValue == null || relationValue.isEmpty()) {
-                        continue;
-                    }
-                    
-                    // Get the synonym ID for this dependency relation
-                    int synonymId = annotationSynonyms.getOrCreateId(relationValue, AnnotationType.DEPENDENCY);
-                    
-                    // Find unigrams in the same sentence and create stitch entries
-                    List<UnigramData> unigrams = unigramsBySentence.getOrDefault(sentenceId, List.of());
-                    for (UnigramData unigram : unigrams) {
-                        entries.add(new StitchEntry(
-                            documentId,
-                            sentenceId,
-                            unigram.beginChar,
-                            unigram.endChar,
-                            unigram.token,
-                            AnnotationType.DEPENDENCY,
-                            synonymId
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
     @Override
     protected ListMultimap<String, PositionList> processBatch(List<StitchEntry> batch) {
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
@@ -647,8 +534,9 @@ public class StitchIndexGenerator extends IndexGenerator<StitchEntry> {
     }
 
     @Override
-    protected long getDocumentCountForIndex() throws SQLException {
-        // Stitch index processes documents, so count from the documents table
+    public long getDocumentCountForIndex() throws SQLException {
+        // Count documents that have the specific NER_DATE and UNIGRAM counts for Stitch index.
+        // This might be complex to get accurately. A simple document count might be used initially.
         String countSql = "SELECT COUNT(*) FROM documents";
         try (Statement stmt = sqliteConn.createStatement();
              ResultSet rs = stmt.executeQuery(countSql)) {

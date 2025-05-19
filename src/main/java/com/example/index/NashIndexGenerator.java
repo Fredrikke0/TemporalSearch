@@ -10,12 +10,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 
 /**
@@ -28,33 +30,34 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(NashIndexGenerator.class);
     private static final DateTimeFormatter NASH_INTERVAL_FORMATTER = DateTimeFormatter.ISO_DATE; // YYYY-MM-DD
 
-    public NashIndexGenerator(String levelDbPath, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize)
+    public NashIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize)
             throws IOException {
-        super(levelDbPath, stopwordsPath, sqliteConn, progress, batchSize);
+        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    }
+
+    public NashIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath)
+            throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
     protected String getTableName() {
-        return "annotations"; // Source table
+        return "annotations";
     }
 
     @Override
     protected String getIndexName() {
-        return "nash"; // Name of this specific index
+        return "nash";
     }
 
     @Override
     protected List<AnnotationEntry> fetchBatch(AnnotationEntry lastProcessedEntry) throws SQLException {
-        // This method is technically not used by NashIndexGenerator because its
-        // generateIndex() method fetches all data at once and processes it differently.
-        // Provide a basic implementation to satisfy the abstract class, but it won't be called.
         logger.warn("fetchBatch called unexpectedly in NashIndexGenerator. This should not happen with the current implementation.");
         return Collections.emptyList();
     }
 
     @Override
-    protected com.google.common.collect.ListMultimap<String, com.example.core.PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
-        // This method is also not used due to the overridden generateIndex.
+    protected com.google.common.collect.ListMultimap<String, com.example.core.PositionList> processBatch(List<AnnotationEntry> batch) {
         logger.warn("processBatch called unexpectedly in NashIndexGenerator. This should not happen.");
         return com.google.common.collect.ArrayListMultimap.create();
     }
@@ -70,33 +73,27 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
         logger.info("Starting Nash index generation (in-memory build)... Index Name: {}", getIndexName());
         long startTime = System.currentTimeMillis();
 
-        // Data structures built in memory
         Map<LocalDate, Integer> dateToId = new HashMap<>();
         List<LocalDate> idToDate = new ArrayList<>();
         List<String> intervalStrings = new ArrayList<>();
-        // Map from the original interval list index to the list of entries for that interval
         Map<Integer, List<NashDateEntryWithId>> listIndexToEntries = new HashMap<>();
-        int intervalIndexCounter = 0;
         long rawAnnotationsProcessed = 0;
 
-        // State for merging consecutive annotations
         int currentDocId = -1;
         int currentSentId = -1;
         String currentNormalizedNer = null;
         int currentStartChar = -1;
         int currentEndChar = -1;
-        int currentDateId = -1; // Track the dateId for the current mention
+        int currentDateId = -1;
 
-        // 1. Fetch ALL relevant annotations (potentially memory-intensive)
         logger.info("Fetching all DATE annotations from database...");
         String query = "SELECT a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
-                       "a.normalized_ner, d.timestamp " +
-                       "FROM annotations a JOIN documents d ON a.document_id = d.document_id " +
+                       "a.normalized_ner " +
+                       "FROM annotations a " +
                        "WHERE a.ner = 'DATE' AND a.normalized_ner IS NOT NULL " +
                        "ORDER BY a.document_id, a.sentence_id, a.begin_char";
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query); ResultSet rs = stmt.executeQuery()) {
-
             while (rs.next()) {
                 rawAnnotationsProcessed++;
                 int docId = rs.getInt("document_id");
@@ -106,61 +103,42 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 String normalizedNer = rs.getString("normalized_ner");
 
                 if (docId == currentDocId && sentId == currentSentId && Objects.equals(normalizedNer, currentNormalizedNer)) {
-                    // --- Part of the same logical mention ---
-                    // SQL query ensures normalizedNer is not null here.
-                    currentEndChar = endChar; // Extend the span
+                    currentEndChar = endChar;
                 } else {
-                    // --- Start of a new mention (or the first one, or different NER) ---
-                    // 1. Finalize the *previous* mention (if valid)
-                    // Check currentDateId != -1 which implies previous normalizedNer was non-null and parseable.
                     if (currentDocId != -1 && currentDateId != -1) { 
-                        // Create finalized Position for the previous mention
                         Position finalizedPosition = new Position(
                                 currentDocId,
                                 currentSentId,
                                 currentStartChar,
                                 currentEndChar
                         );
-                        // Add the entry (finalized position + dateId) to the list associated with its dateId
                         listIndexToEntries.get(currentDateId).add(new NashDateEntryWithId(finalizedPosition, currentDateId));
                     }
-
-                    // 2. Start tracking the new mention
                     currentDocId = docId;
                     currentSentId = sentId;
                     currentNormalizedNer = normalizedNer;
                     currentStartChar = beginChar;
                     currentEndChar = endChar;
-                    currentDateId = -1; // Reset dateId, will be set below if date is valid
+                    currentDateId = -1;
 
-                    // Process the date for the new mention (normalizedNer is non-null here)
                     LocalDate docDate = parseNormalizedDate(normalizedNer);
                     if (docDate != null) {
-                        // Get or create Date ID for the new mention
-                        final LocalDate finalDocDate = docDate; // Final for lambda
+                        final LocalDate finalDocDate = docDate;
                         currentDateId = dateToId.computeIfAbsent(docDate, date -> {
                             idToDate.add(date);
-                            int newId = idToDate.size() - 1; // 0-based ID
-
-                            // Create interval string *only if* this is the first time we see this dateId
+                            int newId = idToDate.size() - 1;
                             String interval = String.format("[%s , %s]",
                                     NASH_INTERVAL_FORMATTER.format(finalDocDate),
                                     NASH_INTERVAL_FORMATTER.format(finalDocDate));
-                            intervalStrings.add(interval); // Add interval string
-                            listIndexToEntries.put(newId, new ArrayList<>()); // Initialize entry list
-
+                            intervalStrings.add(interval);
+                            listIndexToEntries.put(newId, new ArrayList<>());
                             return newId;
                         });
                     } else {
-                        // normalizedNer was non-null but not parseable. Just log and skip.
-                        // currentDateId remains -1, so this mention won't be finalized.
                         logger.trace("Skipping invalid/unparseable normalized_ner date: {}", normalizedNer);
                     }
                 }
             }
-
-            // --- Finalize the very last mention after the loop ---
-            // Check currentDateId != -1 which implies last normalizedNer was non-null and parseable.
             if (currentDocId != -1 && currentDateId != -1) { 
                 Position finalizedPosition = new Position(
                         currentDocId,
@@ -170,7 +148,6 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 );
                  listIndexToEntries.get(currentDateId).add(new NashDateEntryWithId(finalizedPosition, currentDateId));
             }
-
         } catch (SQLException e) {
             logger.error("Database error fetching annotations for Nash index", e);
             throw e;
@@ -179,7 +156,6 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
         if (intervalStrings.isEmpty()) {
             logger.warn("No valid date intervals found. Nash index will be empty.");
-            // Ensure index is created but potentially empty
              try {
                  indexAccess.put(NashSerializationUtils.DATE_LOOKUP_KEY, NashSerializationUtils.serializeDateLookup(Collections.emptyList()));
              } catch (IndexAccessException | IOException e) {
@@ -188,38 +164,29 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             return;
         }
 
-        // 2. Perform Nash Inversion
         logger.info("Performing Nash inversion for {} unique date intervals...", intervalStrings.size());
-        MultiMap<String, Integer> invertedIndex; // Maps Nash Prefix -> List of original interval string indices
-
-
+        MultiMap<String, Integer> invertedIndex;
         try {
             invertedIndex = Nash.invert(intervalStrings);
             logger.info("Nash inversion complete. Found {} unique Nash prefixes.", invertedIndex.size());
-
         } catch (Exception e) {
             logger.error("Failed during Nash.invert call", e);
             throw new IOException("Failed to generate Nash inverted index", e);
         }
 
-        // 3. Write to LevelDB
-        logger.info("Writing Nash index data to LevelDB at {} ...", indexAccess.getIndexType());
+        logger.info("Writing Nash index data to LevelDB at {} ...", getIndexName());
         long termsWritten = 0;
         try {
             for (String nashPrefix : invertedIndex.keySet()) {
                 List<NashDateEntryWithId> aggregatedEntries = new ArrayList<>();
-                // The indices in invertedIndex.get(nashPrefix) correspond to the original intervalStrings list,
-                // which in our setup correspond directly to the dateId.
                 for (Integer dateIdFromNash : invertedIndex.get(nashPrefix)) {
                     List<NashDateEntryWithId> entriesForDate = listIndexToEntries.get(dateIdFromNash);
                     if (entriesForDate != null) {
                         aggregatedEntries.addAll(entriesForDate);
                     } else {
-                        // This case might indicate an issue if Nash.invert returns indices outside the range 0 to idToDate.size()-1
                         logger.warn("Inconsistency: Nash prefix '{}' mapped to date ID {} which has no entries.", nashPrefix, dateIdFromNash);
                     }
                 }
-
                 if (!aggregatedEntries.isEmpty()) {
                     byte[] serializedEntries = NashSerializationUtils.serializeNashEntries(aggregatedEntries);
                     indexAccess.put(bytes(nashPrefix), serializedEntries);
@@ -229,39 +196,51 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                     }
                 }
             }
-
-            // Write the date lookup table
             byte[] serializedLookup = NashSerializationUtils.serializeDateLookup(idToDate);
             indexAccess.put(NashSerializationUtils.DATE_LOOKUP_KEY, serializedLookup);
             logger.info("Written date lookup table ({} entries) to LevelDB.", idToDate.size());
-
             long endTime = System.currentTimeMillis();
             logger.info("Successfully generated Nash index. Total unique prefixes written: {}. Time taken: {} ms",
                     termsWritten, (endTime - startTime));
-
         } catch (IndexAccessException e) {
             logger.error("LevelDB error writing Nash index data", e);
             throw new IOException("Failed to write Nash index to LevelDB", e);
         } catch (IOException e) {
             logger.error("Serialization error writing Nash index data", e);
-            throw e;
+            throw new IOException("Failed to serialize Nash index data for LevelDB", e);
         }
-        // Note: IndexAccess is closed by the superclass or caller managing the generator lifecycle.
     }
 
-    /**
-     * Helper to parse normalized date string (YYYY-MM-DD).
-     */
     private LocalDate parseNormalizedDate(String dateStr) {
-        if (dateStr == null || dateStr.length() != 10) { // Basic format check
-            return null;
-        }
+        if (dateStr == null) return null;
         try {
-            // Use the same formatter expected in the database
             return LocalDate.parse(dateStr, DateTimeFormatter.ISO_LOCAL_DATE);
-        } catch (Exception e) {
-            logger.trace("Could not parse date string '{}': {}", dateStr, e.getMessage());
+        } catch (DateTimeParseException e1) {
+            try {
+                if (dateStr.matches("^\\d{4}$")) {
+                    return LocalDate.parse(dateStr + "-01-01");
+                } else if (dateStr.matches("^\\d{4}-\\d{2}$")) {
+                    return LocalDate.parse(dateStr + "-01");
+                }
+            } catch (DateTimeParseException e2) {
+                // Fall through
+            }
+            logger.trace("Could not parse date string '{}' with available formats.", dateStr);
             return null;
         }
+    }
+
+    @Override
+    public long getDocumentCountForIndex() throws SQLException {
+        // For Nash index, we are interested in documents that have DATE entities
+        // which also have a corresponding entry in `political_actors` or `event_summaries`.
+        String countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL";
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
+             ResultSet rs = stmt.executeQuery()) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        }
+        return 0;
     }
 } 

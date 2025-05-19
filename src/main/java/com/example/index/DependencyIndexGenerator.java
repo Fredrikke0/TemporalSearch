@@ -3,11 +3,11 @@ package com.example.index;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -21,24 +21,28 @@ import com.example.core.PositionList;
 
 /**
  * Generates a streaming dependency index from dependency relation entries.
- * Each entry maps a head token, relation type, and dependent token to their positions in the corpus.
- * Uses streaming processing and external sorting for efficient memory usage.
  */
 public final class DependencyIndexGenerator extends IndexGenerator<DependencyEntry> {
     private static final Logger logger = LoggerFactory.getLogger(DependencyIndexGenerator.class);
 
+    // Example: Blacklist common, less informative relations if needed
     private static final Set<String> BLACKLISTED_RELATIONS = Set.of(
-        "punct", "det", "case", "cc"
+        // "punct", "det", "case", "cc" // Example, adjust as needed
     );
 
     public DependencyIndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize);
+        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    }
+
+    public DependencyIndexGenerator(String indexBaseDir, String stopwordsPath,
+            Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
     protected String getTableName() {
-        return "dependencies";
+        return "dependencies"; // Assuming this is the source table
     }
 
     @Override
@@ -49,55 +53,43 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
     @Override
     protected List<DependencyEntry> fetchBatch(DependencyEntry lastProcessedEntry) throws SQLException {
         List<DependencyEntry> batch = new ArrayList<>();
-        String query;
-        boolean isFirstBatch = (lastProcessedEntry == null);
-
-        if (isFirstBatch) {
-            query = "SELECT d.dependency_id, d.document_id, d.sentence_id, d.head_token, d.dependent_token, d.relation, " +
-                    "d.begin_char, d.end_char, doc.timestamp " +
-                    "FROM dependencies d " +
-                    "JOIN documents doc ON d.document_id = doc.document_id " +
-                    "ORDER BY d.dependency_id LIMIT ?";
+        String sql;
+        // Using dependency_id from DependencyEntry for keyset pagination
+        if (lastProcessedEntry == null) {
+            sql = "SELECT dependency_id, document_id, sentence_id, begin_char, end_char, head_token, dependent_token, relation " +
+                  "FROM dependencies ORDER BY dependency_id LIMIT ?";
         } else {
-            query = "SELECT d.dependency_id, d.document_id, d.sentence_id, d.head_token, d.dependent_token, d.relation, " +
-                    "d.begin_char, d.end_char, doc.timestamp " +
-                    "FROM dependencies d " +
-                    "JOIN documents doc ON d.document_id = doc.document_id " +
-                    "WHERE d.dependency_id > ? " +
-                    "ORDER BY d.dependency_id LIMIT ?";
+            sql = "SELECT dependency_id, document_id, sentence_id, begin_char, end_char, head_token, dependent_token, relation " +
+                  "FROM dependencies WHERE dependency_id > ? ORDER BY dependency_id LIMIT ?";
         }
-        
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            if (isFirstBatch) {
-                stmt.setInt(1, this.batchSize);
-            } else {
-                stmt.setInt(1, lastProcessedEntry.getDependencyId());
-                stmt.setInt(2, this.batchSize);
-            }
 
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
+            if (lastProcessedEntry == null) {
+                stmt.setInt(1, batchSize);
+            } else {
+                stmt.setInt(1, lastProcessedEntry.getDependencyId()); // Correct getter
+                stmt.setInt(2, batchSize);
+            }
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    // Sanitize text fields
+                    // Sanitize text fields before creating the entry
                     String headToken = sanitizeText(rs.getString("head_token"));
                     String dependentToken = sanitizeText(rs.getString("dependent_token"));
                     String relation = sanitizeText(rs.getString("relation"));
 
-                    // Skip entries where any required field is null or empty after sanitization
-                    if (headToken == null || headToken.isEmpty() ||
-                        dependentToken == null || dependentToken.isEmpty() ||
-                        relation == null || relation.isEmpty()) {
-                        logger.debug("Skipping entry with null/empty fields: head={}, dependent={}, relation={}",
-                                   headToken, dependentToken, relation);
+                    if (headToken == null || dependentToken == null || relation == null) {
+                        logger.debug("Skipping dependency due to null field after sanitization. Original: head='{}', dep='{}', rel='{}'", 
+                                     rs.getString("head_token"), rs.getString("dependent_token"), rs.getString("relation"));
                         continue;
                     }
 
                     batch.add(new DependencyEntry(
-                        rs.getInt("dependency_id"), // Use the new dependency_id
+                        rs.getInt("dependency_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
-                        headToken,
+                        headToken, 
                         dependentToken,
                         relation
                     ));
@@ -108,69 +100,59 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<DependencyEntry> batch) throws IOException {
-        ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        Map<String, PositionList> positionLists = new HashMap<>();
+    protected ListMultimap<String, PositionList> processBatch(List<DependencyEntry> batch) {
+        ListMultimap<String, PositionList> indexData = ArrayListMultimap.create();
+        Map<String, PositionList> tempAggregator = new HashMap<>();
 
         for (DependencyEntry entry : batch) {
-            // Ensure tokens are lowercased before stopword check
-            String headTokenLower = entry.getHeadToken().toLowerCase();
+            // Tokens are already sanitized from fetchBatch
+            String headTokenLower = entry.getHeadToken().toLowerCase(); 
             String dependentTokenLower = entry.getDependentToken().toLowerCase();
+            String relationLower = entry.getRelation().toLowerCase();
 
-            if (isStopword(headTokenLower) ||
-                isStopword(dependentTokenLower) ||
-                BLACKLISTED_RELATIONS.contains(entry.getRelation())) {
+            if (isStopword(headTokenLower) || isStopword(dependentTokenLower) || 
+                BLACKLISTED_RELATIONS.contains(relationLower)) {
                 continue;
             }
-
-            // Create key in format: headToken\0relation\0dependentToken
-            String key = generateKey(entry);
-
-            Position position = new Position(
-                entry.getDocumentId(),
-                entry.getSentenceId(),
-                entry.getBeginChar(),
-                entry.getEndChar()
-            );
-
-            // Get or create position list for this dependency
-            PositionList posList = positionLists.computeIfAbsent(key, k -> new PositionList());
-            posList.add(position);
+            
+            String key = headTokenLower + DELIMITER + relationLower + DELIMITER + dependentTokenLower;
+            
+            // Using standard Position. For dependencies, begin/end char might refer to the span of the relation or one of the tokens.
+            // Here, using the entry's overall begin/end char. This might need adjustment based on desired semantics.
+            Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
+            
+            PositionList pl = tempAggregator.computeIfAbsent(key, k -> new PositionList());
+            pl.add(pos);
         }
-
-        // Add all position lists to result
-        for (Map.Entry<String, PositionList> entry : positionLists.entrySet()) {
-            index.put(entry.getKey(), entry.getValue());
+        
+        for (Map.Entry<String, PositionList> mapEntry : tempAggregator.entrySet()) {
+            indexData.put(mapEntry.getKey(), mapEntry.getValue());
         }
-
-        return index;
+        return indexData;
     }
 
-    /**
-     * Creates an index key from a dependency entry
-     * @param entry The dependency entry
-     * @return A delimited key in the format headToken${DELIMITER}relation${DELIMITER}dependentToken
-     */
-    protected String generateKey(DependencyEntry entry) {
-        return String.format("%s%s%s%s%s", 
-            entry.getHeadToken().trim().toLowerCase(),
-            DELIMITER,
-            entry.getRelation().trim().toLowerCase(),
-            DELIMITER,
-            entry.getDependentToken().trim().toLowerCase());
+    @Override
+    public long getDocumentCountForIndex() throws SQLException {
+        String countSql = "SELECT COUNT(DISTINCT document_id) FROM dependencies";
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
+             ResultSet rs = stmt.executeQuery()) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        }
+        return 0;
     }
-
-    /**
-     * Sanitizes text by removing special characters and normalizing whitespace.
-     * @param text The text to sanitize
-     * @return The sanitized text, or null if the input is null or empty
-     */
+    
     private String sanitizeText(String text) {
         if (text == null || text.trim().isEmpty()) {
             return null;
         }
-        return text.trim()
-                  .replaceAll("\\s+", " ")
-                  .replaceAll("[^\\p{L}\\p{N}\\s-]", "");
+        // Basic sanitization: trim, normalize multiple spaces, remove non-alphanumeric (except hyphens and spaces)
+        // Adjust regex as needed for more specific cleaning.
+        String cleaned = text.trim().replaceAll("\\s+", " ");
+        // Consider if a more restrictive character set is needed. 
+        // This example keeps letters, numbers, spaces, hyphens.
+        // cleaned = cleaned.replaceAll("[^\\p{L}\\p{N}\\s-]", ""); 
+        return cleaned.isEmpty() ? null : cleaned;
     }
 } 

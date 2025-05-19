@@ -4,7 +4,7 @@ import java.time.LocalDate;
 
 /**
  * Represents an annotation entry from the SQLite database.
- * Contains information about a token's original text and part-of-speech tag.
+ * Contains information about a token and its linguistic features.
  */
 public final class AnnotationEntry implements IndexEntry {
     private final int annotationId;
@@ -14,9 +14,12 @@ public final class AnnotationEntry implements IndexEntry {
     private final int endChar;
     private final String token;
     private final String pos;
+    private final String ner;            // Added NER type
+    private final String normalizedNer;  // Added normalized NER value
+    private final String lemma;          // Added lemma
 
     public AnnotationEntry(int annotationId, int documentId, int sentenceId, int beginChar, int endChar,
-            String token, String pos) {
+            String token, String pos, String ner, String normalizedNer, String lemma) {
         this.annotationId = annotationId;
         this.documentId = documentId;
         this.sentenceId = sentenceId;
@@ -24,6 +27,9 @@ public final class AnnotationEntry implements IndexEntry {
         this.endChar = endChar;
         this.token = token;
         this.pos = pos;
+        this.ner = ner;
+        this.normalizedNer = normalizedNer;
+        this.lemma = lemma;
     }
 
     /**
@@ -65,5 +71,18 @@ public final class AnnotationEntry implements IndexEntry {
      */
     public String getPos() {
         return pos;
+    }
+
+    // New getters
+    public String getNer() {
+        return ner;
+    }
+
+    public String getNormalizedNer() {
+        return normalizedNer;
+    }
+
+    public String getLemma() {
+        return lemma;
     }
 } 

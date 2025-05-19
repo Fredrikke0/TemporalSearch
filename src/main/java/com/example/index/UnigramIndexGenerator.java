@@ -16,6 +16,7 @@ import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
 import java.util.stream.Collectors;
+import java.nio.file.Path;
 
 /**
  * Generates a streaming unigram index from annotation entries.
@@ -23,6 +24,14 @@ import java.util.stream.Collectors;
  * Uses streaming processing and external sorting for efficient memory usage.
  */
 public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
+
+    public UnigramIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    }
+
+    public UnigramIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+    }
 
     @Override
     protected String getTableName() {
@@ -34,32 +43,21 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         return "unigram";
     }
 
-    public UnigramIndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize);
-    }
-
     @Override
     protected List<AnnotationEntry> fetchBatch(AnnotationEntry lastProcessedEntry) throws SQLException {
-        List<AnnotationEntry> entries = new ArrayList<>();
-        String sql;
+        List<AnnotationEntry> batch = new ArrayList<>();
+        String query;
         boolean isFirstBatch = (lastProcessedEntry == null);
 
         if (isFirstBatch) {
-            sql = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
-                  "FROM annotations a " +
-                  "JOIN documents d ON a.document_id = d.document_id " +
-                  "WHERE a.token IS NOT NULL " +
-                  "ORDER BY a.annotation_id LIMIT ?";
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
+                    "FROM annotations ORDER BY annotation_id LIMIT ?";
         } else {
-            sql = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
-                  "FROM annotations a " +
-                  "JOIN documents d ON a.document_id = d.document_id " +
-                  "WHERE a.token IS NOT NULL AND a.annotation_id > ? " +
-                  "ORDER BY a.annotation_id LIMIT ?";
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
+                    "FROM annotations WHERE annotation_id > ? ORDER BY annotation_id LIMIT ?";
         }
-                    
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
+
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
             if (isFirstBatch) {
                 stmt.setInt(1, this.batchSize);
             } else {
@@ -69,55 +67,64 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    String token = sanitizeText(rs.getString("token"));
-                    if (token == null || token.isEmpty()) {
-                        continue;
-                    }
-                    
-                    entries.add(new AnnotationEntry(
+                    String rawToken = rs.getString("token");
+                    String token = (rawToken != null) ? rawToken.trim() : null;
+                    AnnotationEntry entry = new AnnotationEntry(
                         rs.getInt("annotation_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         token,
-                        sanitizeText(rs.getString("pos"))
-                    ));
+                        rs.getString("pos"),
+                        null, // ner
+                        null, // normalizedNer
+                        null  // lemma
+                    );
+                    batch.add(entry);
                 }
             }
         }
-        return entries;
+        return batch;
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
-
-        List<AnnotationEntry> filteredBatch = batch.stream()
-             .filter(entry -> entry != null && entry.getToken() != null && !entry.getToken().isEmpty() &&
-                              entry.getToken().chars().anyMatch(Character::isLetterOrDigit))
-             .collect(Collectors.toList());
-
+    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) {
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        Map<String, PositionList> positionLists = new HashMap<>();
+        Map<String, PositionList> tempAggregator = new HashMap<>();
 
-        for (AnnotationEntry entry : filteredBatch) {
-            String token = entry.getToken().toLowerCase();
-
-            if (isStopword(token)) {
+        for (AnnotationEntry entry : batch) {
+            if (entry.getToken() == null || entry.getToken().isEmpty()) {
+                continue;
+            }
+            String tokenLower = entry.getToken().toLowerCase();
+            if (isStopword(tokenLower) || !tokenLower.chars().anyMatch(Character::isLetterOrDigit)) {
                 continue;
             }
 
-            Position position = new Position(entry.getDocumentId(), entry.getSentenceId(),
-                entry.getBeginChar(), entry.getEndChar());
-
-            PositionList posList = positionLists.computeIfAbsent(token, k -> new PositionList());
-            posList.add(position);
+            Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
+            
+            PositionList pl = tempAggregator.computeIfAbsent(tokenLower, k -> new PositionList());
+            pl.add(pos);
         }
 
-        for (Map.Entry<String, PositionList> entry : positionLists.entrySet()) {
-            index.put(entry.getKey(), entry.getValue());
+        for (Map.Entry<String, PositionList> mapEntry : tempAggregator.entrySet()) {
+            index.put(mapEntry.getKey(), mapEntry.getValue());
         }
         return index;
+    }
+
+    @Override
+    public long getDocumentCountForIndex() throws SQLException {
+        // Unigrams are derived from annotations, so count documents with annotations.
+        String countSql = "SELECT COUNT(*) FROM documents";
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
+             ResultSet rs = stmt.executeQuery()) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        }
+        return 0;
     }
 
     /**

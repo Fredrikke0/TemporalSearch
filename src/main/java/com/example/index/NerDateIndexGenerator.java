@@ -21,6 +21,8 @@ import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import java.nio.file.Path;
+import java.util.regex.Pattern;
 
 /**
  * Generates a streaming index for date entities from annotated text.
@@ -57,61 +59,64 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
     private static final Logger logger = LoggerFactory.getLogger(NerDateIndexGenerator.class);
     private static final DateTimeFormatter INPUT_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter KEY_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
+    private static final Pattern DATE_PATTERN = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
 
     private Set<String> uniqueDatesProcessed = new HashSet<>();
 
     public NerDateIndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize);
+        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    }
+
+    public NerDateIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
     protected List<AnnotationEntry> fetchBatch(AnnotationEntry lastProcessedEntry) throws SQLException {
         List<AnnotationEntry> batch = new ArrayList<>();
-        String query;
-        boolean isFirstBatch = (lastProcessedEntry == null);
-
-        if (isFirstBatch) {
-            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
-                    "a.token, a.normalized_ner, a.ner, d.timestamp " +
-                    "FROM annotations a " +
-                    "JOIN documents d ON a.document_id = d.document_id " +
-                    "WHERE a.ner = 'DATE' " +
-                    "ORDER BY a.annotation_id LIMIT ?";
+        String sql;
+        // Keyset pagination on annotation_id for NER='DATE' entries
+        if (lastProcessedEntry == null) {
+            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
+                  "FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL " +
+                  "ORDER BY annotation_id LIMIT ?";
         } else {
-            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
-                    "a.token, a.normalized_ner, a.ner, d.timestamp " +
-                    "FROM annotations a " +
-                    "JOIN documents d ON a.document_id = d.document_id " +
-                    "WHERE a.ner = 'DATE' AND a.annotation_id > ? " +
-                    "ORDER BY a.annotation_id LIMIT ?";
+            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
+                  "FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL AND annotation_id > ? " +
+                  "ORDER BY annotation_id LIMIT ?";
         }
-        
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            if (isFirstBatch) {
-                stmt.setInt(1, this.batchSize);
+
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
+            if (lastProcessedEntry == null) {
+                stmt.setInt(1, batchSize);
             } else {
                 stmt.setInt(1, lastProcessedEntry.getAnnotationId());
-                stmt.setInt(2, this.batchSize);
+                stmt.setInt(2, batchSize);
             }
-
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    String normalizedDate = rs.getString("normalized_ner");
-                    if (normalizedDate == null || !normalizedDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
-                        logger.debug("Skipping invalid date format: {}", normalizedDate);
-                        continue;
+                    String normalizedNer = rs.getString("normalized_ner");
+                    // Further validation for YYYY-MM-DD format
+                    if (normalizedNer != null && DATE_PATTERN.matcher(normalizedNer).matches()) {
+                        try {
+                            LocalDate.parse(normalizedNer); // Strict parse check
+                            batch.add(new AnnotationEntry(
+                                rs.getInt("annotation_id"),
+                                rs.getInt("document_id"),
+                                rs.getInt("sentence_id"),
+                                rs.getInt("begin_char"),
+                                rs.getInt("end_char"),
+                                rs.getString("token"), // Original token might be useful for context
+                                rs.getString("pos"),
+                                rs.getString("ner"),
+                                normalizedNer, // Key for this index is the normalized date string
+                                rs.getString("lemma")
+                            ));
+                        } catch (DateTimeParseException e) {
+                            logger.debug("Skipping entry with unparseable normalized_ner date: {}", normalizedNer);
+                        }
                     }
-
-                    batch.add(new AnnotationEntry(
-                        rs.getInt("annotation_id"),
-                        rs.getInt("document_id"),
-                        rs.getInt("sentence_id"),
-                        rs.getInt("begin_char"),
-                        rs.getInt("end_char"),
-                        normalizedDate, // Store normalized date in lemma field
-                        "DATE" // Store NER type in pos field
-                    ));
                 }
             }
         }
@@ -119,89 +124,34 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
+    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) {
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        if (batch.isEmpty()) {
-            return index;
-        }
-
-        // State for tracking the current merged date mention
-        int currentDocId = -1;
-        int currentSentId = -1;
-        String currentRawNormalizedDate = null; // Store the original YYYY-MM-DD
-        int currentStartChar = -1;
-        int currentEndChar = -1;
+        Map<String, PositionList> tempAggregator = new HashMap<>();
 
         for (AnnotationEntry entry : batch) {
-            // Basic validation (redundant with fetchBatch, but safe)
-            String rawNormalizedDate = entry.getToken(); // YYYY-MM-DD
-            if (rawNormalizedDate == null || !rawNormalizedDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
-                logger.debug("Skipping invalid raw date format in processBatch: {}", rawNormalizedDate);
-                continue; // Should not happen if fetchBatch filtering is correct
+            String rawNormalizedDate = entry.getNormalizedNer(); // This is YYYY-MM-DD
+            if (rawNormalizedDate == null || rawNormalizedDate.isEmpty()) {
+                continue;
             }
 
-            if (entry.getDocumentId() == currentDocId &&
-                entry.getSentenceId() == currentSentId &&
-                rawNormalizedDate.equals(currentRawNormalizedDate)) {
-                // --- Part of the same logical mention ---
-                // Extend the end character offset
-                currentEndChar = entry.getEndChar();
-            } else {
-                // --- Start of a new mention (or the very first one) ---
-                // 1. Finalize the *previous* mention (if there was one)
-                if (currentDocId != -1) {
-                    String normalizedDateKey = normalizeDate(currentRawNormalizedDate); // Convert to YYYYMMDD for key
-                    if (normalizedDateKey != null) {
-                        Position finalizedPosition = new Position(
-                                currentDocId,
-                                currentSentId,
-                                currentStartChar,
-                                currentEndChar
-                        );
-                        // Add to the set for tracking unique dates across the whole run
-                        this.uniqueDatesProcessed.add(normalizedDateKey);
-                        // Add finalized position to the index map for this batch
-                        PositionList posListForMention = new PositionList();
-                        posListForMention.add(finalizedPosition);
-                        index.put(normalizedDateKey, posListForMention);
-                        // Note: We aggregate PositionLists later in the IndexGenerator superclass
-                    } else {
-                         logger.warn("Could not normalize the date key for the finalized mention: {}", currentRawNormalizedDate);
-                    }
-                }
-
-                // 2. Start tracking the new mention
-                currentDocId = entry.getDocumentId();
-                currentSentId = entry.getSentenceId();
-                currentRawNormalizedDate = rawNormalizedDate;
-                currentStartChar = entry.getBeginChar();
-                currentEndChar = entry.getEndChar();
+            String normalizedDateKey = normalizeDate(rawNormalizedDate); // Convert to YYYYMMDD
+            if (normalizedDateKey == null) {
+                logger.debug("Could not normalize date for key: {}", rawNormalizedDate);
+                continue;
             }
+            
+            this.uniqueDatesProcessed.add(normalizedDateKey); // Populate for logging
+
+            // Use standard Position class
+            Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
+            
+            PositionList pl = tempAggregator.computeIfAbsent(normalizedDateKey, k -> new PositionList());
+            pl.add(pos);
         }
 
-        // Finalize the very last mention in the batch
-        if (currentDocId != -1) {
-             String normalizedDateKey = normalizeDate(currentRawNormalizedDate); // Convert to YYYYMMDD for key
-             if (normalizedDateKey != null) {
-                 Position finalizedPosition = new Position(
-                         currentDocId,
-                         currentSentId,
-                         currentStartChar,
-                         currentEndChar
-                 );
-                 this.uniqueDatesProcessed.add(normalizedDateKey);
-                 PositionList posListForFinalMention = new PositionList();
-                 posListForFinalMention.add(finalizedPosition);
-                 index.put(normalizedDateKey, posListForFinalMention);
-             } else {
-                 logger.warn("Could not normalize the date key for the final mention in batch: {}", currentRawNormalizedDate);
-             }
+        for (Map.Entry<String, PositionList> mapEntry : tempAggregator.entrySet()) {
+            index.put(mapEntry.getKey(), mapEntry.getValue());
         }
-
-        // Note: The superclass's writeSortedSegment and mergeSegments will handle
-        // the aggregation of PositionLists for the same normalizedDateKey across batches.
-        // We are returning ListMultimap<String, PositionList> where each PositionList
-        // currently holds just one merged Position from this batch.
         return index;
     }
 
@@ -239,5 +189,34 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
     @Override
     protected String getIndexName() {
         return "ner_date";
+    }
+
+    @Override
+    public long getDocumentCountForIndex() throws SQLException {
+        // Count documents that have at least one 'DATE' entity with a valid normalized_ner.
+        // This might be slow if many dates don't match the pattern.
+        // A simpler count from annotations might be acceptable if performance is an issue.
+        String countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL AND normalized_ner LIKE '____-__-__'";
+        long count = 0;
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql)) {
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    count = rs.getLong(1);
+                }
+            }
+        }
+        // Fallback or more robust counting might be needed if the above is too restrictive or slow.
+        // For now, this provides a targeted count.
+        if (count == 0) { // If the precise query yields 0, try a broader one for progress bar sanity
+            logger.warn("Initial document count for NerDateIndex was 0 with strict pattern. Trying broader count.");
+            countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL";
+            try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
+                 ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        return count;
     }
 } 

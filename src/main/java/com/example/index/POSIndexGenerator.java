@@ -3,6 +3,7 @@ package com.example.index;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -23,6 +24,14 @@ import com.example.core.PositionList;
  */
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
+    public POSIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    }
+
+    public POSIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+    }
+
     @Override
     protected String getTableName() {
         return "annotations";
@@ -33,11 +42,6 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         return "pos";
     }
 
-    public POSIndexGenerator(String levelDbPath, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        super(levelDbPath, stopwordsPath, sqliteConn, progress, batchSize);
-    }
-
     @Override
     protected List<AnnotationEntry> fetchBatch(AnnotationEntry lastProcessedEntry) throws SQLException {
         List<AnnotationEntry> batch = new ArrayList<>();
@@ -45,16 +49,11 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         boolean isFirstBatch = (lastProcessedEntry == null);
 
         if (isFirstBatch) {
-            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
-                    "FROM annotations a " +
-                    "JOIN documents d ON a.document_id = d.document_id " +
-                    "ORDER BY a.annotation_id LIMIT ?";
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
+                    "FROM annotations ORDER BY annotation_id LIMIT ?";
         } else {
-            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
-                    "FROM annotations a " +
-                    "JOIN documents d ON a.document_id = d.document_id " +
-                    "WHERE a.annotation_id > ? " +
-                    "ORDER BY a.annotation_id LIMIT ?";
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
+                    "FROM annotations WHERE annotation_id > ? ORDER BY annotation_id LIMIT ?";
         }
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
@@ -74,7 +73,10 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         rs.getString("token"),
-                        rs.getString("pos")
+                        rs.getString("pos"),
+                        null, // ner
+                        null, // normalizedNer
+                        null  // lemma
                     );
                     batch.add(entry);
                 }
@@ -85,32 +87,43 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) throws IOException {
+    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) {
         ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        Map<String, PositionList> positionLists = new HashMap<>();
+        Map<String, PositionList> tempAggregator = new HashMap<>();
         
         for (AnnotationEntry entry : batch) {
-            // Skip entries with null or empty POS tags
-            if (entry.getPos() == null || entry.getPos().trim().isEmpty()) {
+            if (entry.getPos() == null || entry.getPos().isEmpty()) {
                 continue;
             }
+            // Key for POS index is typically: POS_TAG<DELIMITER>TOKEN_LOWERCASE
+            // unless the requirement is just to index by POS_TAG.
+            // For now, let's use POS_TAG as the key for simplicity, like NerIndex uses NER_TAG.
+            String posTag = entry.getPos().toLowerCase();
+            // Optionally, could make key: entry.getPos() + DELIMITER + entry.getToken().toLowerCase();
+            // if we want to find specific words with a given POS tag.
+            // For now, just indexing by POS tag to get all occurrences of that tag.
+
+            Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
             
-            // Convert POS tag to lowercase for consistency
-            String key = entry.getPos().toLowerCase().trim();
-            
-            Position position = new Position(entry.getDocumentId(), entry.getSentenceId(),
-                entry.getBeginChar(), entry.getEndChar());
-            
-            // Get or create position list for this POS tag
-            PositionList posList = positionLists.computeIfAbsent(key, k -> new PositionList());
-            posList.add(position);
+            PositionList pl = tempAggregator.computeIfAbsent(posTag, k -> new PositionList());
+            pl.add(pos);
         }
         
-        // Add all position lists to result
-        for (Map.Entry<String, PositionList> entry : positionLists.entrySet()) {
-            index.put(entry.getKey(), entry.getValue());
+        for (Map.Entry<String, PositionList> mapEntry : tempAggregator.entrySet()) {
+            index.put(mapEntry.getKey(), mapEntry.getValue());
         }
-        
         return index;
+    }
+
+    @Override
+    public long getDocumentCountForIndex() throws SQLException {
+        String countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE pos IS NOT NULL AND pos != ''";
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
+             ResultSet rs = stmt.executeQuery()) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+        }
+        return 0;
     }
 } 

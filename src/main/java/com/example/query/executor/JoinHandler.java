@@ -352,8 +352,7 @@ public class JoinHandler {
             // Ensure sentence_id is only returned if valid (not -1)
             case "sentence_id" -> detail.getSentenceId() != -1 ? Optional.of(detail.getSentenceId()) : Optional.empty();
             // Add other structural keys if needed (e.g., timestamp)
-            // case "timestamp" -> Optional.ofNullable(detail.position().getTimestamp()); 
-            default -> Optional.empty(); // Key doesn't match variable or known structural key
+           default -> Optional.empty(); // Key doesn't match variable or known structural key
         };
     }
 

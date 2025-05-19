@@ -28,7 +28,7 @@ class JoinHandlerTest {
         joinHandler = new JoinHandler();
     }
 
-    // Helper to create a Position object
+    // Helper to create a Position object with a date
     // Using dummy IDs and char positions as they aren't directly used by the tested join logic
     private Position createPosition(int docId, int sentenceId) {
         return new Position(docId, sentenceId, 0, 0); // Using 0, 0 for char positions
