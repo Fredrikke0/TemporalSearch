@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -28,16 +28,25 @@ import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.IndexAccess;
 import com.example.core.PositionList;
+import com.example.index.AnnotationEntry;
+import com.example.index.generators.UnigramIndexGenerator;
+
 import org.iq80.leveldb.Options;
+
+import java.io.File;
+import java.io.PrintWriter;
+import java.util.Optional;
 
 @ExtendWith(MockitoExtension.class)
 class UnigramIndexGeneratorTest extends BaseIndexTest {
     private static final Logger logger = LoggerFactory.getLogger(UnigramIndexGeneratorTest.class);
+    private static final String TEST_STOPWORDS_PATH = "test-stopwords-unigram.txt";
     private Path stopwordsPath;
     private UnigramIndexGenerator generator;
+    private IndexAccess indexAccess;
 
     @Mock
-    private ProgressTracker progress;
+    private ProgressTracker mockProgressTracker;
 
     private final MemoryMXBean memoryBean = ManagementFactory.getMemoryMXBean();
     private static final int LARGE_BATCH_SIZE = 10_000;
@@ -45,24 +54,41 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
 
     @BeforeEach
     @Override
-    void setUp() throws Exception {
-        // Call parent setup
+    protected void setUp() throws Exception {
         super.setUp();
         
-        // Create stopwords path
-        stopwordsPath = tempDir.resolve("stopwords.txt");
+        // Create stopwords file for this test class
+        stopwordsPath = tempDir.resolve(TEST_STOPWORDS_PATH);
+        try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(stopwordsPath))) {
+            writer.println("the");
+            writer.println("a");
+            writer.println("is");
+        }
 
-        // Create empty stopwords file
-        Files.writeString(stopwordsPath, "the\na\nan\n");
+        // Set up index directory is NOT needed here, IndexGenerator handles it.
+        // Path unigramIndexDir = indexBaseDir.resolve("unigram"); 
 
-        // Create generator with new index base directory
+        // Create generator
         generator = new UnigramIndexGenerator(
-            indexBaseDir.toString(),
-            stopwordsPath.toString(),
-            sqliteConn,
-            progress,
-            1000 // Added batchSize argument
+                indexBaseDir.toString(), // Pass the actual base directory for all indexes
+                stopwordsPath.toString(), 
+                sqliteConn, 
+                mockProgressTracker, 
+                1000, 
+                null 
         );
+        setupTestData();
+    }
+
+    @AfterEach
+    @Override
+    protected void tearDown() throws Exception {
+        super.tearDown();
+        if (indexAccess != null) {
+            indexAccess.close();
+        }
+        new File(TEST_STOPWORDS_PATH).delete(); //This might be redundant if super.tearDown deletes tempDir which contains this file. 
+                                                //However, specific test stopwords file path is used in this class.
     }
 
     private void insertBasicTestData() throws SQLException {
@@ -197,7 +223,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         }
 
         // Verify progress tracking
-        verify(progress, atLeastOnce()).updateIndex(anyLong());
+        verify(mockProgressTracker, atLeastOnce()).updateIndex(anyLong());
     }
 
     private String generateRandomWord(int length) {
@@ -230,5 +256,9 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         entries.add(new AnnotationEntry(7, 3, 1, 0, 2, "in", "IN", null, null, "in")); // stopword
         entries.add(new AnnotationEntry(8, 3, 1, 3, 4, ".", ".", null, null, "."));   // punctuation
         return entries;
+    }
+
+    private void setupTestData() throws SQLException {
+        // ... existing code ...
     }
 } 

@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.collect.ListMultimap;
 import org.slf4j.Logger;
@@ -10,6 +10,8 @@ import com.example.core.PositionList;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import org.iq80.leveldb.Options;
+
+import com.example.index.IndexEntry;
 import com.example.index.LevelDBConfig;
 import org.iq80.leveldb.WriteBatch;
 
@@ -38,7 +40,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
     protected final IndexAccess indexAccess;
     protected final Connection sqliteConn;
-    private Set<String> stopwords;
+    protected Set<String> stopwords;
     protected final ProgressTracker progress;
     private final Path tempDir;
     private long totalNGramsGenerated = 0;
@@ -80,49 +82,38 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     public abstract long getDocumentCountForIndex() throws SQLException;
 
+    // Slim constructor
+    protected IndexGenerator(String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath, String indexNameForLogging) throws IOException {
+        this.sqliteConn = sqliteConn;
+        this.progress = progress;
+        this.batchSize = batchSize;
+        this.stopwords = loadStopwordsInternal(stopwordsPath);
+        this.tempDir = initializeTempDir(indexNameForLogging, customTempPath);
+        this.indexAccess = null; 
+        logger.debug("IndexGenerator (slim constructor for [{}]) initialized. Temp dir: {}, Batch size: {}", indexNameForLogging, this.tempDir.toAbsolutePath(), this.batchSize);
+        registerShutdownHook();
+    }
+
+    // Original full constructor (delegates to the one with customTempPath)
     protected IndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
+    // Original full constructor with customTempPath
     protected IndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        // Initialize IndexAccess with optimized options from LevelDBConfig
         Options options = LevelDBConfig.createOptimizedOptions();
-
         try {
             this.indexAccess = new IndexAccess(Path.of(indexBaseDir), getIndexName(), options);
         } catch (IndexAccessException e) {
             throw new IOException("Failed to initialize IndexAccess for " + getIndexName(), e);
         }
-
         this.sqliteConn = sqliteConn;
         this.progress = progress;
         this.batchSize = batchSize;
-        loadStopwords(stopwordsPath);
-
-        Path resolvedTempDir;
-        if (customTempPath != null) {
-            try {
-                if (!Files.exists(customTempPath)) {
-                    Files.createDirectories(customTempPath);
-                }
-                if (!Files.isDirectory(customTempPath) || !Files.isWritable(customTempPath)) {
-                    throw new IOException("Custom temporary path is not a writable directory: " + customTempPath);
-                }
-                resolvedTempDir = Files.createTempDirectory(customTempPath, getIndexName() + "-index-temp-");
-                logger.info("IndexGenerator for [{}] using custom temp directory: {}", getIndexName(), resolvedTempDir.toAbsolutePath());
-            } catch (IOException e) {
-                logger.error("Failed to create or use custom temp directory '{}'. Falling back to system default.", customTempPath, e);
-                // Fallback to system default temp directory
-                resolvedTempDir = Files.createTempDirectory(getIndexName() + "-index-temp-");
-                logger.info("IndexGenerator for [{}] using system default temp directory: {}", getIndexName(), resolvedTempDir.toAbsolutePath());
-            }
-        } else {
-            resolvedTempDir = Files.createTempDirectory(getIndexName() + "-index-temp-");
-            logger.info("IndexGenerator for [{}] using system default temp directory: {}", getIndexName(), resolvedTempDir.toAbsolutePath());
-        }
-        this.tempDir = resolvedTempDir;
+        this.stopwords = loadStopwordsInternal(stopwordsPath);
+        this.tempDir = initializeTempDir(getIndexName(), customTempPath); // Use getIndexName() here
         
         try {
             long totalDocs = getDocumentCountForIndex();
@@ -131,15 +122,54 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             throw new IOException("Failed to get document count for index: " + getIndexName(), e);
         }
         logger.debug("IndexGenerator for [{}] initialized. Temp dir: {}, Batch size: {}", getIndexName(), this.tempDir.toAbsolutePath(), this.batchSize);
-        try {
-            FileStore store = Files.getFileStore(tempDir);
-            logger.debug("Initial usable space in temp directory '{}': {} MB", tempDir.toAbsolutePath(), store.getUsableSpace() / (1024 * 1024));
-        } catch (IOException e) {
-            logger.warn("Could not determine usable space for temp directory '{}'", tempDir.toAbsolutePath(), e);
-        }
+        registerShutdownHook();
+    }
 
-        // Register shutdown hook for cleanup
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+    private Path initializeTempDir(String indexNameForTempDir, Path customTempPath) throws IOException {
+        Path resolvedTempDir;
+        if (customTempPath != null) {
+            try {
+                if (!Files.exists(customTempPath)) Files.createDirectories(customTempPath);
+                if (!Files.isDirectory(customTempPath) || !Files.isWritable(customTempPath)) 
+                    throw new IOException("Custom temporary path is not a writable directory: " + customTempPath);
+                resolvedTempDir = Files.createTempDirectory(customTempPath, indexNameForTempDir + "-index-temp-");
+                logger.info("IndexGenerator for [{}] using custom temp directory: {}", indexNameForTempDir, resolvedTempDir.toAbsolutePath());
+            } catch (IOException e) {
+                logger.warn("Failed to create or use custom temp directory '{}' for [{}]. Falling back to system default.", customTempPath, indexNameForTempDir, e);
+                resolvedTempDir = Files.createTempDirectory(indexNameForTempDir + "-index-temp-");
+                logger.info("IndexGenerator for [{}] using system default temp directory: {}", indexNameForTempDir, resolvedTempDir.toAbsolutePath());
+            }
+        } else {
+            resolvedTempDir = Files.createTempDirectory(indexNameForTempDir + "-index-temp-");
+            logger.info("IndexGenerator for [{}] using system default temp directory: {}", indexNameForTempDir, resolvedTempDir.toAbsolutePath());
+        }
+        return resolvedTempDir;
+    }
+
+    private Set<String> loadStopwordsInternal(String path) throws IOException { 
+        if (path == null || path.trim().isEmpty()) {
+            logger.warn("Stopwords path is null or empty. Proceeding without stopwords.");
+            return Collections.emptySet();
+        }
+        Path filePath = Path.of(path);
+        if (!Files.exists(filePath) || !Files.isReadable(filePath)) {
+            logger.warn("Stopwords file not found or not readable: {}. Proceeding without stopwords.", filePath.toAbsolutePath());
+            return Collections.emptySet();
+        }
+        try {
+            Set<String> loadedStopwords = new HashSet<>(Files.readAllLines(filePath, StandardCharsets.UTF_8));
+            logger.info("Loaded {} stopwords from {}", loadedStopwords.size(), filePath.toAbsolutePath());
+            return loadedStopwords;
+        } catch (IOException e) {
+            logger.error("Error loading stopwords from {}. Proceeding without stopwords.", filePath.toAbsolutePath(), e);
+            // Still return empty set on error after logging, or rethrow. Current behavior is to proceed without.
+            // Rethrowing to make failure explicit, consistent with original throw for this method.
+            throw e; 
+        }
+    }
+
+    private void registerShutdownHook() {
+         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 if (Files.exists(tempDir)) {
                     Files.walk(tempDir)
@@ -160,28 +190,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         }));
     }
 
-    private void loadStopwords(String path) throws IOException {
-        if (path == null || path.trim().isEmpty()) {
-            logger.warn("Stopwords path is null or empty. Proceeding without stopwords.");
-            this.stopwords = Collections.emptySet();
-            return;
-        }
-        Path filePath = Path.of(path);
-        if (!Files.exists(filePath) || !Files.isReadable(filePath)) {
-            logger.warn("Stopwords file not found or not readable: {}. Proceeding without stopwords.", filePath.toAbsolutePath());
-            this.stopwords = Collections.emptySet();
-            return;
-        }
-        try {
-            this.stopwords = new HashSet<>(Files.readAllLines(filePath, StandardCharsets.UTF_8));
-            logger.info("Loaded {} stopwords from {}", stopwords.size(), filePath.toAbsolutePath());
-        } catch (IOException e) {
-            logger.error("Error loading stopwords from {}. Proceeding without stopwords.", filePath.toAbsolutePath(), e);
-            this.stopwords = Collections.emptySet();
-            throw e;
-        }
-    }
-
     /**
      * Checks if a word is a stopword.
      * The input word is expected to be already lowercased by the caller.
@@ -200,13 +208,13 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     protected File writeBatchToTempFile(ListMultimap<String, PositionList> positions) throws IOException {
         File tempFile = Files.createTempFile(tempDir, "batch-", ".tmp").toFile();
-        logger.info("Attempting to write batch to temp file: {}. Unique terms in batch: {}. Total PositionLists: {}",
-            tempFile.getAbsolutePath(), positions.keySet().size(), positions.size());
+        // logger.info("Attempting to write batch to temp file: {}. Unique terms in batch: {}. Total PositionLists: {}",
+        //    tempFile.getAbsolutePath(), positions.keySet().size(), positions.size());
 
         try {
             FileStore store = Files.getFileStore(tempDir);
-            logger.debug("Usable space before writing [{}]: {} MB",
-                tempFile.getName(), store.getUsableSpace() / (1024 * 1024));
+            // logger.debug("Usable space before writing [{}]: {} MB",
+            //     tempFile.getName(), store.getUsableSpace() / (1024 * 1024));
         } catch (IOException e) {
             logger.warn("Could not determine usable space before writing temp file [{}]: {}", tempFile.getName(), e.getMessage());
         }
@@ -240,8 +248,8 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 tempFile.getAbsolutePath(), bytesWrittenToFile, e.getMessage(), e);
             throw e; // Re-throw the exception
         }
-        logger.info("Successfully wrote batch to temp file: {}. Final size: {} bytes",
-            tempFile.getAbsolutePath(), tempFile.length());
+        // logger.info("Successfully wrote batch to temp file: {}. Final size: {} bytes",
+        //     tempFile.getAbsolutePath(), tempFile.length());
         return tempFile;
     }
 
@@ -255,7 +263,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         WriteBatch batch = null;
         int batchCounter = 0;
 
-        String debugTerm = System.getProperty("debug.index.term", "shrek"); // Default to shrek if not set
+        //String debugTerm = System.getProperty("debug.index.term", "shrek"); // Default to shrek if not set
 
         try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile))) {
             String line;
@@ -272,24 +280,24 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 String term = parts[0];
                 PositionList positions = PositionList.deserialize(Base64.getDecoder().decode(parts[1]));
 
-                if (debugTerm.equals(term)) {
-                    logger.debug("Processing term '{}'. Current mergedPositions size: {}. New positions size: {}.",
-                        debugTerm, (mergedPositions != null ? mergedPositions.size() : "null"), positions.size());
-                }
+                // if (debugTerm.equals(term)) {
+                //     logger.debug("Processing term '{}'. Current mergedPositions size: {}. New positions size: {}.",
+                //         debugTerm, (mergedPositions != null ? mergedPositions.size() : "null"), positions.size());
+                // }
 
                 if (currentTerm == null) {
                     currentTerm = term;
                     mergedPositions = positions;
-                    if (debugTerm.equals(currentTerm)) {
-                        logger.debug("Encountered '{}' for the first time in sorted file. Positions size: {}", debugTerm, mergedPositions.size());
-                    }
+                    // if (debugTerm.equals(currentTerm)) {
+                    //     logger.debug("Encountered '{}' for the first time in sorted file. Positions size: {}", debugTerm, mergedPositions.size());
+                    // }
                     continue;
                 }
 
                 if (!currentTerm.equals(term)) {
-                    if (debugTerm.equals(currentTerm)) {
-                        logger.debug("Finalizing '{}' before switching to term '{}'. Merged positions size: {}", debugTerm, term, mergedPositions.size());
-                    }
+                    // if (debugTerm.equals(currentTerm)) {
+                    //     logger.debug("Finalizing '{}' before switching to term '{}'. Merged positions size: {}", debugTerm, term, mergedPositions.size());
+                    // }
                     byte[] keyBytes = bytes(currentTerm);
                     byte[] valueBytes = mergedPositions.serialize();
                     batch.put(keyBytes, valueBytes);
@@ -303,36 +311,36 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                         batchCounter = 0;
                     }
 
-                    if (totalNGramsGenerated % 100000 == 0) {
-                        long elapsed = System.currentTimeMillis() - startTime;
-                        logger.debug("Write progress: {} terms, {} terms/sec",
-                            totalNGramsGenerated,
-                            String.format("%.2f", totalNGramsGenerated * 1000.0 / elapsed));
-                    }
+                    // if (totalNGramsGenerated % 100000 == 0) {
+                    //     long elapsed = System.currentTimeMillis() - startTime;
+                    //     logger.debug("Write progress: {} terms, {} terms/sec",
+                    //         totalNGramsGenerated,
+                    //         String.format("%.2f", totalNGramsGenerated * 1000.0 / elapsed));
+                    // }
 
                     currentTerm = term;
                     mergedPositions = positions;
-                    if (debugTerm.equals(currentTerm)) {
-                        logger.debug("Switched to new term '{}'. Initial positions size: {}", debugTerm, mergedPositions.size());
-                    }
+                    // if (debugTerm.equals(currentTerm)) {
+                    //     logger.debug("Switched to new term '{}'. Initial positions size: {}", debugTerm, mergedPositions.size());
+                    // }
                 } else { // Same term as before, merge positions
-                    if (debugTerm.equals(currentTerm)) {
-                        logger.debug("Merging additional positions for '{}'. Before merge size: {}. Adding {} positions.", debugTerm, mergedPositions.size(), positions.size());
-                    }
+                    // if (debugTerm.equals(currentTerm)) {
+                    //     logger.debug("Merging additional positions for '{}'. Before merge size: {}. Adding {} positions.", debugTerm, mergedPositions.size(), positions.size());
+                    // }
                     // The 'positions' object is the PositionList from the current line, for the same 'currentTerm'.
                     // Add all Position objects from the current line's 'positions' list to our 'mergedPositions' accumulator.
                     positions.getPositions().forEach(mergedPositions::add);
-                    if (debugTerm.equals(currentTerm)) {
-                        logger.debug("After merge for '{}', new total positions: {}.", debugTerm, mergedPositions.size());
-                    }
+                    // if (debugTerm.equals(currentTerm)) {
+                    //     logger.debug("After merge for '{}', new total positions: {}.", debugTerm, mergedPositions.size());
+                    // }
                 }
             }
 
             // Handle the last term
             if (currentTerm != null && mergedPositions != null) {
-                if (debugTerm.equals(currentTerm)) {
-                    logger.debug("Finalizing last term '{}'. Merged positions size: {}", debugTerm, mergedPositions.size());
-                }
+                // if (debugTerm.equals(currentTerm)) {
+                //     logger.debug("Finalizing last term '{}'. Merged positions size: {}", debugTerm, mergedPositions.size());
+                // }
                 byte[] keyBytes = bytes(currentTerm);
                 byte[] valueBytes = mergedPositions.serialize();
                 batch.put(keyBytes, valueBytes);
@@ -507,10 +515,12 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
     @Override
     public void close() throws IOException {
-        try {
-            indexAccess.close();
-        } catch (IndexAccessException e) {
-            throw new IOException("Failed to close index access", e);
+        if (indexAccess != null) {
+            try {
+                indexAccess.close();
+            } catch (IndexAccessException e) {
+                throw new IOException("Failed to close index access", e);
+            }
         }
     }
 } 

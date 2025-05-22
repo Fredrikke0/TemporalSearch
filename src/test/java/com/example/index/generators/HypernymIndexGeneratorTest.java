@@ -1,23 +1,28 @@
-package com.example.index;
+package com.example.index.generators;
 
 import org.junit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.*;
 import java.sql.*;
-import java.util.Map;
+import java.util.List;
+import java.util.Optional;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.generators.HypernymIndexGenerator;
+import com.example.index.generators.IndexGenerator;
+import com.example.core.IndexAccess;
 
 public class HypernymIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-hyp.txt";
     private HypernymIndexGenerator generator;
+    private IndexAccess indexAccess;
 
     @BeforeEach
     @Override
-    void setUp() throws Exception {
+    protected void setUp() throws Exception {
         super.setUp();
         
         // Create test stopwords file
@@ -99,9 +104,13 @@ public class HypernymIndexGeneratorTest extends BaseIndexTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    @Override
+    protected void tearDown() throws Exception {
         super.tearDown();
         new File(TEST_STOPWORDS_PATH).delete();
+        if (indexAccess != null) {
+            indexAccess.close();
+        }
     }
 
     @Test

@@ -73,7 +73,7 @@ ORGANIZATION: 'ORGANIZATION';
 TIME: 'TIME';
 DURATION: 'DURATION';
 MONEY: 'MONEY';
-NUMBER: 'NUMBER'; // Reverted: Token for NER(NUMBER) type
+NUMBER: 'NUMBER';
 ORDINAL: 'ORDINAL';
 PERCENT: 'PERCENT';
 SET: 'SET';
@@ -373,7 +373,7 @@ posTag
 DOCUMENT_ID: 'DOCUMENT_ID';
 SENTENCE_ID: 'SENTENCE_ID';
 
-// New: groupByClause rules
+
 groupByClause
     : GROUP BY groupByItemList
     ;

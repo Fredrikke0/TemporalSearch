@@ -68,6 +68,9 @@ public class IndexAccess implements IndexAccessInterface {
      * Stores a position list for a given key.
      * This is a convenience method specific to this implementation.
      */
+    /*  // This method is being removed as it's not used by production code
+        // and its internal merge logic is complex and potentially memory-intensive.
+        // Direct byte[] puts via WriteBatch are used by IndexGenerator.
     public void put(byte[] key, PositionList positions) throws IndexAccessException {
         checkOpen();
         try {
@@ -87,6 +90,7 @@ public class IndexAccess implements IndexAccessInterface {
             );
         }
     }
+    */
 
     /**
      * Writes a batch of operations atomically.

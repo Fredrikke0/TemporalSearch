@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -16,6 +16,7 @@ import java.util.stream.Collectors;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.AnnotationEntry;
 
 /**
  * Generates a streaming bigram index from annotation entries.
@@ -41,31 +42,19 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
         boolean isFirstBatch = (lastProcessedEntry == null);
 
         if (isFirstBatch) {
-            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
-                    "FROM annotations a " +
-                    "JOIN documents d ON a.document_id = d.document_id " +
-                    "ORDER BY a.document_id, a.sentence_id, a.begin_char LIMIT ?";
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
+                    "FROM annotations ORDER BY annotation_id LIMIT ?";
         } else {
-            query = "SELECT a.annotation_id, a.document_id, a.sentence_id, a.begin_char, a.end_char, a.token, a.pos, d.timestamp " +
-                    "FROM annotations a " +
-                    "JOIN documents d ON a.document_id = d.document_id " +
-                    "WHERE (a.document_id > ? OR " +
-                    "      (a.document_id = ? AND a.sentence_id > ?) OR " +
-                    "      (a.document_id = ? AND a.sentence_id = ? AND a.begin_char > ?)) " +
-                    "ORDER BY a.document_id, a.sentence_id, a.begin_char LIMIT ?";
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
+                    "FROM annotations WHERE annotation_id > ? ORDER BY annotation_id LIMIT ?";
         }
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
             if (isFirstBatch) {
                 stmt.setInt(1, this.batchSize);
             } else {
-                stmt.setInt(1, lastProcessedEntry.getDocumentId());
-                stmt.setInt(2, lastProcessedEntry.getDocumentId());
-                stmt.setInt(3, lastProcessedEntry.getSentenceId());
-                stmt.setInt(4, lastProcessedEntry.getDocumentId());
-                stmt.setInt(5, lastProcessedEntry.getSentenceId());
-                stmt.setInt(6, lastProcessedEntry.getBeginChar());
-                stmt.setInt(7, this.batchSize);
+                stmt.setInt(1, lastProcessedEntry.getAnnotationId());
+                stmt.setInt(2, this.batchSize);
             }
             
             try (ResultSet rs = stmt.executeQuery()) {
@@ -80,7 +69,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         token,
-                        rs.getString("pos"),
+                        null,
                         null,
                         null,
                         null
@@ -151,7 +140,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
     public long getDocumentCountForIndex() throws SQLException {
         // Since bigrams are derived from annotations, we can use the total annotation count
         // or a more specific count if available that better reflects pairs.
-        String countSql = "SELECT COUNT(*) FROM documents";
+        String countSql = "SELECT MAX(annotation_id) FROM annotations";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {

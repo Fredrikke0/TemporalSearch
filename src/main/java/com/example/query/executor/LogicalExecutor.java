@@ -41,6 +41,16 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         this.executorFactory = executorFactory;
     }
     
+    private <C extends Condition> QueryResult executeCondition(
+        C condition,
+        Map<String, IndexAccessInterface> indexes,
+        Query.Granularity granularity,
+        int granularitySize,
+        String corpusName) throws QueryExecutionException {
+        ConditionExecutor<C> executor = executorFactory.getExecutor(condition);
+        return executor.execute(condition, indexes, granularity, granularitySize, corpusName);
+    }
+    
     @Override
     public QueryResult execute(Logical condition, Map<String, IndexAccessInterface> indexes,
                                Query.Granularity granularity,
@@ -93,8 +103,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         QueryResult combinedResult = null;
 
         for (Condition condition : conditions) {
-            ConditionExecutor executor = executorFactory.getExecutor(condition);
-            QueryResult currentResult = executor.execute(condition, indexes, granularity, granularitySize, corpusName);
+            QueryResult currentResult = executeCondition(condition, indexes, granularity, granularitySize, corpusName);
 
             if (currentResult.getAllDetails().isEmpty()) {
                 logger.debug("Condition {} has no matches, short-circuiting AND", condition);
@@ -131,8 +140,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         QueryResult combinedResult = null;
         
         for (Condition condition : conditions) {
-            ConditionExecutor executor = executorFactory.getExecutor(condition);
-            QueryResult currentResult = executor.execute(condition, indexes, granularity, granularitySize, corpusName);
+            QueryResult currentResult = executeCondition(condition, indexes, granularity, granularitySize, corpusName);
 
             if (currentResult.getAllDetails().isEmpty()) {
                 continue; // Skip empty results for OR

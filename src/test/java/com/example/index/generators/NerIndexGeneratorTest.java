@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import org.junit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -10,16 +10,18 @@ import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.generators.NerIndexGenerator;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessInterface;
 
 public class NerIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-ner-general.txt";
     private NerIndexGenerator generator;
+    private IndexAccess indexAccess;
 
     @BeforeEach
     @Override
-    void setUp() throws Exception {
+    protected void setUp() throws Exception {
         super.setUp();
         
         // Create test stopwords file
@@ -88,7 +90,8 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    @Override
+    protected void tearDown() throws Exception {
         super.tearDown();
         new File(TEST_STOPWORDS_PATH).delete();
     }

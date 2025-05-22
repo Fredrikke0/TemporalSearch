@@ -12,9 +12,9 @@
         <maven.compiler.source>23</maven.compiler.source>
         <maven.compiler.target>23</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <stanford.nlp.version>4.5.8</stanford.nlp.version>
-        <jackson.version>2.18.2</jackson.version>
-        <mockito.version>5.15.2</mockito.version>
+        <stanford.nlp.version>4.5.9</stanford.nlp.version>
+        <jackson.version>2.19.0</jackson.version>
+        <mockito.version>5.17.0</mockito.version>
     </properties>
 
     <repositories>
@@ -174,17 +174,17 @@
         <dependency>
             <groupId>tech.tablesaw</groupId>
             <artifactId>tablesaw-core</artifactId>
-            <version>0.43.1</version>
+            <version>0.44.1</version>
         </dependency>
         <dependency>
             <groupId>tech.tablesaw</groupId>
             <artifactId>tablesaw-html</artifactId>
-            <version>0.43.1</version>
+            <version>0.44.1</version>
         </dependency>
         <dependency>
             <groupId>tech.tablesaw</groupId>
             <artifactId>tablesaw-json</artifactId>
-            <version>0.43.1</version>
+            <version>0.44.1</version>
         </dependency>
 
         <!-- Nash - for temporal indices -->
@@ -444,7 +444,9 @@
                                                 <!-- Add-Opens needed for LevelDB/Snappy on newer JDKs -->
                                                 <Add-Opens>java.base/java.lang=ALL-UNNAMED</Add-Opens>
                                                 <!-- Keep existing Add-Opens if needed -->
-                                                <Add-Opens>java.base/sun.misc=ALL-UNNAMED</Add-Opens> 
+                                                <Add-Opens>java.base/sun.misc=ALL-UNNAMED</Add-Opens>
+                                                <!-- Set maximum memory usage to 70% -->
+                                                <JVM-Args>-XX:MaxRAMPercentage=70</JVM-Args>
                                             </manifestEntries>
                                         </transformer>
                                     </transformers>

@@ -50,35 +50,38 @@ public class MockIndexAccess implements IndexAccessInterface {
         if (closed) throw new IllegalStateException("Index is closed");
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
         Position pos = new Position(docId, sentenceId, begin, end);
-
-        // Retrieve existing list or create a new one
-        byte[] existingData = dataStore.get(wrappedKey);
+        
+        // Retrieve existing list if present, or create a new one
         PositionList list;
-        if (existingData != null) {
-            try {
-                 // Note: Avoid using get() inside addTestData to avoid infinite recursion if get() throws
-                 list = PositionList.deserialize(existingData);
-            } catch (RuntimeException e) {
-                // Handle potential deserialization error for existing data
-                System.err.println("Error deserializing existing PositionList for key '" + key + "'. Starting fresh.");
-                list = new PositionList();
-            }
+        byte[] existingValue = dataStore.get(wrappedKey);
+        if (existingValue != null) {
+            list = PositionList.deserialize(existingValue);
         } else {
             list = new PositionList();
         }
-
-        // Add the new position and store the updated list
         list.add(pos);
         dataStore.put(wrappedKey, list.serialize());
     }
 
     /**
      * Helper method to add pre-serialized test data.
+     * If the key already exists, the new positions are merged with the existing ones.
      */
-    public void addTestData(String key, PositionList positionList) throws IOException {
+    public void addTestData(String key, PositionList newPositions) throws IOException {
         if (closed) throw new IllegalStateException("Index is closed");
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
-        dataStore.put(wrappedKey, positionList.serialize());
+
+        PositionList mergedList;
+        byte[] existingValue = dataStore.get(wrappedKey);
+        if (existingValue != null) {
+            mergedList = PositionList.deserialize(existingValue);
+            for (Position pos : newPositions.getPositions()) { // Assuming PositionList has a getPositions() or is iterable
+                mergedList.add(pos);
+            }
+        } else {
+            mergedList = newPositions;
+        }
+        dataStore.put(wrappedKey, mergedList.serialize());
     }
     
      /**

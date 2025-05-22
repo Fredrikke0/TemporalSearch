@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 
 
 /**
@@ -54,6 +56,9 @@ public class IndexingMetrics {
     private final AtomicLong maxWriteTempTimeNanos;
     private final AtomicLong minWriteTempTimeNanos;
     
+    // For storing arbitrary named timings
+    private final Map<String, Long> customTimingsMs = new ConcurrentHashMap<>();
+    
     // Current batch tracking
     private long currentBatchStartTime;
     private int currentBatchSize;
@@ -89,6 +94,15 @@ public class IndexingMetrics {
         this.minProcessTimeNanos = new AtomicLong(Long.MAX_VALUE);
         this.maxWriteTempTimeNanos = new AtomicLong(0);
         this.minWriteTempTimeNanos = new AtomicLong(Long.MAX_VALUE);
+    }
+
+    /**
+     * Stores a custom named timing value.
+     * @param key The name of the timing metric (e.g., "stitch_date_total_ms")
+     * @param durationMs The duration in milliseconds.
+     */
+    public void addTiming(String key, long durationMs) {
+        customTimingsMs.put(key, durationMs);
     }
 
     /**
@@ -320,6 +334,15 @@ public class IndexingMetrics {
 
             json.put("heap_used_mb", MEMORY_BEAN.getHeapMemoryUsage().getUsed() / (1024.0 * 1024.0))
                 .put("heap_change_mb", (MEMORY_BEAN.getHeapMemoryUsage().getUsed() - initialHeapUsed) / (1024.0 * 1024.0));
+
+            // Add custom timings
+            if (!customTimingsMs.isEmpty()) {
+                ObjectNode customTimingsNode = MAPPER.createObjectNode();
+                for (Map.Entry<String, Long> entry : customTimingsMs.entrySet()) {
+                    customTimingsNode.put(entry.getKey(), entry.getValue());
+                }
+                json.set("custom_timings_ms", customTimingsNode);
+            }
 
             // Only log at INFO level when called at completion (i.e. when total_output_items > 0)
             if (currentTotalOutputItems > 0 || currentTotalRawEntries > 0) {

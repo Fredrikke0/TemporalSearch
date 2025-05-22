@@ -455,7 +455,9 @@ public class PipelineTest {
                         "This is test document %d. It contains sample text for testing NLP features. " +
                         "The quick brown fox jumps over the lazy dog. " +
                         "This document was created on January 1st, 2024. " +
-                        "OpenAI's GPT models have revolutionized natural language processing.",
+                        "OpenAI's GPT models have revolutionized natural language processing. " +
+                        "John Smith and Mary Johnson met in New York City on Tuesday. " +
+                        "Apple Inc. announced their new products yesterday in California.",
                         i))
                     .put("timestamp", "2024-01-01");
                 writer.write(doc.toString());
@@ -503,7 +505,7 @@ public class PipelineTest {
 
     private void verifyIndexingStage() {
         // Verify index directories were created
-        String[] indexTypes = {"unigram", "bigram", "trigram", "dependency", "ner_date", "pos"};
+        String[] indexTypes = {"unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "stitch-ner", "stitch-pos"};
         for (String type : indexTypes) {
             Path indexPath = indexDir.resolve(type);
             assertTrue(indexPath.toFile().exists(), 

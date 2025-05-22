@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -16,6 +16,8 @@ import java.util.Map;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.AnnotationEntry;
+import java.util.Set;
 
 /**
  * Generates a streaming POS (Part-of-Speech) index from annotation entries.
@@ -23,6 +25,8 @@ import com.example.core.PositionList;
  * Uses streaming processing and external sorting for efficient memory usage.
  */
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
+
+    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '\'\'','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-')";
 
     public POSIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
@@ -48,21 +52,22 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         String query;
         boolean isFirstBatch = (lastProcessedEntry == null);
 
+        String notInClause = " AND pos NOT IN " + POS_TAGS_TO_EXCLUDE_SQL;
+
         if (isFirstBatch) {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
-                    "FROM annotations ORDER BY annotation_id LIMIT ?";
+                    "FROM annotations WHERE pos IS NOT NULL AND pos != ''" + notInClause + " ORDER BY annotation_id LIMIT ?";
         } else {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
-                    "FROM annotations WHERE annotation_id > ? ORDER BY annotation_id LIMIT ?";
+                    "FROM annotations WHERE annotation_id > ? AND pos IS NOT NULL AND pos != ''" + notInClause + " ORDER BY annotation_id LIMIT ?";
         }
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            if (isFirstBatch) {
-                stmt.setInt(1, this.batchSize);
-            } else {
-                stmt.setInt(1, lastProcessedEntry.getAnnotationId());
-                stmt.setInt(2, this.batchSize);
+            int paramIdx = 1;
+            if (!isFirstBatch) {
+                stmt.setInt(paramIdx++, lastProcessedEntry.getAnnotationId());
             }
+            stmt.setInt(paramIdx, this.batchSize);
             
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
@@ -92,20 +97,17 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         Map<String, PositionList> tempAggregator = new HashMap<>();
         
         for (AnnotationEntry entry : batch) {
-            if (entry.getPos() == null || entry.getPos().isEmpty()) {
+            if (entry.getPos() == null || entry.getPos().isEmpty() || entry.getToken() == null || entry.getToken().isEmpty()) {
                 continue;
             }
-            // Key for POS index is typically: POS_TAG<DELIMITER>TOKEN_LOWERCASE
-            // unless the requirement is just to index by POS_TAG.
-            // For now, let's use POS_TAG as the key for simplicity, like NerIndex uses NER_TAG.
-            String posTag = entry.getPos().toLowerCase();
-            // Optionally, could make key: entry.getPos() + DELIMITER + entry.getToken().toLowerCase();
-            // if we want to find specific words with a given POS tag.
-            // For now, just indexing by POS tag to get all occurrences of that tag.
+            
+            String posTag = entry.getPos().toUpperCase(); // Consistent casing with NER types
+            String token = entry.getToken().toLowerCase();
+            String compositeKey = posTag + com.example.core.IndexAccessInterface.DELIMITER + token;
 
             Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
             
-            PositionList pl = tempAggregator.computeIfAbsent(posTag, k -> new PositionList());
+            PositionList pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionList());
             pl.add(pos);
         }
         
@@ -117,7 +119,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        String countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE pos IS NOT NULL AND pos != ''";
+        String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE pos IS NOT NULL AND pos != ''";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {

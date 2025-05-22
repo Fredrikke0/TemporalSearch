@@ -423,63 +423,66 @@ public class TableResultService {
         }
 
         // Identify aggregate functions and their target columns from the SELECT clause
-        List<tech.tablesaw.aggregate.AggregateFunction<?, ?>> aggregateFunctions = new ArrayList<>();
-        List<String> columnsToAggregate = new ArrayList<>();
-        Map<String, String> finalColumnNames = new HashMap<>(); // Map from temp agg name to final name
+        List<tech.tablesaw.aggregate.AggregateFunction<?, ?>> aggregateFunctionsList = new ArrayList<>();
+        List<String> columnsToAggregateList = new ArrayList<>();
+        Map<String, String> finalColumnNamesMap = new HashMap<>(); // Map from temp agg name to final name
 
         for (SelectColumn sc : query.selectColumns()) {
             if (sc instanceof CountColumn countColumn) {
-                // Determine the column to apply the count on. For COUNT(*), it can be any non-null column or a specific one.
-                // For COUNT(UNIQUE var), it's the column corresponding to 'var'.
-                // Tablesaw's count usually doesn't need a specific column for COUNT(*)-like behavior when grouping.
-                // However, to use .summarize(col, func), we need a column name.
-                // Let's use the first groupBy column as a placeholder for COUNT(*)-like behavior within summarize.
-                String targetColForCount = groupByColumnNames.get(0); 
+                String targetColForCount; // The actual column name in the table to perform count/countUnique on
+                String originalAggColName = countColumn.getColumnName(); // e.g., "count", "count_unique_var" (final desired name)
+                String tempTablesawColName; // Default name Tablesaw generates, e.g., "Count [column]", "Count Unique [column]"
+                tech.tablesaw.aggregate.AggregateFunction<?, ?> aggFuncToAdd = null;
 
-                String originalAggColName = countColumn.getColumnName(); // e.g., "count", "count_unique_var"
-
-                if (countColumn.toString().startsWith("COUNT(UNIQUE")) { // Check based on CountColumn's own representation
-                    String varToCount = countColumn.getVariableNameForValidation(); // This should be the qualified name
+                if (countColumn.toString().startsWith("COUNT(UNIQUE")) {
+                    String varToCount = countColumn.getVariableNameForValidation();
                     if (varToCount == null || !table.columnNames().contains(varToCount)) {
                         throw new ResultGenerationException(
                             String.format("Cannot apply COUNT(UNIQUE %s): column '%s' not found in table for aggregation.", varToCount, varToCount),
                             "table_result_service", ResultGenerationException.ErrorType.INTERNAL_ERROR);
                     }
-                    columnsToAggregate.add(varToCount); // Column to count unique values from
-                    aggregateFunctions.add(tech.tablesaw.aggregate.AggregateFunctions.countUnique);
-                    finalColumnNames.put("Count Unique [" + varToCount + "]", countColumn.toString());
+                    targetColForCount = varToCount;
+                    aggFuncToAdd = tech.tablesaw.aggregate.AggregateFunctions.countUnique;
+                    tempTablesawColName = aggFuncToAdd.functionName() + " [" + targetColForCount + "]";
                 } else if (countColumn.toString().equals("COUNT(*)")) {
-                    columnsToAggregate.add(targetColForCount); // Placeholder for COUNT(*)
-                    aggregateFunctions.add(tech.tablesaw.aggregate.AggregateFunctions.count);
-                    finalColumnNames.put("Count [" + targetColForCount + "]", countColumn.toString());
+                    if (groupByColumnNames.isEmpty()) { // Should not happen if we are in applyGroupBy
+                         throw new ResultGenerationException("COUNT(*) requires GROUP BY columns to determine a target for Tablesaw's count.", "table_result_service", ResultGenerationException.ErrorType.INTERNAL_ERROR);
+                    }
+                    targetColForCount = groupByColumnNames.get(0); // Use first group-by column as placeholder for COUNT(*)
+                    aggFuncToAdd = tech.tablesaw.aggregate.AggregateFunctions.count;
+                    tempTablesawColName = aggFuncToAdd.functionName() + " [" + targetColForCount + "]";
                 } else if (countColumn.toString().equals("COUNT(DOCUMENTS)")) {
-                    // COUNT(DOCUMENTS) is complex with summarize.by(). 
-                    // It needs to count unique document IDs *within each group*
-                    // This might require a more complex aggregation setup or pre-calculation.
-                    // For now, we'll log a warning and potentially skip or use a simple count as placeholder.
-                    logger.warn("COUNT(DOCUMENTS) with GROUP BY is not fully supported yet. Using COUNT(*) as placeholder for column '{}'.", originalAggColName);
-                    columnsToAggregate.add(targetColForCount);
-                    aggregateFunctions.add(tech.tablesaw.aggregate.AggregateFunctions.count);
-                    finalColumnNames.put("Count [" + targetColForCount + "]", originalAggColName);
+                    logger.warn("COUNT(DOCUMENTS) with GROUP BY is complex. Using COUNT(*) on first group-by column ('{}') as placeholder for '{}'. True unique document count per group needs dedicated logic.", groupByColumnNames.get(0), originalAggColName);
+                    targetColForCount = groupByColumnNames.get(0); // Placeholder
+                    aggFuncToAdd = tech.tablesaw.aggregate.AggregateFunctions.count; // Or a custom one if implemented
+                    tempTablesawColName = aggFuncToAdd.functionName() + " [" + targetColForCount + "]";
                 } else {
-                     logger.warn("Unhandled CountColumn type for GROUP BY: {} for column '{}'", countColumn.toString(), originalAggColName);
+                     logger.warn("Unhandled CountColumn type for GROUP BY: {} for column '{}'. Skipping.", countColumn.toString(), originalAggColName);
+                     continue; // Skip this aggregate
+                }
+                
+                if (aggFuncToAdd != null) {
+                    columnsToAggregateList.add(targetColForCount);
+                    aggregateFunctionsList.add(aggFuncToAdd);
+                    // Map default Tablesaw name to the name expected by tests (toString() representation)
+                    finalColumnNamesMap.put(tempTablesawColName, countColumn.toString()); 
                 }
             }
             // Other aggregate functions (SUM, AVG, etc.) would be handled here if added in the future
         }
 
-        if (aggregateFunctions.isEmpty()) {
-            // If only grouping without aggregation, Tablesaw's `by` can be used, 
-            // but it typically expects an aggregation. 
+        if (aggregateFunctionsList.isEmpty()) {
+            // If only grouping without aggregation, Tablesaw's `by` can be used,
+            // but it typically expects an aggregation.
             // A simple `table.groupBy(groupByColumnNames).reduce(...)` or just selecting distinct rows might be needed.
             // For now, if there are no *explicit* aggregates like COUNT, we assume the user wants distinct combinations of grouped columns.
             // The validator ensures all selected non-aggregate columns are in GROUP BY.
             // So, we can take the first row of each group after grouping.
             logger.debug("GROUP BY without explicit aggregates. Selecting first row of each group for columns: {}", query.selectColumns().stream().map(SelectColumn::getColumnName).toList());
-            Table groupedTable = table.emptyCopy(); // CORRECTED: Use emptyCopy() to get an empty table with the same structure
-            Table tempGrouped = table.sortOn(groupByColumnNames.toArray(new String[0])); 
-            
-            if (tempGrouped.isEmpty()) return groupedTable; 
+            Table groupedTable = table.emptyCopy();
+            Table tempGrouped = table.sortOn(groupByColumnNames.toArray(new String[0]));
+
+            if (tempGrouped.isEmpty()) return groupedTable;
 
             Set<List<Object>> distinctGroupValues = new HashSet<>();
             for (Row row : tempGrouped) {
@@ -488,56 +491,83 @@ public class TableResultService {
                     currentGroupKey.add(row.getObject(groupColName));
                 }
                 if (distinctGroupValues.add(currentGroupKey)) {
-                    groupedTable.addRow(row);
+                    groupedTable.append(row);
                 }
             }
             return groupedTable;
         }
 
-        // Perform aggregation
-        Table summarizedTable = table.summarize(columnsToAggregate.get(0), aggregateFunctions.get(0))
-                                     .by(groupByColumnNames.toArray(new String[0]));
-        
-        // If there are more aggregates, they need to be added. 
-        // Tablesaw's fluent API for multiple aggregates on different columns in one go is tricky.
-        // Often it's `table.summarize(col1, func1, func2).by(groupCols)` or multiple `summarize` calls then join.
-        // For simplicity, if there are multiple COUNTs, we might hit limitations here or need to process them sequentially.
-        if (aggregateFunctions.size() > 1) {
-            logger.warn("Multiple aggregate functions in GROUP BY. Current implementation might only correctly process the first one: '{}' on '{}'.", 
-                        aggregateFunctions.get(0).functionName(), columnsToAggregate.get(0));
-            // TODO: Enhance to handle multiple aggregations correctly, possibly by separate summarize calls and joining,
-            // or by ensuring the `summarize` call can take multiple (column, function) pairs if Tablesaw supports it directly.
+        // Perform aggregation using all collected functions and source columns
+        Set<String> uniqueSourceColNames = new LinkedHashSet<>(columnsToAggregateList);
+        Set<tech.tablesaw.aggregate.AggregateFunction<?, ?>> uniqueAggFunctions = new LinkedHashSet<>(aggregateFunctionsList);
+
+        if (uniqueSourceColNames.isEmpty() || uniqueAggFunctions.isEmpty()) {
+            logger.error("Internal error: Aggregates were specified, but no unique source columns or functions were derived for summarization. GroupBy columns: {}", groupByColumnNames);
+            // Fallback or throw: For now, let's return distinct groups as if no aggregates.
+            // This path indicates a logic error in preparing aggregateFunctionsList/columnsToAggregateList
+             Table distinctTable = table.selectColumns(groupByColumnNames.toArray(new String[0])).dropDuplicateRows();
+             logger.warn("Falling back to returning distinct group-by columns due to missing aggregation details.");
+             return distinctTable;
         }
+        
+        logger.debug("Performing aggregation with unique source columns: {} and unique functions: {}", 
+            uniqueSourceColNames, uniqueAggFunctions.stream().map(f -> f.functionName()).toList());
 
-        // Rename aggregated columns to their original names
-        for (Map.Entry<String, String> entry : finalColumnNames.entrySet()) {
-            String tempName = entry.getKey();
-            String finalName = entry.getValue();
-            if (summarizedTable.columnNames().contains(tempName)) {
-                Column<?> aggCol = summarizedTable.column(tempName);
-                aggCol.setName(finalName);
+        Table tempFullAggTable = table.summarize(
+                new ArrayList<>(uniqueSourceColNames), // Convert Set to List explicitly
+                uniqueAggFunctions.toArray(new tech.tablesaw.aggregate.AggregateFunction[0])
+        ).by(groupByColumnNames.toArray(new String[0]));
+        
+        logger.debug("Temporary aggregated table columns: {}", tempFullAggTable.columnNames());
 
-                // If it's a known count column (e.g., starts with "COUNT(") and is DoubleColumn, convert to IntColumn
-                if (finalName.startsWith("COUNT(") && aggCol.type() == ColumnType.DOUBLE) {
-                    logger.warn("Count aggregate column '{}' was DoubleColumn, converting to IntColumn (truncating).", finalName);
-                    try {
-                        // Cast to DoubleColumn first, then convert to IntColumn
-                        DoubleColumn doubleAggCol = (DoubleColumn) aggCol;
-                        IntColumn intValues = doubleAggCol.asIntColumn(); 
-                        summarizedTable.replaceColumn(finalName, intValues); 
-                    } catch (ClassCastException cce) {
-                        // This should not happen if aggCol.type() == ColumnType.DOUBLE
-                        logger.error("Failed to cast aggregate column '{}' to DoubleColumn for conversion: {}", finalName, cce.getMessage());
-                    } catch (Exception e) {
-                        logger.error("Could not convert DoubleColumn '{}' to IntColumn: {}", finalName, e.getMessage());
-                    }
-                }
+        // Select and rename the columns we actually want for the final result
+        Table summarizedTable;
+        // Start with the group-by columns from the temp table
+        List<Column<?>> finalColumns = new ArrayList<>();
+        for (String groupColName : groupByColumnNames) {
+            if (tempFullAggTable.columnNames().contains(groupColName)) {
+                finalColumns.add(tempFullAggTable.column(groupColName).copy());
             } else {
-                logger.warn("Aggregated column '{}' not found in summarized table for renaming to '{}'. Available: {}", 
-                            tempName, finalName, summarizedTable.columnNames());
+                // This is highly unlikely as .by() should ensure these columns are present
+                logger.error("CRITICAL: Group-by column '{}' missing from temp aggregation result. Check Tablesaw behavior.", groupColName);
+                // Potentially add a placeholder or throw, for now, skip, which might lead to an empty table or errors later.
             }
         }
+        summarizedTable = Table.create(table.name() + "_grouped", finalColumns);
 
+
+        for (Map.Entry<String, String> entry : finalColumnNamesMap.entrySet()) {
+            String tempNameKey = entry.getKey();    // Default Tablesaw name, e.g., "Count Unique [varToCount]"
+            String finalNameValue = entry.getValue(); // Final desired name, e.g., "COUNT(UNIQUE varToCount)" or user alias
+
+            if (tempFullAggTable.columnNames().contains(tempNameKey)) {
+                Column<?> aggCol = tempFullAggTable.column(tempNameKey).copy();
+                aggCol.setName(finalNameValue);
+
+                if (finalNameValue.startsWith("COUNT(") && aggCol.type() == ColumnType.DOUBLE) {
+                    logger.debug("Count aggregate column '{}' was DoubleColumn, converting to IntColumn.", finalNameValue);
+                    try {
+                        DoubleColumn doubleAggCol = (DoubleColumn) aggCol;
+                        IntColumn intValues = doubleAggCol.asIntColumn();
+                        intValues.setName(finalNameValue); // Ensure name is preserved after conversion
+                        summarizedTable.addColumns(intValues);
+                    } catch (ClassCastException cce) {
+                        logger.error("Failed to cast aggregate column '{}' to DoubleColumn for conversion: {}. Adding as Double.", finalNameValue, cce.getMessage(), cce);
+                        summarizedTable.addColumns(aggCol); // Add original (renamed) double column
+                    } catch (Exception e) {
+                        logger.error("Could not convert DoubleColumn '{}' to IntColumn: {}. Adding as Double.", finalNameValue, e.getMessage(), e);
+                        summarizedTable.addColumns(aggCol); // Add original (renamed) double column
+                    }
+                } else {
+                    summarizedTable.addColumns(aggCol);
+                }
+            } else {
+                logger.warn("Expected aggregated column temp name '{}' (for final name '{}') not found in temp aggregation result. Available: {}. This aggregate will be missing.",
+                            tempNameKey, finalNameValue, tempFullAggTable.columnNames());
+            }
+        }
+        
+        logger.debug("Final summarized table columns: {}", summarizedTable.columnNames());
         return summarizedTable;
     }
 

@@ -7,8 +7,6 @@ import java.util.Properties;
 
 /**
  * Configuration class for CoreNLP pipeline with optimized settings.
- * This class encapsulates all CoreNLP-related configuration and provides
- * factory methods for creating optimized pipeline instances.
  */
 public class CoreNLPConfig {
     private static final Logger logger = LoggerFactory.getLogger(CoreNLPConfig.class);

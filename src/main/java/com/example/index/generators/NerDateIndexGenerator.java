@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -21,6 +21,8 @@ import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.AnnotationEntry;
+
 import java.nio.file.Path;
 import java.util.regex.Pattern;
 
@@ -196,24 +198,12 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         // Count documents that have at least one 'DATE' entity with a valid normalized_ner.
         // This might be slow if many dates don't match the pattern.
         // A simpler count from annotations might be acceptable if performance is an issue.
-        String countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL AND normalized_ner LIKE '____-__-__'";
+        String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL AND normalized_ner LIKE '____-__-__'";
         long count = 0;
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql)) {
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
                     count = rs.getLong(1);
-                }
-            }
-        }
-        // Fallback or more robust counting might be needed if the above is too restrictive or slow.
-        // For now, this provides a targeted count.
-        if (count == 0) { // If the precise query yields 0, try a broader one for progress bar sanity
-            logger.warn("Initial document count for NerDateIndex was 0 with strict pattern. Trying broader count.");
-            countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL";
-            try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
-                 ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getLong(1);
                 }
             }
         }

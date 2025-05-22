@@ -13,7 +13,7 @@ import java.util.concurrent.ExecutorService;
 
 public class Annotations {
     private static final Logger logger = LoggerFactory.getLogger(Annotations.class);
-    private static final int MAX_DOCUMENT_LENGTH = 20000; // Adjust to reduce annotation time.
+    private static final int MAX_DOCUMENT_LENGTH = 20000; // Skip very long documents.
 
     private static StanfordCoreNLP createCoreNLPPipeline(int threads) {
         CoreNLPConfig config = new CoreNLPConfig(threads);
@@ -98,7 +98,7 @@ public class Annotations {
                     throw e; 
                 }
             } else if (startDocumentId > 1) {
-                // This is the original resume logic: clean up only the specific document_id we are starting from
+                // Clean up only the specific document_id we are starting from
                 // in case it was partially processed.
                 logger.info("Resuming or starting from specific ID (force=false). Performing cleanup for document_id: {}", startDocumentId);
                 try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?");
@@ -110,10 +110,10 @@ public class Annotations {
                     delDep.setInt(1, startDocumentId);
                     delDep.executeUpdate();
                     
-                    conn.commit(); // Commit the deletions
+                    conn.commit();
                 } catch (SQLException e) {
                     logger.error("Error during pre-emptive delete for document_id=" + startDocumentId, e);
-                    throw e; // Rethrow to halt processing if cleanup fails
+                    throw e;
                 }
             }
 
@@ -126,19 +126,18 @@ public class Annotations {
                 try (ResultSet maxIdRs = maxIdStmt.executeQuery()) {
                     if (maxIdRs.next()) {
                         long queriedMaxId = maxIdRs.getLong(1);
-                        if (queriedMaxId > 0) { // Check if MAX returned a valid ID (not 0 from COALESCE on empty or no match)
-                             // Ensure queriedMaxId is at least startDocumentId if result is found
+                        if (queriedMaxId > 0) {
                             estimatedDocsInScope = (queriedMaxId >= startDocumentId) ? (queriedMaxId - startDocumentId + 1) : 0;
                         }
                     }
                 }
             }
-            if (estimatedDocsInScope == 0 && startDocumentId == 1) { // If starting fresh and no docs found, verify total docs
+            if (estimatedDocsInScope == 0 && startDocumentId == 1) {
                 try (PreparedStatement totalCheckStmt = conn.prepareStatement("SELECT COALESCE(MAX(document_id), 0) FROM documents WHERE LENGTH(text) <= " + MAX_DOCUMENT_LENGTH); 
                      ResultSet totalRs = totalCheckStmt.executeQuery()) {
                     if (totalRs.next() && totalRs.getLong(1) == 0) {
                         logger.info("No documents found in the database (or all are too long). Nothing to annotate.");
-                        return; // Exit early
+                        return;
                     }
                 }
             }
@@ -173,13 +172,13 @@ public class Annotations {
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
                 stmt.setInt(1, startDocumentId);
                 if (limit != null) {
-                    stmt.setInt(2, limit); // Set the limit parameter
+                    stmt.setInt(2, limit);
                 }
                 logger.debug("Executing query to fetch documents...");
                 try (ResultSet rs = stmt.executeQuery()) {
                     logger.debug("Starting document processing loop...");
                     
-                    int totalUserThreads = threads; // From -t argument
+                    int totalUserThreads = threads;
                     int numCoreNLPInternalThreads;
                     int numExecutorThreads;
 
@@ -190,8 +189,7 @@ public class Annotations {
                         // Prioritize executor threads slightly if rounding is an issue, ensure CoreNLP gets at least 1
                         numExecutorThreads = Math.max(1, (int) Math.ceil(totalUserThreads * 0.6));
                         numCoreNLPInternalThreads = Math.max(1, totalUserThreads - numExecutorThreads);
-                        // If coreNLP threads ended up 0 due to the above, give it at least 1 and adjust executor
-                        if (numCoreNLPInternalThreads == 0) { // Should not happen with Math.max(1, ...) above but as a safeguard
+                        if (numCoreNLPInternalThreads == 0) {
                             numCoreNLPInternalThreads = 1;
                             numExecutorThreads = Math.max(1, totalUserThreads - 1);
                         }
@@ -210,7 +208,7 @@ public class Annotations {
 
                     ProgressBarBuilder pbb = new ProgressBarBuilder()
                         .setTaskName("Annotating")
-                        .setInitialMax(totalDocumentsToProcessThisRun) // Use the calculated value
+                        .setInitialMax(totalDocumentsToProcessThisRun)
                         .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
                         .setUpdateIntervalMillis(200)
                         .showSpeed();
@@ -223,7 +221,7 @@ public class Annotations {
                             }
                         int documentId = rs.getInt("document_id");
                         String text = rs.getString("text");
-                        String timestamp = rs.getString("timestamp"); // Get the timestamp
+                        String timestamp = rs.getString("timestamp");
 
                             java.util.concurrent.Future<AnnotationResult> future = executor.submit(() -> {
                         AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId, timestamp);
@@ -286,7 +284,7 @@ public class Annotations {
                     } finally {
                         executor.shutdown();
                         try {
-                            if (!executor.awaitTermination(10, java.util.concurrent.TimeUnit.MINUTES)) {
+                            if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.MINUTES)) {
                                 executor.shutdownNow();
                             }
                         } catch (InterruptedException e) {
@@ -333,7 +331,6 @@ public class Annotations {
                         )
                     """);
 
-            // Indexes for annotations table
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_annotations_document_id ON annotations (document_id)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_ann_did_sid_token_lemma ON annotations (document_id, sentence_id, token, lemma)");
 
@@ -350,13 +347,11 @@ public class Annotations {
                             FOREIGN KEY (document_id) REFERENCES documents(document_id)
                         )
                     """);
-            // Indexes for dependencies table
+
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_dependencies_document_id ON dependencies (document_id)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_dep_id ON dependencies (dependency_id)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_dep_relation_did_sid_tokens ON dependencies (relation, document_id, sentence_id, head_token, dependent_token)");
             
-            // Assuming 'documents' table exists and this is a good place to ensure its index
-            // If 'documents' table creation is handled elsewhere, this might be redundant or ideally co-located.
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_doc_id_timestamp ON documents (document_id, timestamp)");
         }
     }
@@ -377,7 +372,6 @@ public class Annotations {
 
         // Set the document date for SUTime to resolve relative dates like "yesterday"
         if (documentTimestamp != null && !documentTimestamp.isEmpty()) {
-            // Assuming timestamp is like "YYYY-MM-DD HH:MM:SS" or just "YYYY-MM-DD"
             // CoreNLP's DocDateAnnotation expects "YYYY-MM-DD"
             String dateOnly = documentTimestamp.length() > 10 ? documentTimestamp.substring(0, 10) : documentTimestamp;
             if (dateOnly.matches("\\d{4}-\\d{2}-\\d{2}")) { // Basic check for YYYY-MM-DD format

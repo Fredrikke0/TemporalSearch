@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import org.junit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -9,6 +9,8 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
 import com.example.logging.ProgressTracker;
+import com.example.index.NashDateEntryWithId;
+import com.example.index.generators.NashIndexGenerator;
 import com.example.index.util.NashSerializationUtils;
 
 public class NashIndexGeneratorTest extends BaseIndexTest {
@@ -17,7 +19,7 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
 
     @BeforeEach
     @Override
-    void setUp() throws Exception {
+    protected void setUp() throws Exception {
         super.setUp();
         // Create test stopwords file
         try (PrintWriter writer = new PrintWriter(TEST_STOPWORDS_PATH)) {
@@ -74,7 +76,8 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    @Override
+    protected void tearDown() throws Exception {
         super.tearDown();
         new File(TEST_STOPWORDS_PATH).delete();
     }

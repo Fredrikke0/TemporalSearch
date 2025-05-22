@@ -9,11 +9,13 @@ import java.time.LocalDate;
 public record StitchEntry(
     int documentId,
     int sentenceId,
-    int beginChar,
-    int endChar,
+    int beginChar,        // Unigram's begin char
+    int endChar,          // Unigram's end char
     String value,         // The unigram text
     AnnotationType type,  // The type of annotation (DATE, NER, POS, DEPENDENCY)
-    int synonymId         // ID from the appropriate synonym table
+    int synonymId,        // ID from the appropriate synonym table
+    int annotationBeginChar, // Begin char of the linked annotation
+    int annotationEndChar    // End char of the linked annotation
 ) implements IndexEntry {
     @Override
     public int getDocumentId() {

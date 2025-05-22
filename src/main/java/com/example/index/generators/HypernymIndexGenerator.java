@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -18,6 +18,8 @@ import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.DependencyEntry;
+
 import java.nio.file.Path;
 
 /**
@@ -169,7 +171,7 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
         String inClause = HYPERNYM_RELATIONS.stream()
             .map(r -> "'" + r.replace("'", "''") + "'")
             .collect(Collectors.joining(", "));
-        String countSql = "SELECT COUNT(DISTINCT document_id) FROM dependencies WHERE relation IN (" + inClause + ")";
+        String countSql = "SELECT MAX(dependency_id) FROM dependencies WHERE relation IN (" + inClause + ")";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {

@@ -62,7 +62,7 @@ public class IndexAccessTest {
 
         // Test put and get
         byte[] key = "test-key".getBytes();
-        indexAccess.put(key, positions);
+        indexAccess.put(key, positions.serialize());
 
         Optional<PositionList> retrieved = indexAccess.get(key);
         assertTrue(retrieved.isPresent(), "Should retrieve stored positions");
@@ -118,18 +118,24 @@ public class IndexAccessTest {
         Position pos1 = new Position(1, 1, 0, 5);
         PositionList positions1 = new PositionList();
         positions1.add(pos1);
-        indexAccess.put(key, positions1);
+        indexAccess.put(key, positions1.serialize());
 
         // Create second position list
         Position pos2 = new Position(1, 2, 6, 10);
         PositionList positions2 = new PositionList();
         positions2.add(pos2);
-        indexAccess.put(key, positions2);
+        
+        // Simulate merge: get existing, deserialize, merge, serialize, then put
+        Optional<PositionList> existingListOpt = indexAccess.get(key);
+        assertTrue(existingListOpt.isPresent(), "Existing list should be present for merge");
+        PositionList mergedList = existingListOpt.get();
+        mergedList.merge(positions2);
+        indexAccess.put(key, mergedList.serialize());
 
         // Verify merge
-        Optional<PositionList> merged = indexAccess.get(key);
-        assertTrue(merged.isPresent(), "Should retrieve merged positions");
-        assertEquals(2, merged.get().getPositions().size(), "Should contain all positions");
+        Optional<PositionList> mergedResult = indexAccess.get(key);
+        assertTrue(mergedResult.isPresent(), "Should retrieve merged positions");
+        assertEquals(2, mergedResult.get().getPositions().size(), "Should contain all positions");
     }
 
     @Test
@@ -139,7 +145,7 @@ public class IndexAccessTest {
             Position pos = new Position(i, 1, 0, 5);
             PositionList positions = new PositionList();
             positions.add(pos);
-            indexAccess.put(("key" + i).getBytes(), positions);
+            indexAccess.put(("key" + i).getBytes(), positions.serialize());
         }
 
         // Test iteration
@@ -165,7 +171,7 @@ public class IndexAccessTest {
 
         // Verify operations throw appropriate exceptions
         assertThrows(IndexAccessException.class, () -> 
-            indexAccess.put("test".getBytes(), new PositionList()));
+            indexAccess.put("test".getBytes(), new PositionList().serialize()));
         assertThrows(IndexAccessException.class, () -> 
             indexAccess.get("test".getBytes()));
         assertThrows(IndexAccessException.class, () -> 

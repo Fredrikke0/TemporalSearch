@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.AnnotationEntry;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessInterface;
 
@@ -31,6 +32,8 @@ import java.util.Map;
 public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(NerIndexGenerator.class);
     
+    public static final String NER_TAGS_TO_EXCLUDE_SQL = "('O', 'DATE')";
+    
     public NerIndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
@@ -47,11 +50,11 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         if (lastProcessedEntry == null) {
             sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
                   "FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE' " +
-                  "ORDER BY document_id, sentence_id, begin_char, annotation_id LIMIT ?";
+                  "ORDER BY annotation_id LIMIT ?";
         } else {
             sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
                   "FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE' AND annotation_id > ? " +
-                  "ORDER BY document_id, sentence_id, begin_char, annotation_id LIMIT ?";
+                  "ORDER BY annotation_id LIMIT ?";
         }
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
@@ -93,7 +96,6 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         AnnotationEntry prevEntry = null;
         List<String> currentEntityRawTokens = new ArrayList<>();
         String currentEntityType = null;
-        String currentEntityNormalizedTextFirstToken = null; 
         int currentEntityDocId = -1;
         int currentEntitySentId = -1;
         int currentEntityBeginChar = -1;
@@ -116,7 +118,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             if (entityBreak) {
                 if (!currentEntityRawTokens.isEmpty() && prevEntry != null) {
                     addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
-                                            currentEntityNormalizedTextFirstToken, currentEntityRawTokens,
+                                            currentEntityRawTokens,
                                             currentEntityDocId, currentEntitySentId,
                                             currentEntityBeginChar, prevEntry.getEndChar());
                 }
@@ -127,7 +129,6 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             if (nerTag != null && !nerTag.isEmpty() && !"O".equals(nerTag) && !"DATE".equals(nerTag)) {
                 if (currentEntityType == null) {
                     currentEntityType = nerTag;
-                    currentEntityNormalizedTextFirstToken = entry.getNormalizedNer();
                     currentEntityDocId = entry.getDocumentId();
                     currentEntitySentId = entry.getSentenceId();
                     currentEntityBeginChar = entry.getBeginChar();
@@ -139,7 +140,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
         if (currentEntityType != null && !currentEntityRawTokens.isEmpty() && prevEntry != null) {
              addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
-                                    currentEntityNormalizedTextFirstToken, currentEntityRawTokens,
+                                    currentEntityRawTokens,
                                     currentEntityDocId, currentEntitySentId,
                                     currentEntityBeginChar, prevEntry.getEndChar());
         }
@@ -151,7 +152,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
     }
     
     private void addProcessedEntityToMap(Map<String, PositionList> map,
-                                         String entityType, String normalizedTextFirstToken,
+                                         String entityType,
                                          List<String> rawTokens, int docId, int sentId,
                                          int beginChar, int endChar) {
         if (entityType == null || rawTokens.isEmpty() || beginChar == -1 || endChar == -1 || endChar < beginChar) {
@@ -160,13 +161,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             return;
         }
 
-        String entityValue;
-        if (normalizedTextFirstToken != null && !normalizedTextFirstToken.isBlank()) {
-            entityValue = normalizedTextFirstToken.toLowerCase(); 
-        } else {
-            entityValue = String.join(" ", rawTokens).toLowerCase();
-        }
-
+        String entityValue = String.join(" ", rawTokens).toLowerCase();
         String compositeKey = entityType.toUpperCase() + IndexAccessInterface.DELIMITER + entityValue;
 
         PositionList pl = map.computeIfAbsent(compositeKey, k -> new PositionList());
@@ -185,7 +180,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        String countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE'";
+        String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE'";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {

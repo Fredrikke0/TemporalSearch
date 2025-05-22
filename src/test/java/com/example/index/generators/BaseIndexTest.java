@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.io.MoreFiles;
 import com.google.common.io.RecursiveDeleteOption;
@@ -31,7 +31,7 @@ public abstract class BaseIndexTest {
     protected static final String TEST_STOPWORDS_PATH = "test-stopwords.txt";
 
     @BeforeEach
-    void setUp() throws Exception {
+    protected void setUp() throws Exception {
         // Create temp directory
         tempDir = Files.createTempDirectory("index-test-");
         logger.info("Created temp directory: {}", tempDir);
@@ -56,7 +56,7 @@ public abstract class BaseIndexTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    protected void tearDown() throws Exception {
         logger.info("Starting test cleanup...");
         
         // Close SQLite connection
@@ -139,6 +139,7 @@ public abstract class BaseIndexTest {
     protected Options createTestOptions() {
         Options options = new Options();
         options.createIfMissing(true);
+        options.errorIfExists(false);
         options.cacheSize(16 * 1024 * 1024); // 16MB cache for testing
         options.writeBufferSize(4 * 1024 * 1024); // 4MB write buffer
         options.blockSize(4 * 1024); // 4KB block size

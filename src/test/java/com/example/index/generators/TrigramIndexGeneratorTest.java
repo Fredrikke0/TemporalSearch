@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import org.junit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -11,6 +11,8 @@ import java.util.Optional;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.generators.IndexGenerator;
+import com.example.index.generators.TrigramIndexGenerator;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import java.util.List;
@@ -27,7 +29,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
 
     @BeforeEach
     @Override
-    void setUp() throws Exception {
+    protected void setUp() throws Exception {
         super.setUp();
         
         // Create test stopwords file
@@ -143,7 +145,8 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    @Override
+    protected void tearDown() throws Exception {
         super.tearDown();
         if (indexAccess != null) {
             indexAccess.close();

@@ -1,23 +1,28 @@
-package com.example.index;
+package com.example.index.generators;
 
 import org.junit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.*;
 import java.sql.*;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.generators.POSIndexGenerator;
+import com.example.core.IndexAccess;
 
 public class POSIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-pos.txt";
     private POSIndexGenerator generator;
+    private IndexAccess indexAccess;
 
     @BeforeEach
     @Override
-    void setUp() throws Exception {
+    protected void setUp() throws Exception {
         super.setUp();
         
         // Create test stopwords file
@@ -94,9 +99,13 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    @Override
+    protected void tearDown() throws Exception {
         super.tearDown();
         new File(TEST_STOPWORDS_PATH).delete();
+        if (indexAccess != null) {
+            indexAccess.close();
+        }
     }
 
     @Test
@@ -107,23 +116,26 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         // Process batch and verify results
         ListMultimap<String, PositionList> result = generator.processBatch(entries);
         
-        // Check that all POS tags are indexed
-        String[] expectedTags = {"noun", "verb", "adj", "det", "adp", "pron", "aux"};
+        // Check that POS tags exist in composite keys
+        String[] expectedTags = {"NOUN", "VERB", "ADJ", "DET", "ADP", "PRON", "AUX"};
         for (String tag : expectedTags) {
-            assertTrue(result.containsKey(tag.toLowerCase()), 
-                "Should contain POS tag: " + tag);
+            boolean hasTagKey = result.keySet().stream()
+                .anyMatch(key -> key.startsWith(tag + com.example.core.IndexAccessInterface.DELIMITER));
+            assertTrue(hasTagKey, "Should contain at least one key with POS tag: " + tag);
         }
         
         // Verify NOUN has multiple positions
-        var nounPositions = result.get("noun");
-        int totalNounPositions = nounPositions.stream()
+        int totalNounPositions = result.keySet().stream()
+            .filter(key -> key.startsWith("NOUN" + com.example.core.IndexAccessInterface.DELIMITER))
+            .flatMap(key -> result.get(key).stream())
             .mapToInt(pl -> pl.getPositions().size())
             .sum();
         assertEquals(3, totalNounPositions, "Should have 3 NOUN positions");
         
         // Verify DET is indexed despite being a stopword
-        var detPositions = result.get("det");
-        int totalDetPositions = detPositions.stream()
+        int totalDetPositions = result.keySet().stream()
+            .filter(key -> key.startsWith("DET" + com.example.core.IndexAccessInterface.DELIMITER))
+            .flatMap(key -> result.get(key).stream())
             .mapToInt(pl -> pl.getPositions().size())
             .sum();
         assertEquals(3, totalDetPositions, "Should have 3 DET positions");
@@ -149,15 +161,15 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
 
         // Insert mixed case POS tags
         Object[][] mixedCaseWords = {
-            { 3, 0, 0, 4, "test", "NOUN" },
-            { 3, 0, 5, 9, "word", "noun" },
-            { 3, 0, 10, 14, "run", "VERB" },
-            { 3, 0, 15, 19, "fast", "verb" }
+            { 3, 0, 0, 4, "test", "test", "NOUN" },
+            { 3, 0, 5, 9, "word", "word", "noun" },
+            { 3, 0, 10, 14, "run", "run", "VERB" },
+            { 3, 0, 15, 19, "fast", "fast", "verb" }
         };
 
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, lemma, pos) " +
-                "VALUES (?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
             for (Object[] word : mixedCaseWords) {
                 pstmt.setInt(1, (Integer) word[0]);
                 pstmt.setInt(2, (Integer) word[1]);
@@ -165,6 +177,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
                 pstmt.setInt(4, (Integer) word[3]);
                 pstmt.setString(5, (String) word[4]);
                 pstmt.setString(6, (String) word[5]);
+                pstmt.setString(7, (String) word[6]);
                 pstmt.executeUpdate();
             }
         }
@@ -174,14 +187,16 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         var result = generator.processBatch(entries);
 
         // Verify case normalization
-        var nounPositions = result.get("noun");
-        int totalNounPositions = nounPositions.stream()
+        int totalNounPositions = result.keySet().stream()
+            .filter(key -> key.startsWith("NOUN" + com.example.core.IndexAccessInterface.DELIMITER))
+            .flatMap(key -> result.get(key).stream())
             .mapToInt(pl -> pl.getPositions().size())
             .sum();
         assertEquals(2, totalNounPositions, "Should have 2 NOUN positions after case normalization");
 
-        var verbPositions = result.get("verb");
-        int totalVerbPositions = verbPositions.stream()
+        int totalVerbPositions = result.keySet().stream()
+            .filter(key -> key.startsWith("VERB" + com.example.core.IndexAccessInterface.DELIMITER))
+            .flatMap(key -> result.get(key).stream())
             .mapToInt(pl -> pl.getPositions().size())
             .sum();
         assertEquals(2, totalVerbPositions, "Should have 2 VERB positions after case normalization");

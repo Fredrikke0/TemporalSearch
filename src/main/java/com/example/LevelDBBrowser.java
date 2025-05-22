@@ -359,18 +359,22 @@ public class LevelDBBrowser {
         
         for (String annotationType : ANNOTATION_TYPES) {
             String synonymsFileName = String.format(ANNOTATION_SYNONYMS_PREFIX, annotationType);
-            Path synonymsPath = Paths.get(basePath, "stitch", synonymsFileName);
+            Path synonymsPath = Paths.get(basePath, "stitch-" + annotationType, synonymsFileName);
             File synonymsFile = synonymsPath.toFile();
             
-            if (!synonymsFile.exists()) continue;
+            if (!synonymsFile.exists()) {
+                logger.warn("Synonym file not found for type '{}' at path: {}", annotationType, synonymsPath);
+                continue;
+            }
             
             try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(synonymsFile))) {
                 Map<String, Integer> valueToId = (Map<String, Integer>) ois.readObject();
                 Map<Integer, String> idToValue = new HashMap<>();
                 valueToId.forEach((value, id) -> idToValue.put(id, value));
                 allSynonyms.put(annotationType, idToValue);
+                logger.info("Successfully loaded {} synonyms for type '{}' from {}", idToValue.size(), annotationType, synonymsPath);
             } catch (Exception e) {
-                logger.error("Error loading {} synonyms: {}", annotationType, e.getMessage());
+                logger.error("Error loading {} synonyms from {}: {}", annotationType, synonymsPath, e.getMessage());
             }
         }
         

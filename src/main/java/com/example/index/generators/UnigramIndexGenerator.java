@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -15,6 +15,8 @@ import java.util.Map;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.AnnotationEntry;
+
 import java.util.stream.Collectors;
 import java.nio.file.Path;
 
@@ -117,7 +119,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
     @Override
     public long getDocumentCountForIndex() throws SQLException {
         // Unigrams are derived from annotations, so count documents with annotations.
-        String countSql = "SELECT COUNT(*) FROM documents";
+        String countSql = "SELECT MAX(annotation_id) FROM annotations";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {

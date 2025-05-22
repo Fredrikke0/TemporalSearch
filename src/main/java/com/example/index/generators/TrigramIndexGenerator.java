@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -16,6 +16,7 @@ import java.util.Map;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.AnnotationEntry;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import java.util.stream.Collectors;
@@ -42,29 +43,22 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         boolean isFirstBatch = (lastProcessedEntry == null);
 
         if (isFirstBatch) {
-            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " + // Removed d.timestamp, ner, normalized_ner, lemma as not in AnnotationEntry initially
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " + 
                     "FROM annotations " +
-                    "ORDER BY document_id, sentence_id, begin_char LIMIT ?";
+                    "ORDER BY annotation_id LIMIT ?";
         } else {
-            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
                     "FROM annotations " +
-                    "WHERE (document_id > ? OR " +
-                    "      (document_id = ? AND sentence_id > ?) OR " +
-                    "      (document_id = ? AND sentence_id = ? AND begin_char > ?)) " +
-                    "ORDER BY document_id, sentence_id, begin_char LIMIT ?";
+                    "WHERE annotation_id > ? " +
+                    "ORDER BY annotation_id LIMIT ?";
         }
         
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
             if (isFirstBatch) {
                 stmt.setInt(1, this.batchSize);
             } else {
-                stmt.setInt(1, lastProcessedEntry.getDocumentId());
-                stmt.setInt(2, lastProcessedEntry.getDocumentId());
-                stmt.setInt(3, lastProcessedEntry.getSentenceId());
-                stmt.setInt(4, lastProcessedEntry.getDocumentId());
-                stmt.setInt(5, lastProcessedEntry.getSentenceId());
-                stmt.setInt(6, lastProcessedEntry.getBeginChar());
-                stmt.setInt(7, this.batchSize);
+                stmt.setInt(1, lastProcessedEntry.getAnnotationId());
+                stmt.setInt(2, this.batchSize);
             }
             
             try (ResultSet rs = stmt.executeQuery()) {
@@ -78,7 +72,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         token,
-                        rs.getString("pos"),
+                        null, // pos
                         null, // ner
                         null, // normalizedNer
                         null  // lemma
@@ -151,7 +145,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        String countSql = "SELECT COUNT(*) FROM documents";
+        String countSql = "SELECT MAX(annotation_id) FROM annotations";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {

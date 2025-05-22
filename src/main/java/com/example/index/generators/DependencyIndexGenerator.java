@@ -1,4 +1,4 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.index.DependencyEntry;
 
 /**
  * Generates a streaming dependency index from dependency relation entries.
@@ -27,7 +28,7 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
 
     // Example: Blacklist common, less informative relations if needed
     private static final Set<String> BLACKLISTED_RELATIONS = Set.of(
-        // "punct", "det", "case", "cc" // Example, adjust as needed
+        "punct"
     );
 
     public DependencyIndexGenerator(String indexBaseDir, String stopwordsPath,
@@ -67,19 +68,19 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
             if (lastProcessedEntry == null) {
                 stmt.setInt(1, batchSize);
             } else {
-                stmt.setInt(1, lastProcessedEntry.getDependencyId()); // Correct getter
+                stmt.setInt(1, lastProcessedEntry.getDependencyId());
                 stmt.setInt(2, batchSize);
             }
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    // Sanitize text fields before creating the entry
-                    String headToken = sanitizeText(rs.getString("head_token"));
-                    String dependentToken = sanitizeText(rs.getString("dependent_token"));
-                    String relation = sanitizeText(rs.getString("relation"));
+                    String headToken = rs.getString("head_token");
+                    String dependentToken = rs.getString("dependent_token");
+                    String relation = rs.getString("relation");
 
-                    if (headToken == null || dependentToken == null || relation == null) {
-                        logger.debug("Skipping dependency due to null field after sanitization. Original: head='{}', dep='{}', rel='{}'", 
-                                     rs.getString("head_token"), rs.getString("dependent_token"), rs.getString("relation"));
+                    if (headToken == null || dependentToken == null || relation == null || 
+                        headToken.isEmpty() || dependentToken.isEmpty() || relation.isEmpty()) {
+                        logger.debug("Skipping dependency due to null or empty field. Original: head='{}', dep='{}', rel='{}'", 
+                                     headToken, dependentToken, relation);
                         continue;
                     }
 
@@ -105,7 +106,6 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
         Map<String, PositionList> tempAggregator = new HashMap<>();
 
         for (DependencyEntry entry : batch) {
-            // Tokens are already sanitized from fetchBatch
             String headTokenLower = entry.getHeadToken().toLowerCase(); 
             String dependentTokenLower = entry.getDependentToken().toLowerCase();
             String relationLower = entry.getRelation().toLowerCase();
@@ -117,8 +117,6 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
             
             String key = headTokenLower + DELIMITER + relationLower + DELIMITER + dependentTokenLower;
             
-            // Using standard Position. For dependencies, begin/end char might refer to the span of the relation or one of the tokens.
-            // Here, using the entry's overall begin/end char. This might need adjustment based on desired semantics.
             Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
             
             PositionList pl = tempAggregator.computeIfAbsent(key, k -> new PositionList());
@@ -133,7 +131,7 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        String countSql = "SELECT COUNT(DISTINCT document_id) FROM dependencies";
+        String countSql = "SELECT MAX(dependency_id) FROM dependencies";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {
@@ -141,18 +139,5 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
             }
         }
         return 0;
-    }
-    
-    private String sanitizeText(String text) {
-        if (text == null || text.trim().isEmpty()) {
-            return null;
-        }
-        // Basic sanitization: trim, normalize multiple spaces, remove non-alphanumeric (except hyphens and spaces)
-        // Adjust regex as needed for more specific cleaning.
-        String cleaned = text.trim().replaceAll("\\s+", " ");
-        // Consider if a more restrictive character set is needed. 
-        // This example keeps letters, numbers, spaces, hyphens.
-        // cleaned = cleaned.replaceAll("[^\\p{L}\\p{N}\\s-]", ""); 
-        return cleaned.isEmpty() ? null : cleaned;
     }
 } 

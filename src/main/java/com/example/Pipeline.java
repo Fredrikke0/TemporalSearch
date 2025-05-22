@@ -1,7 +1,8 @@
 package com.example;
 
 import com.example.annotation.Annotations;
-import com.example.index.IndexGenerator;
+import com.example.index.generators.IndexGenerator;
+
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;

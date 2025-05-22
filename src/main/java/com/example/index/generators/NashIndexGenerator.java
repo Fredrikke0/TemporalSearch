@@ -1,7 +1,9 @@
-package com.example.index;
+package com.example.index.generators;
 
 import com.example.core.IndexAccessException;
 import com.example.core.Position;
+import com.example.index.AnnotationEntry;
+import com.example.index.NashDateEntryWithId;
 import com.example.index.util.NashSerializationUtils;
 import com.example.logging.ProgressTracker;
 import no.ntnu.sandbox.Nash;
