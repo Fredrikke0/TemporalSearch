@@ -5,6 +5,7 @@ import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.model.JoinCondition;
 import com.example.query.model.Query;
 import com.example.query.model.SubquerySpec;
@@ -120,24 +121,24 @@ class QueryExecutorTest {
     
     private void setupMockData() throws IndexAccessException {
         // Setup test data for "test" word
-        PositionList testPositions = new PositionList();
+        PositionListSoA testPositions = new PositionListSoA();
         testPositions.add(new Position(1, 1, 0, 5));
         testPositions.add(new Position(2, 1, 0, 5));
         
         // Setup test data for "example" word
-        PositionList examplePositions = new PositionList();
+        PositionListSoA examplePositions = new PositionListSoA();
         examplePositions.add(new Position(2, 1, 10, 15));
         examplePositions.add(new Position(3, 1, 10, 15));
         
         // Setup test data for PERSON NER
-        PositionList nerPositions = new PositionList();
+        PositionListSoA nerPositions = new PositionListSoA();
         nerPositions.add(new Position(2, 1, 10, 15));
         nerPositions.add(new Position(3, 1, 10, 15));
         
         // Mock index responses with lenient mode to avoid unnecessary stubbing exceptions
         lenient().when(unigramIndex.get("test".getBytes())).thenReturn(Optional.of(testPositions));
         lenient().when(unigramIndex.get("example".getBytes())).thenReturn(Optional.of(examplePositions));
-        lenient().when(nerIndex.get("PERSON|".getBytes())).thenReturn(Optional.of(nerPositions));
+        lenient().when(nerIndex.get("PERSON".getBytes())).thenReturn(Optional.of(nerPositions));
     }
     
     // Helper method to create QueryResult for mocking

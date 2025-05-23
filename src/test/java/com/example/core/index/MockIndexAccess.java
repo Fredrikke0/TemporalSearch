@@ -5,7 +5,7 @@ package com.example.core.index;
 // import com.example.core.IndexAccess; 
 import com.example.core.IndexAccessException;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import org.iq80.leveldb.DBIterator;
 import org.iq80.leveldb.ReadOptions;
 import org.iq80.leveldb.WriteBatch;
@@ -44,7 +44,7 @@ public class MockIndexAccess implements IndexAccessInterface {
 
     /**
      * Helper method to add test data.
-     * Converts the string key to bytes and creates/serializes a PositionList.
+     * Converts the string key to bytes and creates/serializes a PositionListSoA.
      */
     public void addTestData(String key, int docId, int sentenceId, int begin, int end) throws IOException {
         if (closed) throw new IllegalStateException("Index is closed");
@@ -52,36 +52,34 @@ public class MockIndexAccess implements IndexAccessInterface {
         Position pos = new Position(docId, sentenceId, begin, end);
         
         // Retrieve existing list if present, or create a new one
-        PositionList list;
+        PositionListSoA list;
         byte[] existingValue = dataStore.get(wrappedKey);
         if (existingValue != null) {
-            list = PositionList.deserialize(existingValue);
+            list = PositionListSoA.deserializeFromCompositeBlob(existingValue);
         } else {
-            list = new PositionList();
+            list = new PositionListSoA();
         }
         list.add(pos);
-        dataStore.put(wrappedKey, list.serialize());
+        dataStore.put(wrappedKey, list.serializeToCompositeBlob());
     }
 
     /**
      * Helper method to add pre-serialized test data.
      * If the key already exists, the new positions are merged with the existing ones.
      */
-    public void addTestData(String key, PositionList newPositions) throws IOException {
+    public void addTestData(String key, PositionListSoA newPositions) throws IOException {
         if (closed) throw new IllegalStateException("Index is closed");
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
 
-        PositionList mergedList;
+        PositionListSoA mergedList;
         byte[] existingValue = dataStore.get(wrappedKey);
         if (existingValue != null) {
-            mergedList = PositionList.deserialize(existingValue);
-            for (Position pos : newPositions.getPositions()) { // Assuming PositionList has a getPositions() or is iterable
-                mergedList.add(pos);
-            }
+            mergedList = PositionListSoA.deserializeFromCompositeBlob(existingValue);
+            mergedList.addAll(newPositions);
         } else {
             mergedList = newPositions;
         }
-        dataStore.put(wrappedKey, mergedList.serialize());
+        dataStore.put(wrappedKey, mergedList.serializeToCompositeBlob());
     }
     
      /**
@@ -103,27 +101,28 @@ public class MockIndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public Optional<PositionList> get(byte[] key) throws IndexAccessException {
+    public Optional<PositionListSoA> get(byte[] key) throws IndexAccessException {
         if (closed) throw new IndexAccessException("Index is closed", indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         byte[] value = dataStore.get(new ByteArrayWrapper(key));
         if (value == null) {
             return Optional.empty();
         }
         try {
-            return Optional.of(PositionList.deserialize(value));
-        } catch (IOException e) { // Catch IOException specifically
+            // Deserialize to PositionListSoA
+            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(value)); 
+        } catch (IOException e) { 
             throw new IndexAccessException(
-                "Failed to deserialize PositionList due to IO error for key", 
+                "Failed to deserialize PositionListSoA due to IO error for key", 
                 indexType, 
                 IndexAccessException.ErrorType.READ_ERROR,
                 e
             );
-        } catch (RuntimeException e) { // Catch other potential deserialization errors
+        } catch (RuntimeException e) { 
             throw new IndexAccessException(
-                "Failed to deserialize PositionList for key", 
+                "Failed to deserialize PositionListSoA for key", 
                 indexType, 
-                IndexAccessException.ErrorType.READ_ERROR, // Use READ_ERROR
-                e // Pass the original exception as the cause
+                IndexAccessException.ErrorType.READ_ERROR, 
+                e 
             ); 
         }
     }

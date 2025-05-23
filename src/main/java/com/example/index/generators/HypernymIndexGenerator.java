@@ -17,7 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.DependencyEntry;
 
 import java.nio.file.Path;
@@ -127,9 +127,9 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<DependencyEntry> batch) {
-        ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        Map<String, PositionList> positionLists = new HashMap<>();
+    protected ListMultimap<String, PositionListSoA> processBatch(List<DependencyEntry> batch) {
+        ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
+        Map<String, PositionListSoA> positionLists = new HashMap<>();
         
         for (DependencyEntry entry : batch) {
             Position position = new Position(
@@ -141,11 +141,11 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
 
             String key = createKey(entry.getHeadToken(), entry.getDependentToken());
             
-            PositionList posList = positionLists.computeIfAbsent(key, k -> new PositionList());
+            PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
             posList.add(position);
         }
         
-        for (Map.Entry<String, PositionList> entryMap : positionLists.entrySet()) {
+        for (Map.Entry<String, PositionListSoA> entryMap : positionLists.entrySet()) {
             index.put(entryMap.getKey(), entryMap.getValue());
         }
         

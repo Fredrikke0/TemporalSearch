@@ -7,7 +7,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Contains;
 import com.example.query.executor.QueryResult;
@@ -60,7 +60,7 @@ public class ContainsConditionExecutorTest {
     void testExecuteSingleTerm() throws Exception {
         // Setup
         Contains condition = new Contains("test");
-        PositionList positionList = new PositionList();
+        PositionListSoA positionList = new PositionListSoA();
         positionList.add(new Position(1, 1, 0, 4));
         positionList.add(new Position(2, 1, 5, 9));
         
@@ -88,7 +88,7 @@ public class ContainsConditionExecutorTest {
         // Setup - now we expect a bigram search with two terms
         Contains condition = new Contains(Arrays.asList("test", "example"));
         
-        PositionList positionList = new PositionList();
+        PositionListSoA positionList = new PositionListSoA();
         positionList.add(new Position(1, 1, 0, 12));
         positionList.add(new Position(2, 1, 5, 17));
         
@@ -119,7 +119,7 @@ public class ContainsConditionExecutorTest {
         
         // Setup - using a list of terms instead of a space-separated string
         Contains condition = new Contains(Arrays.asList("another", "test"));
-        PositionList positionList = new PositionList();
+        PositionListSoA positionList = new PositionListSoA();
         positionList.add(new Position(1, 1, 0, 12));
         positionList.add(new Position(2, 1, 5, 17));
         
@@ -147,7 +147,7 @@ public class ContainsConditionExecutorTest {
     void testExecuteWithTrigramIndex() throws Exception {
         // Setup - using a list of three terms
         Contains condition = new Contains(Arrays.asList("test", "example", "phrase"));
-        PositionList positionList = new PositionList();
+        PositionListSoA positionList = new PositionListSoA();
         positionList.add(new Position(1, 1, 0, 19));
         positionList.add(new Position(2, 1, 5, 24));
         
@@ -238,7 +238,7 @@ public class ContainsConditionExecutorTest {
         // Setup - now we expect a bigram search with two terms
         Contains condition = new Contains(Arrays.asList("test", "example"));
         
-        PositionList positionList = new PositionList();
+        PositionListSoA positionList = new PositionListSoA();
         positionList.add(new Position(1, 1, 0, 12));
         positionList.add(new Position(2, 1, 5, 17));
         
@@ -264,7 +264,7 @@ public class ContainsConditionExecutorTest {
         String variableName = "?termVar";
         String searchTerm = "keyword";
         Contains condition = new Contains(searchTerm, variableName, true);
-        PositionList positionList = new PositionList();
+        PositionListSoA positionList = new PositionListSoA();
         Position pos1 = new Position(1, 1, 10, 17);
         Position pos2 = new Position(1, 2, 5, 12); // Same doc, different sentence
         Position pos3 = new Position(2, 1, 0, 7);   // Different doc
@@ -310,7 +310,7 @@ public class ContainsConditionExecutorTest {
         String searchTerm = "apple";
         Contains condition = new Contains(searchTerm);
         
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 1, 0, 5));
         positions.add(new Position(2, 3, 10, 15));
         when(mockUnigramIndex.get(searchTerm.toLowerCase().getBytes())).thenReturn(Optional.of(positions));
@@ -331,7 +331,7 @@ public class ContainsConditionExecutorTest {
         String term2 = "apple";
         Contains condition = new Contains(List.of(term1, term2)); // Use List constructor
         
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 1, 0, 9));
         when(mockBigramIndex.get((term1.toLowerCase() + "\0" + term2.toLowerCase()).getBytes())).thenReturn(Optional.of(positions));
 
@@ -350,7 +350,7 @@ public class ContainsConditionExecutorTest {
         String term1 = "big", term2 = "red", term3 = "apple";
         Contains condition = new Contains(List.of(term1, term2, term3)); // Use List constructor
         
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(3, 5, 20, 33));
         String trigramKey = term1.toLowerCase() + "\0" + term2.toLowerCase() + "\0" + term3.toLowerCase();
         when(mockTrigramIndex.get(trigramKey.getBytes())).thenReturn(Optional.of(positions));
@@ -423,7 +423,7 @@ public class ContainsConditionExecutorTest {
         String variableName = "?fruit";
         Contains condition = new Contains(searchTerm, variableName, true);
         
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(5, 1, 0, 6));
         when(mockUnigramIndex.get(searchTerm.toLowerCase().getBytes())).thenReturn(Optional.of(positions));
         

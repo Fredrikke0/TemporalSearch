@@ -56,20 +56,20 @@ public class IndexAccessTest {
         // Create test data
         Position pos1 = new Position(1, 1, 0, 5);
         Position pos2 = new Position(1, 2, 6, 10);
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(pos1);
         positions.add(pos2);
 
         // Test put and get
         byte[] key = "test-key".getBytes();
-        indexAccess.put(key, positions.serialize());
+        indexAccess.put(key, positions.serializeToCompositeBlob());
 
-        Optional<PositionList> retrieved = indexAccess.get(key);
+        Optional<PositionListSoA> retrieved = indexAccess.get(key);
         assertTrue(retrieved.isPresent(), "Should retrieve stored positions");
-        assertEquals(2, retrieved.get().getPositions().size(), "Should have correct number of positions");
+        assertEquals(2, retrieved.get().getNumPositions(), "Should have correct number of positions");
 
         // Verify position details
-        Position retrievedPos = retrieved.get().getPositions().get(0);
+        Position retrievedPos = retrieved.get().getPositionAt(0);
         assertEquals(pos1.getDocumentId(), retrievedPos.getDocumentId());
         assertEquals(pos1.getSentenceId(), retrievedPos.getSentenceId());
         assertEquals(pos1.getBeginPosition(), retrievedPos.getBeginPosition());
@@ -79,10 +79,10 @@ public class IndexAccessTest {
     @Test
     void testBatchOperations() throws Exception {
         // Create test data
-        Map<String, PositionList> entries = new HashMap<>();
+        Map<String, PositionListSoA> entries = new HashMap<>();
         for (int i = 0; i < 5; i++) {
             Position pos = new Position(i, 1, 0, 5);
-            PositionList positions = new PositionList();
+            PositionListSoA positions = new PositionListSoA();
             positions.add(pos);
             entries.put("key" + i, positions);
         }
@@ -90,10 +90,10 @@ public class IndexAccessTest {
         // Write batch
         WriteBatch batch = indexAccess.createWriteBatch();
         try {
-            for (Map.Entry<String, PositionList> entry : entries.entrySet()) {
+            for (Map.Entry<String, PositionListSoA> entry : entries.entrySet()) {
                 batch.put(
                     entry.getKey().getBytes(),
-                    entry.getValue().serialize()
+                    entry.getValue().serializeToCompositeBlob()
                 );
             }
             indexAccess.write(batch);
@@ -103,9 +103,9 @@ public class IndexAccessTest {
 
         // Verify entries
         for (String key : entries.keySet()) {
-            Optional<PositionList> retrieved = indexAccess.get(key.getBytes());
+            Optional<PositionListSoA> retrieved = indexAccess.get(key.getBytes());
             assertTrue(retrieved.isPresent(), "Should retrieve entry for key: " + key);
-            assertEquals(1, retrieved.get().getPositions().size(),
+            assertEquals(1, retrieved.get().getNumPositions(),
                 "Should have correct number of positions for key: " + key);
         }
     }
@@ -116,26 +116,26 @@ public class IndexAccessTest {
         
         // Create first position list
         Position pos1 = new Position(1, 1, 0, 5);
-        PositionList positions1 = new PositionList();
+        PositionListSoA positions1 = new PositionListSoA();
         positions1.add(pos1);
-        indexAccess.put(key, positions1.serialize());
+        indexAccess.put(key, positions1.serializeToCompositeBlob());
 
         // Create second position list
         Position pos2 = new Position(1, 2, 6, 10);
-        PositionList positions2 = new PositionList();
+        PositionListSoA positions2 = new PositionListSoA();
         positions2.add(pos2);
         
         // Simulate merge: get existing, deserialize, merge, serialize, then put
-        Optional<PositionList> existingListOpt = indexAccess.get(key);
+        Optional<PositionListSoA> existingListOpt = indexAccess.get(key);
         assertTrue(existingListOpt.isPresent(), "Existing list should be present for merge");
-        PositionList mergedList = existingListOpt.get();
+        PositionListSoA mergedList = existingListOpt.get();
         mergedList.merge(positions2);
-        indexAccess.put(key, mergedList.serialize());
+        indexAccess.put(key, mergedList.serializeToCompositeBlob());
 
         // Verify merge
-        Optional<PositionList> mergedResult = indexAccess.get(key);
+        Optional<PositionListSoA> mergedResult = indexAccess.get(key);
         assertTrue(mergedResult.isPresent(), "Should retrieve merged positions");
-        assertEquals(2, mergedResult.get().getPositions().size(), "Should contain all positions");
+        assertEquals(2, mergedResult.get().getNumPositions(), "Should contain all positions");
     }
 
     @Test
@@ -143,9 +143,9 @@ public class IndexAccessTest {
         // Create test data
         for (int i = 0; i < 5; i++) {
             Position pos = new Position(i, 1, 0, 5);
-            PositionList positions = new PositionList();
+            PositionListSoA positions = new PositionListSoA();
             positions.add(pos);
-            indexAccess.put(("key" + i).getBytes(), positions.serialize());
+            indexAccess.put(("key" + i).getBytes(), positions.serializeToCompositeBlob());
         }
 
         // Test iteration
@@ -156,8 +156,8 @@ public class IndexAccessTest {
                 assertNotNull(entry.getKey(), "Key should not be null");
                 assertNotNull(entry.getValue(), "Value should not be null");
                 
-                PositionList positions = PositionList.deserialize(entry.getValue());
-                assertEquals(1, positions.getPositions().size(),
+                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
+                assertEquals(1, positions.getNumPositions(),
                     "Should have correct number of positions");
                 count++;
             }
@@ -168,10 +168,11 @@ public class IndexAccessTest {
     @Test
     void testClosedOperations() throws Exception {
         indexAccess.close();
+        PositionListSoA positions = new PositionListSoA();
 
         // Verify operations throw appropriate exceptions
         assertThrows(IndexAccessException.class, () -> 
-            indexAccess.put("test".getBytes(), new PositionList().serialize()));
+            indexAccess.put("test".getBytes(), positions.serializeToCompositeBlob()));
         assertThrows(IndexAccessException.class, () -> 
             indexAccess.get("test".getBytes()));
         assertThrows(IndexAccessException.class, () -> 

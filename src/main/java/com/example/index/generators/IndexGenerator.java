@@ -26,6 +26,12 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 
+import com.example.core.PositionListSoA;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import me.lemire.integercompression.FastPFOR128;
+import me.lemire.integercompression.IntegerCODEC;
+import me.lemire.integercompression.IntWrapper;
+
 /**
  * Abstract base class for streaming index generation that processes large datasets efficiently
  * while maintaining bounded memory usage. Uses external sorting for scalable processing.
@@ -70,9 +76,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     /**
      * Processes a raw batch of entries into an intermediate, aggregated form suitable for writing to a temp file.
      * @param batch The list of entries fetched from the database.
-     * @return A ListMultimap সেরা<String, PositionList>, where keys are terms and values are their positions.
+     * @return A ListMultimap সেরা<String, PositionListSoA>, where keys are terms and values are their positions.
      */
-    protected abstract ListMultimap<String, PositionList> processBatch(List<T> batch);
+    protected abstract ListMultimap<String, PositionListSoA> processBatch(List<T> batch);
 
     /**
      * Estimates or retrieves the total number of documents/items to be processed for this index.
@@ -206,7 +212,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @param positions The processed position lists to write
      * @return The temporary file containing the sorted entries
      */
-    protected File writeBatchToTempFile(ListMultimap<String, PositionList> positions) throws IOException {
+    protected File writeBatchToTempFile(ListMultimap<String, PositionListSoA> positions) throws IOException {
         File tempFile = Files.createTempFile(tempDir, "batch-", ".tmp").toFile();
         // logger.info("Attempting to write batch to temp file: {}. Unique terms in batch: {}. Total PositionLists: {}",
         //    tempFile.getAbsolutePath(), positions.keySet().size(), positions.size());
@@ -222,20 +228,20 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         long bytesWrittenToFile = 0;
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
             // Sort the entries by term (key) before writing to ensure each batch file is sorted.
-            List<Map.Entry<String, Collection<PositionList>>> sortedEntries =
+            List<Map.Entry<String, Collection<PositionListSoA>>> sortedEntries =
                 new ArrayList<>(positions.asMap().entrySet());
             sortedEntries.sort(Map.Entry.comparingByKey());
 
-            for (Map.Entry<String, Collection<PositionList>> entry : sortedEntries) {
+            for (Map.Entry<String, Collection<PositionListSoA>> entry : sortedEntries) {
                 // Merge all position lists for this term within this batch
-                PositionList mergedList = new PositionList();
-                for (PositionList list : entry.getValue()) {
-                    list.getPositions().forEach(mergedList::add);
+                PositionListSoA mergedListSoA = new PositionListSoA();
+                for (PositionListSoA list : entry.getValue()) {
+                    mergedListSoA.addAll(list);
                 }
                 
                 String line = String.format("%s\t%s\n", 
                     entry.getKey(), 
-                    Base64.getEncoder().encodeToString(mergedList.serialize()));
+                    Base64.getEncoder().encodeToString(mergedListSoA.serializeToCompositeBlob()));
                 if (line.length() > 10 * 1024 * 1024) { // Log if a single line is very large (e.g. >10MB)
                     logger.warn("Very large line being written to temp file {} for key '{}'. Line length: {} bytes",
                         tempFile.getName(), entry.getKey(), line.length());
@@ -255,112 +261,228 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
     /**
      * Writes the final merged and sorted entries to the index.
+     * Implements a streaming re-compression strategy using PositionListSoA.
+     * Each chunk from the sorted file is processed one attribute at a time to minimize memory.
+     * The final blob for each term is constructed by re-compressing each aggregated attribute array.
+     *
      * @param sortedFile The file containing the sorted entries
      */
     protected void writeToLevelDB(File sortedFile) throws IOException {
-        long startTime = System.currentTimeMillis();
-        totalNGramsGenerated = 0; // Reset count for this index generation
-        WriteBatch batch = null;
-        int batchCounter = 0;
-
-        //String debugTerm = System.getProperty("debug.index.term", "shrek"); // Default to shrek if not set
-
-        try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile))) {
-            String line;
+        logger.info("Starting to write to LevelDB from sorted file: {}", sortedFile.getAbsolutePath());
             String currentTerm = null;
-            PositionList mergedPositions = null;
-            final int MAX_RETRIES = 3;
-            final long RETRY_DELAY_MS = 1000;
+        long totalTermsWritten = 0;
+        long entriesSinceLastReport = 0;
+        long lastReportTime = System.currentTimeMillis();
+        final long reportIntervalMillis = 30000; 
+        final int batchSizeForLevelDB = 1000; 
+        int termsInCurrentBatch = 0;
 
+        ByteArrayOutputStream baosDocIds = new ByteArrayOutputStream();
+        ByteArrayOutputStream baosSentIds = new ByteArrayOutputStream();
+        ByteArrayOutputStream baosBeginChars = new ByteArrayOutputStream();
+        ByteArrayOutputStream baosEndChars = new ByteArrayOutputStream();
+        ByteArrayOutputStream baosSynonymIds = new ByteArrayOutputStream();
+
+        DataOutputStream dosDocIds = new DataOutputStream(baosDocIds);
+        DataOutputStream dosSentIds = new DataOutputStream(baosSentIds);
+        DataOutputStream dosBeginChars = new DataOutputStream(baosBeginChars);
+        DataOutputStream dosEndChars = new DataOutputStream(baosEndChars);
+        DataOutputStream dosSynonymIds = new DataOutputStream(baosSynonymIds);
+        
+        int numPositionsForCurrentTerm = 0;
+
+        WriteBatch batch = null; 
+        try {
             batch = indexAccess.createWriteBatch();
-
+            try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
+                String line;
             while ((line = reader.readLine()) != null) {
                 String[] parts = line.split("\t", 2);
-                if (parts.length != 2) continue;
-                String term = parts[0];
-                PositionList positions = PositionList.deserialize(Base64.getDecoder().decode(parts[1]));
-
-                // if (debugTerm.equals(term)) {
-                //     logger.debug("Processing term '{}'. Current mergedPositions size: {}. New positions size: {}.",
-                //         debugTerm, (mergedPositions != null ? mergedPositions.size() : "null"), positions.size());
-                // }
-
-                if (currentTerm == null) {
-                    currentTerm = term;
-                    mergedPositions = positions;
-                    // if (debugTerm.equals(currentTerm)) {
-                    //     logger.debug("Encountered '{}' for the first time in sorted file. Positions size: {}", debugTerm, mergedPositions.size());
-                    // }
-                    continue;
-                }
-
-                if (!currentTerm.equals(term)) {
-                    // if (debugTerm.equals(currentTerm)) {
-                    //     logger.debug("Finalizing '{}' before switching to term '{}'. Merged positions size: {}", debugTerm, term, mergedPositions.size());
-                    // }
-                    byte[] keyBytes = bytes(currentTerm);
-                    byte[] valueBytes = mergedPositions.serialize();
-                    batch.put(keyBytes, valueBytes);
-                    batchCounter++;
-                    totalNGramsGenerated++;
-
-                    if (batchCounter >= LevelDBConfig.BATCH_SIZE) {
-                        writeBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
-                        batch.close(); // Close old batch
-                        batch = indexAccess.createWriteBatch(); // Start new batch
-                        batchCounter = 0;
+                    if (parts.length != 2) {
+                        logger.warn("Skipping malformed line in sorted file: {}", line);
+                        continue;
                     }
 
-                    // if (totalNGramsGenerated % 100000 == 0) {
-                    //     long elapsed = System.currentTimeMillis() - startTime;
-                    //     logger.debug("Write progress: {} terms, {} terms/sec",
-                    //         totalNGramsGenerated,
-                    //         String.format("%.2f", totalNGramsGenerated * 1000.0 / elapsed));
-                    // }
+                    String termFromFile = parts[0];
+                    byte[] lineCompositeBlob = Base64.getDecoder().decode(parts[1]);
 
-                    currentTerm = term;
-                    mergedPositions = positions;
-                    // if (debugTerm.equals(currentTerm)) {
-                    //     logger.debug("Switched to new term '{}'. Initial positions size: {}", debugTerm, mergedPositions.size());
-                    // }
-                } else { // Same term as before, merge positions
-                    // if (debugTerm.equals(currentTerm)) {
-                    //     logger.debug("Merging additional positions for '{}'. Before merge size: {}. Adding {} positions.", debugTerm, mergedPositions.size(), positions.size());
-                    // }
-                    // The 'positions' object is the PositionList from the current line, for the same 'currentTerm'.
-                    // Add all Position objects from the current line's 'positions' list to our 'mergedPositions' accumulator.
-                    positions.getPositions().forEach(mergedPositions::add);
-                    // if (debugTerm.equals(currentTerm)) {
-                    //     logger.debug("After merge for '{}', new total positions: {}.", debugTerm, mergedPositions.size());
-                    // }
+                if (currentTerm == null) {
+                        currentTerm = termFromFile;
+                    }
+
+                    if (!termFromFile.equals(currentTerm)) {
+                        if (numPositionsForCurrentTerm > 0) {
+                            ByteArrayOutputStream finalCompositeBlobStream = new ByteArrayOutputStream();
+                            try (DataOutputStream dosFinal = new DataOutputStream(finalCompositeBlobStream)) {
+                                dosFinal.writeInt(numPositionsForCurrentTerm);
+
+                                dosDocIds.close();
+                                int[] termDocIdInts = convertByteArrayToIntArray(baosDocIds.toByteArray());
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length);
+                                baosDocIds.reset(); // Release memory immediately
+                                
+                                dosSentIds.close();
+                                int[] termSentIdInts = convertByteArrayToIntArray(baosSentIds.toByteArray());
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length);
+                                baosSentIds.reset();
+
+                                dosBeginChars.close();
+                                int[] termBeginCharInts = convertByteArrayToIntArray(baosBeginChars.toByteArray());
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length);
+                                baosBeginChars.reset();
+
+                                dosEndChars.close();
+                                int[] termEndCharInts = convertByteArrayToIntArray(baosEndChars.toByteArray());
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length);
+                                baosEndChars.reset();
+
+                                dosSynonymIds.close();
+                                int[] termSynonymIdInts = convertByteArrayToIntArray(baosSynonymIds.toByteArray());
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length);
+                                baosSynonymIds.reset();
+                            }
+                            
+                            batch.put(bytes(currentTerm), finalCompositeBlobStream.toByteArray());
+                            termsInCurrentBatch++;
+                            totalTermsWritten++;
+                            entriesSinceLastReport++;
+                        }
+
+                        if (termsInCurrentBatch >= batchSizeForLevelDB) {
+                            writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
+                            batch.close(); 
+                            batch = indexAccess.createWriteBatch(); 
+                            termsInCurrentBatch = 0;
+                            logger.info("Written batch of {} terms to LevelDB. Total terms processed so far: {}.", batchSizeForLevelDB, totalTermsWritten);
+                        }
+                        
+                        currentTerm = termFromFile;
+                        // Re-initialize DataOutputStreams for the new term (BAOS were reset)
+                        dosDocIds = new DataOutputStream(baosDocIds);
+                        dosSentIds = new DataOutputStream(baosSentIds);
+                        dosBeginChars = new DataOutputStream(baosBeginChars);
+                        dosEndChars = new DataOutputStream(baosEndChars);
+                        dosSynonymIds = new DataOutputStream(baosSynonymIds);
+                        numPositionsForCurrentTerm = 0;
+                    }
+
+                    try (DataInputStream disChunk = new DataInputStream(new ByteArrayInputStream(lineCompositeBlob))) {
+                        int chunkNumPositions = disChunk.readInt();
+                        if (chunkNumPositions > 0) {
+                            IntArrayList tempChunkList;
+                            tempChunkList = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            for (int i = 0; i < tempChunkList.size(); i++) dosDocIds.writeInt(tempChunkList.getInt(i));
+                            tempChunkList = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            for (int i = 0; i < tempChunkList.size(); i++) dosSentIds.writeInt(tempChunkList.getInt(i));
+                            tempChunkList = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            for (int i = 0; i < tempChunkList.size(); i++) dosBeginChars.writeInt(tempChunkList.getInt(i));
+                            tempChunkList = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            for (int i = 0; i < tempChunkList.size(); i++) dosEndChars.writeInt(tempChunkList.getInt(i));
+                            tempChunkList = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            for (int i = 0; i < tempChunkList.size(); i++) dosSynonymIds.writeInt(tempChunkList.getInt(i));
+                        }
+                        numPositionsForCurrentTerm += chunkNumPositions;
+                    }
+
+                    long currentTime = System.currentTimeMillis();
+                    if (currentTime - lastReportTime > reportIntervalMillis) {
+                        logger.info("writeToLevelDB progress: {} terms processed in last {} ms. Total terms written: {}. Current term: {}",
+                                entriesSinceLastReport, currentTime - lastReportTime, totalTermsWritten, currentTerm);
+                        lastReportTime = currentTime;
+                        entriesSinceLastReport = 0;
+                    }
                 }
+            } // End of try-with-resources for BufferedReader
+
+            // Write the last term's data
+            if (currentTerm != null && numPositionsForCurrentTerm > 0) {
+                ByteArrayOutputStream finalCompositeBlobStream = new ByteArrayOutputStream();
+                try (DataOutputStream dosFinal = new DataOutputStream(finalCompositeBlobStream)) {
+                    dosFinal.writeInt(numPositionsForCurrentTerm);
+
+                    dosDocIds.close();
+                    int[] termDocIdInts = convertByteArrayToIntArray(baosDocIds.toByteArray());
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length);
+                    // No need to reset BAOS here as we are exiting.
+
+                    dosSentIds.close();
+                    int[] termSentIdInts = convertByteArrayToIntArray(baosSentIds.toByteArray());
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length);
+
+                    dosBeginChars.close();
+                    int[] termBeginCharInts = convertByteArrayToIntArray(baosBeginChars.toByteArray());
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length);
+
+                    dosEndChars.close();
+                    int[] termEndCharInts = convertByteArrayToIntArray(baosEndChars.toByteArray());
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length);
+
+                    dosSynonymIds.close();
+                    int[] termSynonymIdInts = convertByteArrayToIntArray(baosSynonymIds.toByteArray());
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length);
+                }
+
+                batch.put(bytes(currentTerm), finalCompositeBlobStream.toByteArray());
+                termsInCurrentBatch++;
+                totalTermsWritten++;
             }
 
-            // Handle the last term
-            if (currentTerm != null && mergedPositions != null) {
-                // if (debugTerm.equals(currentTerm)) {
-                //     logger.debug("Finalizing last term '{}'. Merged positions size: {}", debugTerm, mergedPositions.size());
-                // }
-                byte[] keyBytes = bytes(currentTerm);
-                byte[] valueBytes = mergedPositions.serialize();
-                batch.put(keyBytes, valueBytes);
-                batchCounter++;
-                totalNGramsGenerated++;
+            if (termsInCurrentBatch > 0) {
+                 writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
+                logger.info("Written final batch of {} terms to LevelDB. Total terms written: {}", termsInCurrentBatch, totalTermsWritten);
             }
 
-            // Write any remaining entries in the last batch
-            if (batchCounter > 0) {
-                writeBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
-            }
-
-            logger.info("Finished writing {} unique terms/keys to index [{}]", totalNGramsGenerated, getIndexName()); 
+        } catch (IOException e) {
+            logger.error("IOException during writeToLevelDB. Last term processed: {}. Total terms written: {}. Error: {}",
+                    currentTerm, totalTermsWritten, e.getMessage(), e);
+            throw e;
         } finally {
             if (batch != null) {
                 try {
-                    batch.close(); // Ensure batch is closed in case of exceptions
+                    batch.close();
                 } catch (IOException e) {
-                    logger.warn("Failed to close write batch for index [{}]: {}", getIndexName(), e.getMessage());
+                    logger.warn("Error closing final write batch: {}", e.getMessage());
                 }
+            }
+             closeQuietly(dosDocIds); closeQuietly(dosSentIds); closeQuietly(dosBeginChars); closeQuietly(dosEndChars); closeQuietly(dosSynonymIds);
+             closeQuietly(baosDocIds); closeQuietly(baosSentIds); closeQuietly(baosBeginChars); closeQuietly(baosEndChars); closeQuietly(baosSynonymIds);
+             logger.info("Finished writing to LevelDB. Total terms written: {}. Total n-grams generated: {}", totalTermsWritten, getTotalNGramsGenerated());
+        }
+    }
+
+    /**
+     * Converts a byte array (assumed to be a sequence of 4-byte integers in big-endian order)
+     * back to an int array.
+     * @param bytes The byte array to convert.
+     * @return The corresponding int array.
+     * @throws IOException If the byte array length is not a multiple of 4.
+     */
+    private int[] convertByteArrayToIntArray(byte[] bytes) throws IOException {
+        if (bytes == null) return new int[0];
+        if (bytes.length % 4 != 0) {
+            throw new IOException("Byte array length (" + bytes.length + ") is not a multiple of 4, cannot convert to int array.");
+        }
+        if (bytes.length == 0) {
+            return new int[0];
+        }
+        int[] ints = new int[bytes.length / 4];
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+             DataInputStream dis = new DataInputStream(bais)) {
+            for (int i = 0; i < ints.length; i++) {
+                ints[i] = dis.readInt();
+            }
+        }
+        return ints;
+    }
+    
+    // Helper method to close streams quietly
+    private void closeQuietly(Closeable closeable) {
+        if (closeable != null) {
+            try {
+                closeable.close();
+            } catch (IOException e) {
+                // Log or ignore
+                logger.debug("Error closing stream quietly: {}", e.getMessage());
             }
         }
     }
@@ -434,7 +556,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 }
 
                 long startTimeProcess = System.nanoTime();
-                ListMultimap<String, PositionList> positions = processBatch(batch);
+                ListMultimap<String, PositionListSoA> positions = processBatch(batch);
                 long durationProcessNanos = System.nanoTime() - startTimeProcess;
                 int itemsInBatchOutput = positions.asMap().size(); 
 

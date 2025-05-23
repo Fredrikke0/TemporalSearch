@@ -10,7 +10,7 @@ import java.util.Optional;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.generators.HypernymIndexGenerator;
 import com.example.index.generators.IndexGenerator;
 import com.example.core.IndexAccess;
@@ -119,18 +119,18 @@ public class HypernymIndexGeneratorTest extends BaseIndexTest {
         var entries = generator.fetchBatch(null);
         
         // Process batch and verify results
-        ListMultimap<String, PositionList> result = generator.processBatch(entries);
+        ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
         
         // Verify animal->cat hypernym (using tokens from dependencies table, lowercased)
         String key1 = "animals" + IndexGenerator.DELIMITER + "cats";
         assertTrue(result.containsKey(key1), "Should contain animals->cats hypernym. Found: " + result.keySet());
-        assertEquals(1, result.get(key1).get(0).getPositions().size(), 
+        assertEquals(1, result.get(key1).get(0).getNumPositions(), 
             "Should have one position for animals->cats hypernym");
         
         // Verify animal->dog hypernym (using tokens from dependencies table, lowercased)
         String key2 = "animals" + IndexGenerator.DELIMITER + "dogs";
         assertTrue(result.containsKey(key2), "Should contain animals->dogs hypernym. Found: " + result.keySet());
-        assertEquals(1, result.get(key2).get(0).getPositions().size(), 
+        assertEquals(1, result.get(key2).get(0).getNumPositions(), 
             "Should have one position for animals->dogs hypernym");
     }
 
@@ -208,12 +208,12 @@ public class HypernymIndexGeneratorTest extends BaseIndexTest {
         // Verify case normalization (using tokens from dependencies table, lowercased)
         String key1 = "animal" + IndexGenerator.DELIMITER + "cat"; // Test data uses "Animal" and "CAT"
         assertTrue(result.containsKey(key1), "Should contain normalized animal->cat hypernym. Found: " + result.keySet());
-        assertEquals(1, result.get(key1).get(0).getPositions().size(), 
+        assertEquals(1, result.get(key1).get(0).getNumPositions(), 
             "Should have one position for normalized animal->cat hypernym");
 
         String key2 = "mammal" + IndexGenerator.DELIMITER + "dog"; // Test data uses "MAMMAL" and "DOG"
         assertTrue(result.containsKey(key2), "Should contain normalized mammal->dog hypernym. Found: " + result.keySet());
-        assertEquals(1, result.get(key2).get(0).getPositions().size(), 
+        assertEquals(1, result.get(key2).get(0).getNumPositions(), 
             "Should have one position for normalized mammal->dog hypernym");
     }
 } 

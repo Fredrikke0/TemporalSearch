@@ -18,9 +18,9 @@ public interface IndexAccessInterface extends AutoCloseable {
 
     /**
      * Retrieves positions for a given key.
-     * Deserializes the stored byte[] value into a PositionList.
+     * Deserializes the stored byte[] value into a PositionListSoA.
      */
-    Optional<PositionList> get(byte[] key) throws IndexAccessException;
+    Optional<PositionListSoA> get(byte[] key) throws IndexAccessException;
 
     /**
      * Retrieves the raw byte[] value for a given key.

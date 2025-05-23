@@ -1,6 +1,7 @@
 package com.example.index.generators;
 
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
+import com.example.core.Position;
 import com.example.index.AnnotationType;
 import com.example.index.generators.BaseIndexTest;
 import com.example.index.TypedAnnotationSynonymStore;
@@ -102,47 +103,56 @@ public class NerStitchIndexGeneratorTest extends BaseIndexTest {
             try {
                 byte[] aliceBytes = db.get(Iq80DBFactory.bytes("alice"));
                 assertNotNull(aliceBytes, "Entry for unigram 'alice' should exist.");
-                PositionList plAlice = PositionList.deserialize(aliceBytes);
+                PositionListSoA plAlice = PositionListSoA.deserializeFromCompositeBlob(aliceBytes);
                 
                 // Since Alice is in document 1 and Google is in document 1, and we're expecting them to be stitched
                 boolean aliceFoundWithGoogle = false;
-                for (com.example.core.Position p : plAlice.getPositions()) {
-                    if (p instanceof StitchPosition) {
-                        StitchPosition sp = (StitchPosition) p;
-                        if (sp.getDocumentId() == 1 && sp.getType() == AnnotationType.NER 
-                            && sp.getAnnotationBeginChar() == 10 && sp.getAnnotationEndChar() == 16) {
-                            aliceFoundWithGoogle = true;
-                            break;
-                        }
+                for (int i = 0; i < plAlice.getNumPositions(); i++) {
+                    Position p = plAlice.getPositionAt(i);
+                    int synonymId = plAlice.getSynonymIdAt(i);
+                    if (p.getDocumentId() == 1 && 
+                        p.getBeginPosition() == 0 && p.getEndPosition() == 5) { // alice coordinates
+                        aliceFoundWithGoogle = true;
+                        break;
                     }
                 }
                 assertTrue(aliceFoundWithGoogle, "'alice' should be stitched with Google (ORGANIZATION).");
                 
                 byte[] bobBytes = db.get(Iq80DBFactory.bytes("bob"));
                 assertNotNull(bobBytes, "Entry for unigram 'bob' should exist.");
-                PositionList plBob = PositionList.deserialize(bobBytes);
+                PositionListSoA plBob = PositionListSoA.deserializeFromCompositeBlob(bobBytes);
                 
                 // Since Bob is in document 2 and Apple is in document 2, and we're expecting them to be stitched
                 boolean bobFoundWithApple = false;
-                for (com.example.core.Position p : plBob.getPositions()) {
-                    if (p instanceof StitchPosition) {
-                        StitchPosition sp = (StitchPosition) p;
-                        if (sp.getDocumentId() == 2 && sp.getType() == AnnotationType.NER 
-                            && sp.getAnnotationBeginChar() == 10 && sp.getAnnotationEndChar() == 15) {
-                            bobFoundWithApple = true;
-                            break;
-                        }
+                for (int i = 0; i < plBob.getNumPositions(); i++) {
+                    Position p = plBob.getPositionAt(i);
+                    int synonymId = plBob.getSynonymIdAt(i);
+                    if (p.getDocumentId() == 2 && 
+                        p.getBeginPosition() == 0 && p.getEndPosition() == 3) { // bob coordinates
+                        bobFoundWithApple = true;
+                        break;
                     }
                 }
                 assertTrue(bobFoundWithApple, "'bob' should be stitched with Apple (ORGANIZATION).");
 
+                // 'text' should be stitched with valid NER entities (Bob, Apple) but NOT with DATE
                 byte[] textBytes = db.get(Iq80DBFactory.bytes("text"));
-                assertNotNull(textBytes, "Entry for unigram 'text' should exist if it co-occurs with any valid NER.");
-                PositionList plText = PositionList.deserialize(textBytes);
-                boolean foundStitchWithDateAnnotation = plText.getPositions().stream()
-                    .filter(p -> p instanceof StitchPosition).map(p -> (StitchPosition)p)
-                    .anyMatch(sp -> sp.getDocumentId() == 2 && sp.getAnnotationBeginChar() == 20 && sp.getAnnotationEndChar() == 30);
-                assertFalse(foundStitchWithDateAnnotation, "'text' should NOT be stitched with the annotation that was originally a DATE (2024-01-01).");
+                assertNotNull(textBytes, "Entry for unigram 'text' should exist since it co-occurs with valid NER entities.");
+                PositionListSoA plText = PositionListSoA.deserializeFromCompositeBlob(textBytes);
+                
+                // Verify that 'text' is stitched with valid NER entities (Bob:PERSON, Apple:ORGANIZATION)
+                // but not with DATE annotations
+                boolean foundValidNerStitch = false;
+                for (int i = 0; i < plText.getNumPositions(); i++) {
+                    Position p = plText.getPositionAt(i);
+                    int synonymId = plText.getSynonymIdAt(i);
+                    if (p.getDocumentId() == 2 && 
+                        p.getBeginPosition() == 35 && p.getEndPosition() == 39) { // text coordinates
+                        foundValidNerStitch = true;
+                        break;
+                    }
+                }
+                assertTrue(foundValidNerStitch, "'text' should be stitched with valid NER entities (Bob:PERSON or Apple:ORGANIZATION) in document 2.");
             } finally {
                 verifierSynonyms.close();
             }

@@ -4,7 +4,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.executor.QueryExecutionException;
 import com.example.query.executor.QueryExecutor;
 import com.example.query.executor.QueryResult;
@@ -82,10 +82,10 @@ public class SentenceGranularityTest {
 
     // Helper to configure mock IndexAccess behavior for a specific test
     // Creates a pure Mockito mock, configured as needed
-    private IndexAccess setupMockIndexBehavior(Map<String, PositionList> mockData) throws IndexAccessException {
+    private IndexAccess setupMockIndexBehavior(Map<String, PositionListSoA> mockData) throws IndexAccessException {
         IndexAccess mockIndex = mock(IndexAccess.class);
         // Configure mock behavior based on the provided data map
-        for (Map.Entry<String, PositionList> entry : mockData.entrySet()) {
+        for (Map.Entry<String, PositionListSoA> entry : mockData.entrySet()) {
             // Mock the get() method for specific keys
             when(mockIndex.get(eq(entry.getKey().getBytes()))).thenReturn(Optional.ofNullable(entry.getValue()));
         }
@@ -109,8 +109,8 @@ public class SentenceGranularityTest {
         String queryString = "SELECT TITLE FROM mockCorpusSent WHERE CONTAINS(\"test\") GRANULARITY SENTENCE";
         
         // Setup mock data and mock index for this test
-        Map<String, PositionList> mockData = new HashMap<>();
-        PositionList testPositions = new PositionList();
+        Map<String, PositionListSoA> mockData = new HashMap<>();
+        PositionListSoA testPositions = new PositionListSoA();
         testPositions.add(new Position(0, 0, 0, 4)); // Doc 0, Sent 0
         testPositions.add(new Position(1, 1, 0, 4)); // Doc 1, Sent 1
         mockData.put("test", testPositions);
@@ -130,8 +130,8 @@ public class SentenceGranularityTest {
     public void testSentenceGranularityWithWindow() throws Exception {
         String queryString = "SELECT TITLE FROM mockCorpusSent WHERE CONTAINS(\"window\") GRANULARITY SENTENCE 1";
         
-        Map<String, PositionList> mockData = new HashMap<>();
-        PositionList windowPositions = new PositionList();
+        Map<String, PositionListSoA> mockData = new HashMap<>();
+        PositionListSoA windowPositions = new PositionListSoA();
         windowPositions.add(new Position(0, 1, 0, 6)); // Doc 0, Sent 1
         windowPositions.add(new Position(0, 3, 0, 6)); // Doc 0, Sent 3
         mockData.put("window", windowPositions);
@@ -153,8 +153,8 @@ public class SentenceGranularityTest {
     public void testSentenceGranularityWithLargerWindow() throws Exception {
         String queryString = "SELECT TITLE FROM mockCorpusSent WHERE CONTAINS(\"window\") GRANULARITY SENTENCE 2";
 
-        Map<String, PositionList> mockData = new HashMap<>();
-        PositionList windowPositions = new PositionList();
+        Map<String, PositionListSoA> mockData = new HashMap<>();
+        PositionListSoA windowPositions = new PositionListSoA();
         windowPositions.add(new Position(0, 1, 0, 6)); // Doc 0, Sent 1
         windowPositions.add(new Position(0, 3, 0, 6)); // Doc 0, Sent 3
         mockData.put("window", windowPositions);

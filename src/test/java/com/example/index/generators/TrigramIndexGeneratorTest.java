@@ -11,6 +11,7 @@ import java.util.Optional;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
 import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.generators.IndexGenerator;
 import com.example.index.generators.TrigramIndexGenerator;
 import com.example.core.IndexAccess;
@@ -215,9 +216,9 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         indexAccess = new IndexAccess(indexBaseDir.toPath(), "trigram", options);
 
         // Verify no trigrams cross sentence boundaries (using tokens)
-        Optional<PositionList> quietly = indexAccess.get(bytes("quietly" + IndexGenerator.DELIMITER + "now" + 
+        Optional<PositionListSoA> quietly = indexAccess.get(bytes("quietly" + IndexGenerator.DELIMITER + "now" + 
             IndexGenerator.DELIMITER + "it"));
-        Optional<PositionList> now = indexAccess.get(bytes("now" + IndexGenerator.DELIMITER + "it" + 
+        Optional<PositionListSoA> now = indexAccess.get(bytes("now" + IndexGenerator.DELIMITER + "it" + 
             IndexGenerator.DELIMITER + "purrs")); // Use token "purrs"
         assertTrue(quietly.isEmpty(), "Trigram should not cross sentence boundary");
         assertTrue(now.isEmpty(), "Trigram should not cross sentence boundary");
@@ -260,13 +261,13 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
 
     private void verifyTrigram(String trigram, int expectedDocId, int expectedSentenceId,
             int expectedBeginChar, int expectedEndChar, int expectedCount) throws IOException, IndexAccessException {
-        Optional<PositionList> positions = indexAccess.get(bytes(trigram));
+        Optional<PositionListSoA> positions = indexAccess.get(bytes(trigram));
         assertTrue(positions.isPresent(), "Trigram '" + trigram + "' should be indexed");
         
-        assertEquals(expectedCount, positions.get().size(),
+        assertEquals(expectedCount, positions.get().getNumPositions(),
                 String.format("Trigram '%s' should appear %d time(s)", trigram, expectedCount));
         
-        Position pos = positions.get().getPositions().get(0);
+        Position pos = positions.get().getPositionAt(0);
         assertEquals(expectedDocId, pos.getDocumentId());
         assertEquals(expectedSentenceId, pos.getSentenceId());
         assertEquals(expectedBeginChar, pos.getBeginPosition());
@@ -274,7 +275,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     }
 
     private void verifyTrigramAbsent(String trigram, String message) throws IOException, IndexAccessException {
-        Optional<PositionList> positions = indexAccess.get(bytes(trigram));
-        assertTrue(positions.isEmpty(), message + " - Found unexpected trigram: '" + trigram + "'");
+        Optional<PositionListSoA> positions = indexAccess.get(bytes(trigram));
+        assertTrue(positions.isEmpty(), message != null ? message : "Trigram '" + trigram + "' should NOT be indexed");
     }
 } 

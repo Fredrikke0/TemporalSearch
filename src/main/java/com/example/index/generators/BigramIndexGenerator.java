@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 
 /**
@@ -82,7 +82,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) {
+    protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
         List<AnnotationEntry> filteredBatch = batch.stream()
             .filter(entry -> entry != null && entry.getToken() != null && !entry.getToken().isEmpty())
             .map(entry -> {
@@ -97,8 +97,8 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
             .filter(entry -> entry != null)
             .collect(Collectors.toList());
 
-        ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        Map<String, PositionList> positionLists = new HashMap<>();
+        ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
+        Map<String, PositionListSoA> positionLists = new HashMap<>();
 
         for (int i = 0; i < filteredBatch.size() - 1; i++) {
             AnnotationEntry firstEntry = filteredBatch.get(i);
@@ -115,12 +115,12 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                 Position position = new Position(secondEntry.getDocumentId(), secondEntry.getSentenceId(),
                     firstEntry.getBeginChar(), secondEntry.getEndChar());
 
-                PositionList posList = positionLists.computeIfAbsent(key, k -> new PositionList());
+                PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
                 posList.add(position);
             }
         }
 
-        for (Map.Entry<String, PositionList> entry : positionLists.entrySet()) {
+        for (Map.Entry<String, PositionListSoA> entry : positionLists.entrySet()) {
             index.put(entry.getKey(), entry.getValue());
         }
         return index;

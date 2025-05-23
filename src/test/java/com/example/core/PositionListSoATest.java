@@ -126,18 +126,17 @@ class PositionListSoATest {
     // --- Serialization Tests ---
     @Test
     void testSerializeDeserialize_EmptyList() throws IOException {
-        PositionListSoA plOriginal = new PositionListSoA();
-        byte[] blob = plOriginal.serializeToCompositeBlob();
-        assertNotNull(blob);
-        // numPositions (int) = 4 bytes
-        // Each of 5 arrays will write an int(0) as length marker = 5 * 4 = 20 bytes
-        // Total = 4 + 20 = 24 bytes
-        assertEquals(24, blob.length); 
+        PositionListSoA list = new PositionListSoA();
+        byte[] blob = list.serializeToCompositeBlob();
 
-        PositionListSoA plDeserialized = PositionListSoA.deserializeFromCompositeBlob(blob);
-        assertNotNull(plDeserialized);
-        assertEquals(0, plDeserialized.getNumPositions());
-        assertTrue(plDeserialized.isEmpty());
+        // Expected size: numPositions (4) + 5 * (originalLength_attr (4) + marker_attr (4))
+        // 4 + 5 * 8 = 44
+        assertEquals(44, blob.length, "Serialized blob length for empty list");
+
+        PositionListSoA deserializedList = PositionListSoA.deserializeFromCompositeBlob(blob);
+        assertNotNull(deserializedList);
+        assertEquals(0, deserializedList.getNumPositions());
+        assertTrue(deserializedList.isEmpty());
     }
 
     private void assertSoaListsEqual(PositionListSoA expected, PositionListSoA actual) {

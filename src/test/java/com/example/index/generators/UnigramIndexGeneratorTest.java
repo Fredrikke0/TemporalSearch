@@ -28,6 +28,7 @@ import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.IndexAccess;
 import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.index.generators.UnigramIndexGenerator;
 
@@ -149,14 +150,14 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
 
         // Verify positions
         var testPositions = result.get("test").get(0);
-        assertEquals(1, testPositions.getPositions().size());
-        assertEquals(0, testPositions.getPositions().get(0).getBeginPosition());
-        assertEquals(4, testPositions.getPositions().get(0).getEndPosition());
+        assertEquals(1, testPositions.getNumPositions());
+        assertEquals(0, testPositions.getPositionAt(0).getBeginPosition());
+        assertEquals(4, testPositions.getPositionAt(0).getEndPosition());
 
         var wordPositions = result.get("word").get(0);
-        assertEquals(1, wordPositions.getPositions().size());
-        assertEquals(5, wordPositions.getPositions().get(0).getBeginPosition());
-        assertEquals(9, wordPositions.getPositions().get(0).getEndPosition());
+        assertEquals(1, wordPositions.getNumPositions());
+        assertEquals(5, wordPositions.getPositionAt(0).getBeginPosition());
+        assertEquals(9, wordPositions.getPositionAt(0).getEndPosition());
     }
 
     @Test
@@ -176,27 +177,27 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
 
         // Verify overlapping positions for "test"
         var testPositions = result.get("test").get(0);
-        assertEquals(2, testPositions.getPositions().size(), "Expected two distinct positions for overlapping 'test' entries");
-        assertEquals(0, testPositions.getPositions().get(0).getBeginPosition());
-        assertEquals(4, testPositions.getPositions().get(0).getEndPosition());
-        assertEquals(2, testPositions.getPositions().get(1).getBeginPosition());
-        assertEquals(6, testPositions.getPositions().get(1).getEndPosition());
+        assertEquals(2, testPositions.getNumPositions(), "Expected two distinct positions for overlapping 'test' entries");
+        assertEquals(0, testPositions.getPositionAt(0).getBeginPosition());
+        assertEquals(4, testPositions.getPositionAt(0).getEndPosition());
+        assertEquals(2, testPositions.getPositionAt(1).getBeginPosition());
+        assertEquals(6, testPositions.getPositionAt(1).getEndPosition());
 
         // Verify adjacent positions for "word"
         var wordPositions = result.get("word").get(0);
-        assertEquals(2, wordPositions.getPositions().size(), "Expected two positions for adjacent 'word' entries");
-        assertEquals(10, wordPositions.getPositions().get(0).getBeginPosition());
-        assertEquals(14, wordPositions.getPositions().get(0).getEndPosition());
-        assertEquals(15, wordPositions.getPositions().get(1).getBeginPosition());
-        assertEquals(19, wordPositions.getPositions().get(1).getEndPosition());
+        assertEquals(2, wordPositions.getNumPositions(), "Expected two positions for adjacent 'word' entries");
+        assertEquals(10, wordPositions.getPositionAt(0).getBeginPosition());
+        assertEquals(14, wordPositions.getPositionAt(0).getEndPosition());
+        assertEquals(15, wordPositions.getPositionAt(1).getBeginPosition());
+        assertEquals(19, wordPositions.getPositionAt(1).getEndPosition());
 
         // Verify deduplication of exact matches for "repeat"
         var repeatPositions = result.get("repeat").get(0);
-        assertEquals(2, repeatPositions.getPositions().size(), "Expected two positions for 'repeat' as they are separate entries");
-        assertEquals(20, repeatPositions.getPositions().get(0).getBeginPosition());
-        assertEquals(26, repeatPositions.getPositions().get(0).getEndPosition());
-        assertEquals(20, repeatPositions.getPositions().get(1).getBeginPosition());
-        assertEquals(26, repeatPositions.getPositions().get(1).getEndPosition());
+        assertEquals(2, repeatPositions.getNumPositions(), "Expected two positions for 'repeat' as they are separate entries");
+        assertEquals(20, repeatPositions.getPositionAt(0).getBeginPosition());
+        assertEquals(26, repeatPositions.getPositionAt(0).getEndPosition());
+        assertEquals(20, repeatPositions.getPositionAt(1).getBeginPosition());
+        assertEquals(26, repeatPositions.getPositionAt(1).getEndPosition());
     }
 
     @Test
@@ -215,11 +216,11 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
             // Verify index contents
             var testPositions = indexAccess.get("test".getBytes());
             assertTrue(testPositions.isPresent(), "Expected positions for 'test'");
-            assertEquals(1, testPositions.get().getPositions().size());
+            assertEquals(1, testPositions.get().getNumPositions());
 
             var wordPositions = indexAccess.get("word".getBytes());
             assertTrue(wordPositions.isPresent(), "Expected positions for 'word'");
-            assertEquals(1, wordPositions.get().getPositions().size());
+            assertEquals(1, wordPositions.get().getNumPositions());
         }
 
         // Verify progress tracking

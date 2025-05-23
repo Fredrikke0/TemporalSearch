@@ -2,7 +2,7 @@ package com.example.query.executor;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Ner;
 import com.example.query.binding.MatchDetail;
@@ -164,11 +164,15 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                     continue; // Skip if value doesn't contain the target substring
                 }
                 
-                PositionList positionList = PositionList.deserialize(entry.getValue());
+                PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
                 
-                details.addAll(positionList.getPositions().stream()
-                    .map(pos -> new MatchDetail(value, valueType, pos, variableName))
-                    .collect(Collectors.toList()));
+                // Now, iterate PositionListSoA correctly
+                for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                    Position pos = positionListSoA.getPositionAt(i);
+                    // For NER, the synonymId in PositionListSoA is not directly used for MatchDetail value.
+                    // The 'value' (entity text) comes from the key.
+                    details.add(new MatchDetail(value, valueType, pos, variableName));
+                }
             }
         }
         logger.debug("Extracted {} details for entity type '{}'", details.size(), entityType);
@@ -228,11 +232,14 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 // but we still need the positions. We use the actual matched value if target is specified,
                 // otherwise use the entity type itself.
                 String detailValue = (targetValueLower != null) ? value : entityType; 
-                PositionList positionList = PositionList.deserialize(entry.getValue());
+                PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
                 
-                details.addAll(positionList.getPositions().stream()
-                    .map(pos -> new MatchDetail(detailValue, valueType, pos, (String) null))
-                    .collect(Collectors.toList()));
+                // Now, iterate PositionListSoA correctly
+                for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                    Position pos = positionListSoA.getPositionAt(i);
+                     // For NER, the synonymId in PositionListSoA is not directly used for MatchDetail value.
+                    details.add(new MatchDetail(detailValue, valueType, pos, (String) null));
+                }
             }
         }
         

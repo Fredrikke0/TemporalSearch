@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import java.util.Set;
 
@@ -92,9 +92,9 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) {
-        ListMultimap<String, PositionList> index = ArrayListMultimap.create();
-        Map<String, PositionList> tempAggregator = new HashMap<>();
+    protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
+        ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
+        Map<String, PositionListSoA> tempAggregator = new HashMap<>();
         
         for (AnnotationEntry entry : batch) {
             if (entry.getPos() == null || entry.getPos().isEmpty() || entry.getToken() == null || entry.getToken().isEmpty()) {
@@ -107,11 +107,11 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
             Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
             
-            PositionList pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionList());
+            PositionListSoA pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionListSoA());
             pl.add(pos);
         }
         
-        for (Map.Entry<String, PositionList> mapEntry : tempAggregator.entrySet()) {
+        for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
             index.put(mapEntry.getKey(), mapEntry.getValue());
         }
         return index;

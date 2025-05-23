@@ -59,7 +59,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     }
 
     @Override
-    protected com.google.common.collect.ListMultimap<String, com.example.core.PositionList> processBatch(List<AnnotationEntry> batch) {
+    protected com.google.common.collect.ListMultimap<String, com.example.core.PositionListSoA> processBatch(List<AnnotationEntry> batch) {
         logger.warn("processBatch called unexpectedly in NashIndexGenerator. This should not happen.");
         return com.google.common.collect.ArrayListMultimap.create();
     }

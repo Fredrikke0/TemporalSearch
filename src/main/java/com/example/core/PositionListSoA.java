@@ -41,7 +41,7 @@ public class PositionListSoA {
     private int numPositions;        // Number of logical positions stored, also the size of each active list
 
     private static final IntegerCODEC CODEC = new FastPFOR128();
-    private static final int UNCOMPRESSED_THRESHOLD = 128; // Small arrays won't be compressed
+    private static final int UNCOMPRESSED_THRESHOLD = 128; // Small arrays might not benefit from compression.
     private static final int CODEC_BLOCK_SIZE = 128; // Block size for FastPFOR128
 
     /**
@@ -301,71 +301,65 @@ public class PositionListSoA {
             dos.writeInt(this.numPositions);
 
             // 2. Write Attribute Blobs (always all 5)
-            writeCompressedIntArraySoA(dos, this.documentIds.elements(), this.numPositions);
-            writeCompressedIntArraySoA(dos, this.sentenceIds.elements(), this.numPositions);
-            writeCompressedIntArraySoA(dos, this.beginChars.elements(), this.numPositions);
-            writeCompressedIntArraySoA(dos, this.endChars.elements(), this.numPositions);
-            writeCompressedIntArraySoA(dos, this.synonymIds.elements(), this.numPositions); // Always write synonymIds
+            writeCompressedIntArray(dos, this.documentIds.elements(), this.numPositions);
+            writeCompressedIntArray(dos, this.sentenceIds.elements(), this.numPositions);
+            writeCompressedIntArray(dos, this.beginChars.elements(), this.numPositions);
+            writeCompressedIntArray(dos, this.endChars.elements(), this.numPositions);
+            writeCompressedIntArray(dos, this.synonymIds.elements(), this.numPositions); // Always write synonymIds
             dos.flush();
         }
         return baos.toByteArray();
     }
 
     /**
-     * Helper method to write an integer array (potentially compressed) to the DataOutputStream.
-     * Stores the actual number of elements from the source array up to {@code effectiveSize}.
+     * Writes an integer array to the output stream, compressing it if it's large enough.
+     * The format is:
+     * 1. originalLength (int): Number of integers in the original array.
+     * 2. compressedLengthOrMarker (int):
+     *    - If negative: -originalLength, indicating data is uncompressed.
+     *    - If positive: Number of integers in the compressed data.
+     * 3. data (int[]): Actual integer data (either uncompressed or compressed).
      *
-     * Format for each array written:
-     * - If uncompressed (array length <= UNCOMPRESSED_THRESHOLD):
-     *   - -(effectiveSize) (int): Negative effectiveSize indicates uncompressed.
-     *   - int data[effectiveSize]
-     * - If compressed:
-     *   - effectiveSize (int): Original number of elements.
-     *   - compressed_data_length_in_ints (int): Number of ints in the compressed data.
-     *   - int compressed_data[compressed_data_length_in_ints]
-     *
-     * @param dos The DataOutputStream to write to.
-     * @param array The source integer array. This array might be larger than effectiveSize.
-     * @param effectiveSize The number of elements from the start of the array to serialize.
+     * @param out The DataOutputStream to write to.
+     * @param data The integer array to write.
+     * @param numElementsInArray The number of elements from the beginning of the array to write.
      * @throws IOException If an I/O error occurs.
      */
-    private static void writeCompressedIntArraySoA(DataOutputStream dos, int[] array, int effectiveSize) throws IOException {
-        if (effectiveSize == 0) {
-            dos.writeInt(0); // Indicate zero original length, implies no data following for this array.
-            return;
-        }
+    public static void writeCompressedIntArray(DataOutputStream out, int[] data, int numElementsInArray) throws IOException {
+        out.writeInt(numElementsInArray); // Store the original number of elements
 
-        if (effectiveSize <= UNCOMPRESSED_THRESHOLD) {
-            dos.writeInt(-effectiveSize); // Negative length indicates uncompressed
-            for (int i = 0; i < effectiveSize; i++) {
-                dos.writeInt(array[i]);
+        if (numElementsInArray <= UNCOMPRESSED_THRESHOLD || numElementsInArray == 0) {
+            out.writeInt(-numElementsInArray); // Negative marker for uncompressed (or zero for empty)
+            for (int i = 0; i < numElementsInArray; i++) {
+                out.writeInt(data[i]);
             }
         } else {
-            int[] dataToCompress = array;
-            if (array.length != effectiveSize) { 
-                 dataToCompress = Arrays.copyOf(array, effectiveSize);
-            }
-
-            // Pad dataToCompress to be a multiple of CODEC_BLOCK_SIZE for FastPFOR
-            int paddedSize = ((effectiveSize + CODEC_BLOCK_SIZE - 1) / CODEC_BLOCK_SIZE) * CODEC_BLOCK_SIZE;
-            int[] paddedData = dataToCompress;
-            if (effectiveSize != paddedSize) {
-                 paddedData = Arrays.copyOf(dataToCompress, paddedSize);
-                 // The padded elements don't matter for compression outcome if compressor handles original length
-            }
-
-            IntWrapper inOffset = new IntWrapper(0);
-            IntWrapper outOffset = new IntWrapper(0);
-            // Output buffer for compressed data; FastPFOR can sometimes expand, * 2 is a safe bet.
-            int[] compressed = new int[paddedSize * 2]; 
+            // Ensure input array for compression is correctly sized for FastPFOR
+            int[] exactData = (data.length == numElementsInArray) ? data : Arrays.copyOf(data, numElementsInArray);
             
-            CODEC.compress(paddedData, inOffset, paddedSize, compressed, outOffset);
-            int compressedSizeInInts = outOffset.get();
+            // FastPFOR requires input buffer to be padded if its length is not a multiple of its block size (128 for FastPFOR128)
+            int blockSize = FastPFOR128.BLOCK_SIZE; // Typically 128
+            int remainder = exactData.length % blockSize;
+            int[] inputForCompression = exactData;
+            if (remainder != 0) {
+                int paddedLength = exactData.length + (blockSize - remainder);
+                inputForCompression = Arrays.copyOf(exactData, paddedLength); 
+                // Padding with zeros is fine as FastPFOR handles it, and we only decompress originalLength.
+            }
 
-            dos.writeInt(effectiveSize);        // Original number of elements (non-padded)
-            dos.writeInt(compressedSizeInInts); 
-            for (int i = 0; i < compressedSizeInInts; i++) {
-                dos.writeInt(compressed[i]);
+            // Sufficiently large buffer: original size + 50% + fixed overhead
+            int[] compressedData = new int[inputForCompression.length + (inputForCompression.length / 2) + 1024]; 
+            IntWrapper inPos = new IntWrapper(0);
+            IntWrapper outPos = new IntWrapper(0);
+            CODEC.compress(inputForCompression, inPos, inputForCompression.length - inPos.get(), compressedData, outPos);
+            
+            // Adjust inPos to reflect the actual number of elements from inputForCompression that were consumed to produce outPos.get() compressed integers.
+            // For FastPFOR, it typically consumes in multiples of block size.
+            // What we care about is how many integers are in compressedData (outPos.get())
+            
+            out.writeInt(outPos.get()); // Number of integers in the compressed data
+            for (int i = 0; i < outPos.get(); i++) {
+                out.writeInt(compressedData[i]);
             }
         }
     }
@@ -396,11 +390,11 @@ public class PositionListSoA {
             }
 
             // Read attribute arrays (always all 5)
-            soaList.documentIds = new IntArrayList(readCompressedIntArraySoA(dis, numPositions));
-            soaList.sentenceIds = new IntArrayList(readCompressedIntArraySoA(dis, numPositions));
-            soaList.beginChars = new IntArrayList(readCompressedIntArraySoA(dis, numPositions));
-            soaList.endChars = new IntArrayList(readCompressedIntArraySoA(dis, numPositions));
-            soaList.synonymIds = new IntArrayList(readCompressedIntArraySoA(dis, numPositions)); // Always read synonymIds
+            soaList.documentIds = readCompressedIntArray(dis, numPositions);
+            soaList.sentenceIds = readCompressedIntArray(dis, numPositions);
+            soaList.beginChars = readCompressedIntArray(dis, numPositions);
+            soaList.endChars = readCompressedIntArray(dis, numPositions);
+            soaList.synonymIds = readCompressedIntArray(dis, numPositions); // Always read synonymIds
 
             soaList.numPositions = numPositions; 
 
@@ -418,68 +412,64 @@ public class PositionListSoA {
     }
 
     /**
-     * Helper method to read an integer array (potentially compressed) from the DataInputStream.
-     * Expects the format written by {@link #writeCompressedIntArraySoA(DataOutputStream, int[], int)}.
+     * Reads a compressed (or uncompressed) integer array from the input stream.
      *
-     * @param dis The DataInputStream to read from.
-     * @param expectedOriginalSize The expected number of elements in the deserialized array, used for validation for compressed arrays.
-     *                           For uncompressed arrays, this isn't strictly needed for allocation if we read first then allocate.
-     * @return A new int[] containing the deserialized integers.
-     * @throws IOException If an I/O error occurs or data is malformed.
+     * @param in The DataInputStream to read from.
+     * @param numExpectedPositions The number of positions expected in the list (used for initial sizing and FastPFOR decompression).
+     * @return An IntArrayList containing the deserialized integers.
+     * @throws IOException If an I/O error occurs.
      */
-    private static int[] readCompressedIntArraySoA(DataInputStream dis, int expectedOriginalSize) throws IOException {
-        int lengthMarker = dis.readInt();
-
-        if (lengthMarker == 0) { // Array was stored with effectiveSize 0
-            if (expectedOriginalSize != 0) {
-                // This might be an issue if expectedOriginalSize (numPositions from header) is > 0
-                // but an array was written as empty. For now, assume this means an empty array is correct.
-            }
-            return new int[0];
+    public static IntArrayList readCompressedIntArray(DataInputStream in, int numExpectedPositions) throws IOException {
+        int originalLength = in.readInt(); // Original number of elements
+        if (originalLength == 0) {
+            return new IntArrayList(0); // Handle empty array case
         }
 
-        if (lengthMarker < 0) { // Uncompressed
-            int actualLength = -lengthMarker;
-            int[] data = new int[actualLength];
-            for (int i = 0; i < actualLength; i++) {
-                data[i] = dis.readInt();
-            }
-            return data;
-        } else { // Compressed
-            int originalSize = lengthMarker; // This is the actual number of elements we care about
-            int compressedSizeInInts = dis.readInt();
-            if (compressedSizeInInts < 0) throw new IOException("Invalid compressedSizeInInts: " + compressedSizeInInts);
+        int compressedLengthOrMarker = in.readInt(); // Length of compressed data or negative marker
+        IntArrayList list = new IntArrayList(originalLength); // Pre-size with actual original length
 
-            int[] compressedData = new int[compressedSizeInInts];
-            for (int i = 0; i < compressedSizeInInts; i++) {
-                compressedData[i] = dis.readInt();
+        if (compressedLengthOrMarker < 0) { // Uncompressed data
+            if (-compressedLengthOrMarker != originalLength && originalLength !=0) { // Check marker consistency for non-empty
+                 throw new IOException("Uncompressed length marker mismatch. Expected: " + originalLength + ", Got from marker: " + (-compressedLengthOrMarker));
+            }
+            for (int i = 0; i < originalLength; i++) {
+                list.add(in.readInt());
+            }
+        } else { // Compressed data
+            int[] compressedData = new int[compressedLengthOrMarker];
+            for (int i = 0; i < compressedLengthOrMarker; i++) {
+                compressedData[i] = in.readInt();
             }
 
-            // Determine padded size for decompression based on originalSize
-            int paddedSize = ((originalSize + CODEC_BLOCK_SIZE - 1) / CODEC_BLOCK_SIZE) * CODEC_BLOCK_SIZE;
-            int[] decompressedPadded = new int[paddedSize]; 
+            // For FastPFOR, the output array for decompression needs to be padded if originalLength is not a multiple of block size.
+            // The originalLength is the exact count. Decompress into a buffer that can hold originalLength + padding.
+            int blockSize = FastPFOR128.BLOCK_SIZE;
+            int remainder = originalLength % blockSize;
+            int paddedOutputLength = originalLength;
+            if (remainder != 0) {
+                paddedOutputLength = originalLength + (blockSize - remainder);
+            }
+
+            int[] decompressed = new int[paddedOutputLength]; // Use padded length for decompression buffer
+            IntWrapper inPos = new IntWrapper(0);
+            IntWrapper outPos = new IntWrapper(0); // Will store actual numbers of ints recovered
             
-            IntWrapper inOffset = new IntWrapper(0);
-            IntWrapper outOffset = new IntWrapper(0);
+            // codec.uncompress needs the compressed data, its length, and the output buffer.
+            // It will decompress 'originalLength' integers into 'decompressed'.
+            CODEC.uncompress(compressedData, inPos, compressedLengthOrMarker - inPos.get(), decompressed, outPos);
 
-            CODEC.uncompress(compressedData, inOffset, compressedSizeInInts, decompressedPadded, outOffset);
+            if (outPos.get() < originalLength) {
+                 // This can happen if the compressed data was shorter than expected or an issue during decompression.
+                 // The FastPFOR codec might stop early if it detects end of compressed stream or issues.
+                 // We should trust originalLength for the number of elements to actually take, provided outPos.get() is at least that.
+                 // However, if outPos.get() is less, it means not enough data was decompressed.
+                 throw new IOException("Decompression output size mismatch. Expected to decompress " + originalLength + " ints, but got " + outPos.get() + " ints.");
+            }
             
-            // The outOffset.get() from uncompress for FastPFOR should be the paddedSize if it processed full blocks.
-            // We only need the originalSize elements from the decompressedPadded array.
-            if (outOffset.get() != paddedSize) {
-                // This might indicate an issue if the codec didn't fill the expected padded buffer.
-                // However, some codecs might return the actual number of items uncompressed if less than paddedSize.
-                // For FastPFOR, it usually processes in blocks, so outOffset should reflect that.
-                // The crucial part is that `decompressedPadded` contains at least `originalSize` valid elements.
-            }
-
-            // Copy only the original number of elements
-            if (originalSize == paddedSize) {
-                return decompressedPadded;
-            } else {
-                return Arrays.copyOf(decompressedPadded, originalSize);
-            }
+            // Add only the original number of elements to the list
+            list.addElements(0, decompressed, 0, originalLength);
         }
+        return list;
     }
 
     // ---- Selective Deserialization Utilities ----
@@ -526,7 +516,7 @@ public class PositionListSoA {
 
             int numPositions = dis.readInt();
             if (numPositions == 0) return new IntArrayList(0);
-            return new IntArrayList(readCompressedIntArraySoA(dis, numPositions));
+            return readCompressedIntArray(dis, numPositions);
         }
     }
 
@@ -547,10 +537,10 @@ public class PositionListSoA {
             int numPositions = dis.readInt();
 
             // Skip DocIDs array
-            skipAttributeArraySoA(dis); 
+            skipCompressedIntArray(dis, numPositions); 
             
             if (numPositions == 0) return new IntArrayList(0); // Should have been caught by skip or read logic if numPos=0 led to lengthMarker=0
-            return new IntArrayList(readCompressedIntArraySoA(dis, numPositions));
+            return readCompressedIntArray(dis, numPositions);
         }
     }
     
@@ -558,25 +548,28 @@ public class PositionListSoA {
      * Helper method to skip over a single compressed/uncompressed attribute array in the stream.
      * Reads the length marker and skips the appropriate number of bytes for the data.
      * @param dis The DataInputStream to read from and skip.
+     * @param numExpectedPositions Hint for expected positions (currently not strictly used by skip logic itself but good for consistency).
      * @throws IOException If an I/O error occurs.
      */
-    private static void skipAttributeArraySoA(DataInputStream dis) throws IOException {
-        int lengthMarker = dis.readInt(); // This is either -originalSize (uncompressed) or originalSize (compressed), or 0 (empty)
-        if (lengthMarker == 0) {
-            return; // No data to skip
-        }
-        if (lengthMarker < 0) { // Uncompressed
-            int numInts = -lengthMarker;
-            long bytesToSkip = (long)numInts * 4;
-            if (dis.skipBytes((int)bytesToSkip) != bytesToSkip) {
-                 throw new IOException("Failed to skip all bytes for uncompressed attribute array.");
+    private static void skipCompressedIntArray(DataInputStream dis, int numExpectedPositions) throws IOException {
+        int originalLength = dis.readInt(); // Read original length
+        if (originalLength == 0) return;    // Nothing to skip for an empty array
+
+        int compressedLengthOrMarker = dis.readInt(); // Read compressed length or uncompressed marker
+        int bytesToSkip = 0;
+
+        if (compressedLengthOrMarker < 0) { // Uncompressed
+             if (-compressedLengthOrMarker != originalLength && originalLength !=0) {
+                 throw new IOException("Uncompressed length marker mismatch during skip. Expected: " + originalLength + ", Got from marker: " + (-compressedLengthOrMarker));
             }
+            bytesToSkip = originalLength * 4; // 4 bytes per int
         } else { // Compressed
-            int compressedSizeInInts = dis.readInt();
-            long bytesToSkip = (long)compressedSizeInInts * 4;
-             if (dis.skipBytes((int)bytesToSkip) != bytesToSkip) {
-                 throw new IOException("Failed to skip all bytes for compressed attribute array.");
-            }
+            bytesToSkip = compressedLengthOrMarker * 4; // 4 bytes per int
+        }
+        
+        long skipped = dis.skipBytes(bytesToSkip);
+        if (skipped != bytesToSkip) {
+            throw new IOException("Failed to skip the full " + bytesToSkip + " bytes for an attribute array. Skipped only " + skipped);
         }
     }
 
@@ -596,11 +589,11 @@ public class PositionListSoA {
 
             int numPositions = dis.readInt();
 
-            skipAttributeArraySoA(dis); // Skip DocIDs
-            skipAttributeArraySoA(dis); // Skip SentenceIDs
+            skipCompressedIntArray(dis, numPositions); // Skip DocIDs
+            skipCompressedIntArray(dis, numPositions); // Skip SentenceIDs
             
             if (numPositions == 0) return new IntArrayList(0);
-            return new IntArrayList(readCompressedIntArraySoA(dis, numPositions));
+            return readCompressedIntArray(dis, numPositions);
         }
     }
 
@@ -620,12 +613,12 @@ public class PositionListSoA {
 
             int numPositions = dis.readInt();
 
-            skipAttributeArraySoA(dis); // Skip DocIDs
-            skipAttributeArraySoA(dis); // Skip SentenceIDs
-            skipAttributeArraySoA(dis); // Skip BeginChars
+            skipCompressedIntArray(dis, numPositions); // Skip DocIDs
+            skipCompressedIntArray(dis, numPositions); // Skip SentenceIDs
+            skipCompressedIntArray(dis, numPositions); // Skip BeginChars
             
             if (numPositions == 0) return new IntArrayList(0);
-            return new IntArrayList(readCompressedIntArraySoA(dis, numPositions));
+            return readCompressedIntArray(dis, numPositions);
         }
     }
 
@@ -648,13 +641,13 @@ public class PositionListSoA {
 
             int numPositions = dis.readInt();
 
-            skipAttributeArraySoA(dis); // Skip DocIDs
-            skipAttributeArraySoA(dis); // Skip SentenceIDs
-            skipAttributeArraySoA(dis); // Skip BeginChars
-            skipAttributeArraySoA(dis); // Skip EndChars
+            skipCompressedIntArray(dis, numPositions); // Skip DocIDs
+            skipCompressedIntArray(dis, numPositions); // Skip SentenceIDs
+            skipCompressedIntArray(dis, numPositions); // Skip BeginChars
+            skipCompressedIntArray(dis, numPositions); // Skip EndChars
             
             if (numPositions == 0) return new IntArrayList(0);
-            return new IntArrayList(readCompressedIntArraySoA(dis, numPositions));
+            return readCompressedIntArray(dis, numPositions);
         }
     }
 
@@ -825,6 +818,17 @@ public class PositionListSoA {
         // If an explicit re-sort to exactly match the sort() method behavior is needed (e.g. for stability guarantees not provided by this TreeSet approach)
         // then uncomment: this.sort(); 
         // However, for just unique sorted positions, this is sufficient.
+    }
+
+    /**
+     * Helper to write an IntArrayList's elements to a DataOutputStream using the compression logic.
+     *
+     * @param dos The DataOutputStream to write to.
+     * @param list The IntArrayList whose elements are to be written.
+     * @throws IOException If an I/O error occurs.
+     */
+    private void writeCompressedIntArrayList(DataOutputStream dos, IntArrayList list) throws IOException {
+        writeCompressedIntArray(dos, list.elements(), list.size());
     }
 
 } 

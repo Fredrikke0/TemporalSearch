@@ -11,7 +11,7 @@ import java.util.Optional;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.generators.POSIndexGenerator;
 import com.example.core.IndexAccess;
 
@@ -114,7 +114,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         var entries = generator.fetchBatch(null);
         
         // Process batch and verify results
-        ListMultimap<String, PositionList> result = generator.processBatch(entries);
+        ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
         
         // Check that POS tags exist in composite keys
         String[] expectedTags = {"NOUN", "VERB", "ADJ", "DET", "ADP", "PRON", "AUX"};
@@ -128,7 +128,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         int totalNounPositions = result.keySet().stream()
             .filter(key -> key.startsWith("NOUN" + com.example.core.IndexAccessInterface.DELIMITER))
             .flatMap(key -> result.get(key).stream())
-            .mapToInt(pl -> pl.getPositions().size())
+            .mapToInt(pl -> pl.getNumPositions())
             .sum();
         assertEquals(3, totalNounPositions, "Should have 3 NOUN positions");
         
@@ -136,7 +136,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         int totalDetPositions = result.keySet().stream()
             .filter(key -> key.startsWith("DET" + com.example.core.IndexAccessInterface.DELIMITER))
             .flatMap(key -> result.get(key).stream())
-            .mapToInt(pl -> pl.getPositions().size())
+            .mapToInt(pl -> pl.getNumPositions())
             .sum();
         assertEquals(3, totalDetPositions, "Should have 3 DET positions");
     }
@@ -190,14 +190,14 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         int totalNounPositions = result.keySet().stream()
             .filter(key -> key.startsWith("NOUN" + com.example.core.IndexAccessInterface.DELIMITER))
             .flatMap(key -> result.get(key).stream())
-            .mapToInt(pl -> pl.getPositions().size())
+            .mapToInt(pl -> pl.getNumPositions())
             .sum();
         assertEquals(2, totalNounPositions, "Should have 2 NOUN positions after case normalization");
 
         int totalVerbPositions = result.keySet().stream()
             .filter(key -> key.startsWith("VERB" + com.example.core.IndexAccessInterface.DELIMITER))
             .flatMap(key -> result.get(key).stream())
-            .mapToInt(pl -> pl.getPositions().size())
+            .mapToInt(pl -> pl.getNumPositions())
             .sum();
         assertEquals(2, totalVerbPositions, "Should have 2 VERB positions after case normalization");
     }

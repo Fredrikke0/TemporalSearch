@@ -1,7 +1,7 @@
 package com.example.index.generators;
 
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.index.AnnotationType;
 import com.example.index.TypedAnnotationSynonymStore;
@@ -35,6 +35,7 @@ import com.example.index.LevelDBConfig;
 import java.io.File;
 import java.io.BufferedReader;
 import java.io.FileReader;
+import java.util.Base64;
 
 public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<StitchEntry> {
     private static final Logger logger = LoggerFactory.getLogger(AbstractUnigramStitchGenerator.class);
@@ -269,9 +270,9 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<StitchEntry> batch) {
-        ListMultimap<String, PositionList> indexData = ArrayListMultimap.create();
-        Map<String, PositionList> tempAggregator = new HashMap<>();
+    protected ListMultimap<String, PositionListSoA> processBatch(List<StitchEntry> batch) {
+        ListMultimap<String, PositionListSoA> indexData = ArrayListMultimap.create();
+        Map<String, PositionListSoA> tempAggregator = new HashMap<>();
         AnnotationType currentType = getManagedAnnotationType(); // Get type once
 
         for (StitchEntry entry : batch) {
@@ -296,11 +297,11 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
                     entry.annotationEndChar()   // Annotation's end char from StitchEntry
             );
 
-            PositionList pl = tempAggregator.computeIfAbsent(key, k -> new PositionList());
+            PositionListSoA pl = tempAggregator.computeIfAbsent(key, k -> new PositionListSoA());
             pl.add(stitchPos);
         }
 
-        for (Map.Entry<String, PositionList> mapEntry : tempAggregator.entrySet()) {
+        for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
             indexData.put(mapEntry.getKey(), mapEntry.getValue());
         }
         
@@ -333,6 +334,129 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
      */
     protected abstract String getSpecificAnnotationTypeDBCondition();
 
+
+    @Override
+    protected void writeToLevelDB(File sortedFile) throws IOException {
+        logger.info("Starting custom writeToLevelDB for {} from sorted file: {}", this.resolvedIndexName, sortedFile.getAbsolutePath());
+        long startTime = System.currentTimeMillis();
+        long localTotalNGramsGenerated = 0;
+        WriteBatch batch = null;
+        int batchCounter = 0;
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
+            String line;
+            String currentTerm = null;
+            PositionListSoA mergedPositions = null;
+            final int MAX_RETRIES = 3;
+            final long RETRY_DELAY_MS = 1000;
+
+            batch = this.db.createWriteBatch(); // Use this.db instead of indexAccess
+
+            while ((line = reader.readLine()) != null) {
+                String[] parts = line.split("\t", 2);
+                if (parts.length != 2) continue;
+                String term = parts[0];
+                byte[] lineCompositeBlob = Base64.getDecoder().decode(parts[1]);
+                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(lineCompositeBlob);
+
+                if (currentTerm == null) {
+                    currentTerm = term;
+                    mergedPositions = positions;
+                    continue;
+                }
+
+                if (!currentTerm.equals(term)) {
+                    // Write the current term
+                    if (mergedPositions.getNumPositions() > 1_000_000) {
+                        logger.warn("Serializing very large PositionListSoA for key: '{}', size: {}", currentTerm, mergedPositions.getNumPositions());
+                    }
+                    byte[] keyBytes = bytes(currentTerm);
+                    byte[] valueBytes = mergedPositions.serializeToCompositeBlob();
+                    batch.put(keyBytes, valueBytes);
+                    batchCounter++;
+                    localTotalNGramsGenerated++;
+
+                    if (batchCounter >= LevelDBConfig.BATCH_SIZE) {
+                        writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
+                        batch.close();
+                        batch = this.db.createWriteBatch();
+                        batchCounter = 0;
+                    }
+
+                    if (localTotalNGramsGenerated % 100000 == 0) {
+                        long elapsed = System.currentTimeMillis() - startTime;
+                        logger.info("Custom writeToLevelDB progress for {}: {} terms, {} terms/sec",
+                            getIndexName(), localTotalNGramsGenerated,
+                            String.format("%.2f", localTotalNGramsGenerated * 1000.0 / elapsed));
+                    }
+
+                    currentTerm = term;
+                    mergedPositions = positions;
+                } else {
+                    // Same term, merge positions
+                    mergedPositions.addAll(positions);
+                }
+            }
+
+            // Write the last term
+            if (currentTerm != null && mergedPositions != null) {
+                if (mergedPositions.getNumPositions() > 1_000_000) {
+                    logger.warn("Serializing very large PositionListSoA for key: '{}', size: {}", currentTerm, mergedPositions.getNumPositions());
+                }
+                byte[] keyBytes = bytes(currentTerm);
+                byte[] valueBytes = mergedPositions.serializeToCompositeBlob();
+                batch.put(keyBytes, valueBytes);
+                batchCounter++;
+                localTotalNGramsGenerated++;
+            }
+
+            if (batchCounter > 0) {
+                writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
+            }
+
+            logger.info("Custom writeToLevelDB finished for {}: {} unique terms written", getIndexName(), localTotalNGramsGenerated);
+
+        } finally {
+            if (batch != null) {
+                try {
+                    batch.close();
+                } catch (IOException e) {
+                    logger.warn("Failed to close write batch for index [{}]: {}", getIndexName(), e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * Attempts to write a batch to this.db, retrying on specific failures.
+     */
+    private void writeDbBatchWithRetry(WriteBatch batch, int maxRetries, long delayMs, int numEntries) throws IOException {
+        int attempt = 0;
+        while (true) {
+            try {
+                this.db.write(batch); // Use this.db instead of indexAccess
+                if (logger.isTraceEnabled()) {
+                    logger.trace("Successfully wrote batch of {} entries to index [{}] on attempt {}", numEntries, getIndexName(), attempt + 1);
+                }
+                return; // Success
+            } catch (DBException e) {
+                attempt++;
+                logger.warn("Attempt {}/{} failed to write batch of {} entries to index [{}]: {}",
+                            attempt, maxRetries, numEntries, getIndexName(), e.getMessage());
+
+                if (attempt >= maxRetries) {
+                    logger.error("Failed to write batch of {} entries to index [{}] after {} attempts. Giving up.", numEntries, getIndexName(), attempt, e);
+                    throw new IOException("Failed to write batch of " + numEntries + " entries to index [" + getIndexName() + "] after " + attempt + " attempts", e);
+                }
+                try {
+                    Thread.sleep(delayMs * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted during retry wait for batch write to index [" + getIndexName() + "]", ie);
+                }
+            }
+        }
+    }
 
     @Override
     public void close() throws IOException {
@@ -375,151 +499,5 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         return this.resolvedIndexName; 
     }
 
-    @Override
-    protected void writeToLevelDB(File sortedFile) throws IOException {
-        long startTime = System.currentTimeMillis();
-        // totalNGramsGenerated is a field in IndexGenerator, ensure it's accessible or redeclared if needed.
-        // For now, assume it's accessible via super or AbstractUnigramStitchGenerator can have its own.
-        // Let's use a local one to avoid superclass state issues if this.indexAccess was the main point of it.
-        long localTotalNGramsGenerated = 0;
-        WriteBatch batch = null;
-        int batchCounter = 0;
 
-        //String debugTerm = System.getProperty("debug.index.term", "shrek");
-
-        try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile))) {
-            String line;
-            String currentTerm = null;
-            PositionList mergedPositions = null;
-            final int MAX_RETRIES = 3; // This could be a constant in LevelDBConfig or similar
-            final long RETRY_DELAY_MS = 1000;
-
-            batch = this.db.createWriteBatch(); // Use this.db
-
-            while ((line = reader.readLine()) != null) {
-                String[] parts = line.split("\t", 2);
-                if (parts.length != 2) continue;
-                String term = parts[0];
-                PositionList positions = PositionList.deserialize(Base64.getDecoder().decode(parts[1]));
-
-                //if (debugTerm.equals(term)) {
-                //    logger.debug("AUSG: Processing term '{}'. Current mergedPositions size: {}. New positions size: {}.",
-                //        debugTerm, (mergedPositions != null ? mergedPositions.size() : "null"), positions.size());
-                //}
-
-                if (currentTerm == null) {
-                    currentTerm = term;
-                    mergedPositions = positions;
-                    //if (debugTerm.equals(currentTerm)) {
-                    //    logger.debug("AUSG: Encountered '{}' for the first time. Positions size: {}", debugTerm, mergedPositions.size());
-                    //}
-                    continue;
-                }
-
-                if (!currentTerm.equals(term)) {
-                    //if (debugTerm.equals(currentTerm)) {
-                    //    logger.debug("AUSG: Finalizing '{}' before switching to term '{}'. Merged positions size: {}", debugTerm, term, mergedPositions.size());
-                    //}
-                    if (mergedPositions.size() > 1_000_000) { // Log if very large
-                        logger.warn("Serializing very large PositionList for key: '{}', size: {}", currentTerm, mergedPositions.size());
-                    }
-                    byte[] keyBytes = bytes(currentTerm); // bytes() is static in IndexGenerator
-                    byte[] valueBytes = mergedPositions.serialize();
-                    batch.put(keyBytes, valueBytes);
-                    batchCounter++;
-                    localTotalNGramsGenerated++;
-
-                    if (batchCounter >= LevelDBConfig.BATCH_SIZE) { // Assuming LevelDBConfig.BATCH_SIZE is accessible
-                        writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
-                        batch.close();
-                        batch = this.db.createWriteBatch(); // Use this.db
-                        batchCounter = 0;
-                    }
-
-                    if (localTotalNGramsGenerated % 100000 == 0) {
-                        long elapsed = System.currentTimeMillis() - startTime;
-                        logger.debug("AUSG: Write progress for {}: {} terms, {} terms/sec",
-                            getIndexName(), // Use getIndexName() for context
-                            localTotalNGramsGenerated,
-                            String.format("%.2f", localTotalNGramsGenerated * 1000.0 / elapsed));
-                    }
-
-                    currentTerm = term;
-                    mergedPositions = positions;
-                    //if (debugTerm.equals(currentTerm)) {
-                    //    logger.debug("AUSG: Switched to new term '{}'. Initial positions size: {}", debugTerm, mergedPositions.size());
-                    //}
-                } else { // Same term as before, merge positions
-                    //  if (debugTerm.equals(currentTerm)) {
-                    //    logger.debug("AUSG: Merging additional positions for '{}'. Before merge size: {}. Adding {} positions.", debugTerm, mergedPositions
-                    positions.getPositions().forEach(mergedPositions::add);
-                    //if (debugTerm.equals(currentTerm)) {
-                    //    logger.debug("AUSG: After merge for '{}', new total positions: {}.", debugTerm, mergedPositions.size());
-                    //}
-                }
-            }
-
-            if (currentTerm != null && mergedPositions != null) {
-                // if (debugTerm.equals(currentTerm)) {
-                //    logger.debug("AUSG: Finalizing last term '{}'. Merged positions size: {}", debugTerm, mergedPositions.size());
-                //}
-                if (mergedPositions.size() > 1_000_000) { // Log if very large
-                    logger.warn("Serializing very large PositionList for key: '{}', size: {}", currentTerm, mergedPositions.size());
-                }
-                byte[] keyBytes = bytes(currentTerm);
-                byte[] valueBytes = mergedPositions.serialize();
-                batch.put(keyBytes, valueBytes);
-                batchCounter++;
-                localTotalNGramsGenerated++;
-            }
-
-            if (batchCounter > 0) {
-                writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
-            }
-
-            logger.info("AUSG: Finished writing {} unique terms/keys to index [{}]", localTotalNGramsGenerated, getIndexName());
-            // If IndexGenerator.totalNGramsGenerated needs to be updated for some external reason, do it here.
-            // For now, localTotalNGramsGenerated tracks what this specific method wrote.
-
-        } finally {
-            if (batch != null) {
-                try {
-                    batch.close();
-                } catch (IOException e) {
-                    logger.warn("AUSG: Failed to close write batch for index [{}]: {}", getIndexName(), e.getMessage());
-                }
-            }
-        }
-    }
-
-    /**
-     * Attempts to write a batch to this.db, retrying on specific failures.
-     */
-    private void writeDbBatchWithRetry(WriteBatch batch, int maxRetries, long delayMs, int numEntries) throws IOException {
-        int attempt = 0;
-        while (true) {
-            try {
-                this.db.write(batch); // Use this.db
-                if (logger.isTraceEnabled()) {
-                    logger.trace("AUSG: Successfully wrote batch of {} entries to index [{}] on attempt {}", numEntries, getIndexName(), attempt + 1);
-                }
-                return; // Success
-            } catch (DBException e) { // Catch org.iq80.leveldb.DBException
-                attempt++;
-                logger.warn("AUSG: Attempt {}/{} failed to write batch of {} entries to index [{}]: {}",
-                            attempt, maxRetries, numEntries, getIndexName(), e.getMessage());
-
-                if (attempt >= maxRetries) {
-                    logger.error("AUSG: Failed to write batch of {} entries to index [{}] after {} attempts. Giving up.", numEntries, getIndexName(), attempt, e);
-                    throw new IOException("Failed to write batch of " + numEntries + " entries to index [" + getIndexName() + "] after " + attempt + " attempts", e);
-                }
-                try {
-                    Thread.sleep(delayMs * attempt);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("AUSG: Interrupted during retry wait for batch write to index [" + getIndexName() + "]", ie);
-                }
-            }
-        }
-    }
 } 

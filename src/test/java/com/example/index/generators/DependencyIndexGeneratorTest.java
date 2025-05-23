@@ -10,7 +10,7 @@ import java.util.Optional;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.generators.DependencyIndexGenerator;
 import com.example.index.generators.IndexGenerator;
 import com.example.core.IndexAccess;
@@ -101,18 +101,18 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
         var entries = generator.fetchBatch(null);
         
         // Process batch and verify results
-        ListMultimap<String, PositionList> result = generator.processBatch(entries);
+        ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
         
         // Verify subject-verb dependency
         String key1 = "fox" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "jumps";
         assertTrue(result.containsKey(key1), "Should contain subject-verb dependency");
-        assertEquals(1, result.get(key1).get(0).getPositions().size(), 
+        assertEquals(1, result.get(key1).get(0).getNumPositions(), 
             "Should have one position for subject-verb dependency");
         
         // Verify verb-object dependency
         String key2 = "jumps" + IndexGenerator.DELIMITER + "prep" + IndexGenerator.DELIMITER + "over";
         assertTrue(result.containsKey(key2), "Should contain verb-object dependency");
-        assertEquals(1, result.get(key2).get(0).getPositions().size(), 
+        assertEquals(1, result.get(key2).get(0).getNumPositions(), 
             "Should have one position for verb-object dependency");
     }
 
@@ -155,7 +155,7 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
         // Verify case normalization
         String key3 = "cat" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "chases";
         assertTrue(result.containsKey(key3), "Should contain normalized subject-verb dependency");
-        assertEquals(1, result.get(key3).get(0).getPositions().size(), 
+        assertEquals(1, result.get(key3).get(0).getNumPositions(), 
             "Should have one position for normalized subject-verb dependency");
     }
 } 

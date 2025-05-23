@@ -2,7 +2,7 @@ package com.example.query.executor;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.core.IndexAccessException;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Dependency;
@@ -101,15 +101,17 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                                normalizedDependent;
             byte[] keyBytes = searchKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
-            Optional<PositionList> positionsOpt = index.get(keyBytes);
+            Optional<PositionListSoA> positionsOptSoA = index.get(keyBytes);
             
-            if (positionsOpt.isPresent()) {
-                PositionList positionList = positionsOpt.get();
-                // Explicitly format the value for MatchDetail with a visible delimiter
+            if (positionsOptSoA.isPresent()) {
+                PositionListSoA positionListSoA = positionsOptSoA.get();
                 String value = String.join(":", normalizedGovernor, normalizedRelation, normalizedDependent);
-                return positionList.getPositions().stream()
-                    .map(pos -> new MatchDetail(value, ValueType.DEPENDENCY, pos, isVariable ? variableName : null))
-                    .collect(Collectors.toList());
+                List<MatchDetail> resultDetails = new ArrayList<>();
+                for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                    Position pos = positionListSoA.getPositionAt(i);
+                    resultDetails.add(new MatchDetail(value, ValueType.DEPENDENCY, pos, isVariable ? variableName : null));
+                }
+                return resultDetails;
             } else {
                 return Collections.emptyList();
             }
@@ -156,13 +158,15 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     String rel = parts[1]; // Should match input relation (case-insensitively)
                     String dep = parts[2];
                     
-                    // Deserialize PositionList
-                    PositionList positionList = PositionList.deserialize(entry.getValue());
-                    String value = String.join("/", gov, rel, dep); // Reconstruct original case?
+                    // Deserialize PositionListSoA
+                    PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
+                    String value = String.join("/", gov, rel, dep); 
                     
-                    details.addAll(positionList.getPositions().stream()
-                        .map(pos -> new MatchDetail(value, ValueType.DEPENDENCY, pos, variableName))
-                        .collect(Collectors.toList()));
+                    for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                        Position pos = positionListSoA.getPositionAt(i); // Reconstruct Position
+                        // Ensure variableName is wrapped in Optional for MatchDetail
+                        details.add(new MatchDetail(value, ValueType.DEPENDENCY, pos, isVariable ? Optional.ofNullable(variableName) : Optional.empty()));
+                    }
                 } else {
                      logger.warn("Skipping invalid key format in dependency index: {}", key);
                 }

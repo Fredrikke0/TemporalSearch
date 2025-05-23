@@ -2,7 +2,7 @@ package com.example.query.executor;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Pos;
 import com.example.query.binding.MatchDetail;
@@ -104,21 +104,19 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         try {
             // Search key is just the normalized POS tag
             byte[] keyBytes = normalizedPosTag.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            Optional<PositionList> positionsOpt = index.get(keyBytes);
+            Optional<PositionListSoA> positionsOptSoA = index.get(keyBytes);
 
-            if (positionsOpt.isPresent()) {
-                PositionList positionList = positionsOpt.get();
-                // Value for MatchDetail is just the original POS tag from the condition
+            if (positionsOptSoA.isPresent()) {
+                PositionListSoA positionListSoA = positionsOptSoA.get();
                 String valueString = posTag; 
 
-                for (Position position : positionList.getPositions()) {
-                    // Create MatchDetail for each position found for the tag.
-                    // Bind variableName if isVariable is true.
+                for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                    Position position = positionListSoA.getPositionAt(i);
                     MatchDetail detail = new MatchDetail(
-                        valueString,        // Value is the POS tag itself
-                        ValueType.POS_TERM,     // Use POS_TERM as the closest type for the tag string
+                        valueString,        
+                        ValueType.POS_TERM,    
                         position,
-                        isVariable ? variableName : null // Bind variable if needed
+                        isVariable ? variableName : null 
                     );
                     details.add(detail);
                 }

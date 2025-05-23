@@ -6,7 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessInterface;
@@ -85,13 +85,13 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<AnnotationEntry> batch) {
-        ListMultimap<String, PositionList> resultMultimap = ArrayListMultimap.create();
+    protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
+        ListMultimap<String, PositionListSoA> resultMultimap = ArrayListMultimap.create();
         if (batch.isEmpty()) {
             return resultMultimap;
         }
 
-        Map<String, PositionList> currentBatchEntityPositions = new HashMap<>();
+        Map<String, PositionListSoA> currentBatchEntityPositions = new HashMap<>();
 
         AnnotationEntry prevEntry = null;
         List<String> currentEntityRawTokens = new ArrayList<>();
@@ -145,13 +145,13 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
                                     currentEntityBeginChar, prevEntry.getEndChar());
         }
 
-        for (Map.Entry<String, PositionList> mapEntry : currentBatchEntityPositions.entrySet()) {
+        for (Map.Entry<String, PositionListSoA> mapEntry : currentBatchEntityPositions.entrySet()) {
             resultMultimap.put(mapEntry.getKey(), mapEntry.getValue());
         }
         return resultMultimap;
     }
     
-    private void addProcessedEntityToMap(Map<String, PositionList> map,
+    private void addProcessedEntityToMap(Map<String, PositionListSoA> map,
                                          String entityType,
                                          List<String> rawTokens, int docId, int sentId,
                                          int beginChar, int endChar) {
@@ -164,7 +164,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         String entityValue = String.join(" ", rawTokens).toLowerCase();
         String compositeKey = entityType.toUpperCase() + IndexAccessInterface.DELIMITER + entityValue;
 
-        PositionList pl = map.computeIfAbsent(compositeKey, k -> new PositionList());
+        PositionListSoA pl = map.computeIfAbsent(compositeKey, k -> new PositionListSoA());
         pl.add(new Position(docId, sentId, beginChar, endChar));
     }
 

@@ -17,7 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.logging.ProgressTracker;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.DependencyEntry;
 
 /**
@@ -101,9 +101,9 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
     }
 
     @Override
-    protected ListMultimap<String, PositionList> processBatch(List<DependencyEntry> batch) {
-        ListMultimap<String, PositionList> indexData = ArrayListMultimap.create();
-        Map<String, PositionList> tempAggregator = new HashMap<>();
+    protected ListMultimap<String, PositionListSoA> processBatch(List<DependencyEntry> batch) {
+        ListMultimap<String, PositionListSoA> indexData = ArrayListMultimap.create();
+        Map<String, PositionListSoA> tempAggregator = new HashMap<>();
 
         for (DependencyEntry entry : batch) {
             String headTokenLower = entry.getHeadToken().toLowerCase(); 
@@ -119,11 +119,11 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
             
             Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
             
-            PositionList pl = tempAggregator.computeIfAbsent(key, k -> new PositionList());
+            PositionListSoA pl = tempAggregator.computeIfAbsent(key, k -> new PositionListSoA());
             pl.add(pos);
         }
         
-        for (Map.Entry<String, PositionList> mapEntry : tempAggregator.entrySet()) {
+        for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
             indexData.put(mapEntry.getKey(), mapEntry.getValue());
         }
         return indexData;

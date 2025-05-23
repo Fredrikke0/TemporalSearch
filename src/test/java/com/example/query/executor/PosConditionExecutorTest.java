@@ -4,7 +4,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.binding.MatchDetail;
 import com.example.query.binding.ValueType;
 import com.example.query.executor.QueryResult;
@@ -56,7 +56,7 @@ class PosConditionExecutorTest {
         Pos condition = new Pos("NN", "test"); 
         String expectedKey = "nn" + IndexAccessInterface.DELIMITER + "test";
 
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 0, 5, 10));
         positions.add(new Position(2, 1, 15, 20));
         positions.add(new Position(1, 1, 25, 30));
@@ -80,7 +80,7 @@ class PosConditionExecutorTest {
         Pos condition = new Pos("VB", "run");
         String expectedKey = "vb" + IndexAccessInterface.DELIMITER + "run";
 
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 1, 1, 2));
         positions.add(new Position(1, 2, 3, 4));
         positions.add(new Position(2, 1, 5, 6));
@@ -107,7 +107,7 @@ class PosConditionExecutorTest {
         Pos condition = new Pos("NN", "noun");
         String expectedKey = "nn" + IndexAccessInterface.DELIMITER + "noun";
 
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 0, 1, 2));
         positions.add(new Position(1, 2, 3, 4));
         positions.add(new Position(1, 3, 5, 6));
@@ -137,7 +137,7 @@ class PosConditionExecutorTest {
         byte[] expectedKeyBytes = expectedKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
         // Define the expected positions combined into one list for the 'jj' tag
-        PositionList positions = new PositionList(); 
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 1, 5, 10)); // From original posList1
         positions.add(new Position(2, 1, 15, 20)); // From original posList2
         positions.add(new Position(1, 2, 25, 30)); // From original posList3

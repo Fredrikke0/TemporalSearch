@@ -65,34 +65,6 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     /**
-     * Stores a position list for a given key.
-     * This is a convenience method specific to this implementation.
-     */
-    /*  // This method is being removed as it's not used by production code
-        // and its internal merge logic is complex and potentially memory-intensive.
-        // Direct byte[] puts via WriteBatch are used by IndexGenerator.
-    public void put(byte[] key, PositionList positions) throws IndexAccessException {
-        checkOpen();
-        try {
-            byte[] existing = db.get(key);
-            if (existing != null) {
-                PositionList existingPositions = PositionList.deserialize(existing);
-                positions.merge(existingPositions);
-            }
-            
-            db.put(key, positions.serialize());
-        } catch (Exception e) {
-            throw new IndexAccessException(
-                "Failed to put entry: " + e.getMessage(),
-                indexType,
-                IndexAccessException.ErrorType.WRITE_ERROR,
-                e
-            );
-        }
-    }
-    */
-
-    /**
      * Writes a batch of operations atomically.
      * Implements the interface method.
      */
@@ -121,18 +93,19 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     /**
-     * Retrieves positions for a given key.
+     * Retrieves positions for a given key, deserializing to PositionListSoA.
      */
     @Override
-    public Optional<PositionList> get(byte[] key) throws IndexAccessException {
+    public Optional<PositionListSoA> get(byte[] key) throws IndexAccessException {
         checkOpen();
         try {
             byte[] value = db.get(key);
             if (value == null) {
                 return Optional.empty();
             }
-            return Optional.of(PositionList.deserialize(value));
-        } catch (Exception e) {
+            // Deserialize to PositionListSoA instead of PositionList
+            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(value));
+        } catch (IOException | DBException e) { // Catch IOException from deserialize and DBException from db.get
             throw new IndexAccessException(
                 "Failed to get entry: " + e.getMessage(),
                 indexType,

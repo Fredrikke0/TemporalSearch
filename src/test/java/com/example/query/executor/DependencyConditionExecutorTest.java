@@ -4,7 +4,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.binding.MatchDetail;
 import com.example.query.binding.ValueType;
 import com.example.query.executor.QueryResult;
@@ -46,7 +46,7 @@ class DependencyConditionExecutorTest {
         String expectedKey = "nsubj" + IndexAccessInterface.DELIMITER +
                              "vb" + IndexAccessInterface.DELIMITER +
                              "nn";
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 1, 10, 15));
         positions.add(new Position(2, 1, 5, 10));
         when(dependencyIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
@@ -69,7 +69,7 @@ class DependencyConditionExecutorTest {
                              "vb" + IndexAccessInterface.DELIMITER +
                              "jj";
         
-        PositionList positions = new PositionList();
+        PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 1, 10, 15)); 
         positions.add(new Position(1, 2, 5, 10));   
         positions.add(new Position(2, 1, 20, 25)); 

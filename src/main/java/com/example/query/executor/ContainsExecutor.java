@@ -2,7 +2,7 @@ package com.example.query.executor;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.core.IndexAccessException;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Contains;
@@ -248,90 +248,106 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             // Basic wildcard handling (prefix only for now)
             if (pattern.endsWith("*")) {
                 String prefix = pattern.substring(0, pattern.length() - 1).toLowerCase();
-                logger.debug("Searching for prefix pattern '{}' in index type {}", prefix, index.getIndexType());
-                return executePrefixSearch(prefix, isVariable, variableName, index, condition);
+                // Call the prefix search helper
+                return executePrefixSearch(prefix, isVariable, variableName, index, condition); 
             } else {
-                 logger.warn("Wildcard patterns ('{}') other than suffix ('*') are not implemented yet.", pattern);
-                return details;
+                // Other wildcard patterns not supported yet
+                logger.warn("Wildcard pattern '{}' is not fully supported. Only prefix wildcards (e.g., 'term*') are handled.", pattern);
+                return details; // Return empty for unsupported wildcards for now
             }
         }
         
-        String normalizedPattern = pattern.toLowerCase();
-        logger.debug("Searching for exact pattern '{}' in index type {} at {} granularity",
-                    normalizedPattern, index.getIndexType(), granularity);
+        // Standard pattern search (no wildcards)
+        byte[] keyBytes = pattern.toLowerCase().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Optional<PositionListSoA> positionsSoA = index.get(keyBytes); // Changed to PositionListSoA
         
-        byte[] patternBytes = normalizedPattern.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        Optional<PositionList> positionsOpt = index.get(patternBytes);
-        
-        if (!positionsOpt.isPresent()) {
-            logger.debug("Pattern '{}' not found in any documents", normalizedPattern);
-            return details;
+        if (positionsSoA.isPresent()) {
+            PositionListSoA pl = positionsSoA.get();
+            logger.debug("Found {} positions for pattern: '{}'", pl.getNumPositions(), pattern);
+            
+            // Convert the pattern back to space-separated format for the MatchDetail value
+            String displayValue = pattern.replace(String.valueOf(DELIMITER), " ");
+            
+            for (int i = 0; i < pl.getNumPositions(); i++) {
+                Position pos = pl.getPositionAt(i); // Reconstruct Position object
+                String actualValue = isVariable ? pattern : displayValue; 
+                details.add(new MatchDetail(
+                    actualValue, 
+                    ValueType.TERM,
+                    pos, 
+                    isVariable ? Optional.of(variableName) : Optional.empty()
+                ));
+            }
+        } else {
+            logger.debug("No positions found for pattern: '{}'", pattern);
         }
-        
-        PositionList positionList = positionsOpt.get();
-        String condId = String.valueOf(condition.hashCode());
-        
-        // Reconstruct the human-readable value (space-separated)
-        String valueString = reconstructValue(pattern, DELIMITER);
-
-        for (Position position : positionList.getPositions()) {
-            // Use 5-arg constructor for non-join results
-            MatchDetail detail = new MatchDetail(
-                valueString, // Always use the reconstructed value with spaces
-                ValueType.TERM,
-                position,
-                isVariable ? variableName : null // Bind variable if needed
-            );
-            details.add(detail);
-        }
-        
-        logger.trace("Found {} details for pattern '{}' with conditionId {}", 
-                     details.size(), normalizedPattern, condId);
         return details;
     }
     
-    // Added method for prefix search to handle suffix wildcard
+    /**
+     * Executes a prefix search in the index.
+     *
+     * @param prefix The prefix to search for (lowercase)
+     * @param isVariable Whether this corresponds to a variable
+     * @param variableName The original variable name (if applicable)
+     * @param index The index to search in
+     * @param condition The Contains condition
+     * @return List of MatchDetail objects found for the prefix
+     */
     private List<MatchDetail> executePrefixSearch(String prefix, boolean isVariable, String variableName,
                                         IndexAccessInterface index, Contains condition)
         throws QueryExecutionException, IndexAccessException {
-            
+        
         List<MatchDetail> details = new ArrayList<>();
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        String condId = String.valueOf(condition.hashCode());
         
         try (DBIterator iterator = index.iterator()) {
             iterator.seek(prefixBytes);
+            
             while (iterator.hasNext()) {
                 Map.Entry<byte[], byte[]> entry = iterator.next();
                 String key = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8);
                 
                 if (!key.startsWith(prefix)) {
-                    break; // Moved past relevant keys
+                    // We've iterated past the prefix range
+                    break; 
                 }
                 
-                PositionList positionList = PositionList.deserialize(entry.getValue());
-                
-                // Reconstruct the human-readable value (space-separated)
-                String valueString = reconstructValue(key, DELIMITER);
+                // Deserialize the value to PositionListSoA
+                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
+                String actualValue = isVariable ? key : null; // For prefix search, bound value is the full key
 
-                for (Position position : positionList.getPositions()) {
-                    // Use 5-arg constructor for non-join results
-                    MatchDetail detail = new MatchDetail(
-                        valueString, // Always use the reconstructed value with spaces
+                for (int i = 0; i < positions.getNumPositions(); i++) {
+                    Position pos = positions.getPositionAt(i); // Reconstruct Position
+                    details.add(new MatchDetail(
+                        actualValue, 
                         ValueType.TERM,
-                        position,
-                        isVariable ? variableName : null // Bind variable if needed
-                    );
-                    details.add(detail);
+                        pos, 
+                        isVariable ? Optional.of(variableName) : Optional.empty()
+                    ));
                 }
             }
         } catch (IOException e) {
-             throw new QueryExecutionException("IO error during prefix search for CONTAINS", e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
-        } catch (RuntimeException e) { // Catch deserialization errors
-             throw new QueryExecutionException("Deserialization error during prefix search for CONTAINS", e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+            throw new QueryExecutionException(
+                "Error during prefix search deserialization: " + e.getMessage(), 
+                e,
+                condition.toString(), 
+                QueryExecutionException.ErrorType.INTERNAL_ERROR
+            );
+        } catch (IndexAccessException iae) {
+            // Re-throw if it's already an IndexAccessException from the iterator itself
+            throw iae;
+        } catch (Exception e) {
+            // Catch-all for other unexpected errors during iteration or processing
+            throw new QueryExecutionException(
+                "Unexpected error during prefix search: " + e.getMessage(), 
+                e,
+                condition.toString(), 
+                QueryExecutionException.ErrorType.INTERNAL_ERROR
+            );
         }
-        logger.trace("Found {} details for prefix '{}' with conditionId {}", 
-                     details.size(), prefix, condId);
+        
+        logger.debug("Found {} details for prefix: '{}'", details.size(), prefix);
         return details;
     }
 

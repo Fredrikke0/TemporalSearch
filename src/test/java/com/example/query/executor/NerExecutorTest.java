@@ -4,7 +4,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.binding.MatchDetail;
 import com.example.query.binding.ValueType;
 import com.example.query.executor.QueryResult;
@@ -29,7 +29,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-class NerConditionExecutorTest {
+class NerExecutorTest {
 
     @Mock private IndexAccess nerIndex;
     @Mock private DBIterator mockIterator; 
@@ -46,7 +46,7 @@ class NerConditionExecutorTest {
         lenient().when(mockIterator.hasNext()).thenReturn(false); 
     }
 
-    private void setupIteratorMock(DBIterator iterator, String prefix, List<Map.Entry<byte[], PositionList>> entries) throws IOException, IndexAccessException {
+    private void setupIteratorMock(DBIterator iterator, String prefix, List<Map.Entry<byte[], PositionListSoA>> entries) throws IOException, IndexAccessException {
         lenient().when(nerIndex.iterator()).thenReturn(iterator);
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         doNothing().when(iterator).seek(argThat(k -> Arrays.equals(k, prefixBytes)));
@@ -64,10 +64,10 @@ class NerConditionExecutorTest {
             Map.Entry<byte[], byte[]>[] entryArray = entries.stream()
                  .map(e -> {
                     try {
-                        return Map.entry(e.getKey(), e.getValue().serialize());
+                        return Map.entry(e.getKey(), e.getValue().serializeToCompositeBlob());
                     } catch (IOException ioe) {
                         // For test setup, rethrow as unchecked if direct handling is too verbose
-                        throw new RuntimeException("Failed to serialize PositionList in test setup", ioe);
+                        throw new RuntimeException("Failed to serialize PositionListSoA in test setup", ioe);
                     }
                  })
                  .toArray(Map.Entry[]::new);
@@ -88,10 +88,10 @@ class NerConditionExecutorTest {
         Ner condition = new Ner("PERSON");
         String expectedKeyPrefix = "PERSON" + IndexAccessInterface.DELIMITER;
         
-        PositionList posList1 = new PositionList(); posList1.add(new Position(1, 1, 0, 5));
-        PositionList posList2 = new PositionList(); posList2.add(new Position(3, 1, 10, 15));
+        PositionListSoA posList1 = new PositionListSoA(); posList1.add(new Position(1, 1, 0, 5));
+        PositionListSoA posList2 = new PositionListSoA(); posList2.add(new Position(3, 1, 10, 15));
         
-        List<Map.Entry<byte[], PositionList>> mockEntries = List.of(
+        List<Map.Entry<byte[], PositionListSoA>> mockEntries = List.of(
             Map.entry((expectedKeyPrefix + "Alice").getBytes(), posList1),
             Map.entry((expectedKeyPrefix + "Bob").getBytes(), posList2)
         );
@@ -122,8 +122,8 @@ class NerConditionExecutorTest {
         Ner conditionLocation = new Ner("LOCATION");
         
         String personPrefix = "PERSON" + IndexAccessInterface.DELIMITER;
-        PositionList personPos = new PositionList(); personPos.add(new Position(1, 1, 0, 5));
-        List<Map.Entry<byte[], PositionList>> personEntries = List.of(
+        PositionListSoA personPos = new PositionListSoA(); personPos.add(new Position(1, 1, 0, 5));
+        List<Map.Entry<byte[], PositionListSoA>> personEntries = List.of(
             Map.entry((personPrefix + "Alice").getBytes(), personPos)
         );
         DBIterator personIterator = mock(DBIterator.class, "personIterator");
@@ -132,9 +132,9 @@ class NerConditionExecutorTest {
         QueryResult resultPerson = executor.execute(conditionPerson, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
 
         String locationPrefix = "LOCATION" + IndexAccessInterface.DELIMITER;
-        PositionList locPos1 = new PositionList(); locPos1.add(new Position(2, 1, 10, 15));
-        PositionList locPos2 = new PositionList(); locPos2.add(new Position(2, 2, 20, 25));
-        List<Map.Entry<byte[], PositionList>> locationEntries = List.of(
+        PositionListSoA locPos1 = new PositionListSoA(); locPos1.add(new Position(2, 1, 10, 15));
+        PositionListSoA locPos2 = new PositionListSoA(); locPos2.add(new Position(2, 2, 20, 25));
+        List<Map.Entry<byte[], PositionListSoA>> locationEntries = List.of(
             Map.entry((locationPrefix + "Paris").getBytes(), locPos1),
             Map.entry((locationPrefix + "London").getBytes(), locPos2)
         );
@@ -169,10 +169,10 @@ class NerConditionExecutorTest {
         Ner condition = new Ner("ORGANIZATION", "?orgVar", true); 
         String expectedKeyPrefix = "ORGANIZATION" + IndexAccessInterface.DELIMITER;
         
-        PositionList posList1 = new PositionList(); posList1.add(new Position(4, 1, 0, 10));
-        PositionList posList2 = new PositionList(); posList2.add(new Position(4, 2, 15, 25)); 
+        PositionListSoA posList1 = new PositionListSoA(); posList1.add(new Position(4, 1, 0, 10));
+        PositionListSoA posList2 = new PositionListSoA(); posList2.add(new Position(4, 2, 15, 25)); 
         
-        List<Map.Entry<byte[], PositionList>> mockEntries = List.of(
+        List<Map.Entry<byte[], PositionListSoA>> mockEntries = List.of(
             Map.entry((expectedKeyPrefix + "AcmeInc").getBytes(), posList1),
             Map.entry((expectedKeyPrefix + "Globex").getBytes(), posList2)
         );
