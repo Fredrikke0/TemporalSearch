@@ -19,6 +19,7 @@ import com.example.core.PositionList;
 import com.example.index.StitchPosition;
 import com.example.index.NashDateEntryWithId;
 import com.example.index.util.NashSerializationUtils;
+import com.example.core.PositionListSoA;
 
 public class LevelDBBrowser {
     private static final String DELIMITER = "\0";
@@ -165,8 +166,8 @@ public class LevelDBBrowser {
                     }
                 } else {
                     try {
-                        PositionList positions = PositionList.deserialize(iterator.peekNext().getValue());
-                        totalPositions += positions.size();
+                        byte[] value = iterator.peekNext().getValue();
+                        totalPositions += PositionListSoA.getNumPositionsFromBlob(value);
                     } catch (Exception e) {
                         logger.warn("Could not deserialize entry value in index '{}' during stats calculation: {}. Skipping for position count.", indexType, e.getMessage());
                     }
@@ -199,8 +200,8 @@ public class LevelDBBrowser {
         if (indexType.equals("nash")) {
             displayNashEntry(bytes(key), data);
         } else {
-            PositionList positions = PositionList.deserialize(data);
-            displayPositions(key, positions, indexType, synonyms);
+            PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(data);
+            displayPositionsSoA(key, positionsSoA, indexType, synonyms);
         }
     }
 
@@ -221,8 +222,8 @@ public class LevelDBBrowser {
                 if (isNash) {
                     displayNashEntry(entry.getKey(), entry.getValue());
                 } else {
-                    PositionList positions = PositionList.deserialize(entry.getValue());
-                    displayPositions(key, positions, indexType, synonyms);
+                    PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
+                    displayPositionsSoA(key, positionsSoA, indexType, synonyms);
                 }
                 count++;
                 iterator.next();
@@ -261,7 +262,7 @@ public class LevelDBBrowser {
                     Map.Entry<byte[], byte[]> entry = iterator.next();
                     String key = asString(entry.getKey());
                     // Efficiently get count without full deserialization
-                    int positionCount = PositionList.getPositionCountFromSerialized(entry.getValue()); 
+                    int positionCount = PositionListSoA.getNumPositionsFromBlob(entry.getValue());
                     keyAndCountsList.add(new AbstractMap.SimpleEntry<>(key, positionCount));
                 }
             }
@@ -431,5 +432,45 @@ public class LevelDBBrowser {
                      entry.dateId());
              count++;
          }
+    }
+
+    private static void displayPositionsSoA(String key, PositionListSoA positionsSoA, String indexType, Map<String, Map<Integer, String>> synonyms) {
+        System.out.printf("%nKey: %s%n", formatKey(key, indexType));
+        System.out.printf("Positions: %d%n", positionsSoA.getNumPositions());
+        System.out.println("----------");
+
+        int count = 0;
+        int maxPositions = 100;  // Limit to 100 positions by default
+        
+        for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
+            Position pos = positionsSoA.getPositionAt(i);
+            if (count >= maxPositions) {
+                System.out.printf("%nShowing first %d positions. Total positions: %d%n", maxPositions, positionsSoA.getNumPositions());
+                break;
+            }
+            
+            if (pos instanceof StitchPosition stitchPos) {
+                String annotationType = stitchPos.getType().toString().toLowerCase();
+                int synonymId = stitchPos.getSynonymId();
+                String value = synonyms
+                    .getOrDefault(annotationType, Map.of())
+                    .getOrDefault(synonymId, "unknown");
+                
+                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][%s:%s]%n",
+                    pos.getDocumentId(),
+                    pos.getSentenceId(),
+                    pos.getBeginPosition(),
+                    pos.getEndPosition(),
+                    annotationType,
+                    value);
+                } else {
+                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d]%n",
+                    pos.getDocumentId(),
+                    pos.getSentenceId(),
+                    pos.getBeginPosition(),
+                    pos.getEndPosition());
+            }
+            count++;
+        }
     }
 }

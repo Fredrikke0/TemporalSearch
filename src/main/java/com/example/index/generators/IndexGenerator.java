@@ -266,15 +266,17 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * The final blob for each term is constructed by re-compressing each aggregated attribute array.
      *
      * @param sortedFile The file containing the sorted entries
+     * @return The total number of terms written to the database.
      */
-    protected void writeToLevelDB(File sortedFile) throws IOException {
+    protected long writeToLevelDB(File sortedFile) throws IOException {
         logger.info("Starting to write to LevelDB from sorted file: {}", sortedFile.getAbsolutePath());
             String currentTerm = null;
         long totalTermsWritten = 0;
         long entriesSinceLastReport = 0;
         long lastReportTime = System.currentTimeMillis();
         final long reportIntervalMillis = 30000; 
-        final int batchSizeForLevelDB = 1000; 
+        final long TARGET_BATCH_BYTES = 4 * 1024 * 1024; // 4MB target batch size
+        long currentBatchSizeBytes = 0;
         int termsInCurrentBatch = 0;
 
         ByteArrayOutputStream baosDocIds = new ByteArrayOutputStream();
@@ -342,20 +344,34 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                                 baosSynonymIds.reset();
                             }
                             
-                            batch.put(bytes(currentTerm), finalCompositeBlobStream.toByteArray());
+                            byte[] termKeyBytes = bytes(currentTerm);
+                            byte[] termValueBytes = finalCompositeBlobStream.toByteArray();
+
+                            // If the current batch + this new term exceeds target, write current batch first.
+                            // Also, ensure that a single very large entry doesn't prevent batching of smaller previous entries.
+                            if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES)) {
+                                writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
+                                batch.close(); 
+                                batch = indexAccess.createWriteBatch(); 
+                                logger.info("Written batch of {} terms (approx {:.2f} MB) to LevelDB due to size limit. Total terms written: {}.", 
+                                    termsInCurrentBatch, currentBatchSizeBytes / (1024.0 * 1024.0), totalTermsWritten);
+                                termsInCurrentBatch = 0;
+                                currentBatchSizeBytes = 0;
+                            }
+                            
+                            batch.put(termKeyBytes, termValueBytes);
                             termsInCurrentBatch++;
+                            currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length;
                             totalTermsWritten++;
                             entriesSinceLastReport++;
+
+                            // --- Update Progress periodically ---
+                            if (entriesSinceLastReport % 1000 == 0) { // Update progress every 1000 terms processed in this stage
+                                progress.updateIndex(entriesSinceLastReport); // Report terms processed since last update
+                                entriesSinceLastReport = 0; // Reset counter for this interval
+                            }
                         }
 
-                        if (termsInCurrentBatch >= batchSizeForLevelDB) {
-                            writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
-                            batch.close(); 
-                            batch = indexAccess.createWriteBatch(); 
-                            termsInCurrentBatch = 0;
-                            logger.info("Written batch of {} terms to LevelDB. Total terms processed so far: {}.", batchSizeForLevelDB, totalTermsWritten);
-                        }
-                        
                         currentTerm = termFromFile;
                         // Re-initialize DataOutputStreams for the new term (BAOS were reset)
                         dosDocIds = new DataOutputStream(baosDocIds);
@@ -422,9 +438,30 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length);
                 }
 
-                batch.put(bytes(currentTerm), finalCompositeBlobStream.toByteArray());
+                byte[] termKeyBytes = bytes(currentTerm);
+                byte[] termValueBytes = finalCompositeBlobStream.toByteArray();
+
+                // Check if the current batch (containing previous terms) + this last term exceeds target.
+                // This handles the case where the loop finishes and the last term needs to be added.
+                if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES) && termsInCurrentBatch > 0) {
+                    writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
+                    batch.close();
+                    batch = indexAccess.createWriteBatch();
+                    logger.info("Written batch of {} terms (approx {:.2f} MB) to LevelDB before adding final term. Total terms written: {}.",
+                                termsInCurrentBatch, currentBatchSizeBytes / (1024.0 * 1024.0), totalTermsWritten);
+                    termsInCurrentBatch = 0;
+                    currentBatchSizeBytes = 0; // Reset for the batch that will contain the final term
+                }
+
+                batch.put(termKeyBytes, termValueBytes);
                 termsInCurrentBatch++;
+                // currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length; // Not strictly needed for logging the final batch size here
                 totalTermsWritten++;
+
+                // --- Final progress update for any remaining terms ---
+                if (entriesSinceLastReport > 0) {
+                    progress.updateIndex(entriesSinceLastReport);
+                }
             }
 
             if (termsInCurrentBatch > 0) {
@@ -448,6 +485,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
              closeQuietly(baosDocIds); closeQuietly(baosSentIds); closeQuietly(baosBeginChars); closeQuietly(baosEndChars); closeQuietly(baosSynonymIds);
              logger.info("Finished writing to LevelDB. Total terms written: {}. Total n-grams generated: {}", totalTermsWritten, getTotalNGramsGenerated());
         }
+        return totalTermsWritten;
     }
 
     /**
@@ -536,10 +574,12 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         IndexingMetrics metrics = new IndexingMetrics();
         long totalRawEntriesFetched = 0;
         totalNGramsGenerated = 0; 
+        long initialTotalProgress = 0;
 
         try {
             long totalCountForProgressBar = getDocumentCountForIndex(); 
             progress.startIndex(getIndexName(), totalCountForProgressBar);
+            initialTotalProgress = totalCountForProgressBar; // Store for later use if needed
 
             while (true) {
                 metrics.startBatch(this.batchSize, getIndexName());
@@ -581,6 +621,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
             if (tempFiles.isEmpty()) {
                 logger.warn("No indexable entries found after filtering. Index [{}] will be empty.", getIndexName());
+                // progress.completeIndex(); // Complete the main stage if empty
+                // Ensure the main progress is completed if we return early.
+                if (initialTotalProgress == 0) progress.updateIndex(0); // If it was indeterminate, show 0/0 or similar
                 progress.completeIndex();
                 return;
             }
@@ -596,9 +639,12 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), false);
 
             logger.info("Writing merged entries to LevelDB index...");
-            writeToLevelDB(outputFile);
-
-            progress.completeIndex();
+            // --- Start Progress for writeToLevelDB --- 
+            progress.startIndex(getIndexName() + " - Writing to DB", 0); // 0 or -1 for indeterminate
+            long totalTermsWrittenToDb = writeToLevelDB(outputFile);
+            progress.updateIndex(totalTermsWrittenToDb); // Update with total terms written in this stage
+            progress.completeIndex(); // Complete this sub-stage
+            // --- End Progress for writeToLevelDB ---
 
             metrics.logIndexingMetrics();
 
