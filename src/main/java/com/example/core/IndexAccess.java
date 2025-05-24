@@ -72,7 +72,8 @@ public class IndexAccess implements IndexAccessInterface {
     public void write(WriteBatch batch) throws IndexAccessException {
         checkOpen();
         try {
-            db.write(batch);
+            db.write(batch, new WriteOptions().sync(true));
+            logger.debug("Executed synchronous batch write for index: {}", indexType);
         } catch (Exception e) {
             throw new IndexAccessException(
                 "Failed to write batch: " + e.getMessage(),
@@ -196,6 +197,11 @@ public class IndexAccess implements IndexAccessInterface {
         return indexType;
     }
 
+    // Method for IndexGenerator internal verification
+    public DB getDbForVerification() {
+        return this.db;
+    }
+
     /**
      * Checks if the index is still open.
      */
@@ -264,18 +270,7 @@ public class IndexAccess implements IndexAccessInterface {
      * @return Array of sentences, or null if not found
      */
     public String[] getDocumentSentences(int documentId) {
-        try {
-            checkOpen();
-            // In a real implementation, you would retrieve the sentences from the index
-            // For now, we'll just return placeholders
-            return new String[] {
-                "This is the text of document " + documentId + ".",
-                "It contains multiple sentences.",
-                "This is the third sentence."
-            };
-        } catch (Exception e) {
-            logger.error("Failed to get document sentences: {}", e.getMessage(), e);
-            return null;
-        }
+        // Placeholder implementation
+        return new String[0]; 
     }
 } 

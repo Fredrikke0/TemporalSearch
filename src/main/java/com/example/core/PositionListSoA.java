@@ -45,15 +45,6 @@ public class PositionListSoA {
     private static final int CODEC_BLOCK_SIZE = 128; // Block size for FastPFOR128
 
     /**
-     * Primary constructor. Initializes empty primitive lists.
-     * The flag determines if the synonymIds list is created and active.
-     *
-     * @param isStitchList true if this list will store stitch-related data (including synonymIds), false otherwise.
-     * @param stitchAnnotationTypeIfStitch The {@link AnnotationType} for this list if it's a stitch list; can be null if not a stitch list.
-     * @throws IllegalArgumentException if isStitchList is true but stitchAnnotationTypeIfStitch is null.
-     */
-
-    /**
      * Convenience constructor, defaults to a non-stitch list (isStitchList = false).
      * Now the primary constructor.
      */
@@ -490,15 +481,6 @@ public class PositionListSoA {
             return dis.readInt();
         }
     }
-
-    /**
-     * Reads only the metadata header from the composite blob to get the {@link AnnotationType}.
-     * Returns null if it's not a stitch list.
-     *
-     * @param compositeBlob The byte array of the serialized PositionListSoA.
-     * @return The {@link AnnotationType} if it's a stitch list and the type is present; null otherwise.
-     * @throws IOException If an I/O error occurs, the blob is too short, or the ordinal is invalid.
-     */
 
     /**
      * Selectively deserializes only the document IDs from the composite blob.

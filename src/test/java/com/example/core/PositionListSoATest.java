@@ -199,6 +199,29 @@ class PositionListSoATest {
         assertTrue(blob.length < (long)plOriginal.getNumPositions() * 5 * 4, "Blob should be compressed"); // Rough check
     }
 
+    @Test
+    void testSerializeDeserialize_SmallStitchLikeData() throws IOException {
+        PositionListSoA plOriginal = new PositionListSoA();
+        // Simulates data for a term like 'quick' that might appear in a stitch index
+        // Doc 1, Sent 0, Pos 10-15, SynID 1001 (e.g., 'quick' itself)
+        plOriginal.add(1, 0, 10, 15, 1001);
+        // Doc 1, Sent 0, Pos 20-25, SynID -1 (e.g., 'brown' that is part of a stitch but 'brown' itself is not the primary term for this list)
+        // Or, a non-stitch position that somehow got associated with this term temporarily before merging.
+        plOriginal.add(1, 0, 20, 25, -1); 
+        // Doc 2, Sent 1, Pos 5-10, SynID 1002
+        plOriginal.add(2, 1, 5, 10, 1002);
+
+        assertEquals(3, plOriginal.getNumPositions());
+
+        byte[] blob = plOriginal.serializeToCompositeBlob();
+        assertNotNull(blob);
+        assertTrue(blob.length > 0);
+
+        PositionListSoA plDeserialized = PositionListSoA.deserializeFromCompositeBlob(blob);
+        assertNotNull(plDeserialized);
+        assertSoaListsEqual(plOriginal, plDeserialized);
+    }
+
     // --- Selective Deserialization Tests ---
     @Test
     void testGetNumPositionsFromBlob() throws IOException {
