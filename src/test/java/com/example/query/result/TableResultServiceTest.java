@@ -20,12 +20,20 @@ import com.example.query.model.JoinCondition;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.binding.VariableRegistry;
 import com.example.query.model.CountColumn;
+import com.example.query.sqlite.SqliteAccessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
 import tech.tablesaw.api.*;
 
 import java.time.LocalDate;
 import java.util.*;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -44,11 +52,53 @@ class TableResultServiceTest {
     
     private TableResultService tableResultService;
     private Map<String, IndexAccessInterface> indexes;
+    private File tempDbFile;
     
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         tableResultService = new TableResultService();
         indexes = new HashMap<>();
+        
+        // Create a temporary SQLite database for testing
+        tempDbFile = Files.createTempFile("test_db", ".sqlite").toFile();
+        tempDbFile.deleteOnExit();
+        
+        // Initialize the test database with sample data
+        setupTestDatabase(tempDbFile.getAbsolutePath());
+        
+        // Initialize SqliteAccessor with the test database
+        SqliteAccessor.initialize(tempDbFile.getAbsolutePath());
+    }
+    
+    @AfterEach
+    void tearDown() {
+        if (tempDbFile != null && tempDbFile.exists()) {
+            tempDbFile.delete();
+        }
+    }
+    
+    private void setupTestDatabase(String dbPath) throws Exception {
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             Statement stmt = conn.createStatement()) {
+            
+            // Create documents table
+            stmt.execute("""
+                CREATE TABLE documents (
+                    document_id INTEGER PRIMARY KEY,
+                    title TEXT,
+                    timestamp TEXT,
+                    text TEXT
+                )
+            """);
+            
+            // Insert sample data for testing
+            stmt.execute("INSERT INTO documents VALUES (1, 'Document 1', '2023-01-01', 'This is the text of document 1')");
+            stmt.execute("INSERT INTO documents VALUES (2, 'Document 2', '2023-01-02', 'This is the text of document 2')");
+            stmt.execute("INSERT INTO documents VALUES (3, 'Document 3', '2023-01-03', 'This is the text of document 3')");
+            stmt.execute("INSERT INTO documents VALUES (4, 'Document 4', '2023-01-04', 'This is the text of document 4')");
+            stmt.execute("INSERT INTO documents VALUES (5, 'Document 5', '2023-01-05', 'This is the text of document 5')");
+            stmt.execute("INSERT INTO documents VALUES (101, 'Test Document 101', '2023-05-01', 'Test document content')");
+        }
     }
     
     // Helper to create QueryResult

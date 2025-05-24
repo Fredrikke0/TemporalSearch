@@ -53,7 +53,7 @@
     <!-- Root logger configuration -->
     <!-- This level applies to all loggers unless overridden by a more specific logger above. -->
     <!-- All logs from com.example.* (except IndexingMetrics if configured above) will use this. -->
-    <root level="DEBUG">
+    <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
     </root>
