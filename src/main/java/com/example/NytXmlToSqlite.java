@@ -190,7 +190,7 @@ public class NytXmlToSqlite {
                             TarArchiveInputStream tis = new TarArchiveInputStream(gis);
 
                             TarArchiveEntry entry;
-                            while ((entry = tis.getNextTarEntry()) != null) {
+                            while ((entry = tis.getNextEntry()) != null) {
                                 if (globalLimitReachedSignal.get()) break; // Check if global limit was hit in a previous iteration
 
                                 // 1. Check global limit: Have we processed enough files overall?
@@ -344,7 +344,7 @@ public class NytXmlToSqlite {
                      TarArchiveInputStream tis = new TarArchiveInputStream(gis)) {
 
                     TarArchiveEntry entry;
-                    while ((entry = tis.getNextTarEntry()) != null) {
+                    while ((entry = tis.getNextEntry()) != null) {
                         if (!entry.isDirectory() && entry.getName().toLowerCase().endsWith(".xml")) {
                             count.incrementAndGet();
                         }
