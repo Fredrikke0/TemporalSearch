@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService;
 public class Annotations {
     private static final Logger logger = LoggerFactory.getLogger(Annotations.class);
     private static final int MAX_DOCUMENT_LENGTH = 20000; // Skip very long documents.
+    private static final int DOCUMENT_PROCESSING_TIMEOUT_MINUTES = 5; // Timeout for a single CoreNLP task
 
     private static StanfordCoreNLP createCoreNLPPipeline(int threads) {
         CoreNLPConfig config = new CoreNLPConfig(threads);
@@ -145,15 +146,12 @@ public class Annotations {
             // Determine the actual number of documents for the progress bar this run
             long totalDocumentsToProcessThisRun;
             String queryBase = "SELECT document_id, text, timestamp FROM documents WHERE document_id >= ? AND LENGTH(text) <= " + MAX_DOCUMENT_LENGTH + " ORDER BY document_id ASC";
-            String query;
-
+            
             if (limit != null) {
                 totalDocumentsToProcessThisRun = limit;
-                query = queryBase + " LIMIT ?";
                 logger.info("Attempting to process up to {} documents starting from document_id {} (limit specified). Estimated {} documents in available range starting from this ID.", limit, startDocumentId, estimatedDocsInScope);
             } else {
                 totalDocumentsToProcessThisRun = estimatedDocsInScope;
-                query = queryBase;
                 if (estimatedDocsInScope > 0) {
                     logger.info("Attempting to process all {} estimated documents starting from document_id {} (no limit specified).", estimatedDocsInScope, startDocumentId);
                 } else {
@@ -169,129 +167,180 @@ public class Annotations {
                  return;
             }
 
-            try (PreparedStatement stmt = conn.prepareStatement(query)) {
-                stmt.setInt(1, startDocumentId);
-                if (limit != null) {
-                    stmt.setInt(2, limit);
+            // Use streaming approach with cursor-based pagination
+            final int FETCH_CHUNK_SIZE = batchSize * 10; // Fetch in chunks larger than batch size
+            int currentStartId = startDocumentId;
+            int totalProcessed = 0;
+            
+            // Setup threading once
+            int totalUserThreads = threads;
+            int numCoreNLPInternalThreads;
+            int numExecutorThreads;
+
+            if (totalUserThreads <= 1) {
+                numCoreNLPInternalThreads = 1;
+                numExecutorThreads = 1;
+            } else {
+                // Prioritize executor threads slightly if rounding is an issue, ensure CoreNLP gets at least 1
+                numExecutorThreads = Math.max(1, (int) Math.ceil(totalUserThreads * 0.6));
+                numCoreNLPInternalThreads = Math.max(1, totalUserThreads - numExecutorThreads);
+                if (numCoreNLPInternalThreads == 0) {
+                    numCoreNLPInternalThreads = 1;
+                    numExecutorThreads = Math.max(1, totalUserThreads - 1);
                 }
-                logger.debug("Executing query to fetch documents...");
-                try (ResultSet rs = stmt.executeQuery()) {
-                    logger.debug("Starting document processing loop...");
+            }
+
+            StanfordCoreNLP pipeline = createCoreNLPPipeline(numCoreNLPInternalThreads);
+            logger.debug("CoreNLP pipeline initialized for processing with {} internal threads.", numCoreNLPInternalThreads);
+            logger.debug("ExecutorService configured for {} parallel document tasks.", numExecutorThreads);
+
+            ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(numExecutorThreads);
+            List<java.util.concurrent.Future<AnnotationResult>> futures = new ArrayList<>();
+            List<Integer> docIds = new ArrayList<>();
+            List<AnnotationResult> batchResults = new ArrayList<>();
+            int batch = 0;
+
+            ProgressBarBuilder pbb = new ProgressBarBuilder()
+                .setTaskName("Annotating")
+                .setInitialMax(totalDocumentsToProcessThisRun)
+                .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
+                .setUpdateIntervalMillis(200)
+                .showSpeed();
+
+            try (ProgressBar pb = pbb.build()) {
+                // Process documents in chunks to avoid loading everything into memory
+                while (true) {
+                    int documentsToFetchThisChunk = FETCH_CHUNK_SIZE;
+                    if (limit != null) {
+                        int remaining = limit - totalProcessed;
+                        if (remaining <= 0) break;
+                        documentsToFetchThisChunk = Math.min(FETCH_CHUNK_SIZE, remaining);
+                    }
                     
-                    int totalUserThreads = threads;
-                    int numCoreNLPInternalThreads;
-                    int numExecutorThreads;
-
-                    if (totalUserThreads <= 1) {
-                        numCoreNLPInternalThreads = 1;
-                        numExecutorThreads = 1;
-                    } else {
-                        // Prioritize executor threads slightly if rounding is an issue, ensure CoreNLP gets at least 1
-                        numExecutorThreads = Math.max(1, (int) Math.ceil(totalUserThreads * 0.6));
-                        numCoreNLPInternalThreads = Math.max(1, totalUserThreads - numExecutorThreads);
-                        if (numCoreNLPInternalThreads == 0) {
-                            numCoreNLPInternalThreads = 1;
-                            numExecutorThreads = Math.max(1, totalUserThreads - 1);
+                    String chunkQuery = queryBase + " LIMIT ?";
+                    List<DocumentData> documentsChunk = new ArrayList<>();
+                    
+                    // Fetch a chunk of documents
+                    try (PreparedStatement chunkStmt = conn.prepareStatement(chunkQuery)) {
+                        chunkStmt.setInt(1, currentStartId);
+                        chunkStmt.setInt(2, documentsToFetchThisChunk);
+                        
+                        try (ResultSet rs = chunkStmt.executeQuery()) {
+                            while (rs.next()) {
+                                int documentId = rs.getInt("document_id");
+                                String text = rs.getString("text");
+                                String timestamp = rs.getString("timestamp");
+                                
+                                documentsChunk.add(new DocumentData(documentId, text, timestamp));
+                                currentStartId = documentId + 1; // Update for next chunk
+                            }
                         }
                     }
+                    
+                    // If no documents found, we're done
+                    if (documentsChunk.isEmpty()) {
+                        logger.debug("No more documents found starting from document_id {}. Processing complete.", currentStartId);
+                        break;
+                    }
+                    
+                    logger.debug("Fetched {} documents in chunk starting from document_id {}", documentsChunk.size(), documentsChunk.get(0).documentId);
+                    
+                    // Process the chunk
+                    for (DocumentData doc : documentsChunk) {
+                        java.util.concurrent.Future<AnnotationResult> future = executor.submit(() -> {
+                            AnnotationResult result = processTextWithCoreNLP(pipeline, doc.text, doc.documentId, doc.timestamp);
+                            return result;
+                        });
+                        futures.add(future);
+                        docIds.add(doc.documentId);
+                        totalProcessed++;
 
-                    StanfordCoreNLP pipeline = createCoreNLPPipeline(numCoreNLPInternalThreads);
-                    logger.debug("CoreNLP pipeline initialized for processing with {} internal threads.", numCoreNLPInternalThreads);
-                    logger.debug("ExecutorService configured for {} parallel document tasks.", numExecutorThreads);
-
-                    ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(numExecutorThreads);
-                    List<java.util.concurrent.Future<AnnotationResult>> futures = new ArrayList<>();
-                    List<Integer> docIds = new ArrayList<>();
-                    List<AnnotationResult> batchResults = new ArrayList<>();
-                    int processed = 0;
-                    int batch = 0;
-
-                    ProgressBarBuilder pbb = new ProgressBarBuilder()
-                        .setTaskName("Annotating")
-                        .setInitialMax(totalDocumentsToProcessThisRun)
-                        .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
-                        .setUpdateIntervalMillis(200)
-                        .showSpeed();
-
-                    try (ProgressBar pb = pbb.build()) {
-                    while (rs.next()) {
-                            if (limit != null && processed >= limit) {
-                                logger.info("Reached processing limit ({}) for this run.", limit);
-                                break;
-                            }
-                        int documentId = rs.getInt("document_id");
-                        String text = rs.getString("text");
-                        String timestamp = rs.getString("timestamp");
-
-                            java.util.concurrent.Future<AnnotationResult> future = executor.submit(() -> {
-                        AnnotationResult result = processTextWithCoreNLP(pipeline, text, documentId, timestamp);
-                                return result;
-                            });
-                            futures.add(future);
-                            docIds.add(documentId);
-                            processed++;
-
-                            // If enough futures for a batch, process them
-                            if (futures.size() >= batchSize) {
-                                for (int i = 0; i < futures.size(); i++) {
-                                    java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
-                                    int docId = docIds.get(i);
-                                    try {
-                                        AnnotationResult result = f.get();
+                        // If enough futures have been submitted, process them as a batch
+                        if (futures.size() >= batchSize) {
+                            for (int i = 0; i < futures.size(); i++) {
+                                java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
+                                int docId = docIds.get(i);
+                                try {
+                                    AnnotationResult result = f.get(DOCUMENT_PROCESSING_TIMEOUT_MINUTES, java.util.concurrent.TimeUnit.MINUTES);
+                                    if (result != null) {
                                         batchResults.add(result);
-                                    } catch (Exception e) {
-                                        logger.error("Error during annotation task execution for documentId=" + docId, e);
-                                        throw e;
                                     }
+                                } catch (java.util.concurrent.TimeoutException e) {
+                                    logger.warn("Timeout ({} min) processing document_id={}. Skipping this document.", DOCUMENT_PROCESSING_TIMEOUT_MINUTES, docId);
+                                } catch (Exception e) {
+                                    logger.error("Error during annotation task execution for documentId=" + docId, e);
+                                    // Optionally, decide if this error should be fatal or rethrown
                                 }
-                                // Insert all results in this batch
-                                for (int i = 0; i < batchResults.size(); i++) {
-                                    int docId = docIds.get(i);
-                                    AnnotationResult result = batchResults.get(i);
-                        insertData(conn, result.annotations, result.dependencies);
-                                    batch++;
-                        pb.step();
-                                }
-                            conn.commit();
+                            }
+                            
+                            // Insert all results in this batch
+                            for (AnnotationResult result : batchResults) {
+                                insertData(conn, result.annotations, result.dependencies);
+                                batch++;
+                                pb.step();
+                            }
+                            
+                            // Commit the entire batch
+                            if (batch > 0) {
+                                conn.commit();
+                                logger.trace("Committed batch of {} annotations.", batch);
                                 batch = 0;
-                                batchResults.clear();
-                                futures.clear();
-                                docIds.clear();
                             }
-                        }
-                        // Process any remaining futures
-                        for (int i = 0; i < futures.size(); i++) {
-                            java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
-                            int docId = docIds.get(i);
-                            try {
-                                AnnotationResult result = f.get();
-                                batchResults.add(result);
-                            } catch (Exception e) {
-                                logger.error("Error during annotation task execution for documentId=" + docId, e);
-                                throw e;
-                            }
-                        }
-                        for (int i = 0; i < batchResults.size(); i++) {
-                            int docId = docIds.get(i);
-                            AnnotationResult result = batchResults.get(i);
-                            insertData(conn, result.annotations, result.dependencies);
-                            batch++;
-                            pb.step();
-                        }
-                        if (batch > 0) {
-                        conn.commit();
-                        }
-                    } finally {
-                        executor.shutdown();
-                        try {
-                            if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.MINUTES)) {
-                                executor.shutdownNow();
-                            }
-                        } catch (InterruptedException e) {
-                            executor.shutdownNow();
-                            Thread.currentThread().interrupt();
+                            
+                            batchResults.clear();
+                            futures.clear();
+                            docIds.clear();
                         }
                     }
+                    
+                    // Clear the chunk from memory immediately
+                    documentsChunk.clear();
+                    
+                    // Check if we've hit the limit
+                    if (limit != null && totalProcessed >= limit) {
+                        logger.info("Reached processing limit ({}) for this run.", limit);
+                        break;
+                    }
+                }
+                
+                // Process any remaining futures
+                for (int i = 0; i < futures.size(); i++) {
+                    java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
+                    int docId = docIds.get(i);
+                    try {
+                        AnnotationResult result = f.get(DOCUMENT_PROCESSING_TIMEOUT_MINUTES, java.util.concurrent.TimeUnit.MINUTES);
+                        if (result != null) {
+                            batchResults.add(result);
+                        }
+                    } catch (java.util.concurrent.TimeoutException e) {
+                        logger.warn("Timeout ({} min) processing document_id={} (in remaining batch). Skipping this document.", DOCUMENT_PROCESSING_TIMEOUT_MINUTES, docId);
+                    } catch (Exception e) {
+                        logger.error("Error during annotation task execution for documentId=" + docId, e);
+                        // Optionally, decide if this error should be fatal or rethrown
+                    }
+                }
+                
+                // Insert remaining results
+                for (AnnotationResult result : batchResults) {
+                    insertData(conn, result.annotations, result.dependencies);
+                    batch++;
+                    pb.step();
+                }
+                
+                // Final commit for any remaining items
+                if (batch > 0) {
+                    conn.commit();
+                    logger.trace("Committed final {} annotations.", batch);
+                }
+            } finally {
+                executor.shutdown();
+                try {
+                    if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.MINUTES)) {
+                        executor.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
+                    executor.shutdownNow();
+                    Thread.currentThread().interrupt();
                 }
             }
         }
@@ -481,4 +530,18 @@ public class Annotations {
             dependencyStmt.executeBatch();
         }
     }
+
+    // Helper class for document data
+    private static class DocumentData {
+        final int documentId;
+        final String text;
+        final String timestamp;
+        
+        DocumentData(int documentId, String text, String timestamp) {
+            this.documentId = documentId;
+            this.text = text;
+            this.timestamp = timestamp;
+        }
+    }
 }
+

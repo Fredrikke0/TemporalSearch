@@ -9,8 +9,8 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <maven.compiler.source>23</maven.compiler.source>
-        <maven.compiler.target>23</maven.compiler.target>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <stanford.nlp.version>4.5.9</stanford.nlp.version>
         <jackson.version>2.19.0</jackson.version>
@@ -285,12 +285,13 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
+                <version>3.13.0</version>
                 <configuration>
-                    <source>23</source>
-                    <target>23</target>
-                    <showWarnings>false</showWarnings>
-                    <quiet>true</quiet>
+                    <release>21</release>
+                    <compilerArgs>
+                        <arg>-Xlint:all</arg>
+                        <!-- <arg>-Werror</arg> -->
+                    </compilerArgs>
                 </configuration>
             </plugin>
 
@@ -300,16 +301,20 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
                 <configuration>
-                    <argLine>--add-opens=java.base/sun.misc=ALL-UNNAMED</argLine>
-                    <redirectTestOutputToFile>true</redirectTestOutputToFile>
-                    <trimStackTrace>true</trimStackTrace>
-                    <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
-                    <consoleOutputReporter>
-                        <disable>true</disable>
-                    </consoleOutputReporter>
-                    <statelessTestsetReporter implementation="org.apache.maven.plugin.surefire.extensions.junit5.JUnit5Xml30StatelessReporter">
-                        <disable>true</disable>
-                    </statelessTestsetReporter>
+                    <argLine>
+                        -XX:+UseG1GC
+                        -XX:MaxGCPauseMillis=200
+                        -XX:+UseStringDeduplication
+                        -Xmx8g
+                        -Xms2g
+                        --add-opens java.base/java.lang=ALL-UNNAMED
+                        --add-opens java.base/java.util=ALL-UNNAMED
+                        --add-opens java.base/java.io=ALL-UNNAMED
+                        --add-opens java.base/java.nio=ALL-UNNAMED
+                        --add-opens java.base/sun.nio.ch=ALL-UNNAMED
+                        --add-opens java.base/java.lang.reflect=ALL-UNNAMED
+                        --add-opens java.base/java.security=ALL-UNNAMED
+                    </argLine>
                 </configuration>
             </plugin>
 
@@ -383,7 +388,14 @@
                 <version>3.5.0</version>
                 <configuration>
                     <mainClass>com.example.QueryCLI</mainClass>
-                    <vmArgs>-Xss16m -XX:MaxRAMPercentage=80 --add-opens=java.base/sun.misc=ALL-UNNAMED</vmArgs>
+                    <vmArgs>
+                        -Xss16m 
+                        -XX:+UseG1GC 
+                        -XX:MaxGCPauseMillis=200 
+                        -XX:+UseStringDeduplication 
+                        -XX:MaxRAMPercentage=80 
+                        --add-opens=java.base/sun.misc=ALL-UNNAMED
+                    </vmArgs>
                 </configuration>
             </plugin>
 

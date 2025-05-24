@@ -93,9 +93,9 @@ public class Pipeline {
         // Annotation stage group
         var annotateGroup = parser.addArgumentGroup("Annotation stage arguments (used in 'annotate' or 'all' stage)");
         annotateGroup.addArgument("-b", "--batch-size")
-                .setDefault(1000) // Keep batch size for annotation commit frequency
+                .setDefault(200) // Keep batch size for annotation commit frequency
                 .type(Integer.class)
-                .help("Number of documents to commit per transaction during annotation (default: 1000)");
+                .help("Number of documents to commit per transaction during annotation (default: 200)");
 
         annotateGroup.addArgument("-t", "--threads")
                 .setDefault(Runtime.getRuntime().availableProcessors()) // Default to available processors
@@ -126,7 +126,7 @@ public class Pipeline {
                       "  pos        - Part-of-speech tagging" +
                       "  hypernym   - Word hypernyms" +
                       "  stitch     - Connects unigrams with their associated dates" +
-                      "  nash       - Specific index type (adjust description if needed)" + // Added nash
+                      "  nash       - Efficient index for searching for dates" +
                       "  all        - Generate all available index types (default)");
 
         indexGroup.addArgument("--custom-temp-dir")
@@ -214,7 +214,7 @@ public class Pipeline {
                         logger.info("--force is also active. Annotation will start from {} and overwrite existing annotations from this ID onwards.", startId);
                     }
                 } else if (force) {
-                    startId = 1; // Default start for a full forced run
+                    startId = 1;
                     logger.info("--force active, starting annotation from document_id 1.");
                 } else {
                     startId = status.startDocumentId;
@@ -237,8 +237,8 @@ public class Pipeline {
             logger.debug("About to run indexing on DB: {}", projectDbPath.toAbsolutePath());
             String indexType = ns.getString("index_type");
             String stopwordsPath = ns.getString("stopwords");
-            int indexBatchSize = ns.getInt("idx_batch_size"); // Use the new argument
-            String customTempDirArg = ns.getString("custom_temp_dir"); // Get the argument value
+            int indexBatchSize = ns.getInt("idx_batch_size");
+            String customTempDirArg = ns.getString("custom_temp_dir");
 
             String effectiveCustomTempDirStr;
             if (customTempDirArg != null && !customTempDirArg.isBlank()) {
