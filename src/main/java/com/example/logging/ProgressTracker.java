@@ -11,9 +11,11 @@ public class ProgressTracker implements AutoCloseable {
     private ProgressBar overallProgress;
     private ProgressBar currentIndexProgress;
     private ProgressBar batchProgress;
+    private ProgressBar levelDBWriteProgress;
     private final AtomicLong overallCount = new AtomicLong(0);
     private final AtomicLong indexCount = new AtomicLong(0);
     private final AtomicLong batchCount = new AtomicLong(0);
+    private final AtomicLong levelDBTermCount = new AtomicLong(0);
     private final boolean isEnabled;
 
     public ProgressTracker() {
@@ -75,13 +77,19 @@ public class ProgressTracker implements AutoCloseable {
             currentIndexProgress.close();
         }
         indexCount.set(0);
-        currentIndexProgress = new ProgressBarBuilder()
+        
+        ProgressBarBuilder pbb = new ProgressBarBuilder()
             .setTaskName(indexType)
-            .setInitialMax(total)
             .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
             .setUpdateIntervalMillis(100)
-            .showSpeed()
-            .build();
+            .showSpeed();
+
+        if (total > 0) {
+            pbb.setInitialMax(total);
+        }
+        // If total <= 0, don't set an initial max, leading to an indeterminate bar showing progress count and speed.
+
+        currentIndexProgress = pbb.build();
     }
 
     public void startBatch(long total) {
@@ -137,7 +145,10 @@ public class ProgressTracker implements AutoCloseable {
     public void completeIndex() {
         if (!isEnabled) return;
         if (currentIndexProgress != null) {
-            currentIndexProgress.stepTo(currentIndexProgress.getMax());
+            // Only step to max if a max was set (i.e., total > 0 during start)
+            if (currentIndexProgress.getMax() > 0) { 
+                currentIndexProgress.stepTo(currentIndexProgress.getMax());
+            }
             currentIndexProgress.close();
             currentIndexProgress = null;
         }
@@ -152,10 +163,42 @@ public class ProgressTracker implements AutoCloseable {
         }
     }
 
+    public void startLevelDBWrite(String indexName) {
+        if (!isEnabled) return;
+        if (levelDBWriteProgress != null) {
+            levelDBWriteProgress.close();
+        }
+        levelDBTermCount.set(0);
+        levelDBWriteProgress = new ProgressBarBuilder()
+            .setTaskName("Writing " + indexName + " to LevelDB")
+            .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
+            .setUpdateIntervalMillis(200)
+            .showSpeed()
+            .setUnit("terms", 1)
+            .build();
+    }
+
+    public void updateLevelDBWrite(long termsProcessedInStep) {
+        if (!isEnabled) return;
+        if (levelDBWriteProgress != null) {
+            levelDBWriteProgress.stepBy(termsProcessedInStep);
+            levelDBTermCount.addAndGet(termsProcessedInStep);
+        }
+    }
+
+    public void completeLevelDBWrite() {
+        if (!isEnabled) return;
+        if (levelDBWriteProgress != null) {
+            levelDBWriteProgress.close();
+            levelDBWriteProgress = null;
+        }
+    }
+
     @Override
     public void close() {
         completeBatch();
         completeIndex();
+        completeLevelDBWrite();
         completeOverall();
     }
 } 
