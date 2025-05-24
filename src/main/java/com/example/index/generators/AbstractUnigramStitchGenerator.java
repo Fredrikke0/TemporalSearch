@@ -1,5 +1,6 @@
 package com.example.index.generators;
 
+import com.example.core.IndexAccess;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
@@ -36,18 +37,19 @@ import java.io.File;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.util.Base64;
+import com.google.common.collect.Ordering;
 
 public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<StitchEntry> {
     private static final Logger logger = LoggerFactory.getLogger(AbstractUnigramStitchGenerator.class);
-    protected static final int MAX_OPEN_FILES = 1000;
-    protected static final long LEVELDB_CACHE_SIZE_BYTES = 100 * 1024 * 1024; // 100MB
-    protected static final int LEVELDB_WRITE_BUFFER_SIZE_BYTES = 16 * 1024 * 1024; // 16MB
+    // protected static final int MAX_OPEN_FILES = 1000; // No longer directly managing DB options here
+    // protected static final long LEVELDB_CACHE_SIZE_BYTES = 100 * 1024 * 1024; // 100MB
+    // protected static final int LEVELDB_WRITE_BUFFER_SIZE_BYTES = 16 * 1024 * 1024; // 16MB
 
     protected final TypedAnnotationSynonymStore annotationSynonyms;
     private Integer lastProcessedDocumentId = null;
-    protected final int batchSize;
-    protected final Path indexDBPath;
-    protected DB db;
+    // protected final int batchSize; // Already in parent
+    protected final Path indexDBPath; // Path for synonyms, specific to this stitch index
+    // protected DB db; // Will use indexAccess from parent
     protected final String resolvedIndexName;
 
     public Path getIndexDBPath() {
@@ -58,38 +60,22 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
                                            String stopwordsPathString, Connection sqliteConnParam,
                                            ProgressTracker progressTrackerParam, int batchSizeParam, Path customSortTempParam,
                                            AnnotationType managedAnnotationType) throws IOException {
-        this(indexBaseDir, indexNameParam, stopwordsPathString, sqliteConnParam, progressTrackerParam, batchSizeParam, customSortTempParam, managedAnnotationType, true);
-    }
-    
-    protected AbstractUnigramStitchGenerator(String indexBaseDir, String indexNameParam,
-                                           String stopwordsPathString, Connection sqliteConnParam,
-                                           ProgressTracker progressTrackerParam, int batchSizeParam, Path customSortTempParam,
-                                           AnnotationType managedAnnotationType, boolean initializeDB) throws IOException {
-        super(stopwordsPathString, sqliteConnParam, progressTrackerParam, batchSizeParam, customSortTempParam, indexNameParam);
+        // Call the full constructor of IndexGenerator which initializes indexAccess
+        // and also passes the correct index name for indexAccess to use for its subdirectory.
+        super(indexBaseDir, stopwordsPathString, sqliteConnParam, progressTrackerParam, batchSizeParam, customSortTempParam);
         
-        this.resolvedIndexName = indexNameParam;
-        this.batchSize = batchSizeParam;
+        this.resolvedIndexName = indexNameParam; // Keep this for clarity and synonym store path
+        // this.batchSize = batchSizeParam; // Handled by parent
+        
+        // The indexDBPath for a stitch index is indexBaseDir/resolvedIndexName (e.g., projects/nyt/indexes/stitch-date)
+        // This path is used by TypedAnnotationSynonymStore for its own files.
         this.indexDBPath = Path.of(indexBaseDir, this.resolvedIndexName);
-
-        if (initializeDB) {
-            Options options = new Options();
-            options.createIfMissing(true);
-            options.errorIfExists(false);
-            options.maxOpenFiles(MAX_OPEN_FILES);
-            options.cacheSize(LEVELDB_CACHE_SIZE_BYTES); 
-            options.writeBufferSize(LEVELDB_WRITE_BUFFER_SIZE_BYTES);
-            try {
-                logger.info("Opening its own LevelDB for {} at: {}", this.resolvedIndexName, this.indexDBPath.toAbsolutePath());
-                this.db = Iq80DBFactory.factory.open(this.indexDBPath.toFile(), options);
-                logger.info("Successfully opened its own LevelDB for {} at: {}", this.resolvedIndexName, this.indexDBPath.toAbsolutePath());
-            } catch (IOException e) {
-                logger.error("Failed to open its own LevelDB for {} at {}: {}", this.resolvedIndexName, this.indexDBPath.toAbsolutePath(), e.getMessage(), e);
-                throw new UncheckedIOException("Failed to open its own LevelDB at " + this.indexDBPath, e);
-            }
-        } else {
-            this.db = null;
-            logger.info("Skipping LevelDB initialization for {} (initializeDB=false)", this.resolvedIndexName);
+        if (!Files.exists(this.indexDBPath)) {
+            Files.createDirectories(this.indexDBPath);
         }
+
+        // this.db = null; // No longer managing its own DB instance
+        // logger.info("Skipping LevelDB initialization for {} (initializeDB=false)", this.resolvedIndexName);
 
         this.annotationSynonyms = new TypedAnnotationSynonymStore(this.indexDBPath, managedAnnotationType);
 
@@ -100,27 +86,15 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
                     managedAnnotationType, annotationSynonyms.size(), managedAnnotationType);
         } catch (SQLException | IOException e) {
             closeSynonymsOnError();
-            if (this.db != null) {
-                try {
-                    this.db.close();
-                    logger.info("Closed its own DB for {} due to synonym population error.", this.resolvedIndexName);
-                } catch (IOException dbCloseEx) {
-                    logger.warn("Failed to close its own DB for {} after synonym population error", this.resolvedIndexName, dbCloseEx);
-                }
-            }
+            // No db to close here as it's managed by the parent (indexAccess)
+            // If indexAccess failed to initialize in super, it would have thrown from there.
             throw new UncheckedIOException("Failed to populate " + managedAnnotationType + " annotation synonyms for " + this.resolvedIndexName, e instanceof IOException ? (IOException)e : new IOException(e));
         }
         
-        if (initializeDB) {
-            try {
-                long count = getDocumentCountForIndex();
-                if (super.progress != null) {
-                    super.progress.startIndex(this.resolvedIndexName, count);
-                }
-            } catch (SQLException e) {
-                logger.warn("Could not set progress for index {}: {}", this.resolvedIndexName, e.getMessage());
-            }
-        }
+        // Progress starting is handled by the parent IndexGenerator constructor if indexAccess is successfully created.
+        // We just need to make sure getIndexName() in this class returns what the parent expects for its progress bar.
+        // The parent constructor already calls: this.progress.startIndex(getIndexName(), totalDocs);
+        // So, the override of getIndexName() at the bottom of this file to return this.resolvedIndexName is correct.
     }
 
     private void closeSynonymsOnError() {
@@ -253,7 +227,10 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
                     String lemma = rs.getString("lemma");
                     String normalizedToken = (lemma != null && !lemma.isEmpty()) ? lemma.toLowerCase() : token.toLowerCase();
 
-                    if (isStopword(normalizedToken)) {
+                    boolean isStop = isStopword(normalizedToken);
+                    boolean noLetterOrDigit = !normalizedToken.chars().anyMatch(Character::isLetterOrDigit);
+
+                    if (isStop || noLetterOrDigit) {
                         continue;
                     }
 
@@ -274,12 +251,34 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         ListMultimap<String, PositionListSoA> indexData = ArrayListMultimap.create();
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
         AnnotationType currentType = getManagedAnnotationType(); // Get type once
+        int filteredCount = 0;
 
         for (StitchEntry entry : batch) {
             String unigram = entry.value();
-            if (unigram == null || unigram.isEmpty() || isStopword(unigram)) { // unigram is already lowercased by fetchUnigrams
+            boolean isFiltered = false;
+            String filterReason = "";
+
+            if (unigram == null) {
+                isFiltered = true;
+                filterReason = "null unigram";
+            } else if (unigram.isEmpty()) {
+                isFiltered = true;
+                filterReason = "empty unigram";
+            } else if (isStopword(unigram)) {
+                isFiltered = true;
+                filterReason = "stopword";
+            } else if (!unigram.chars().anyMatch(Character::isLetterOrDigit)) {
+                isFiltered = true;
+                filterReason = "no letter/digit";
+            }
+
+            if (isFiltered) {
+                logger.trace("Filtered unigram: '{}' from entry: {}. Reason: {}", unigram, entry, filterReason);
+                filteredCount++;
                 continue;
             }
+            
+            logger.trace("Processing unigram: '{}' from entry: {}", unigram, entry);
 
             // Key for LevelDB will just be the unigram.
             // The AnnotationType is inherent to the specific index (e.g., "stitch/date")
@@ -305,6 +304,11 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
             indexData.put(mapEntry.getKey(), mapEntry.getValue());
         }
         
+        if (!batch.isEmpty()) {
+            logger.debug("ProcessBatch for {} input {} entries, produced {} unique unigram keys, filtered out {} entries.", 
+                getManagedAnnotationType(), batch.size(), indexData.keySet().size(), filteredCount);
+        }
+
         if (indexData.isEmpty() && !batch.isEmpty()){
             logger.warn("ProcessBatch for {} produced no indexable data from a batch of {} entries. First entry: {}", getManagedAnnotationType(), batch.size(), batch.get(0));
         } else if (!indexData.isEmpty()) {
@@ -336,141 +340,120 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
 
 
     @Override
-    protected void writeToLevelDB(File sortedFile) throws IOException {
+    protected long writeToLevelDB(File sortedFile) throws IOException {
         logger.info("Starting custom writeToLevelDB for {} from sorted file: {}", this.resolvedIndexName, sortedFile.getAbsolutePath());
         long startTime = System.currentTimeMillis();
         long localTotalNGramsGenerated = 0;
         WriteBatch batch = null;
         int batchCounter = 0;
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
-            String line;
-            String currentTerm = null;
-            PositionListSoA mergedPositions = null;
-            final int MAX_RETRIES = 3;
-            final long RETRY_DELAY_MS = 1000;
+        // try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
+        //     String line;
+        //     String currentTerm = null;
+        //     PositionListSoA mergedPositions = null;
+        //     final int MAX_RETRIES = 3;
+        //     final long RETRY_DELAY_MS = 1000;
 
-            batch = this.db.createWriteBatch(); // Use this.db instead of indexAccess
+        //     batch = this.db.createWriteBatch(); // Use this.db instead of indexAccess
 
-            while ((line = reader.readLine()) != null) {
-                String[] parts = line.split("\t", 2);
-                if (parts.length != 2) continue;
-                String term = parts[0];
-                byte[] lineCompositeBlob = Base64.getDecoder().decode(parts[1]);
-                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(lineCompositeBlob);
+        //     while ((line = reader.readLine()) != null) {
+        //         String[] parts = line.split("	", 2);
+        //         if (parts.length != 2) continue;
+        //         String term = parts[0];
+        //         byte[] lineCompositeBlob = Base64.getDecoder().decode(parts[1]);
+        //         PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(lineCompositeBlob);
 
-                if (currentTerm == null) {
-                    currentTerm = term;
-                    mergedPositions = positions;
-                    continue;
-                }
+        //         if (currentTerm == null) {
+        //             currentTerm = term;
+        //             mergedPositions = positions;
+        //             continue;
+        //         }
 
-                if (!currentTerm.equals(term)) {
-                    // Write the current term
-                    if (mergedPositions.getNumPositions() > 1_000_000) {
-                        logger.warn("Serializing very large PositionListSoA for key: '{}', size: {}", currentTerm, mergedPositions.getNumPositions());
-                    }
-                    byte[] keyBytes = bytes(currentTerm);
-                    byte[] valueBytes = mergedPositions.serializeToCompositeBlob();
-                    batch.put(keyBytes, valueBytes);
-                    batchCounter++;
-                    localTotalNGramsGenerated++;
+        //         if (!currentTerm.equals(term)) {
+        //             // Write the current term
+        //             if (mergedPositions.getNumPositions() > 1_000_000) {
+        //                 logger.warn("Serializing very large PositionListSoA for key: '{}', size: {}", currentTerm, mergedPositions.getNumPositions());
+        //             }
+        //             byte[] keyBytes = bytes(currentTerm);
+        //             byte[] valueBytes = mergedPositions.serializeToCompositeBlob();
+        //             batch.put(keyBytes, valueBytes);
+        //             batchCounter++;
+        //             localTotalNGramsGenerated++;
 
-                    if (batchCounter >= LevelDBConfig.BATCH_SIZE) {
-                        writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
-                        batch.close();
-                        batch = this.db.createWriteBatch();
-                        batchCounter = 0;
-                    }
+        //             if (batchCounter >= LevelDBConfig.BATCH_SIZE) {
+        //                 writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
+        //                 batch.close();
+        //                 batch = this.db.createWriteBatch();
+        //                 batchCounter = 0;
+        //             }
 
-                    if (localTotalNGramsGenerated % 100000 == 0) {
-                        long elapsed = System.currentTimeMillis() - startTime;
-                        logger.info("Custom writeToLevelDB progress for {}: {} terms, {} terms/sec",
-                            getIndexName(), localTotalNGramsGenerated,
-                            String.format("%.2f", localTotalNGramsGenerated * 1000.0 / elapsed));
-                    }
+        //             if (localTotalNGramsGenerated % 100000 == 0) {
+        //                 long elapsed = System.currentTimeMillis() - startTime;
+        //                 logger.info("Custom writeToLevelDB progress for {}: {} terms, {} terms/sec",
+        //                     getIndexName(), localTotalNGramsGenerated,
+        //                     String.format("%.2f", localTotalNGramsGenerated * 1000.0 / elapsed));
+        //             }
 
-                    currentTerm = term;
-                    mergedPositions = positions;
-                } else {
-                    // Same term, merge positions
-                    mergedPositions.addAll(positions);
-                }
-            }
+        //             currentTerm = term;
+        //             mergedPositions = positions;
+        //         } else {
+        //             // Same term, merge positions
+        //             mergedPositions.addAll(positions);
+        //         }
+        //     }
 
-            // Write the last term
-            if (currentTerm != null && mergedPositions != null) {
-                if (mergedPositions.getNumPositions() > 1_000_000) {
-                    logger.warn("Serializing very large PositionListSoA for key: '{}', size: {}", currentTerm, mergedPositions.getNumPositions());
-                }
-                byte[] keyBytes = bytes(currentTerm);
-                byte[] valueBytes = mergedPositions.serializeToCompositeBlob();
-                batch.put(keyBytes, valueBytes);
-                batchCounter++;
-                localTotalNGramsGenerated++;
-            }
+        //     // Write the last term
+        //     if (currentTerm != null && mergedPositions != null) {
+        //         if (mergedPositions.getNumPositions() > 1_000_000) {
+        //             logger.warn("Serializing very large PositionListSoA for key: '{}', size: {}", currentTerm, mergedPositions.getNumPositions());
+        //         }
+        //         byte[] keyBytes = bytes(currentTerm);
+        //         byte[] valueBytes = mergedPositions.serializeToCompositeBlob();
+        //         batch.put(keyBytes, valueBytes);
+        //         batchCounter++;
+        //         localTotalNGramsGenerated++;
+        //     }
 
-            if (batchCounter > 0) {
-                writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
-            }
+        //     if (batchCounter > 0) {
+        //         writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
+        //     }
 
-            logger.info("Custom writeToLevelDB finished for {}: {} unique terms written", getIndexName(), localTotalNGramsGenerated);
+        //     logger.info("Custom writeToLevelDB finished for {}: {} unique terms written", getIndexName(), localTotalNGramsGenerated);
 
-        } finally {
-            if (batch != null) {
-                try {
-                    batch.close();
-                } catch (IOException e) {
-                    logger.warn("Failed to close write batch for index [{}]: {}", getIndexName(), e.getMessage());
-                }
-            }
-        }
+        // } finally {
+        //     if (batch != null) {
+        //         try {
+        //             batch.close();
+        //         } catch (IOException e) {
+        //             logger.warn("Failed to close write batch for index [{}]: {}", getIndexName(), e.getMessage());
+        //         }
+        //     }
+        // }
+        // Now, delegate to the parent's writeToLevelDB method
+        long totalTermsWritten = super.writeToLevelDB(sortedFile);
+        localTotalNGramsGenerated = totalTermsWritten;
+        logger.info("Delegated writeToLevelDB for {} to parent IndexGenerator.", this.resolvedIndexName);
+        return localTotalNGramsGenerated;
     }
 
     /**
      * Attempts to write a batch to this.db, retrying on specific failures.
      */
-    private void writeDbBatchWithRetry(WriteBatch batch, int maxRetries, long delayMs, int numEntries) throws IOException {
-        int attempt = 0;
-        while (true) {
-            try {
-                this.db.write(batch); // Use this.db instead of indexAccess
-                if (logger.isTraceEnabled()) {
-                    logger.trace("Successfully wrote batch of {} entries to index [{}] on attempt {}", numEntries, getIndexName(), attempt + 1);
-                }
-                return; // Success
-            } catch (DBException e) {
-                attempt++;
-                logger.warn("Attempt {}/{} failed to write batch of {} entries to index [{}]: {}",
-                            attempt, maxRetries, numEntries, getIndexName(), e.getMessage());
-
-                if (attempt >= maxRetries) {
-                    logger.error("Failed to write batch of {} entries to index [{}] after {} attempts. Giving up.", numEntries, getIndexName(), attempt, e);
-                    throw new IOException("Failed to write batch of " + numEntries + " entries to index [" + getIndexName() + "] after " + attempt + " attempts", e);
-                }
-                try {
-                    Thread.sleep(delayMs * attempt);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted during retry wait for batch write to index [" + getIndexName() + "]", ie);
-                }
-            }
-        }
-    }
+    // private void writeDbBatchWithRetry(WriteBatch batch, int maxRetries, long delayMs, int numEntries) throws IOException { ... } // No longer needed
 
     @Override
     public void close() throws IOException {
         logger.info("Closing AbstractUnigramStitchGenerator {}...", this.resolvedIndexName);
-        if (db != null) {
-            try {
-                db.close();
-                logger.debug("Internal LevelDB closed for {}.", this.resolvedIndexName);
-            } catch (IOException e) {
-                logger.error("Error closing internal LevelDB for {}: {}", this.resolvedIndexName, e.getMessage(), e);
-            } finally {
-                db = null;
-            }
-        }
+        // if (db != null) { // db field is removed
+        //     try {
+        //         db.close();
+        //         logger.debug("Internal LevelDB closed for {}.", this.resolvedIndexName);
+        //     } catch (IOException e) {
+        //         logger.error("Error closing internal LevelDB for {}: {}", this.resolvedIndexName, e.getMessage(), e);
+        //     } finally {
+        //         db = null;
+        //     }
+        // }
         if (annotationSynonyms != null) {
             try {
                 annotationSynonyms.close();
@@ -499,5 +482,14 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         return this.resolvedIndexName; 
     }
 
+    // Method to allow tests to access the DB instance via IndexAccess
+    public IndexAccess getIndexAccess() {
+        return this.indexAccess;
+    }
+
+    // Method to allow tests to access the generator's internal synonym store instance
+    public TypedAnnotationSynonymStore getAnnotationSynonyms() {
+        return this.annotationSynonyms;
+    }
 
 } 

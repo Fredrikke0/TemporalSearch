@@ -31,20 +31,8 @@ public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
             ProgressTracker progress,
             int batchSize,
             Path customTempPath) throws IOException {
-        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath, true);
-    }
-    
-    public DateStitchIndexGenerator(
-            String indexBaseDir,
-            String stopwordsPath,
-            Connection sqliteConn,
-            ProgressTracker progress,
-            int batchSize,
-            Path customTempPath, 
-            boolean initializeDB) throws IOException {
         super(indexBaseDir, MY_INDEX_NAME, stopwordsPath, sqliteConn, progress, batchSize, customTempPath,
-              AnnotationType.DATE,
-              initializeDB
+              AnnotationType.DATE
         );
     }
 
@@ -106,26 +94,59 @@ public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
                 AND normalized_ner LIKE '____-__-__'
         """;
 
+        // High-verbosity logging for specific document diagnosis
+        boolean detailedLogging = (documentId == 1); // Log for doc 1 in date-stitch
+        if (detailedLogging) {
+            logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: Starting fetch for docId: {}", getIndexName(), documentId);
+        }
+
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
             stmt.setInt(1, documentId);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String dateValue = rs.getString("normalized_ner");
+                    int sentenceId = rs.getInt("sentence_id");
+                    int beginChar = rs.getInt("begin_char");
+                    int endChar = rs.getInt("end_char");
+
+                    if (detailedLogging) {
+                        logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: DocId: {}, Found potential DATE: value='{}', sentId={}, begin={}, end={}",
+                                    getIndexName(), documentId, dateValue, sentenceId, beginChar, endChar);
+                    }
+
                     if (dateValue != null && DATE_PATTERN.matcher(dateValue).matches()) {
                         try {
                             LocalDate.parse(dateValue); // Final check
-                            annotations.add(new AnnotationData(
-                                    rs.getInt("sentence_id"),
-                                    rs.getInt("begin_char"),
-                                    rs.getInt("end_char"),
+                            AnnotationData ad = new AnnotationData(
+                                    sentenceId,
+                                    beginChar,
+                                    endChar,
                                     dateValue
-                            ));
+                            );
+                            annotations.add(ad);
+                            if (detailedLogging) {
+                                logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: DocId: {}, ADDED AnnotationData: {}", getIndexName(), documentId, ad);
+                            }
                         } catch (DateTimeParseException e) {
-                            logger.debug("Skipping invalid date value during fetch: {} for doc {}", dateValue, documentId);
+                            if (detailedLogging) {
+                                logger.warn("AUDIT_FETCH_ANNOTATIONS [{}]: DocId: {}, SKIPPING invalid date value (parse failed): '{}' for doc {}",
+                                            getIndexName(), documentId, dateValue, documentId, e);
+                            } else {
+                                logger.debug("Skipping invalid date value during fetch: {} for doc {} - {}", dateValue, documentId, e.getMessage());
+                            }
+                        }
+                    } else {
+                        if (detailedLogging) {
+                            logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: DocId: {}, SKIPPING date value (null or pattern mismatch): '{}' for doc {}",
+                                        getIndexName(), documentId, dateValue, documentId);
                         }
                     }
                 }
             }
+        }
+        if (detailedLogging) {
+            logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: Finished fetch for docId: {}. Annotations found: {}",
+                        getIndexName(), documentId, annotations.size());
         }
         return annotations;
     }

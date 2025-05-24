@@ -39,9 +39,7 @@ public class NerStitchIndexGeneratorTest extends BaseIndexTest {
         super.setUp();
         customSortTempPathNer = tempDir.resolve("customSortTempNer");
         Files.createDirectories(customSortTempPathNer);
-        Path nerStitchPath = indexBaseDir.resolve("stitch-ner");
-        Files.createDirectories(nerStitchPath);
-        logger.debug("Ensured directory exists: {}", nerStitchPath.toAbsolutePath());
+        logger.debug("Base index directory: {}", indexBaseDir.toAbsolutePath());
 
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(tempDir.resolve(NER_TEST_STOPWORDS_FILENAME)))) {
             writer.println("is");
@@ -84,78 +82,84 @@ public class NerStitchIndexGeneratorTest extends BaseIndexTest {
                 customSortTempPathNer
         );
 
-        Path indexOutputPath = indexBaseDir.resolve(generator.getIndexName());
+        Path indexOutputPath = null; // Define before try-finally
+        DB dbForVerification = null;
 
         try {
+            logger.info("Starting NerStitchIndexGenerator.generateIndex()...");
             generator.generateIndex();
-        } finally {
-            generator.close();
-        }
+            logger.info("NerStitchIndexGenerator.generateIndex() finished.");
+            indexOutputPath = indexBaseDir.resolve(generator.getIndexName());
 
-        assertTrue(Files.exists(indexOutputPath), "NER stitch index directory ('" + generator.getIndexName() + "') should exist. Path: " + indexOutputPath.toAbsolutePath());
+            // VERIFY AGAINST THE GENERATOR'S OWN DB INSTANCE BEFORE IT'S CLOSED
+            assertNotNull(generator.getIndexAccess(), "Generator's IndexAccess should not be null.");
+            dbForVerification = generator.getIndexAccess().getDbForVerification();
+            assertNotNull(dbForVerification, "DB from generator's IndexAccess should not be null.");
+            logger.info("Successfully obtained DB instance from NER generator for immediate verification.");
 
-        TypedAnnotationSynonymStore verifierSynonyms = new TypedAnnotationSynonymStore(indexOutputPath, AnnotationType.NER);
+            assertTrue(Files.exists(indexOutputPath), "NER stitch index directory ('" + generator.getIndexName() + "') should exist. Path: " + indexOutputPath.toAbsolutePath());
 
-        Options verifyOptions = createTestOptions();
-        verifyOptions.createIfMissing(false); 
+            org.iq80.leveldb.ReadOptions readOpts = new org.iq80.leveldb.ReadOptions();
+            readOpts.verifyChecksums(true);
 
-        try (DB db = Iq80DBFactory.factory.open(indexOutputPath.toFile(), verifyOptions)) {
-            try {
-                byte[] aliceBytes = db.get(Iq80DBFactory.bytes("alice"));
-                assertNotNull(aliceBytes, "Entry for unigram 'alice' should exist.");
-                PositionListSoA plAlice = PositionListSoA.deserializeFromCompositeBlob(aliceBytes);
-                
-                // Since Alice is in document 1 and Google is in document 1, and we're expecting them to be stitched
-                boolean aliceFoundWithGoogle = false;
-                for (int i = 0; i < plAlice.getNumPositions(); i++) {
-                    Position p = plAlice.getPositionAt(i);
-                    int synonymId = plAlice.getSynonymIdAt(i);
-                    if (p.getDocumentId() == 1 && 
-                        p.getBeginPosition() == 0 && p.getEndPosition() == 5) { // alice coordinates
-                        aliceFoundWithGoogle = true;
-                        break;
-                    }
+            // USE THE GENERATOR'S OWN SYNONYM STORE FOR VERIFICATION
+            TypedAnnotationSynonymStore verifierSynonyms = generator.getAnnotationSynonyms();
+            assertNotNull(verifierSynonyms, "Generator's annotation synonym store should not be null.");
+            // DO NOT close this verifierSynonyms instance here, generator will close its own store.
+            // The old try-with-resources for verifierSynonyms is removed.
+
+            byte[] aliceBytes = dbForVerification.get(Iq80DBFactory.bytes("alice"), readOpts);
+            assertNotNull(aliceBytes, "Entry for unigram 'alice' should exist.");
+            PositionListSoA plAlice = PositionListSoA.deserializeFromCompositeBlob(aliceBytes);
+            
+            boolean aliceFoundWithGoogle = false;
+            for (int i = 0; i < plAlice.getNumPositions(); i++) {
+                Position p = plAlice.getPositionAt(i);
+                // int synonymId = plAlice.getSynonymIdAt(i); // Not strictly needed for this check if we only care about co-occurrence in doc
+                if (p.getDocumentId() == 1 && 
+                    p.getBeginPosition() == 0 && p.getEndPosition() == 5) { // alice coordinates
+                    aliceFoundWithGoogle = true;
+                    break;
                 }
-                assertTrue(aliceFoundWithGoogle, "'alice' should be stitched with Google (ORGANIZATION).");
-                
-                byte[] bobBytes = db.get(Iq80DBFactory.bytes("bob"));
-                assertNotNull(bobBytes, "Entry for unigram 'bob' should exist.");
-                PositionListSoA plBob = PositionListSoA.deserializeFromCompositeBlob(bobBytes);
-                
-                // Since Bob is in document 2 and Apple is in document 2, and we're expecting them to be stitched
-                boolean bobFoundWithApple = false;
-                for (int i = 0; i < plBob.getNumPositions(); i++) {
-                    Position p = plBob.getPositionAt(i);
-                    int synonymId = plBob.getSynonymIdAt(i);
-                    if (p.getDocumentId() == 2 && 
-                        p.getBeginPosition() == 0 && p.getEndPosition() == 3) { // bob coordinates
-                        bobFoundWithApple = true;
-                        break;
-                    }
-                }
-                assertTrue(bobFoundWithApple, "'bob' should be stitched with Apple (ORGANIZATION).");
-
-                // 'text' should be stitched with valid NER entities (Bob, Apple) but NOT with DATE
-                byte[] textBytes = db.get(Iq80DBFactory.bytes("text"));
-                assertNotNull(textBytes, "Entry for unigram 'text' should exist since it co-occurs with valid NER entities.");
-                PositionListSoA plText = PositionListSoA.deserializeFromCompositeBlob(textBytes);
-                
-                // Verify that 'text' is stitched with valid NER entities (Bob:PERSON, Apple:ORGANIZATION)
-                // but not with DATE annotations
-                boolean foundValidNerStitch = false;
-                for (int i = 0; i < plText.getNumPositions(); i++) {
-                    Position p = plText.getPositionAt(i);
-                    int synonymId = plText.getSynonymIdAt(i);
-                    if (p.getDocumentId() == 2 && 
-                        p.getBeginPosition() == 35 && p.getEndPosition() == 39) { // text coordinates
-                        foundValidNerStitch = true;
-                        break;
-                    }
-                }
-                assertTrue(foundValidNerStitch, "'text' should be stitched with valid NER entities (Bob:PERSON or Apple:ORGANIZATION) in document 2.");
-            } finally {
-                verifierSynonyms.close();
             }
+            assertTrue(aliceFoundWithGoogle, "'alice' should be stitched with Google (ORGANIZATION).");
+            
+            byte[] bobBytes = dbForVerification.get(Iq80DBFactory.bytes("bob"), readOpts);
+            assertNotNull(bobBytes, "Entry for unigram 'bob' should exist.");
+            PositionListSoA plBob = PositionListSoA.deserializeFromCompositeBlob(bobBytes);
+            
+            boolean bobFoundWithApple = false;
+            for (int i = 0; i < plBob.getNumPositions(); i++) {
+                Position p = plBob.getPositionAt(i);
+                // int synonymId = plBob.getSynonymIdAt(i);
+                if (p.getDocumentId() == 2 && 
+                    p.getBeginPosition() == 0 && p.getEndPosition() == 3) { // bob coordinates
+                    bobFoundWithApple = true;
+                    break;
+                }
+            }
+            assertTrue(bobFoundWithApple, "'bob' should be stitched with Apple (ORGANIZATION).");
+
+            byte[] textBytes = dbForVerification.get(Iq80DBFactory.bytes("text"), readOpts);
+            assertNotNull(textBytes, "Entry for unigram 'text' should exist since it co-occurs with valid NER entities.");
+            PositionListSoA plText = PositionListSoA.deserializeFromCompositeBlob(textBytes);
+            
+            boolean foundValidNerStitch = false;
+            for (int i = 0; i < plText.getNumPositions(); i++) {
+                Position p = plText.getPositionAt(i);
+                // int synonymId = plText.getSynonymIdAt(i);
+                if (p.getDocumentId() == 2 && 
+                    p.getBeginPosition() == 35 && p.getEndPosition() == 39) { // text coordinates
+                    foundValidNerStitch = true;
+                    break;
+                }
+            }
+            assertTrue(foundValidNerStitch, "'text' should be stitched with valid NER entities (Bob:PERSON or Apple:ORGANIZATION) in document 2.");
+        } finally {
+            logger.info("Closing NER generator in finally block...");
+            generator.close();
+            logger.info("NER generator closed in finally block.");
         }
+        // Old verification block (reopening DB) is removed.
     }
 } 

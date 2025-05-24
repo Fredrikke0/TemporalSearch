@@ -24,15 +24,9 @@ public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
 
     public PosStitchIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn,
                                  ProgressTracker progressTracker, int batchSize, Path customSortTempPath) throws IOException {
-        this(indexBaseDir, stopwordsPath, sqliteConn, progressTracker, batchSize, customSortTempPath, true);
-    }
-
-    public PosStitchIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn,
-                                 ProgressTracker progressTracker, int batchSize, Path customSortTempPath, boolean initializeDB) throws IOException {
         super(indexBaseDir, MY_INDEX_NAME,
               stopwordsPath, sqliteConn, progressTracker, batchSize, customSortTempPath,
-              AnnotationType.POS,
-              initializeDB
+              AnnotationType.POS
         );
     }
 

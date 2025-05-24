@@ -119,13 +119,15 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE pos IS NOT NULL AND pos != ''";
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
-             ResultSet rs = stmt.executeQuery()) {
-            if (rs.next()) {
-                return rs.getLong(1);
-            }
-        }
+        // String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE pos IS NOT NULL AND pos != ''";
+        // try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
+        //      ResultSet rs = stmt.executeQuery()) {
+        //     if (rs.next()) {
+        //         return rs.getLong(1);
+        //     }
+        // }
+        // return 0;
+        // Return 0 to indicate an indeterminate progress bar, as MAX(annotation_id) is not representative.
         return 0;
     }
 } 

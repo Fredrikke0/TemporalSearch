@@ -129,7 +129,11 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
 
     @SuppressWarnings("unchecked")
     private void loadMappings() throws IOException {
+        logger.info("SYNONYM_STORE_DEBUG: loadMappings() called for type '{}'. Checking path: '{}'", 
+            this.managedType, this.storageFile.toAbsolutePath());
         if (Files.exists(storageFile)) {
+            logger.info("SYNONYM_STORE_DEBUG: File FOUND at path: '{}' for type '{}'. Attempting to load.", 
+                this.storageFile.toAbsolutePath(), this.managedType);
             try (ObjectInputStream ois = new ObjectInputStream(Files.newInputStream(storageFile))) {
                 Map<String, Integer> loadedValueToId = (Map<String, Integer>) ois.readObject();
                 int maxId = 0; 
@@ -146,12 +150,18 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
                 throw new IOException("Failed to load " + managedType + " synonyms from " + storageFile, e);
             }
         } else {
-            logger.info("No existing {} synonyms found at {}. Will create new.", managedType, storageFile);
+            logger.info("SYNONYM_STORE_DEBUG: File NOT FOUND at path: '{}' for type '{}'. Will create new store.", 
+                this.storageFile.toAbsolutePath(), this.managedType);
         }
     }
 
     private void saveMappings() throws IOException {
-        if (!modified) return;
+        logger.info("SYNONYM_STORE_DEBUG: saveMappings() called for type '{}'. File: '{}'. Modified: {}", 
+            this.managedType, this.storageFile.toAbsolutePath(), this.modified);
+        if (!modified) {
+            logger.info("SYNONYM_STORE_DEBUG: Not saving, modified is false for type '{}'.", this.managedType);
+            return;
+        }
 
         Files.createDirectories(storageFile.getParent());
         try (ObjectOutputStream oos = new ObjectOutputStream(Files.newOutputStream(storageFile))) {

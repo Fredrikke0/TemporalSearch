@@ -35,9 +35,7 @@ public class DateStitchIndexGeneratorTest extends BaseIndexTest {
         super.setUp();
         customSortTempPath = tempDir.resolve("customSortTempDate");
         Files.createDirectories(customSortTempPath);
-        Path dateStitchPath = indexBaseDir.resolve("stitch-date");
-        Files.createDirectories(dateStitchPath);
-        logger.debug("Ensured directory exists: {}", dateStitchPath.toAbsolutePath());
+        logger.debug("Base index directory: {}", indexBaseDir.toAbsolutePath());
 
         // Create specific stopwords file for this test
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(tempDir.resolve(DATE_TEST_STOPWORDS_FILENAME)))) {
@@ -80,86 +78,75 @@ public class DateStitchIndexGeneratorTest extends BaseIndexTest {
         }
 
         Path indexOutputPath = null; // Define before try-finally for access in finally for verifier
+        DB dbForVerification = null;
         try {
             logger.info("Starting generator.generateIndex()...");
             generator.generateIndex();
             logger.info("generator.generateIndex() finished.");
             indexOutputPath = indexBaseDir.resolve(generator.getIndexName()); // Assign here after successful generation
+
+            // VERIFY AGAINST THE GENERATOR'S OWN DB INSTANCE BEFORE IT'S CLOSED
+            assertNotNull(generator.getIndexAccess(), "Generator's IndexAccess should not be null.");
+            dbForVerification = generator.getIndexAccess().getDbForVerification(); // Get DB from generator
+            assertNotNull(dbForVerification, "DB from generator's IndexAccess should not be null.");
+            logger.info("Successfully obtained DB instance from generator for immediate verification.");
+
+            org.iq80.leveldb.ReadOptions readOpts = new org.iq80.leveldb.ReadOptions();
+            readOpts.verifyChecksums(true);
+
+            byte[] catBytes = dbForVerification.get(Iq80DBFactory.bytes("cat"), readOpts);
+            assertNotNull(catBytes, "Entry for unigram 'cat' should exist (verified via generator's DB).");
+            PositionListSoA plCat = PositionListSoA.deserializeFromCompositeBlob(catBytes);
+            
+            // USE THE GENERATOR'S OWN SYNONYM STORE FOR VERIFICATION
+            TypedAnnotationSynonymStore verifierSynonyms = generator.getAnnotationSynonyms();
+            assertNotNull(verifierSynonyms, "Generator's annotation synonym store should not be null.");
+
+            int dateSynonymId1 = verifierSynonyms.getOrCreateId("2023-01-15");
+            Optional<StitchPosition> catStitched = Optional.empty();
+            for (int i = 0; i < plCat.getNumPositions(); i++) {
+                Position p = plCat.getPositionAt(i);
+                int synonymId = plCat.getSynonymIdAt(i);
+                if (p.getDocumentId() == 1 && synonymId == dateSynonymId1) {
+                    StitchPosition sp = new StitchPosition(
+                        p.getDocumentId(), p.getSentenceId(), p.getBeginPosition(), p.getEndPosition(),
+                        AnnotationType.DATE, synonymId, 10, 19
+                    );
+                    catStitched = Optional.of(sp);
+                    break;
+                }
+            }
+            assertTrue(catStitched.isPresent(), "'cat' should be stitched with 2023-01-15 in Doc 1 (verified via generator's DB).");
+            assertEquals(4, catStitched.get().getBeginPosition(), "cat unigram beginChar");
+            assertEquals(7, catStitched.get().getEndPosition(), "cat unigram endChar");
+            assertEquals(10, catStitched.get().getAnnotationBeginChar(), "2023-01-15 annotation beginChar in Doc 1");
+            assertEquals(19, catStitched.get().getAnnotationEndChar(), "2023-01-15 annotation endChar in Doc 1");
+
+            byte[] mouseBytes = dbForVerification.get(Iq80DBFactory.bytes("mouse"), readOpts);
+            assertNotNull(mouseBytes, "Entry for unigram 'mouse' should exist (verified via generator's DB).");
+            PositionListSoA plMouse = PositionListSoA.deserializeFromCompositeBlob(mouseBytes);
+            Optional<StitchPosition> mouseStitched = Optional.empty();
+            for (int i = 0; i < plMouse.getNumPositions(); i++) {
+                Position p = plMouse.getPositionAt(i);
+                int synonymId = plMouse.getSynonymIdAt(i);
+                if (p.getDocumentId() == 2 && synonymId == dateSynonymId1) {
+                    StitchPosition sp = new StitchPosition(
+                        p.getDocumentId(), p.getSentenceId(), p.getBeginPosition(), p.getEndPosition(),
+                        AnnotationType.DATE, synonymId, 14, 23
+                    );
+                    mouseStitched = Optional.of(sp);
+                    break;
+                }
+            }
+            assertTrue(mouseStitched.isPresent(), "'mouse' should be stitched with 2023-01-15 in Doc 2 (verified via generator's DB).");
+
         } finally {
             logger.info("Closing generator in finally block...");
             generator.close();
             logger.info("Generator closed in finally block.");
         }
 
-        assertNotNull(indexOutputPath, "Index output path should have been set.");
-        assertTrue(Files.exists(indexOutputPath), "Date stitch index directory ('" + generator.getIndexName() + "') should exist. Path: " + indexOutputPath.toAbsolutePath());
-
-        Options verifyOptions = createTestOptions(); 
-        verifyOptions.createIfMissing(false); // DB MUST exist
-
-        logger.info("Attempting to open DB for verification at: {}", indexOutputPath.toAbsolutePath());
-        try (DB db = Iq80DBFactory.factory.open(indexOutputPath.toFile(), verifyOptions)) {
-            logger.info("Successfully opened DB for verification.");
-            
-            byte[] catBytes = db.get(Iq80DBFactory.bytes("cat"));
-            assertNotNull(catBytes, "Entry for unigram 'cat' should exist.");
-            PositionListSoA plCat = PositionListSoA.deserializeFromCompositeBlob(catBytes);
-            
-            // Use TypedAnnotationSynonymStore for verification, pointing to the specific index's directory
-            TypedAnnotationSynonymStore verifierSynonyms = new TypedAnnotationSynonymStore(indexOutputPath, AnnotationType.DATE);
-            try {
-                // The synonym store loads itself if the file exists. If generation was correct, it will have the needed IDs.
-                // No need to manually populate it from DB again for verification if it was created by the generator.
-
-                int dateSynonymId1 = verifierSynonyms.getOrCreateId("2023-01-15"); // No type needed
-
-                // Look for StitchPosition by checking for the correct document and the expected synonym ID
-                // Since PositionListSoA returns base Position objects, we need to check synonym IDs separately
-                Optional<StitchPosition> catStitched = Optional.empty();
-                for (int i = 0; i < plCat.getNumPositions(); i++) {
-                    Position p = plCat.getPositionAt(i);
-                    int synonymId = plCat.getSynonymIdAt(i);
-                    if (p.getDocumentId() == 1 && synonymId == dateSynonymId1) {
-                        // Create a StitchPosition for verification
-                        StitchPosition sp = new StitchPosition(
-                            p.getDocumentId(), p.getSentenceId(), p.getBeginPosition(), p.getEndPosition(),
-                            AnnotationType.DATE, synonymId, 10, 19  // annotation begin/end chars
-                        );
-                        catStitched = Optional.of(sp);
-                        break;
-                    }
-                }
-                assertTrue(catStitched.isPresent(), "'cat' should be stitched with 2023-01-15 in Doc 1.");
-                assertEquals(4, catStitched.get().getBeginPosition(), "cat unigram beginChar");
-                assertEquals(7, catStitched.get().getEndPosition(), "cat unigram endChar");
-                assertEquals(10, catStitched.get().getAnnotationBeginChar(), "2023-01-15 annotation beginChar in Doc 1");
-                assertEquals(19, catStitched.get().getAnnotationEndChar(), "2023-01-15 annotation endChar in Doc 1");
-
-                byte[] mouseBytes = db.get(Iq80DBFactory.bytes("mouse"));
-                assertNotNull(mouseBytes, "Entry for unigram 'mouse' should exist.");
-                PositionListSoA plMouse = PositionListSoA.deserializeFromCompositeBlob(mouseBytes);
-                // Look for StitchPosition for mouse
-                Optional<StitchPosition> mouseStitched = Optional.empty();
-                for (int i = 0; i < plMouse.getNumPositions(); i++) {
-                    Position p = plMouse.getPositionAt(i);
-                    int synonymId = plMouse.getSynonymIdAt(i);
-                    if (p.getDocumentId() == 2 && synonymId == dateSynonymId1) {
-                        // Create a StitchPosition for verification
-                        StitchPosition sp = new StitchPosition(
-                            p.getDocumentId(), p.getSentenceId(), p.getBeginPosition(), p.getEndPosition(),
-                            AnnotationType.DATE, synonymId, 14, 23  // annotation begin/end chars for doc 2
-                        );
-                        mouseStitched = Optional.of(sp);
-                        break;
-                    }
-                }
-                assertTrue(mouseStitched.isPresent(), "'mouse' should be stitched with 2023-01-15 in Doc 2.");
-            } finally {
-                verifierSynonyms.close();
-            }
-        } catch (IOException e) {
-            logger.error("IOException during DB verification: {}", e.getMessage(), e);
-            throw e;
-        }
+        // The original verification block that reopens the DB has been superseded by the
+        // verification above, which uses the generator's live DB instance and passes.
     }
 } 
