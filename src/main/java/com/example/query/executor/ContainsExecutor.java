@@ -10,6 +10,7 @@ import com.example.query.binding.MatchDetail;
 import com.example.query.binding.ValueType;
 import com.example.query.executor.QueryResult;
 import org.iq80.leveldb.DBIterator;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -360,5 +361,85 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         // Need to handle the delimiter carefully if it's a regex special char
         String[] parts = key.split(String.valueOf(delimiter));
         return String.join(" ", parts);
+    }
+
+    /**
+     * Executes a search for a specific pattern using selective deserialization for better performance.
+     * This method only deserializes the attributes actually needed, reducing memory usage and processing time.
+     *
+     * @param pattern The pattern to search for
+     * @param isVariable Whether this corresponds to a variable in the original condition
+     * @param variableName The original variable name (if isVariable is true)
+     * @param index The index to search in
+     * @param granularity The query granularity (for logging)
+     * @param condition The condition object (used for ID)
+     * @return List of MatchDetail objects found for the pattern
+     */
+    private List<MatchDetail> executePatternSearchOptimized(String pattern, boolean isVariable, String variableName,
+                                        IndexAccessInterface index, Query.Granularity granularity,
+                                        Contains condition)
+        throws QueryExecutionException, IndexAccessException {
+        
+        List<MatchDetail> details = new ArrayList<>();
+        
+        if (pattern == null || pattern.trim().isEmpty()) {
+            logger.warn("Skipping empty pattern in CONTAINS condition");
+            return details;
+        }
+
+        if (pattern.contains("*")) {
+            // For wildcard patterns, fall back to the existing implementation for now
+            return executePatternSearch(pattern, isVariable, variableName, index, granularity, condition);
+        }
+
+        // Standard pattern search using selective deserialization
+        byte[] keyBytes = pattern.toLowerCase().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Optional<byte[]> rawBlob = index.getRaw(keyBytes);
+        
+        if (rawBlob.isPresent()) {
+            try {
+                // Only deserialize the attributes we actually need
+                int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob.get());
+                logger.debug("Found {} positions for pattern: '{}' (using selective deserialization)", numPositions, pattern);
+                
+                // For CONTAINS conditions, we typically need all position attributes for result presentation
+                // But we can still optimize by avoiding Position object reconstruction
+                IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob.get());
+                IntArrayList sentIds = PositionListSoA.decompressSentenceIds(rawBlob.get());
+                IntArrayList beginChars = PositionListSoA.decompressBeginChars(rawBlob.get());
+                IntArrayList endChars = PositionListSoA.decompressEndChars(rawBlob.get());
+                
+                // Convert the pattern back to space-separated format for the MatchDetail value
+                String displayValue = pattern.replace(String.valueOf(DELIMITER), " ");
+                String actualValue = isVariable ? pattern : displayValue;
+                
+                // Create MatchDetail objects directly from SoA arrays
+                for (int i = 0; i < numPositions; i++) {
+                    // Create MatchDetail with SoA-native constructor (when available)
+                    // For now, still create Position object but more efficiently
+                    Position pos = new Position(
+                        docIds.getInt(i),
+                        sentIds.getInt(i), 
+                        beginChars.getInt(i),
+                        endChars.getInt(i)
+                    );
+                    
+                    details.add(new MatchDetail(
+                        actualValue, 
+                        ValueType.TERM,
+                        pos, 
+                        isVariable ? Optional.of(variableName) : Optional.empty()
+                    ));
+                }
+            } catch (Exception e) {
+                logger.warn("Error during selective deserialization for pattern '{}', falling back to full deserialization: {}", 
+                           pattern, e.getMessage());
+                // Fall back to the existing method if selective deserialization fails
+                return executePatternSearch(pattern, isVariable, variableName, index, granularity, condition);
+            }
+        } else {
+            logger.debug("No positions found for pattern: '{}'", pattern);
+        }
+        return details;
     }
 } 

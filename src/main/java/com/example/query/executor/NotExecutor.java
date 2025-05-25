@@ -1,8 +1,8 @@
 package com.example.query.executor;
 
 import com.example.core.IndexAccessInterface;
+import com.example.core.PositionListSoA;
 import com.example.core.Position;
-import com.example.core.PositionList;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Not;
@@ -140,21 +140,23 @@ public final class NotExecutor implements ConditionExecutor<Not> {
                 }
 
                 try {
-                    PositionList positionList = PositionList.deserialize(valueBytes);
+                    PositionListSoA positionList = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
                     count++;
-
-                    for (Position actualPosition : positionList.getPositions()) {
-                        int docId = actualPosition.getDocumentId();
+                    
+                    // Extract positions and add to the set
+                    for (int i = 0; i < positionList.getNumPositions(); i++) {
+                        Position actualPosition = positionList.getPositionAt(i);
                         if (granularity == Query.Granularity.DOCUMENT) {
-                            allIds.add(docId); // Add docId directly
-                        } else if (granularity == Query.Granularity.SENTENCE) {
-                            int sentenceId = actualPosition.getSentenceId();
-                            allIds.add(new SimpleEntry<>(docId, sentenceId)); // Add pair
+                            allIds.add(actualPosition.getDocumentId());
+                        } else { // SENTENCE granularity
+                            allIds.add(new SimpleEntry<>(actualPosition.getDocumentId(), actualPosition.getSentenceId()));
                         }
                     }
-                } catch (RuntimeException e) {
-                    logger.warn("Failed to deserialize PositionList for key '{}' in '{}': {}",
-                                new String(entry.getKey()), UNIGRAM_INDEX_NAME, e.getMessage());
+                } catch (Exception e) {
+                    logger.warn("Failed to deserialize PositionListSoA for key '{}' in '{}': {}",
+                            new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8),
+                            UNIGRAM_INDEX_NAME, e.getMessage());
+                    continue; // Skip this entry and continue with the next
                 }
             }
         } catch (Exception e) {
@@ -167,7 +169,7 @@ public final class NotExecutor implements ConditionExecutor<Not> {
             );
         }
 
-        logger.debug("Finished iterating '{}'. Found {} unique IDs from {} PositionList entries for granularity {}",
+        logger.debug("Finished iterating '{}'. Found {} unique IDs from {} PositionListSoA entries for granularity {}",
                      UNIGRAM_INDEX_NAME, allIds.size(), count, granularity);
         return allIds;
     }

@@ -2,7 +2,7 @@ package com.example.query.executor;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.binding.MatchDetail;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
@@ -369,11 +369,14 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                  if (docDate != null) {
                      // Evaluate the condition using helper method
                      if (evaluateTemporalCondition(type, docDate.atStartOfDay(), queryStart, queryEnd)) {
-                         PositionList positions = PositionList.deserialize(currentEntry.getValue());
+                         PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(currentEntry.getValue());
                                  // Ensure we convert the List to a Set safely
                                  Set<Position> positionSet = null;
-                                 if (positions != null && positions.getPositions() != null) {
-                                     positionSet = new HashSet<>(positions.getPositions());
+                                 if (positions != null && positions.getNumPositions() > 0) {
+                                     positionSet = new HashSet<>();
+                                     for (int i = 0; i < positions.getNumPositions(); i++) {
+                                         positionSet.add(positions.getPositionAt(i));
+                                     }
                                  }
                                  if (positionSet != null) {
                                      for (Position position : positionSet) {

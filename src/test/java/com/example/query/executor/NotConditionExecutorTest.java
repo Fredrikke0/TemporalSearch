@@ -4,7 +4,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.query.binding.MatchDetail;
 import com.example.query.binding.ValueType;
 import com.example.query.executor.QueryResult;
@@ -65,17 +65,17 @@ class NotConditionExecutorTest {
         when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
             .thenReturn(innerResult);
 
-        PositionList posList1 = createPositionList(new Position(1, 0, 0, 0));
-        PositionList posList2 = createPositionList(new Position(2, 0, 0, 0));
-        PositionList posList3 = createPositionList(new Position(3, 0, 0, 0));
-        PositionList posList4 = createPositionList(new Position(4, 0, 0, 0));
+        PositionListSoA posList1 = createPositionList(new Position(1, 0, 0, 0));
+        PositionListSoA posList2 = createPositionList(new Position(2, 0, 0, 0));
+        PositionListSoA posList3 = createPositionList(new Position(3, 0, 0, 0));
+        PositionListSoA posList4 = createPositionList(new Position(4, 0, 0, 0));
         
         when(unigramIterator.hasNext()).thenReturn(true, true, true, true, false);
         when(unigramIterator.next()).thenReturn(
-            Map.entry("key1".getBytes(), posList1.serialize()),
-            Map.entry("key2".getBytes(), posList2.serialize()),
-            Map.entry("key3".getBytes(), posList3.serialize()),
-            Map.entry("key4".getBytes(), posList4.serialize())
+            Map.entry("key1".getBytes(), posList1.serializeToCompositeBlob()),
+            Map.entry("key2".getBytes(), posList2.serializeToCompositeBlob()),
+            Map.entry("key3".getBytes(), posList3.serializeToCompositeBlob()),
+            Map.entry("key4".getBytes(), posList4.serializeToCompositeBlob())
         );
 
         QueryResult result = notExecutor.execute(notCondition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
@@ -107,21 +107,21 @@ class NotConditionExecutorTest {
         when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), anyInt(), anyString()))
             .thenReturn(innerResult);
 
-        PositionList posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
-        PositionList posListD1S1 = createPositionList(new Position(1, 1, 0, 0)); 
-        PositionList posListD2S0 = createPositionList(new Position(2, 0, 0, 0)); 
-        PositionList posListD2S1 = createPositionList(new Position(2, 1, 0, 0)); 
-        PositionList posListD2S2 = createPositionList(new Position(2, 2, 0, 0)); 
-        PositionList posListD3S0 = createPositionList(new Position(3, 0, 0, 0)); 
+        PositionListSoA posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
+        PositionListSoA posListD1S1 = createPositionList(new Position(1, 1, 0, 0)); 
+        PositionListSoA posListD2S0 = createPositionList(new Position(2, 0, 0, 0)); 
+        PositionListSoA posListD2S1 = createPositionList(new Position(2, 1, 0, 0)); 
+        PositionListSoA posListD2S2 = createPositionList(new Position(2, 2, 0, 0)); 
+        PositionListSoA posListD3S0 = createPositionList(new Position(3, 0, 0, 0)); 
         
         when(unigramIterator.hasNext()).thenReturn(true, true, true, true, true, true, false);
         when(unigramIterator.next()).thenReturn(
-            Map.entry("k10".getBytes(), posListD1S0.serialize()),
-            Map.entry("k11".getBytes(), posListD1S1.serialize()),
-            Map.entry("k20".getBytes(), posListD2S0.serialize()),
-            Map.entry("k21".getBytes(), posListD2S1.serialize()),
-            Map.entry("k22".getBytes(), posListD2S2.serialize()),
-            Map.entry("k30".getBytes(), posListD3S0.serialize())
+            Map.entry("k10".getBytes(), posListD1S0.serializeToCompositeBlob()),
+            Map.entry("k11".getBytes(), posListD1S1.serializeToCompositeBlob()),
+            Map.entry("k20".getBytes(), posListD2S0.serializeToCompositeBlob()),
+            Map.entry("k21".getBytes(), posListD2S1.serializeToCompositeBlob()),
+            Map.entry("k22".getBytes(), posListD2S2.serializeToCompositeBlob()),
+            Map.entry("k30".getBytes(), posListD3S0.serializeToCompositeBlob())
         );
 
         QueryResult result = notExecutor.execute(notCondition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus");
@@ -164,15 +164,15 @@ class NotConditionExecutorTest {
         when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), eq(windowSize), anyString()))
             .thenReturn(innerResult);
 
-        PositionList posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
-        PositionList posListD1S1 = createPositionList(new Position(1, 1, 0, 0)); 
-        PositionList posListD1S2 = createPositionList(new Position(1, 2, 0, 0)); 
+        PositionListSoA posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
+        PositionListSoA posListD1S1 = createPositionList(new Position(1, 1, 0, 0)); 
+        PositionListSoA posListD1S2 = createPositionList(new Position(1, 2, 0, 0)); 
 
         when(unigramIterator.hasNext()).thenReturn(true, true, true, false);
         when(unigramIterator.next()).thenReturn(
-            Map.entry("k10".getBytes(), posListD1S0.serialize()),
-            Map.entry("k11".getBytes(), posListD1S1.serialize()),
-            Map.entry("k12".getBytes(), posListD1S2.serialize())
+            Map.entry("k10".getBytes(), posListD1S0.serializeToCompositeBlob()),
+            Map.entry("k11".getBytes(), posListD1S1.serializeToCompositeBlob()),
+            Map.entry("k12".getBytes(), posListD1S2.serializeToCompositeBlob())
         );
 
         QueryResult result = notExecutor.execute(notCondition, indexes, Query.Granularity.SENTENCE, windowSize, "test_corpus");
@@ -206,17 +206,17 @@ class NotConditionExecutorTest {
                             createMatchDetail(pos2.getDocumentId(), "test"))
                 ));
 
-        PositionList posList1 = createPositionList(new Position(1, 0, 0, 0));
-        PositionList posList2 = createPositionList(new Position(2, 0, 0, 0));
-        PositionList posList3 = createPositionList(new Position(3, 0, 0, 0));
-        PositionList posList4 = createPositionList(new Position(4, 0, 0, 0));
+        PositionListSoA posList1 = createPositionList(new Position(1, 0, 0, 0));
+        PositionListSoA posList2 = createPositionList(new Position(2, 0, 0, 0));
+        PositionListSoA posList3 = createPositionList(new Position(3, 0, 0, 0));
+        PositionListSoA posList4 = createPositionList(new Position(4, 0, 0, 0));
         
         when(unigramIterator.hasNext()).thenReturn(true, true, true, true, false);
         when(unigramIterator.next()).thenReturn(
-            Map.entry("key1".getBytes(), posList1.serialize()),
-            Map.entry("key2".getBytes(), posList2.serialize()),
-            Map.entry("key3".getBytes(), posList3.serialize()),
-            Map.entry("key4".getBytes(), posList4.serialize())
+            Map.entry("key1".getBytes(), posList1.serializeToCompositeBlob()),
+            Map.entry("key2".getBytes(), posList2.serializeToCompositeBlob()),
+            Map.entry("key3".getBytes(), posList3.serializeToCompositeBlob()),
+            Map.entry("key4".getBytes(), posList4.serializeToCompositeBlob())
         );
 
         QueryResult result = notExecutor.execute(notCondition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
@@ -243,8 +243,8 @@ class NotConditionExecutorTest {
         return createMatchDetail(docId, -1, value);
     }
 
-    private PositionList createPositionList(Position... positions) {
-        PositionList list = new PositionList();
+    private PositionListSoA createPositionList(Position... positions) {
+        PositionListSoA list = new PositionListSoA();
         for (Position p : positions) {
             list.add(p);
         }

@@ -136,8 +136,8 @@ public class JoinHandler {
                 // If both keys are 'date', use the date-specific hash join
                 if (leftKey.equals("date") && rightKey.equals("date")) {
                      // Check if values are actually LocalDate before calling date-specific join
-                    ValueType leftType = extractTypeForKey(leftDetails.isEmpty() ? null : leftDetails.get(0), leftKey);
-                    ValueType rightType = extractTypeForKey(rightDetails.isEmpty() ? null : rightDetails.get(0), rightKey);
+                    ValueType leftType = extractTypeForKey(leftDetails, leftKey);
+                    ValueType rightType = extractTypeForKey(rightDetails, rightKey);
                     if (leftType == ValueType.DATE && rightType == ValueType.DATE) {
                         joinedDetails = performHashJoinOnDate(leftDetails, rightDetails, leftKey, rightKey);
                     } else {
@@ -360,47 +360,41 @@ public class JoinHandler {
      * Extracts the type corresponding to a specific key from a MatchDetail object.
      * Supports variable names (e.g., "?myVar") and common keys like "document_id", "sentence_id".
      *
-     * @param detail The MatchDetail object
+     * @param details The list of MatchDetail objects
      * @param key The key to extract (e.g., "?myVar", "document_id")
      * @return The extracted type, or null if key is not supported or value is null.
      */
-    private ValueType extractTypeForKey(Object detailObj, String key) {
-         if (detailObj == null || key == null) { 
+    private ValueType extractTypeForKey(List<MatchDetail> details, String key) {
+        if (details == null || details.isEmpty() || key == null) { 
             return null;
         }
-        // Handle JoinedMatch first
-        if (detailObj instanceof JoinedMatch joined) {
-            // Simplified: Assume key directly matches intended part for now
-            ValueType leftType = extractTypeForKey(joined.left(), key);
-            if (leftType != null) return leftType;
-            return extractTypeForKey(joined.right(), key);
-
-        } else if (detailObj instanceof MatchDetail detail) {
-             // Handle bound variables stored in MatchDetail (e.g., "q1.date")
-             if (detail.variableName().isPresent()) {
+        
+        // Scan through the details to find one that has a variable binding matching the key
+        for (MatchDetail detail : details) {
+            if (detail.variableName().isPresent()) {
                 String storedVarName = detail.variableName().get();
                 int dotIndex = storedVarName.indexOf('.');
-                 if (dotIndex != -1 && dotIndex < storedVarName.length() - 1) {
+                if (dotIndex != -1 && dotIndex < storedVarName.length() - 1) {
                     String storedBaseKey = storedVarName.substring(dotIndex + 1);
                     if (key.equals(storedBaseKey)) {
                         return detail.valueType();
                     }
                 } else {
-                     if (key.equals(storedVarName)) {
-                         return detail.valueType();
-                     }
-                 }
+                    if (key.equals(storedVarName)) {
+                        return detail.valueType();
+                    }
+                }
             }
-            // Fallback for structural keys (return appropriate type if needed)
-            return switch (key.toLowerCase()) {
-                 // No specific ValueType for IDs, handled by direct key check
-                 // case "document_id" -> ValueType.INTEGER;
-                 // case "sentence_id" -> ValueType.INTEGER;
-                 // case "date" -> ValueType.DATE; // Example for document date
-                 default -> null;
-            };
         }
-        return null;
+        
+        // Fallback for structural keys (return appropriate type if needed)
+        return switch (key.toLowerCase()) {
+            // No specific ValueType for IDs, handled by direct key check
+            // case "document_id" -> ValueType.INTEGER;
+            // case "sentence_id" -> ValueType.INTEGER;
+            // case "date" -> ValueType.DATE; // Example for document date
+            default -> null;
+        };
     }
 
     private List<JoinedMatch> performGenericHashJoin(
