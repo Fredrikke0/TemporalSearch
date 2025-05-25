@@ -89,10 +89,10 @@ public class LogicalConditionExecutorTest {
         when(mockFactory.getExecutor(eq(mockPosCond2))).thenReturn(mockPosExecutor);
 
         // Stub sub-executor calls to return QueryResult directly
-        when(mockContainsExecutor.execute(eq(mockContainsCond1), any(), any(Query.Granularity.class), anyInt(), anyString()))
+        when(mockContainsExecutor.execute(eq(mockContainsCond1), any(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class)))
             .thenReturn(containsResult);
 
-        when(mockPosExecutor.execute(eq(mockPosCond2), any(), any(Query.Granularity.class), anyInt(), anyString()))
+        when(mockPosExecutor.execute(eq(mockPosCond2), any(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class)))
             .thenReturn(posResult);
 
         // Execute - Now returns QueryResult
@@ -159,9 +159,9 @@ public class LogicalConditionExecutorTest {
         when(mockFactory.getExecutor(eq(mockPosCond2))).thenReturn(mockPosExecutor);
 
         // Stub sub-executor calls
-        when(mockContainsExecutor.execute(eq(mockContainsCond1), any(), any(Query.Granularity.class), anyInt(), anyString()))
+        when(mockContainsExecutor.execute(eq(mockContainsCond1), any(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class)))
             .thenReturn(containsResult);
-        when(mockPosExecutor.execute(eq(mockPosCond2), any(), any(Query.Granularity.class), anyInt(), anyString()))
+        when(mockPosExecutor.execute(eq(mockPosCond2), any(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class)))
             .thenReturn(posResult);
 
         // Execute
@@ -199,11 +199,11 @@ public class LogicalConditionExecutorTest {
         when(mockFactory.getExecutor(eq(mockContainsCond1))).thenReturn(mockContainsExecutor);
 
         // Mock first executor returns empty QueryResult
-        when(mockContainsExecutor.execute(eq(mockContainsCond1), eq(indexes), eq(TEST_GRANULARITY), eq(TEST_WINDOW_SIZE), anyString()))
+        when(mockContainsExecutor.execute(eq(mockContainsCond1), eq(indexes), eq(TEST_GRANULARITY), eq(TEST_WINDOW_SIZE), anyString(), any(AttributeRequirements.class)))
             .thenReturn(new QueryResult(TEST_GRANULARITY, TEST_WINDOW_SIZE, Collections.emptyList()));
 
         // Setup second executor leniently (should not be called due to short-circuit)
-        verify(mockPosExecutor, never()).execute(eq(mockPosCond2), eq(indexes), eq(TEST_GRANULARITY), eq(TEST_WINDOW_SIZE), anyString());
+        verify(mockPosExecutor, never()).execute(eq(mockPosCond2), eq(indexes), eq(TEST_GRANULARITY), eq(TEST_WINDOW_SIZE), anyString(), any(AttributeRequirements.class));
 
         // Execute
         QueryResult finalResult = logicalExecutor.execute(condition, indexes, TEST_GRANULARITY, TEST_WINDOW_SIZE, "test_corpus");
@@ -213,7 +213,7 @@ public class LogicalConditionExecutorTest {
         assertTrue(finalResult.getAllDetails().isEmpty(), "Result should be empty due to short-circuit");
         
         // Verify first executor was called
-        verify(mockContainsExecutor).execute(eq(mockContainsCond1), eq(indexes), eq(TEST_GRANULARITY), eq(TEST_WINDOW_SIZE), anyString());
+        verify(mockContainsExecutor).execute(eq(mockContainsCond1), eq(indexes), eq(TEST_GRANULARITY), eq(TEST_WINDOW_SIZE), anyString(), any(AttributeRequirements.class));
     }
 
     @Test

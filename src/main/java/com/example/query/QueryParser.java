@@ -63,7 +63,7 @@ public class QueryParser {
             // Pass through UnsupportedOperationException
             throw e;
         } catch (RuntimeException e) {
-            logger.error("Error parsing query: {}", queryString, e);
+            logger.debug("Error parsing query: {}", queryString, e);
             String message = e.getMessage();
             if (message != null && message.startsWith("Failed to parse query: ")) {
                 message = message.substring("Failed to parse query: ".length());
@@ -88,7 +88,7 @@ public class QueryParser {
             logger.debug("Successfully parsed subquery: {}", subquery);
             return subquery;
         } catch (RuntimeException e) {
-            logger.error("Error parsing subquery", e);
+            logger.debug("Error parsing subquery", e);
             String message = e.getMessage();
             if (message != null && message.startsWith("Failed to parse subquery: ")) {
                 message = message.substring("Failed to parse subquery: ".length());

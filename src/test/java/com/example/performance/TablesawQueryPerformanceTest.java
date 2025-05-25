@@ -3,7 +3,6 @@ package com.example.performance;
 import com.example.core.Position;
 import com.example.query.binding.MatchDetail;
 import com.example.query.binding.ValueType;
-import com.example.query.model.DocSentenceMatch;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -27,7 +26,7 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.Disabled;
 
 /**
- * Performance tests comparing Set<DocSentenceMatch>, Set<MatchDetail>, and Tablesaw.
+ * Performance tests comparing Set<MatchDetail> and Tablesaw.
  * This test creates large datasets and performs operations simulating query processing.
  */
 @Disabled("Disabled for regular builds - run manually if needed") // Disable test
@@ -49,48 +48,40 @@ public class TablesawQueryPerformanceTest {
     
     @ParameterizedTest
     @ValueSource(ints = {10_000, 100_000, 1_000_000}) // Test different sizes
-    @DisplayName("Compare performance: Set<DSM> vs Set<MD> vs Tablesaw")
+    @DisplayName("Compare performance: Set<MatchDetail> vs Tablesaw")
     public void comparePerformance(int rowCount) {
         logger.info("===== Running performance test with {} target matches =====", rowCount);
         
-        // Generate test data for both Set types
-        logger.info("Generating DocSentenceMatch data...");
-        Set<DocSentenceMatch> matchSetDSM = generateDocSentenceMatchSet(rowCount);
+        // Generate test data for MatchDetail
         logger.info("Generating MatchDetail data...");
         Set<MatchDetail> matchSetMD = generateMatchDetailSet(rowCount);
         
-        // Convert MatchDetail set to Tablesaw Table (assuming MD is the structure to convert)
+        // Convert MatchDetail set to Tablesaw Table
         logger.info("Converting MatchDetail set to Tablesaw Table...");
         Table table = convertMatchDetailToTablesaw(matchSetMD);
         
-        logger.info("Generated {} DSM matches, {} MD matches, and Tablesaw table with {} rows",
-                matchSetDSM.size(), matchSetMD.size(), table.rowCount());
+        logger.info("Generated {} MD matches, and Tablesaw table with {} rows",
+                matchSetMD.size(), table.rowCount());
         
         // --- Benchmark typical operations ---
         
         // Filter by document ID
         runBenchmark("Filter by documentId",
-            () -> filterByDocumentIdDSM(matchSetDSM, NUM_DOCS / 2),
             () -> filterByDocumentIdMD(matchSetMD, NUM_DOCS / 2),
             () -> filterByDocumentIdTablesaw(table, NUM_DOCS / 2));
         
-        // Filter by source (If source is applicable to MatchDetail, otherwise adapt)
-        // Assuming source is implicitly available via context or document lookup elsewhere
-        // For test purposes, let's filter on something MatchDetail has, e.g., valueType
+        // Filter by value type
         runBenchmark("Filter operation (ValueType)",
-            () -> filterBySourceDSM(matchSetDSM, SOURCES[0]), // DSM can filter by source
-            () -> filterByValueTypeMD(matchSetMD, ValueType.ENTITY), // MD filters by ValueType
-            () -> filterByValueTypeTablesaw(table, "ENTITY")); // Table filters by ValueType string
+            () -> filterByValueTypeMD(matchSetMD, ValueType.ENTITY),
+            () -> filterByValueTypeTablesaw(table, "ENTITY"));
         
         // Intersection operation (Simulating AND)
         runBenchmark("Join/Intersection operation",
-            () -> intersectSetsDSM(matchSetDSM),
             () -> intersectSetsMD(matchSetMD),
-            () -> intersectSetsTablesaw(table)); // Simulating intersection in Tablesaw
+            () -> intersectSetsTablesaw(table));
         
         // Group by document
         runBenchmark("Group by document",
-            () -> groupByDocumentDSM(matchSetDSM),
             () -> groupByDocumentMD(matchSetMD),
             () -> groupByDocumentTablesaw(table));
         
@@ -98,7 +89,7 @@ public class TablesawQueryPerformanceTest {
     }
     
     @Test
-    @DisplayName("Test memory usage: Set<DSM> vs Set<MD> vs Tablesaw")
+    @DisplayName("Test memory usage: Set<MatchDetail> vs Tablesaw")
     public void compareMemoryUsage() {
         int size = 1_000_000; // Use a fixed large size for memory test
         logger.info("===== Comparing memory usage for approximately {} matches =====", size);
@@ -107,37 +98,25 @@ public class TablesawQueryPerformanceTest {
         System.gc();
         long memBefore = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
         
-        // 1. Measure Set<DocSentenceMatch>
-        logger.info("Generating and measuring Set<DocSentenceMatch>...");
-        Set<DocSentenceMatch> matchSetDSM = generateDocSentenceMatchSet(size);
-        System.gc();
-        long memAfterDSM = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-        long setDSMMemory = memAfterDSM - memBefore;
-        int actualDSMSize = matchSetDSM.size(); // Capture actual size
-        matchSetDSM = null; // Release memory
-        System.gc(); // GC again
-        
-        // 2. Measure Set<MatchDetail>
-        long memBeforeMD = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        // 1. Measure Set<MatchDetail>
         logger.info("Generating and measuring Set<MatchDetail>...");
         Set<MatchDetail> matchSetMD = generateMatchDetailSet(size);
         System.gc();
         long memAfterMD = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-        long setMDMemory = memAfterMD - memBeforeMD;
+        long setMDMemory = memAfterMD - memBefore;
         int actualMDSize = matchSetMD.size(); // Capture actual size
         
-        // 3. Measure Tablesaw Table (derived from MatchDetail)
+        // 2. Measure Tablesaw Table (derived from MatchDetail)
         logger.info("Converting MatchDetail set to Tablesaw and measuring...");
         Table table = convertMatchDetailToTablesaw(matchSetMD);
         matchSetMD = null; // Release MatchDetail set memory
         System.gc();
         long memAfterTablesaw = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-        long tablesawMemory = memAfterTablesaw - memBeforeMD; // Measure against state before table creation
+        long tablesawMemory = memAfterTablesaw - memBefore; // Measure against initial state
         table = null; // Release table memory
         System.gc();
         
         logger.info("--- Memory Usage Comparison (Approx {} Matches) ---", size);
-        logger.info("Set<DocSentenceMatch> ({} items): {} MB", actualDSMSize, setDSMMemory / (1024 * 1024));
         logger.info("Set<MatchDetail>      ({} items): {} MB", actualMDSize, setMDMemory / (1024 * 1024));
         logger.info("Tablesaw Table        ({} rows) : {} MB", actualMDSize, tablesawMemory / (1024 * 1024));
         logger.info("===================================================");
@@ -145,31 +124,10 @@ public class TablesawQueryPerformanceTest {
     
     // --- Data Generation Methods ---
     
-    /** Generate Set<DocSentenceMatch> */
-    private Set<DocSentenceMatch> generateDocSentenceMatchSet(int targetSize) {
-        Set<DocSentenceMatch> matches = new HashSet<>();
-        Random random = new Random(42); // Fixed seed
-        
-        while (matches.size() < targetSize) {
-            int docId = random.nextInt(NUM_DOCS);
-            String source = SOURCES[random.nextInt(SOURCES.length)];
-            boolean isSentenceLevel = random.nextBoolean();
-            int sentId = isSentenceLevel ? random.nextInt(MAX_SENTENCES_PER_DOC) : -1;
-            
-            DocSentenceMatch match = isSentenceLevel
-                ? new DocSentenceMatch(docId, sentId, source)
-                : new DocSentenceMatch(docId, source);
-            
-            // Add some simulated position data if needed for benchmarks, simplified here
-            matches.add(match);
-        }
-        return matches;
-    }
-    
     /** Generate Set<MatchDetail> */
     private Set<MatchDetail> generateMatchDetailSet(int targetSize) {
         Set<MatchDetail> matches = new HashSet<>();
-        Random random = new Random(123); // Different seed
+        Random random = new Random(123); // Fixed seed for reproducibility
         
         while (matches.size() < targetSize) {
             int docId = random.nextInt(NUM_DOCS);
@@ -231,27 +189,20 @@ public class TablesawQueryPerformanceTest {
     
     // --- Benchmark Runner ---
     
-    /** Run benchmark comparing three implementations */
-    private void runBenchmark(String name, Runnable dsmImpl, Runnable mdImpl, Runnable tablesawImpl) {
+    /** Run benchmark comparing two implementations */
+    private void runBenchmark(String name, Runnable mdImpl, Runnable tablesawImpl) {
         logger.info("--- Benchmarking: {} ---", name);
         
         // Warm up (optional, can take time)
         logger.debug("Warming up...");
         for (int i = 0; i < 2; i++) {
-            dsmImpl.run();
             mdImpl.run();
             tablesawImpl.run();
         }
         logger.debug("Warm up complete.");
         
-        // Time Set<DocSentenceMatch> implementation
-        System.gc(); // Suggest GC before timing
-        long dsmStart = System.nanoTime();
-        dsmImpl.run();
-        long dsmTime = System.nanoTime() - dsmStart;
-        
         // Time Set<MatchDetail> implementation
-        System.gc();
+        System.gc(); // Suggest GC before timing
         long mdStart = System.nanoTime();
         mdImpl.run();
         long mdTime = System.nanoTime() - mdStart;
@@ -262,9 +213,8 @@ public class TablesawQueryPerformanceTest {
         tablesawImpl.run();
         long tablesawTime = System.nanoTime() - tablesawStart;
         
-        logger.info("{} -> Set<DSM>: {} ms | Set<MD>: {} ms | Tablesaw: {} ms",
+        logger.info("{} -> Set<MD>: {} ms | Tablesaw: {} ms",
                 name,
-                TimeUnit.NANOSECONDS.toMillis(dsmTime),
                 TimeUnit.NANOSECONDS.toMillis(mdTime),
                 TimeUnit.NANOSECONDS.toMillis(tablesawTime));
     }
@@ -272,11 +222,6 @@ public class TablesawQueryPerformanceTest {
     // --- Benchmark Operation Implementations ---
     
     // 1. Filter by document ID
-    private Set<DocSentenceMatch> filterByDocumentIdDSM(Set<DocSentenceMatch> matches, int docId) {
-        return matches.stream()
-                .filter(m -> m.documentId() == docId)
-                .collect(Collectors.toSet());
-    }
     private Set<MatchDetail> filterByDocumentIdMD(Set<MatchDetail> matches, int docId) {
         return matches.stream()
                 .filter(m -> m.getDocumentId() == docId)
@@ -288,12 +233,7 @@ public class TablesawQueryPerformanceTest {
         return table.where(table.intColumn("document_id").isEqualTo(docId));
     }
     
-    // 2. Filter by Source (DSM) / ValueType (MD/Table)
-    private Set<DocSentenceMatch> filterBySourceDSM(Set<DocSentenceMatch> matches, String source) {
-        return matches.stream()
-                .filter(m -> source.equals(m.getSource()))
-                .collect(Collectors.toSet());
-    }
+    // 2. Filter by ValueType
     private Set<MatchDetail> filterByValueTypeMD(Set<MatchDetail> matches, ValueType type) {
         return matches.stream()
                 .filter(m -> m.valueType() == type)
@@ -306,17 +246,6 @@ public class TablesawQueryPerformanceTest {
     }
     
     // 3. Intersection operation (Simulating AND)
-    private Set<DocSentenceMatch> intersectSetsDSM(Set<DocSentenceMatch> matches) {
-        Set<DocSentenceMatch> subset1 = matches.stream()
-                .filter(m -> m.documentId() % 3 == 0) // Different condition
-                .collect(Collectors.toSet());
-        Set<DocSentenceMatch> subset2 = matches.stream()
-                .filter(m -> SOURCES[0].equals(m.getSource()) || SOURCES[1].equals(m.getSource()))
-                .collect(Collectors.toSet());
-        Set<DocSentenceMatch> result = new HashSet<>(subset1);
-        result.retainAll(subset2);
-        return result;
-    }
     private Set<MatchDetail> intersectSetsMD(Set<MatchDetail> matches) {
         Set<MatchDetail> subset1 = matches.stream()
                 .filter(m -> m.getDocumentId() % 3 == 0) // Different condition
@@ -341,10 +270,6 @@ public class TablesawQueryPerformanceTest {
     }
     
     // 4. Group by document
-    private Map<Integer, List<DocSentenceMatch>> groupByDocumentDSM(Set<DocSentenceMatch> matches) {
-        return matches.stream()
-                .collect(Collectors.groupingBy(DocSentenceMatch::documentId));
-    }
     private Map<Integer, List<MatchDetail>> groupByDocumentMD(Set<MatchDetail> matches) {
         return matches.stream()
                 .collect(Collectors.groupingBy(MatchDetail::getDocumentId));

@@ -112,8 +112,12 @@ public class QueryExecutor {
      */
     public Object execute(Query query, Map<String, IndexAccessInterface> indexes) 
             throws QueryExecutionException {
-        // Call executeWithContext, which now returns QueryResult or List<JoinedMatch>
-        return executeWithContext(query, indexes, new SubqueryContext());
+        // Analyze query to determine attribute requirements for SoA optimization
+        AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
+        logger.debug("Query requires attributes: {}", requirements.getRequiredSoAAttributes());
+        
+        // Call executeWithContext with requirements
+        return executeWithContext(query, indexes, new SubqueryContext(), requirements);
     }
     
     /**
@@ -127,6 +131,27 @@ public class QueryExecutor {
      * @throws QueryExecutionException if execution fails
      */
     public Object executeWithContext(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext) 
+            throws QueryExecutionException {
+        // Analyze query to determine attribute requirements for SoA optimization
+        AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
+        logger.debug("Query requires attributes: {}", requirements.getRequiredSoAAttributes());
+        
+        return executeWithContext(query, indexes, subqueryContext, requirements);
+    }
+
+    /**
+     * Executes a query with an existing subquery context and attribute requirements.
+     * This is the core execution method that supports SoA optimization.
+     *
+     * @param query The query to execute
+     * @param indexes Map of index name to IndexAccessInterface
+     * @param subqueryContext Context containing results of previously executed subqueries
+     * @param requirements Attribute requirements for SoA optimization
+     * @return QueryResult or List<JoinedMatch> depending on query type
+     * @throws QueryExecutionException if execution fails
+     */
+    private Object executeWithContext(Query query, Map<String, IndexAccessInterface> indexes, 
+                                     SubqueryContext subqueryContext, AttributeRequirements requirements) 
             throws QueryExecutionException {
         logger.debug("Executing query: {}", query);
         Query.Granularity granularity = query.granularity();
@@ -143,10 +168,10 @@ public class QueryExecutor {
             logger.debug("Executing main query conditions...");
             List<Condition> orderedMainConditions = optimizeExecutionOrder(mainConditions);
             if (orderedMainConditions.size() == 1) {
-                mainConditionsResult = executeCondition(orderedMainConditions.get(0), indexes, granularity, granularitySize, source);
+                mainConditionsResult = executeCondition(orderedMainConditions.get(0), indexes, granularity, granularitySize, source, requirements);
             } else {
                 Logical implicitAnd = new Logical(LogicalOperator.AND, orderedMainConditions);
-                mainConditionsResult = executeCondition(implicitAnd, indexes, granularity, granularitySize, source);
+                mainConditionsResult = executeCondition(implicitAnd, indexes, granularity, granularitySize, source, requirements);
             }
             logger.debug("Main query conditions executed, {} details found.", mainConditionsResult.getAllDetails().size());
         } else {
@@ -162,10 +187,10 @@ public class QueryExecutor {
                 joinCondition.type() == JoinCondition.JoinType.INNER &&
                 joinCondition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL) {
                 logger.info("Using DEPENDENT join strategy flow.");
-                return executeDependentJoin(query, indexes, subqueryContext, mainAlias, mainConditionsResult);
+                return executeDependentJoin(query, indexes, subqueryContext, mainAlias, mainConditionsResult, requirements);
             } else {
                 logger.info("Using INDEPENDENT join strategy flow.");
-                return executeIndependentJoin(query, indexes, subqueryContext);
+                return executeIndependentJoin(query, indexes, subqueryContext, requirements);
             }
         } else {
             // No JOIN
@@ -254,6 +279,8 @@ public class QueryExecutor {
      * @param indexes Map of index name to IndexAccessInterface
      * @param granularity The query granularity
      * @param granularitySize The window size for sentence granularity
+     * @param source The corpus name
+     * @param requirements Attribute requirements for SoA optimization
      * @return Set of matches at the specified granularity level
      * @throws QueryExecutionException if execution fails
      */
@@ -263,7 +290,8 @@ public class QueryExecutor {
             Map<String, IndexAccessInterface> indexes,
             Query.Granularity granularity,
             int granularitySize,
-            String source) 
+            String source,
+            AttributeRequirements requirements) 
             throws QueryExecutionException {
         logger.debug("Executing condition: {} with granularity: {} and size: {}", 
                 condition, granularity, granularitySize);
@@ -271,7 +299,7 @@ public class QueryExecutor {
         try {
             ConditionExecutor executor = executorFactory.getExecutor(condition);
             
-            return executor.execute(condition, indexes, granularity, granularitySize, source);
+            return executor.execute(condition, indexes, granularity, granularitySize, source, requirements);
         } catch (QueryExecutionException e) {
             throw e;
         } catch (Exception e) {
@@ -295,7 +323,7 @@ public class QueryExecutor {
     /**
      * Executes the current (independent) join logic.
      */
-    Object executeIndependentJoin(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext) throws QueryExecutionException {
+    Object executeIndependentJoin(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext, AttributeRequirements requirements) throws QueryExecutionException {
         logger.debug("Executing independent join for query: {}", query);
         // Ensure all subqueries defined in the query are executed and their results are in the context
         executeSubqueries(query.subqueries(), indexes, subqueryContext);
@@ -317,7 +345,8 @@ public class QueryExecutor {
                                     Map<String, IndexAccessInterface> indexes, 
                                     SubqueryContext subqueryContext, 
                                     String mainAlias, 
-                                    QueryResult mainConditionsResult) 
+                                    QueryResult mainConditionsResult,
+                                    AttributeRequirements requirements) 
             throws QueryExecutionException {
         logger.info("Attempting DEPENDENT join strategy for query: {}", query.toString());
         JoinCondition joinCondition = query.joinCondition().orElseThrow(() -> 
@@ -407,7 +436,7 @@ public class QueryExecutor {
                 case PROXIMITY: // Fallback for PROXIMITY as per design doc
                 default:
                     logger.warn("Dependent join strategy does not support temporal predicate '{}' for precise pre-filtering. Falling back to independent join.", originalPredicate);
-                    return executeIndependentJoin(query, indexes, subqueryContext);
+                    return executeIndependentJoin(query, indexes, subqueryContext, requirements);
             }
             logger.debug("Constructed new temporal filter for dependent subquery: {}", newFilterCondition);
 
@@ -515,11 +544,11 @@ public class QueryExecutor {
                     logger.info("Modified dependent subquery for alias '{}' executed. Found {} details.", dependentAlias, modifiedSubqueryResult.getAllDetails().size());
                 } else {
                      logger.error("Execution of modified dependent subquery for alias '{}' did not return a QueryResult. Got: {}. Falling back.", dependentAlias, result != null ? result.getClass().getName() : "null");
-                     return executeIndependentJoin(query, indexes, subqueryContext); // Fallback
+                     return executeIndependentJoin(query, indexes, subqueryContext, requirements); // Fallback
                 }
             } catch (Exception e) {
                 logger.error("Error executing modified dependent subquery for alias '{}'. Falling back. Error: {}", dependentAlias, e.getMessage(), e);
-                return executeIndependentJoin(query, indexes, subqueryContext); // Fallback
+                return executeIndependentJoin(query, indexes, subqueryContext, requirements); // Fallback
             }
 
             // 5. Update Main Subquery Context with the filtered result for the dependent side
@@ -548,12 +577,12 @@ public class QueryExecutor {
             logger.warn("QueryExecutionException during dependent join for query {}. Error: {}. Falling back to independent join.", query.toString(), e.getMessage(), e);
             // Ensure the original mainConditionsResult is in the context if we fall back
             subqueryContext.addQueryResult(mainAlias, mainConditionsResult); 
-            return executeIndependentJoin(query, indexes, subqueryContext);
+            return executeIndependentJoin(query, indexes, subqueryContext, requirements);
         } catch (Exception e) { // Catch broader exceptions to ensure fallback
             logger.error("Unexpected exception during dependent join for query {}. Error: {}. Falling back to independent join.", query.toString(), e.getMessage(), e);
             // Ensure the original mainConditionsResult is in the context if we fall back
             subqueryContext.addQueryResult(mainAlias, mainConditionsResult);
-            return executeIndependentJoin(query, indexes, subqueryContext);
+            return executeIndependentJoin(query, indexes, subqueryContext, requirements);
         }
     }
     

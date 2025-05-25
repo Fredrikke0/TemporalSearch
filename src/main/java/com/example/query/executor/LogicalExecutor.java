@@ -51,6 +51,17 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         return executor.execute(condition, indexes, granularity, granularitySize, corpusName);
     }
     
+    private <C extends Condition> QueryResult executeCondition(
+        C condition,
+        Map<String, IndexAccessInterface> indexes,
+        Query.Granularity granularity,
+        int granularitySize,
+        String corpusName,
+        AttributeRequirements requirements) throws QueryExecutionException {
+        ConditionExecutor<C> executor = executorFactory.getExecutor(condition);
+        return executor.execute(condition, indexes, granularity, granularitySize, corpusName, requirements);
+    }
+    
     @Override
     public QueryResult execute(Logical condition, Map<String, IndexAccessInterface> indexes,
                                Query.Granularity granularity,
@@ -61,15 +72,37 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
          return internalResult;
     }
     
+    @Override
+    public QueryResult execute(Logical condition, Map<String, IndexAccessInterface> indexes,
+                               Query.Granularity granularity,
+                               int granularitySize,
+                               String corpusName,
+                               AttributeRequirements requirements)
+        throws QueryExecutionException {
+        QueryResult internalResult = executeInternal(condition, indexes, granularity, granularitySize, corpusName, requirements);
+         return internalResult;
+    }
+    
     // --- Internal execution logic using QueryResult ---
     private QueryResult executeInternal(Logical condition, Map<String, IndexAccessInterface> indexes,
                                       Query.Granularity granularity,
                                       int granularitySize,
                                       String corpusName)
         throws QueryExecutionException {
+        // Call the new method with default requirements
+        AttributeRequirements defaultRequirements = new AttributeRequirements();
+        return executeInternal(condition, indexes, granularity, granularitySize, corpusName, defaultRequirements);
+    }
+
+    private QueryResult executeInternal(Logical condition, Map<String, IndexAccessInterface> indexes,
+                                      Query.Granularity granularity,
+                                      int granularitySize,
+                                      String corpusName,
+                                      AttributeRequirements requirements)
+        throws QueryExecutionException {
         
-        logger.debug("Executing logical condition internally: operator={}, subconditions={}, granularity={}, size={}, corpus={}",
-                condition.operator(), condition.conditions().size(), granularity, granularitySize, corpusName);
+        logger.debug("Executing logical condition internally: operator={}, subconditions={}, granularity={}, size={}, corpus={}, requirements={}",
+                condition.operator(), condition.conditions().size(), granularity, granularitySize, corpusName, requirements);
         
         List<Condition> subConditions = condition.conditions();
         if (subConditions.isEmpty()) {
@@ -79,9 +112,9 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         
         LogicalOperator operator = condition.operator();
         if (operator == LogicalOperator.AND) {
-            return executeAnd(subConditions, indexes, granularity, granularitySize, corpusName);
+            return executeAnd(subConditions, indexes, granularity, granularitySize, corpusName, requirements);
         } else if (operator == LogicalOperator.OR) {
-            return executeOr(subConditions, indexes, granularity, granularitySize, corpusName);
+            return executeOr(subConditions, indexes, granularity, granularitySize, corpusName, requirements);
         } else {
             throw new QueryExecutionException("Unsupported logical operator: " + operator, condition.toString(), QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
         }
@@ -97,13 +130,26 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             int granularitySize,
             String corpusName)
         throws QueryExecutionException {
+        // Call the new method with default requirements
+        AttributeRequirements defaultRequirements = new AttributeRequirements();
+        return executeAnd(conditions, indexes, granularity, granularitySize, corpusName, defaultRequirements);
+    }
+
+    private QueryResult executeAnd(
+            List<Condition> conditions, 
+            Map<String, IndexAccessInterface> indexes,
+            Query.Granularity granularity,
+            int granularitySize,
+            String corpusName,
+            AttributeRequirements requirements)
+        throws QueryExecutionException {
         
-        logger.debug("Executing AND internally with {} subconditions (corpus: {})", conditions.size(), corpusName);
+        logger.debug("Executing AND internally with {} subconditions (corpus: {}, requirements: {})", conditions.size(), corpusName, requirements);
 
         QueryResult combinedResult = null;
 
         for (Condition condition : conditions) {
-            QueryResult currentResult = executeCondition(condition, indexes, granularity, granularitySize, corpusName);
+            QueryResult currentResult = executeCondition(condition, indexes, granularity, granularitySize, corpusName, requirements);
 
             if (currentResult.getAllDetails().isEmpty()) {
                 logger.debug("Condition {} has no matches, short-circuiting AND", condition);
@@ -135,12 +181,25 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             int granularitySize,
             String corpusName)
         throws QueryExecutionException {
+        // Call the new method with default requirements
+        AttributeRequirements defaultRequirements = new AttributeRequirements();
+        return executeOr(conditions, indexes, granularity, granularitySize, corpusName, defaultRequirements);
+    }
         
-        logger.debug("Executing OR internally with {} subconditions (corpus: {})", conditions.size(), corpusName);
+    private QueryResult executeOr(
+            List<Condition> conditions, 
+            Map<String, IndexAccessInterface> indexes,
+            Query.Granularity granularity,
+            int granularitySize,
+            String corpusName,
+            AttributeRequirements requirements)
+        throws QueryExecutionException {
+        
+        logger.debug("Executing OR internally with {} subconditions (corpus: {}, requirements: {})", conditions.size(), corpusName, requirements);
         QueryResult combinedResult = null;
         
         for (Condition condition : conditions) {
-            QueryResult currentResult = executeCondition(condition, indexes, granularity, granularitySize, corpusName);
+            QueryResult currentResult = executeCondition(condition, indexes, granularity, granularitySize, corpusName, requirements);
 
             if (currentResult.getAllDetails().isEmpty()) {
                 continue; // Skip empty results for OR

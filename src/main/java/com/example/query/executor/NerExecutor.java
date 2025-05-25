@@ -168,10 +168,19 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 
                 // Now, iterate PositionListSoA correctly
                 for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
-                    Position pos = positionListSoA.getPositionAt(i);
+                    // Use SoA-native access instead of reconstructing Position objects
                     // For NER, the synonymId in PositionListSoA is not directly used for MatchDetail value.
                     // The 'value' (entity text) comes from the key.
-                    details.add(new MatchDetail(value, valueType, pos, variableName));
+                    details.add(new MatchDetail(
+                        value, 
+                        valueType, 
+                        variableName,
+                        positionListSoA.getDocIdAt(i),
+                        positionListSoA.getSentenceIdAt(i),
+                        positionListSoA.getBeginCharAt(i),
+                        positionListSoA.getEndCharAt(i),
+                        positionListSoA.getSynonymIdAt(i)
+                    ));
                 }
             }
         }
@@ -236,14 +245,38 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 
                 // Now, iterate PositionListSoA correctly
                 for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
-                    Position pos = positionListSoA.getPositionAt(i);
-                     // For NER, the synonymId in PositionListSoA is not directly used for MatchDetail value.
-                    details.add(new MatchDetail(detailValue, valueType, pos, (String) null));
+                    // Use SoA-native access instead of reconstructing Position objects
+                    // For NER, the synonymId in PositionListSoA is not directly used for MatchDetail value.
+                    details.add(new MatchDetail(
+                        detailValue, 
+                        valueType, 
+                        (String) null,
+                        positionListSoA.getDocIdAt(i),
+                        positionListSoA.getSentenceIdAt(i),
+                        positionListSoA.getBeginCharAt(i),
+                        positionListSoA.getEndCharAt(i),
+                        positionListSoA.getSynonymIdAt(i)
+                    ));
                 }
             }
         }
         
         logger.debug("Found {} details matching entity type '{}'", details.size(), entityType);
         return details;
+    }
+
+    @Override
+    public QueryResult execute(Ner condition, Map<String, IndexAccessInterface> indexes,
+                               Query.Granularity granularity,
+                               int granularitySize,
+                               String corpusName,
+                               AttributeRequirements requirements)
+        throws QueryExecutionException {
+        
+        logger.debug("Executing NER condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        
+        // For now, delegate to the existing method
+        // TODO: Implement SoA optimization using requirements in Step 3
+        return execute(condition, indexes, granularity, granularitySize, corpusName);
     }
 } 

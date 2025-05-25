@@ -111,12 +111,16 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                 String valueString = posTag; 
 
                 for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
-                    Position position = positionListSoA.getPositionAt(i);
+                    // Use SoA-native access instead of reconstructing Position objects
                     MatchDetail detail = new MatchDetail(
                         valueString,        
                         ValueType.POS_TERM,    
-                        position,
-                        isVariable ? variableName : null 
+                        isVariable ? variableName : null,
+                        positionListSoA.getDocIdAt(i),
+                        positionListSoA.getSentenceIdAt(i),
+                        positionListSoA.getBeginCharAt(i),
+                        positionListSoA.getEndCharAt(i),
+                        positionListSoA.getSynonymIdAt(i)
                     );
                     details.add(detail);
                 }
@@ -146,5 +150,20 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                 QueryExecutionException.ErrorType.INTERNAL_ERROR
             );
         }
+    }
+    
+    @Override
+    public QueryResult execute(Pos condition, Map<String, IndexAccessInterface> indexes,
+                               Query.Granularity granularity,
+                               int granularitySize,
+                               String corpusName,
+                               AttributeRequirements requirements)
+        throws QueryExecutionException {
+        
+        logger.debug("Executing POS condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        
+        // For now, delegate to the existing method
+        // TODO: Implement SoA optimization using requirements in Step 3
+        return execute(condition, indexes, granularity, granularitySize, corpusName);
     }
 } 

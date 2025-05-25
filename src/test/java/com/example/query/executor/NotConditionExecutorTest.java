@@ -62,7 +62,7 @@ class NotConditionExecutorTest {
         ));
         ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
         when(executorFactory.getExecutor(any(Contains.class))).thenReturn(mockContainsExecutor);
-        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
             .thenReturn(innerResult);
 
         PositionListSoA posList1 = createPositionList(new Position(1, 0, 0, 0));
@@ -104,7 +104,7 @@ class NotConditionExecutorTest {
         ));
         ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
         when(executorFactory.getExecutor(any(Contains.class))).thenReturn(mockContainsExecutor);
-        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), anyInt(), anyString()))
+        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), anyInt(), anyString(), any(AttributeRequirements.class)))
             .thenReturn(innerResult);
 
         PositionListSoA posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
@@ -161,7 +161,7 @@ class NotConditionExecutorTest {
         ));
         ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
         when(executorFactory.getExecutor(any(Contains.class))).thenReturn(mockContainsExecutor);
-        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), eq(windowSize), anyString()))
+        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), eq(windowSize), anyString(), any(AttributeRequirements.class)))
             .thenReturn(innerResult);
 
         PositionListSoA posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
@@ -200,7 +200,7 @@ class NotConditionExecutorTest {
         when(executorFactory.getExecutor(any(Contains.class))).thenReturn(mockContainsExecutor);
         Position pos1 = new Position(1, 1, 0, 5);
         Position pos2 = new Position(2, 1, 0, 5);
-        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
                 .thenReturn(new QueryResult(Query.Granularity.DOCUMENT, 0,
                     List.of(createMatchDetail(pos1.getDocumentId(), "test"), 
                             createMatchDetail(pos2.getDocumentId(), "test"))

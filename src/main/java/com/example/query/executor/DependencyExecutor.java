@@ -163,9 +163,17 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     String value = String.join("/", gov, rel, dep); 
                     
                     for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
-                        Position pos = positionListSoA.getPositionAt(i); // Reconstruct Position
-                        // Ensure variableName is wrapped in Optional for MatchDetail
-                        details.add(new MatchDetail(value, ValueType.DEPENDENCY, pos, isVariable ? Optional.ofNullable(variableName) : Optional.empty()));
+                        // Use SoA-native access instead of reconstructing Position objects
+                        details.add(new MatchDetail(
+                            value, 
+                            ValueType.DEPENDENCY, 
+                            isVariable ? variableName : null,
+                            positionListSoA.getDocIdAt(i),
+                            positionListSoA.getSentenceIdAt(i),
+                            positionListSoA.getBeginCharAt(i),
+                            positionListSoA.getEndCharAt(i),
+                            positionListSoA.getSynonymIdAt(i)
+                        ));
                     }
                 } else {
                      logger.warn("Skipping invalid key format in dependency index: {}", key);
@@ -176,5 +184,20 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
         }
         
         return details;
+    }
+
+    @Override
+    public QueryResult execute(Dependency condition, Map<String, IndexAccessInterface> indexes,
+                               Query.Granularity granularity,
+                               int granularitySize,
+                               String corpusName,
+                               AttributeRequirements requirements)
+        throws QueryExecutionException {
+        
+        logger.debug("Executing DEPENDENCY condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        
+        // For now, delegate to the existing method
+        // TODO: Implement SoA optimization using requirements in Step 3
+        return execute(condition, indexes, granularity, granularitySize, corpusName);
     }
 } 

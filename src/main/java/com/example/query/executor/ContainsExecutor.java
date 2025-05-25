@@ -147,6 +147,21 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         }
     }
     
+    @Override
+    public QueryResult execute(Contains condition, Map<String, IndexAccessInterface> indexes,
+                               Query.Granularity granularity,
+                               int granularitySize,
+                               String corpusName,
+                               AttributeRequirements requirements)
+        throws QueryExecutionException {
+        
+        logger.debug("Executing CONTAINS condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        
+        // For now, delegate to the existing method
+        // TODO: Implement SoA optimization using requirements in Step 3
+        return execute(condition, indexes, granularity, granularitySize, corpusName);
+    }
+    
     /**
      * Constructs search patterns from terms, handling wildcards.
      * For example, ["apple", "*", "day"] would generate patterns for all trigrams
@@ -270,13 +285,17 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             String displayValue = pattern.replace(String.valueOf(DELIMITER), " ");
             
             for (int i = 0; i < pl.getNumPositions(); i++) {
-                Position pos = pl.getPositionAt(i); // Reconstruct Position object
+                // Use SoA-native access instead of reconstructing Position objects
                 String actualValue = isVariable ? pattern : displayValue; 
                 details.add(new MatchDetail(
                     actualValue, 
                     ValueType.TERM,
-                    pos, 
-                    isVariable ? Optional.of(variableName) : Optional.empty()
+                    isVariable ? variableName : null,
+                    pl.getDocIdAt(i),
+                    pl.getSentenceIdAt(i),
+                    pl.getBeginCharAt(i),
+                    pl.getEndCharAt(i),
+                    pl.getSynonymIdAt(i)
                 ));
             }
         } else {
@@ -319,12 +338,16 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                 String actualValue = isVariable ? key : null; // For prefix search, bound value is the full key
 
                 for (int i = 0; i < positions.getNumPositions(); i++) {
-                    Position pos = positions.getPositionAt(i); // Reconstruct Position
+                    // Use SoA-native access instead of reconstructing Position objects
                     details.add(new MatchDetail(
                         actualValue, 
                         ValueType.TERM,
-                        pos, 
-                        isVariable ? Optional.of(variableName) : Optional.empty()
+                        isVariable ? variableName : null,
+                        positions.getDocIdAt(i),
+                        positions.getSentenceIdAt(i),
+                        positions.getBeginCharAt(i),
+                        positions.getEndCharAt(i),
+                        positions.getSynonymIdAt(i)
                     ));
                 }
             }
@@ -415,20 +438,16 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                 
                 // Create MatchDetail objects directly from SoA arrays
                 for (int i = 0; i < numPositions; i++) {
-                    // Create MatchDetail with SoA-native constructor (when available)
-                    // For now, still create Position object but more efficiently
-                    Position pos = new Position(
-                        docIds.getInt(i),
-                        sentIds.getInt(i), 
-                        beginChars.getInt(i),
-                        endChars.getInt(i)
-                    );
-                    
+                    // Use SoA-native constructor - no Position object reconstruction needed
                     details.add(new MatchDetail(
                         actualValue, 
                         ValueType.TERM,
-                        pos, 
-                        isVariable ? Optional.of(variableName) : Optional.empty()
+                        isVariable ? variableName : null,
+                        docIds.getInt(i),
+                        sentIds.getInt(i), 
+                        beginChars.getInt(i),
+                        endChars.getInt(i),
+                        -1  // No synonym ID for regular CONTAINS
                     ));
                 }
             } catch (Exception e) {

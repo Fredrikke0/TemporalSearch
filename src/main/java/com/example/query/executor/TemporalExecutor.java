@@ -171,6 +171,21 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
         }
     }
 
+    @Override
+    public QueryResult execute(Temporal condition, Map<String, IndexAccessInterface> indexes,
+                               Query.Granularity granularity,
+                               int granularitySize,
+                               String corpusName,
+                               AttributeRequirements requirements)
+        throws QueryExecutionException {
+        
+        logger.debug("Executing TEMPORAL condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        
+        // For now, delegate to the existing method
+        // TODO: Implement SoA optimization using requirements in Step 3
+        return execute(condition, indexes, granularity, granularitySize, corpusName);
+    }
+
     // =========================================================================
     // Concrete Strategy Implementations (Inner Classes for now)
     // =========================================================================
@@ -279,7 +294,9 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     // TODO: Re-enable post-filtering once candidate retrieval is confirmed correct
                     // Post-filtering: Evaluate the actual date against the original condition
                     // if (evaluateTemporalCondition(condition.temporalType(), specificDate.atStartOfDay(), condition.startDate(), condition.endDate().orElse(condition.startDate()))) {
-                        details.add(new MatchDetail(specificDate, ValueType.DATE, entry.position(), variableName));
+                        details.add(new MatchDetail(specificDate, ValueType.DATE, variableName.orElse(null), 
+                    entry.position().getDocumentId(), entry.position().getSentenceId(),
+                    entry.position().getBeginPosition(), entry.position().getEndPosition(), -1));
                     // } else {
                         // Optional: Log skipped entries if needed for debugging
                     //     strategyLogger.trace("Skipping Nash entry (dateId={}) with date {} as it failed post-filtering for condition {}", entry.dateId(), specificDate, condition.temporalType());
@@ -383,8 +400,17 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                              // Create MatchDetail for each position matching the date criteria
                                          // Use docDate object (actual matched date) as the value when binding variables
                                          Object matchValue = (variableName.isPresent()) ? docDate : intervalStringFromDate(docDate); // Or use interval string?
-                                         // Pass variable name Optional directly to canonical constructor
-                                         details.add(new MatchDetail(matchValue, ValueType.DATE, position, variableName));
+                                         // Use SoA-native constructor instead of Position object
+                                         details.add(new MatchDetail(
+                                             matchValue, 
+                                             ValueType.DATE, 
+                                             variableName.orElse(null),
+                                             position.getDocumentId(),
+                                             position.getSentenceId(),
+                                             position.getBeginPosition(),
+                                             position.getEndPosition(),
+                                             -1  // No synonym ID for temporal conditions
+                                         ));
                                          matchesFound++;
                                      }
                                  }

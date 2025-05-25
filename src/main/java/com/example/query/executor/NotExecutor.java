@@ -52,8 +52,9 @@ public final class NotExecutor implements ConditionExecutor<Not> {
         Condition operand = condition.condition();
         ConditionExecutor<Condition> subExecutor = factory.getExecutor(operand);
 
-        // Execute the sub-condition
-        QueryResult subResult = subExecutor.execute(operand, indexes, granularity, granularitySize, corpusName);
+        // Execute the sub-condition using default requirements for backward compatibility
+        AttributeRequirements defaultRequirements = new AttributeRequirements();
+        QueryResult subResult = subExecutor.execute(operand, indexes, granularity, granularitySize, corpusName, defaultRequirements);
 
         // Extract IDs based on granularity from the sub-result
         Set<?> subResultIds = extractIds(subResult, granularity);
@@ -98,16 +99,14 @@ public final class NotExecutor implements ConditionExecutor<Not> {
 
     /** Helper to create placeholder MatchDetail from an ID */
     private MatchDetail createPlaceholderMatchDetail(Object id, Query.Granularity granularity) {
-        Position pos;
         if (granularity == Query.Granularity.DOCUMENT) {
             Integer docId = (Integer) id;
-            pos = new Position(docId, -1, -1, -1);
+            return new MatchDetail("NOT_MATCH", ValueType.TERM, (String) null, docId, -1, -1, -1);
         } else { // SENTENCE granularity
             @SuppressWarnings("unchecked")
             SimpleEntry<Integer, Integer> pair = (SimpleEntry<Integer, Integer>) id;
-            pos = new Position(pair.getKey(), pair.getValue(), -1, -1);
+            return new MatchDetail("NOT_MATCH", ValueType.TERM, (String) null, pair.getKey(), pair.getValue(), -1, -1);
         }
-        return new MatchDetail("NOT_MATCH", ValueType.TERM, pos, (String) null);
     }
 
     /**
@@ -172,5 +171,49 @@ public final class NotExecutor implements ConditionExecutor<Not> {
         logger.debug("Finished iterating '{}'. Found {} unique IDs from {} PositionListSoA entries for granularity {}",
                      UNIGRAM_INDEX_NAME, allIds.size(), count, granularity);
         return allIds;
+    }
+
+    @Override
+    public QueryResult execute(Not condition, Map<String, IndexAccessInterface> indexes,
+                               Query.Granularity granularity,
+                               int granularitySize,
+                               String corpusName,
+                               AttributeRequirements requirements)
+        throws QueryExecutionException {
+        
+        logger.debug("Executing NOT condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        
+        Condition operand = condition.condition();
+        ConditionExecutor<Condition> subExecutor = factory.getExecutor(operand);
+
+        // Execute the sub-condition with the provided requirements
+        QueryResult subResult = subExecutor.execute(operand, indexes, granularity, granularitySize, corpusName, requirements);
+
+        // Extract IDs based on granularity from the sub-result
+        Set<?> subResultIds = extractIds(subResult, granularity);
+        logger.debug("Sub-condition executed. Found {} match details, {} unique IDs.", subResult.getAllDetails().size(), subResultIds.size());
+
+        // Get all possible matches (as IDs) based on granularity
+        Set<?> allPossibleIds = getAllPossibleIds(indexes, granularity);
+        if (allPossibleIds.isEmpty()) {
+            logger.warn("Could not determine the set of all possible matches. Check if '{}' index exists and is populated.", UNIGRAM_INDEX_NAME);
+            throw new QueryExecutionException(
+                "Failed to retrieve the set of all possible documents/sentences for NOT operation.",
+                condition.toString(),
+                QueryExecutionException.ErrorType.MISSING_INDEX
+            );
+        }
+        logger.debug("Total possible IDs for granularity {}: {}", granularity, allPossibleIds.size());
+
+        // Perform the NOT operation (set difference on IDs)
+        Set<?> resultIds = new HashSet<>(allPossibleIds); // Create a mutable copy
+        resultIds.removeAll(subResultIds);
+        logger.debug("Resulting IDs after NOT operation: {}", resultIds.size());
+
+        // Create the final QueryResult from the remaining IDs by creating placeholder MatchDetails
+        // We need to reconstruct minimal Position objects based on the ID type
+        return new QueryResult(granularity, granularitySize, resultIds.stream()
+                .map(id -> createPlaceholderMatchDetail(id, granularity))
+                .collect(Collectors.toList()));
     }
 } 

@@ -148,21 +148,16 @@ class QueryExecutorTest {
 
     // Helper method to create simple MatchDetail
     private MatchDetail createMatchDetail(int docId, int sentenceId, String value) {
-         // Create a placeholder position
-        Position pos = new Position(docId, sentenceId, 0, value.length());
-        // Use the 5-argument constructor with null for variableName
-        return new MatchDetail(value, ValueType.TERM, pos, (String) null);
+        // Use SoA-native constructor instead of Position object
+        return new MatchDetail(value, ValueType.TERM, (String) null, docId, sentenceId, 0, value.length());
     }
      private MatchDetail createMatchDetail(int docId, String value) {
-         // Create a placeholder position for document level
-        Position pos = new Position(docId, -1, 0, value.length());
-        // Use the 5-argument constructor with null for variableName
-        return new MatchDetail(value, ValueType.TERM, pos, (String) null);
+        // Use SoA-native constructor for document level
+        return new MatchDetail(value, ValueType.TERM, (String) null, docId, -1, 0, value.length());
     }
 
     // Helper to create MatchDetail with a specific LocalDate value for a key
     private MatchDetail createMatchDetailWithDate(int docId, int sentenceId, String keyNameForDate, LocalDate date, String alias) {
-        Position pos = new Position(docId, sentenceId, 0, 5); // Assuming some length and using date as timestamp
         // Store the date as the value, and keyNameForDate in the variableName for easy extraction in mocks/tests if needed.
         // Actual MatchDetail from NerDateIndex would have the date as part of its structured value or specific field.
         // For testing JoinHandler.extractValueForKey, it expects the key to match a variable or structural key.
@@ -170,13 +165,12 @@ class QueryExecutorTest {
         // Here, we assume `keyNameForDate` is the key that will be used with `extractValueForKey`.
         // Let's use the alias.keyName format for the variableName if an alias is provided.
         String mockVariableName = alias != null ? alias + "." + keyNameForDate : keyNameForDate;
-        return new MatchDetail(date, ValueType.DATE, pos, Optional.of(mockVariableName));
+        return new MatchDetail(date, ValueType.DATE, mockVariableName, docId, sentenceId, 0, 5);
     }
 
     private MatchDetail createMatchDetailWithDate(int docId, String keyNameForDate, LocalDate date, String alias) {
-        Position pos = new Position(docId, -1, 0, 5); // Document level
         String mockVariableName = alias != null ? alias + "." + keyNameForDate : keyNameForDate;
-        return new MatchDetail(date, ValueType.DATE, pos, Optional.of(mockVariableName));
+        return new MatchDetail(date, ValueType.DATE, mockVariableName, docId, -1, 0, 5);
     }
 
     @Test
@@ -212,7 +206,7 @@ class QueryExecutorTest {
         QueryResult expectedAndResult = createMockQueryResult(Query.Granularity.DOCUMENT, 0, 
             List.of(createMatchDetail(2, "test_and_person")) // Simplified single detail for doc 2
         );
-        when(mockLogicalExecutor.execute(eq(andCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockLogicalExecutor.execute(eq(andCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
             .thenReturn(expectedAndResult);
 
         // Execute query
@@ -223,7 +217,7 @@ class QueryExecutorTest {
         assertEquals(1, results.getAllDetails().size(), "Should match 1 document based on intersection");
         assertTrue(results.getAllDetails().stream().anyMatch(d -> d.getDocumentId() == 2), "Document 2 should be the only match");
         // Verify that the mockLogicalExecutor was called
-        verify(mockLogicalExecutor).execute(eq(andCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString());
+        verify(mockLogicalExecutor).execute(eq(andCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class));
     }
     
     @Test
@@ -258,7 +252,7 @@ class QueryExecutorTest {
         QueryResult expectedOrResult = createMockQueryResult(Query.Granularity.DOCUMENT, 0, 
             List.of(createMatchDetail(1, "test"), createMatchDetail(2, "test_or_person"), createMatchDetail(3, "person"))
         );
-        when(mockLogicalExecutor.execute(eq(orCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockLogicalExecutor.execute(eq(orCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
             .thenReturn(expectedOrResult);
 
         // Execute query
@@ -270,7 +264,7 @@ class QueryExecutorTest {
         assertEquals(3, docIds.size(), "Should match 3 unique documents based on union");
         assertTrue(docIds.containsAll(Set.of(1, 2, 3)), "Documents 1, 2, and 3 should be matched");
         // Verify that the mockLogicalExecutor was called
-        verify(mockLogicalExecutor).execute(eq(orCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString());
+        verify(mockLogicalExecutor).execute(eq(orCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class));
     }
     
     @Test
@@ -312,7 +306,7 @@ class QueryExecutorTest {
         // Mock the behavior of the NotExecutor directly
         // We don't need to mock the underlying containsExecutor if we mock NotExecutor's final result
         // Mock the NotExecutor itself
-        when(mockNotExecutor.execute(eq(notCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockNotExecutor.execute(eq(notCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
                 .thenReturn(notResults);
 
         // Execute query
@@ -325,7 +319,7 @@ class QueryExecutorTest {
         assertFalse(docIds.contains(2), "Document 2 should not be in results");
         assertTrue(docIds.contains(3), "Document 3 should be in results (based on mock)");
         assertTrue(docIds.contains(4), "Document 4 should be in results (based on mock)");
-        verify(mockNotExecutor).execute(eq(notCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString());
+        verify(mockNotExecutor).execute(eq(notCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class));
     }
     
     @Test
@@ -372,7 +366,7 @@ class QueryExecutorTest {
         );
         
         // Stub the execute method of the mockLogicalExecutor for the orCondition
-        when(mockLogicalExecutor.execute(eq(orCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockLogicalExecutor.execute(eq(orCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
             .thenReturn(finalComplexResult);
 
 
@@ -389,7 +383,7 @@ class QueryExecutorTest {
         verify(factory).getExecutor(eq(orCondition));
         
         // Verify that the mockLogicalExecutor (handling the OR) was invoked
-        verify(mockLogicalExecutor).execute(eq(orCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString());
+        verify(mockLogicalExecutor).execute(eq(orCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class));
 
         // No need to verify sub-conditions or internal executors as we mocked the top-level execution
     }
@@ -415,9 +409,9 @@ class QueryExecutorTest {
         ));
         ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
         doReturn(mockContainsExecutor).when(factory).getExecutor(isA(Contains.class));
-        when(mockContainsExecutor.execute(eq(containsConditionLeft), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockContainsExecutor.execute(eq(containsConditionLeft), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
                 .thenReturn(mockLeftResult);
-        when(mockContainsExecutor.execute(eq(containsConditionRight), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockContainsExecutor.execute(eq(containsConditionRight), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
                 .thenReturn(mockRightResult);
         Object joinResultsObj = queryExecutor.execute(mainQuery, indexes);
         @SuppressWarnings("unchecked")
@@ -452,9 +446,9 @@ class QueryExecutorTest {
         ));
         ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
         doReturn(mockContainsExecutor).when(factory).getExecutor(isA(Contains.class));
-        when(mockContainsExecutor.execute(eq(containsConditionLeft), eq(indexes), eq(Query.Granularity.SENTENCE), eq(0), anyString()))
+        when(mockContainsExecutor.execute(eq(containsConditionLeft), eq(indexes), eq(Query.Granularity.SENTENCE), eq(0), anyString(), any(AttributeRequirements.class)))
                 .thenReturn(mockLeftResult);
-        when(mockContainsExecutor.execute(eq(containsConditionRight), eq(indexes), eq(Query.Granularity.SENTENCE), eq(0), anyString()))
+        when(mockContainsExecutor.execute(eq(containsConditionRight), eq(indexes), eq(Query.Granularity.SENTENCE), eq(0), anyString(), any(AttributeRequirements.class)))
                 .thenReturn(mockRightResult);
         Object joinResultsObj = queryExecutor.execute(mainQuery, indexes);
         @SuppressWarnings("unchecked")
@@ -483,15 +477,15 @@ class QueryExecutorTest {
         JoinCondition joinCondition = JoinCondition.createEqualityJoin("leftAlias.custom_key", "rightAlias.custom_key", JoinCondition.JoinType.INNER);
         Query mainQuery = new Query("mainSource", Collections.emptyList(), Collections.emptyList(), Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(), Collections.emptyList(), new com.example.query.binding.VariableRegistry(), Arrays.asList(subquerySpecLeft, subquerySpecRight), Optional.of(joinCondition), Optional.empty(), List.of());
         // Create MatchDetails with a custom variable name
-        MatchDetail leftDetail = new MatchDetail("foo", ValueType.TERM, new Position(1, -1, 0, 3), "leftAlias.custom_key");
-        MatchDetail rightDetail = new MatchDetail("foo", ValueType.TERM, new Position(2, -1, 0, 3), "rightAlias.custom_key");
+        MatchDetail leftDetail = new MatchDetail("foo", ValueType.TERM, "leftAlias.custom_key", 1, -1, 0, 3);
+        MatchDetail rightDetail = new MatchDetail("foo", ValueType.TERM, "rightAlias.custom_key", 2, -1, 0, 3);
         QueryResult mockLeftResult = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(leftDetail));
         QueryResult mockRightResult = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(rightDetail));
         ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
         doReturn(mockContainsExecutor).when(factory).getExecutor(isA(Contains.class));
-        when(mockContainsExecutor.execute(eq(containsConditionLeft), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockContainsExecutor.execute(eq(containsConditionLeft), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
                 .thenReturn(mockLeftResult);
-        when(mockContainsExecutor.execute(eq(containsConditionRight), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString()))
+        when(mockContainsExecutor.execute(eq(containsConditionRight), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
                 .thenReturn(mockRightResult);
         Object joinResultsObj = queryExecutor.execute(mainQuery, indexes);
         @SuppressWarnings("unchecked")
@@ -527,20 +521,20 @@ class QueryExecutorTest {
 
         // Setup Mock Executors
         QueryResult containsResult = new QueryResult(Query.Granularity.DOCUMENT, List.of(
-            new MatchDetail("term", ValueType.TERM, new Position(1, 1, 0, 4), Optional.empty()),
-            new MatchDetail("term", ValueType.TERM, new Position(2, 1, 0, 4), Optional.empty())
+            new MatchDetail("term", ValueType.TERM, null, 1, 1, 0, 4),
+            new MatchDetail("term", ValueType.TERM, null, 2, 1, 0, 4)
         ));
         QueryResult nerResult = new QueryResult(Query.Granularity.DOCUMENT, List.of(
-            new MatchDetail("Alice", ValueType.ENTITY, new Position(1, 2, 10, 15), Optional.empty()),
-            new MatchDetail("Bob", ValueType.ENTITY, new Position(3, 1, 5, 8), Optional.empty())
+            new MatchDetail("Alice", ValueType.ENTITY, null, 1, 2, 10, 15),
+            new MatchDetail("Bob", ValueType.ENTITY, null, 3, 1, 5, 8)
         ));
         
         // Mock LogicalExecutor behavior (intersection/AND)
         LogicalExecutor logicalExecutor = mock(LogicalExecutor.class);
         QueryResult combinedResult = new QueryResult(Query.Granularity.DOCUMENT, List.of(
             // Assume only doc 1 matches both Contains and Ner
-             new MatchDetail("term", ValueType.TERM, new Position(1, 1, 0, 4), Optional.empty()),
-             new MatchDetail("Alice", ValueType.ENTITY, new Position(1, 2, 10, 15), Optional.empty())
+             new MatchDetail("term", ValueType.TERM, null, 1, 1, 0, 4),
+             new MatchDetail("Alice", ValueType.ENTITY, null, 1, 2, 10, 15)
         ));
         
         // Explicitly tell the factory what to return for each condition type
@@ -549,12 +543,12 @@ class QueryExecutorTest {
         doReturn(logicalExecutor).when(factory).getExecutor(isA(com.example.query.model.condition.Logical.class));
 
         // Define behavior for the mock LogicalExecutor when it executes the implicit AND
-        when(logicalExecutor.execute(isA(com.example.query.model.condition.Logical.class), anyMap(), eq(Query.Granularity.DOCUMENT), eq(0), eq("wikipedia")))
+        when(logicalExecutor.execute(isA(com.example.query.model.condition.Logical.class), anyMap(), eq(Query.Granularity.DOCUMENT), eq(0), eq("wikipedia"), any(AttributeRequirements.class)))
             .thenReturn(combinedResult);
         
         // REMOVED UNNECESSARY STUBS for individual executors as the mocked LogicalExecutor handles the combined logic
-        // when(containsExecutor.execute(eq(containsCondition), anyMap(), any(Query.Granularity.class), anyInt(), anyString())).thenReturn(containsResult);
-        // when(nerExecutor.execute(eq(nerCondition), anyMap(), any(Query.Granularity.class), anyInt(), anyString())).thenReturn(nerResult);
+        // when(containsExecutor.execute(eq(containsCondition), anyMap(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class))).thenReturn(containsResult);
+        // when(nerExecutor.execute(eq(nerCondition), anyMap(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class))).thenReturn(nerResult);
 
         // Execute
         Object result = queryExecutor.execute(query, Map.of("unigram", unigramIndex)); // Assuming 'unigram' index is relevant, adjust if needed
@@ -563,15 +557,14 @@ class QueryExecutorTest {
         assertTrue(result instanceof QueryResult);
         // Check size based on the combined result from the mocked LogicalExecutor
         assertEquals(2, ((QueryResult) result).getAllDetails().size()); 
-        verify(logicalExecutor, times(1)).execute(any(com.example.query.model.condition.Logical.class), anyMap(), eq(Query.Granularity.DOCUMENT), eq(0), eq("wikipedia"));
+        verify(logicalExecutor, times(1)).execute(any(com.example.query.model.condition.Logical.class), anyMap(), eq(Query.Granularity.DOCUMENT), eq(0), eq("wikipedia"), any(AttributeRequirements.class));
     }
 
     // --- Temporal Join Integration Tests ---
 
     // Helper to create MatchDetail with LocalDate value for temporal joins
     private MatchDetail createTemporalMatchDetail(int docId, int sentenceId, LocalDate date, String variableNameToBind) {
-        Position pos = new Position(docId, sentenceId, 0, 5);
-        return new MatchDetail(date, ValueType.DATE, pos, Optional.ofNullable(variableNameToBind));
+        return new MatchDetail(date, ValueType.DATE, variableNameToBind, docId, sentenceId, 0, 5);
     }
 
     @Test
@@ -613,8 +606,8 @@ class QueryExecutorTest {
         MatchDetail q2_d4 = createTemporalMatchDetail(4, -1, LocalDate.of(2023, 1, 20), "q2.date");
         QueryResult q2Result = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(q2_d3, q2_d4));
 
-        lenient().when(temporalExecutor.execute(eq(cond1), eq(indexes), any(), anyInt(), eq(source))).thenReturn(q1Result);
-        lenient().when(temporalExecutor.execute(eq(cond2), eq(indexes), any(), anyInt(), eq(source))).thenReturn(q2Result);
+        lenient().when(temporalExecutor.execute(eq(cond1), eq(indexes), any(), anyInt(), eq(source), any(AttributeRequirements.class))).thenReturn(q1Result);
+        lenient().when(temporalExecutor.execute(eq(cond2), eq(indexes), any(), anyInt(), eq(source), any(AttributeRequirements.class))).thenReturn(q2Result);
 
         Object result = queryExecutor.execute(mainQuery, indexes);
 
@@ -666,8 +659,8 @@ class QueryExecutorTest {
         MatchDetail q2_d4 = createTemporalMatchDetail(4, -1, LocalDate.of(2023, 1, 20), "q2.date");
         QueryResult q2Result = createMockQueryResult(Query.Granularity.DOCUMENT, 0, List.of(q2_d3, q2_d4));
 
-        lenient().when(temporalExecutor.execute(eq(cond1), eq(indexes), any(), anyInt(), eq(source))).thenReturn(q1Result);
-        lenient().when(temporalExecutor.execute(eq(cond2), eq(indexes), any(), anyInt(), eq(source))).thenReturn(q2Result);
+        lenient().when(temporalExecutor.execute(eq(cond1), eq(indexes), any(), anyInt(), eq(source), any(AttributeRequirements.class))).thenReturn(q1Result);
+        lenient().when(temporalExecutor.execute(eq(cond2), eq(indexes), any(), anyInt(), eq(source), any(AttributeRequirements.class))).thenReturn(q2Result);
 
         Object result = queryExecutor.execute(mainQuery, indexes);
 
@@ -763,10 +756,11 @@ class QueryExecutorTest {
 
         // We will call the real executeDependentJoin on the spied executor.
         // The internal call to executeWithContext for the modified query will be stubbed.
-        Object resultFromDependentJoin = spiedQueryExecutor.executeDependentJoin(overallQuery, indexes, initialSubqueryContext, leadingAlias, mainConditionsResult);
+        AttributeRequirements mockRequirements = new AttributeRequirements(); // Add mock requirements
+        Object resultFromDependentJoin = spiedQueryExecutor.executeDependentJoin(overallQuery, indexes, initialSubqueryContext, leadingAlias, mainConditionsResult, mockRequirements);
 
         // ---- Assertions ----
-        verify(spiedQueryExecutor, never()).executeIndependentJoin(any(), any(), any());
+        verify(spiedQueryExecutor, never()).executeIndependentJoin(any(), any(), any(), any());
 
         // Extract and verify the new Temporal filter from the captured modifiedQuery
         Query capturedModifiedQuery = modifiedQueryCaptor.getValue();
