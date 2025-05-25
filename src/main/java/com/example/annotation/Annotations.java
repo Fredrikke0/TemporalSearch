@@ -182,7 +182,7 @@ public class Annotations {
                 numExecutorThreads = 1;
             } else {
                 // Prioritize executor threads slightly if rounding is an issue, ensure CoreNLP gets at least 1
-                numExecutorThreads = Math.max(1, (int) Math.ceil(totalUserThreads * 0.6));
+                numExecutorThreads = Math.max(1, (int) Math.ceil(totalUserThreads * 0.8));
                 numCoreNLPInternalThreads = Math.max(1, totalUserThreads - numExecutorThreads);
                 if (numCoreNLPInternalThreads == 0) {
                     numCoreNLPInternalThreads = 1;
