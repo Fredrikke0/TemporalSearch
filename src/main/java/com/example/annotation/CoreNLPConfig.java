@@ -96,13 +96,14 @@ public class CoreNLPConfig {
         props.setProperty("tokenize.options", String.join(",",
             //"normalizeParentheses=true",
             //"normalizeOtherBrackets=true",
-            "ptb3Escaping=false"
+            "ptb3Escaping=false",
+            "untokenizable=noneKeep",
+            "tokenizeNLs=false"
         ));
         
         // Sentence splitting
         // props.setProperty("ssplit.boundaryTokenRegex", "\\.|[!?]+");  // Default boundary regex
         props.setProperty("ssplit.newlineIsSentenceBreak", "two"); // Needs testing
-        props.setProperty("tokenize.tokenizeNLs", "false");       // Handle newlines properly
         
 
         

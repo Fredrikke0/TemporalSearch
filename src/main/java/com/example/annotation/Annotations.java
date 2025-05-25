@@ -13,7 +13,7 @@ import java.util.concurrent.ExecutorService;
 
 public class Annotations {
     private static final Logger logger = LoggerFactory.getLogger(Annotations.class);
-    private static final int MAX_DOCUMENT_LENGTH = 20000; // Skip very long documents.
+    private static final int MAX_DOCUMENT_LENGTH = 25000; // Skip very long documents.
     private static final int DOCUMENT_PROCESSING_TIMEOUT_MINUTES = 5; // Timeout for a single CoreNLP task
 
     private static StanfordCoreNLP createCoreNLPPipeline(int threads) {
