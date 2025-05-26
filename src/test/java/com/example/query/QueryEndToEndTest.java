@@ -219,7 +219,7 @@ public class QueryEndToEndTest {
 
     @Test
     public void testSimpleContainsQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
-        String queryString = "SELECT t1.DOCUMENT_ID, t1.TITLE FROM source ALIAS t1 WHERE CONTAINS(\"apple\")";
+        String queryString = "SELECT t1.DOCUMENT_ID FROM source ALIAS t1 WHERE CONTAINS(\"apple\")";
         Query query = queryParser.parse(queryString);
 
         // Execute query
@@ -373,7 +373,7 @@ public class QueryEndToEndTest {
     @Test
     public void testNerTypeWithTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Test exact match still works (case-insensitive)
-        String queryString = "SELECT DOCUMENT_ID, TITLE FROM source WHERE NER(PERSON, 'albert einstein')"; // Use full name 
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE NER(PERSON, 'albert einstein')"; // Use full name 
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -496,7 +496,7 @@ public class QueryEndToEndTest {
     @Test
     public void testNerPartialTargetQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Test partial match (case-insensitive)
-        String queryString = "SELECT DOCUMENT_ID, TITLE FROM source WHERE NER(PERSON, 'Albrecht')"; // Use partial name 
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE NER(PERSON, 'Albrecht')"; // Use partial name 
         Query query = queryParser.parse(queryString);
         QueryResult result = (QueryResult) queryExecutor.execute(query, mockIndexes);
 
@@ -513,7 +513,7 @@ public class QueryEndToEndTest {
     @Test
     public void testOrQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
         // Query for documents containing either "apple" or "banana"
-        String queryString = "SELECT DOCUMENT_ID, TITLE FROM source WHERE CONTAINS(\"apple\") OR CONTAINS(\"banana\")";
+        String queryString = "SELECT DOCUMENT_ID FROM source WHERE CONTAINS(\"apple\") OR CONTAINS(\"banana\")";
         Query query = queryParser.parse(queryString);
 
         // Execute query

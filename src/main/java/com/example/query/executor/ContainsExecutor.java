@@ -57,31 +57,12 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         logger.debug("Executing CONTAINS condition with {} terms at {} granularity with size {} (corpus: {})", 
                 condition.terms().size(), granularity, granularitySize, corpusName);
         
-        // Validate required indexes
-        if (!indexes.containsKey(UNIGRAM_INDEX)) {
-            throw new QueryExecutionException(
-                "Missing required unigram index",
-                condition.toString(),
-                QueryExecutionException.ErrorType.MISSING_INDEX
-            );
-        }
-        
         List<MatchDetail> allDetails = new ArrayList<>();
         
         List<String> terms = condition.terms();
         if (terms.isEmpty()) {
             logger.warn("CONTAINS condition has no terms, returning empty result");
-            // Return empty QueryResult
             return new QueryResult(granularity, granularitySize, Collections.emptyList());
-        }
-        
-        // Check if there are too many terms
-        if (terms.size() > 3) {
-            throw new QueryExecutionException(
-                "CONTAINS condition supports at most 3 terms, but got " + terms.size() + " terms",
-                "CONTAINS(" + String.join(", ", terms) + ")",
-                QueryExecutionException.ErrorType.INVALID_CONDITION
-            );
         }
         
         // Determine if this is a variable binding
@@ -157,9 +138,68 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         
         logger.debug("Executing CONTAINS condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
         
-        // For now, delegate to the existing method
-        // TODO: Implement SoA optimization using requirements in Step 3
-        return execute(condition, indexes, granularity, granularitySize, corpusName);
+        List<MatchDetail> allDetails = new ArrayList<>();
+        
+        List<String> terms = condition.terms();
+        if (terms.isEmpty()) {
+            logger.warn("CONTAINS condition has no terms, returning empty result");
+            return new QueryResult(granularity, granularitySize, Collections.emptyList());
+        }
+        
+        // Determine if this is a variable binding
+        boolean isVariable = condition.isVariable();
+        String variableName = condition.variableName();
+        
+        // Get the appropriate ngram index based on the size of the terms
+        IndexAccessInterface index = null;
+        if (terms.size() == 1) {
+            index = indexes.get(UNIGRAM_INDEX);
+        } else if (terms.size() == 2) {
+            index = indexes.get(BIGRAM_INDEX);
+        } else if (terms.size() == 3) {
+            index = indexes.get(TRIGRAM_INDEX);
+        }
+        
+        if (index == null) {
+            String missingIndex = terms.size() == 1 ? UNIGRAM_INDEX : (terms.size() == 2 ? BIGRAM_INDEX : TRIGRAM_INDEX);
+            logger.error("Required {}-gram index ('{}') not found in provided indexes: {}", terms.size(), missingIndex, indexes.keySet());
+            throw new QueryExecutionException(
+                "Required "+ missingIndex +" index not found for " + terms.size() + "-gram terms.",
+                "CONTAINS(" + String.join(", ", terms) + ")",
+                QueryExecutionException.ErrorType.MISSING_INDEX
+            );
+        }
+        
+        try {
+            // Construct search patterns based on the terms
+            Set<String> patterns = constructSearchPatterns(terms);
+            
+            // Execute search for each pattern using selective deserialization
+            for (String pattern : patterns) {
+                List<MatchDetail> patternDetails = executePatternSearchOptimized(
+                    pattern, isVariable, variableName, index, granularity, condition, requirements);
+                
+                if (!patternDetails.isEmpty()) {
+                    allDetails.addAll(patternDetails);
+                }
+            }
+            
+            logger.debug("Found {} total details for terms: {} using selective deserialization", 
+                    allDetails.size(), terms);
+            
+            return new QueryResult(granularity, granularitySize, allDetails);
+        } catch (Exception e) {
+            if (e instanceof QueryExecutionException qee) throw qee;
+            if (e instanceof IndexAccessException iae) {
+                 throw new QueryExecutionException("Index access error during CONTAINS", iae, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+            }
+            throw new QueryExecutionException(
+                "Error executing CONTAINS condition: " + e.getMessage(),
+                e,
+                condition.toString(),
+                QueryExecutionException.ErrorType.INTERNAL_ERROR
+            );
+        }
     }
     
     /**
@@ -396,11 +436,12 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
      * @param index The index to search in
      * @param granularity The query granularity (for logging)
      * @param condition The condition object (used for ID)
+     * @param requirements The AttributeRequirements for selective deserialization
      * @return List of MatchDetail objects found for the pattern
      */
     private List<MatchDetail> executePatternSearchOptimized(String pattern, boolean isVariable, String variableName,
                                         IndexAccessInterface index, Query.Granularity granularity,
-                                        Contains condition)
+                                        Contains condition, AttributeRequirements requirements)
         throws QueryExecutionException, IndexAccessException {
         
         List<MatchDetail> details = new ArrayList<>();
@@ -421,16 +462,27 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         
         if (rawBlob.isPresent()) {
             try {
-                // Only deserialize the attributes we actually need
                 int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob.get());
                 logger.debug("Found {} positions for pattern: '{}' (using selective deserialization)", numPositions, pattern);
                 
-                // For CONTAINS conditions, we typically need all position attributes for result presentation
-                // But we can still optimize by avoiding Position object reconstruction
+                if (numPositions == 0) {
+                    return details;
+                }
+                
+                // Selective deserialization based on requirements
                 IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob.get());
-                IntArrayList sentIds = PositionListSoA.decompressSentenceIds(rawBlob.get());
-                IntArrayList beginChars = PositionListSoA.decompressBeginChars(rawBlob.get());
-                IntArrayList endChars = PositionListSoA.decompressEndChars(rawBlob.get());
+                
+                IntArrayList sentIds = requirements.needsSentenceId ? 
+                    PositionListSoA.decompressSentenceIds(rawBlob.get()) : null;
+                
+                IntArrayList beginChars = requirements.needsPositions ? 
+                    PositionListSoA.decompressBeginChars(rawBlob.get()) : null;
+                
+                IntArrayList endChars = requirements.needsPositions ? 
+                    PositionListSoA.decompressEndChars(rawBlob.get()) : null;
+                
+                IntArrayList synonymIds = requirements.needsSynonymIds ? 
+                    PositionListSoA.decompressSynonymIds(rawBlob.get()) : null;
                 
                 // Convert the pattern back to space-separated format for the MatchDetail value
                 String displayValue = pattern.replace(String.valueOf(DELIMITER), " ");
@@ -438,18 +490,21 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                 
                 // Create MatchDetail objects directly from SoA arrays
                 for (int i = 0; i < numPositions; i++) {
-                    // Use SoA-native constructor - no Position object reconstruction needed
                     details.add(new MatchDetail(
                         actualValue, 
                         ValueType.TERM,
                         isVariable ? variableName : null,
                         docIds.getInt(i),
-                        sentIds.getInt(i), 
-                        beginChars.getInt(i),
-                        endChars.getInt(i),
-                        -1  // No synonym ID for regular CONTAINS
+                        sentIds != null ? sentIds.getInt(i) : -1,
+                        beginChars != null ? beginChars.getInt(i) : -1,
+                        endChars != null ? endChars.getInt(i) : -1,
+                        synonymIds != null ? synonymIds.getInt(i) : -1
                     ));
                 }
+                
+                logger.debug("Selective deserialization for '{}': docIds={}, sentIds={}, positions={}, synonymIds={}", 
+                           pattern, true, sentIds != null, beginChars != null, synonymIds != null);
+                
             } catch (Exception e) {
                 logger.warn("Error during selective deserialization for pattern '{}', falling back to full deserialization: {}", 
                            pattern, e.getMessage());

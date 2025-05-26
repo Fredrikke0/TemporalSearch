@@ -93,9 +93,9 @@ public class Pipeline {
         // Annotation stage group
         var annotateGroup = parser.addArgumentGroup("Annotation stage arguments (used in 'annotate' or 'all' stage)");
         annotateGroup.addArgument("-b", "--batch-size")
-                .setDefault(200) // Keep batch size for annotation commit frequency
+                .setDefault(300)
                 .type(Integer.class)
-                .help("Number of documents to commit per transaction during annotation (default: 200)");
+                .help("Number of documents to commit per transaction during annotation (default: 300)");
 
         annotateGroup.addArgument("-t", "--threads")
                 .setDefault(Runtime.getRuntime().availableProcessors()) // Default to available processors

@@ -8,6 +8,7 @@ import com.example.query.model.condition.Pos;
 import com.example.query.binding.MatchDetail;
 import com.example.query.binding.ValueType;
 import com.example.query.executor.QueryResult;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -162,8 +163,109 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         
         logger.debug("Executing POS condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
         
-        // For now, delegate to the existing method
-        // TODO: Implement SoA optimization using requirements in Step 3
-        return execute(condition, indexes, granularity, granularitySize, corpusName);
+        // Validate that this condition is used correctly according to the basic index structure.
+        if (condition.term() != null) {
+            throw new QueryExecutionException(
+                "Term specification (e.g., POS(tag, 'term')) is not supported by the basic POS executor. " +
+                "Specific term/tag lookup requires a different index structure (e.g., stitch index).",
+                condition.toString(), QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
+        }
+        
+        // Validate required indexes
+        if (!indexes.containsKey(POS_INDEX)) {
+            throw new QueryExecutionException(
+                "Missing required POS index",
+                condition.toString(),
+                QueryExecutionException.ErrorType.MISSING_INDEX
+            );
+        }
+        
+        String posTag = condition.posTag();
+        boolean isVariable = condition.isVariable();
+        String variableName = condition.variableName();
+        
+        // Normalize POS tag to lowercase (aligns with POSIndexGenerator)
+        String normalizedPosTag = posTag.toLowerCase();
+        
+        logger.debug("POS condition details: tag='{}', isVariable={}, variableName='{}' (selective deserialization)",
+                     normalizedPosTag, isVariable, variableName != null ? variableName : "(none)");
+        
+        // Get the POS index
+        IndexAccessInterface index = indexes.get(POS_INDEX);
+        
+        List<MatchDetail> details = new ArrayList<>();
+        
+        try {
+            // Use selective deserialization for better performance
+            byte[] keyBytes = normalizedPosTag.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            Optional<byte[]> rawBlob = index.getRaw(keyBytes);
+
+            if (rawBlob.isPresent()) {
+                try {
+                    int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob.get());
+                    logger.debug("Found {} positions for POS tag '{}' (using selective deserialization)", numPositions, normalizedPosTag);
+                    
+                    if (numPositions == 0) {
+                        return new QueryResult(granularity, granularitySize, details);
+                    }
+                    
+                    // Selective deserialization based on requirements
+                    IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob.get());
+                    
+                    IntArrayList sentIds = requirements.needsSentenceId ? 
+                        PositionListSoA.decompressSentenceIds(rawBlob.get()) : null;
+                    
+                    IntArrayList beginChars = requirements.needsPositions ? 
+                        PositionListSoA.decompressBeginChars(rawBlob.get()) : null;
+                    
+                    IntArrayList endChars = requirements.needsPositions ? 
+                        PositionListSoA.decompressEndChars(rawBlob.get()) : null;
+                    
+                    IntArrayList synonymIds = requirements.needsSynonymIds ? 
+                        PositionListSoA.decompressSynonymIds(rawBlob.get()) : null;
+                    
+                    String valueString = posTag;
+                    
+                    // Create MatchDetail objects directly from SoA arrays
+                    for (int i = 0; i < numPositions; i++) {
+                        details.add(new MatchDetail(
+                            valueString,        
+                            ValueType.POS_TERM,    
+                            isVariable ? variableName : null,
+                            docIds.getInt(i),
+                            sentIds != null ? sentIds.getInt(i) : -1,
+                            beginChars != null ? beginChars.getInt(i) : -1,
+                            endChars != null ? endChars.getInt(i) : -1,
+                            synonymIds != null ? synonymIds.getInt(i) : -1
+                        ));
+                    }
+                    
+                    logger.debug("Selective deserialization for POS '{}': docIds={}, sentIds={}, positions={}, synonymIds={}", 
+                               normalizedPosTag, true, sentIds != null, beginChars != null, synonymIds != null);
+                    
+                } catch (Exception e) {
+                    logger.warn("Error during selective deserialization for POS tag '{}', falling back to full deserialization: {}", 
+                               normalizedPosTag, e.getMessage());
+                    // Fall back to the existing method if selective deserialization fails
+                    return execute(condition, indexes, granularity, granularitySize, corpusName);
+                }
+            } else {
+                logger.debug("POS tag '{}' not found in index", normalizedPosTag);
+            }
+
+            logger.debug("POS condition with selective deserialization produced {} MatchDetail objects", details.size());
+            return new QueryResult(granularity, granularitySize, details);
+            
+        } catch (Exception e) {
+            if (e instanceof QueryExecutionException qee) {
+                throw qee;
+            }
+            throw new QueryExecutionException(
+                "Error executing POS condition: " + e.getMessage(),
+                e,
+                condition.toString(),
+                QueryExecutionException.ErrorType.INTERNAL_ERROR
+            );
+        }
     }
 } 

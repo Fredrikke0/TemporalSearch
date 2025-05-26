@@ -88,9 +88,24 @@ public class SentenceGranularityTest {
         for (Map.Entry<String, PositionListSoA> entry : mockData.entrySet()) {
             // Mock the get() method for specific keys
             when(mockIndex.get(eq(entry.getKey().getBytes()))).thenReturn(Optional.ofNullable(entry.getValue()));
+            
+            // Mock the getRaw() method for selective deserialization
+            if (entry.getValue() != null) {
+                try {
+                    byte[] serializedData = entry.getValue().serializeToCompositeBlob();
+                    when(mockIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.of(serializedData));
+                } catch (Exception e) {
+                    // If serialization fails, fall back to empty
+                    when(mockIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.empty());
+                }
+            } else {
+                when(mockIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.empty());
+            }
         }
         // Provide a default return for any key not explicitly mocked
         when(mockIndex.get(argThat(k -> mockData.keySet().stream().noneMatch(key -> Arrays.equals(k, key.getBytes())))))
+            .thenReturn(Optional.empty());
+        when(mockIndex.getRaw(argThat(k -> mockData.keySet().stream().noneMatch(key -> Arrays.equals(k, key.getBytes())))))
             .thenReturn(Optional.empty());
         return mockIndex;
     }
@@ -106,7 +121,7 @@ public class SentenceGranularityTest {
 
     @Test
     public void testSentenceGranularityBasic() throws Exception {
-        String queryString = "SELECT TITLE FROM mockCorpusSent WHERE CONTAINS(\"test\") GRANULARITY SENTENCE";
+        String queryString = "SELECT DOCUMENT_ID FROM mockCorpusSent WHERE CONTAINS(\"test\") GRANULARITY SENTENCE";
         
         // Setup mock data and mock index for this test
         Map<String, PositionListSoA> mockData = new HashMap<>();
@@ -128,7 +143,7 @@ public class SentenceGranularityTest {
 
     @Test
     public void testSentenceGranularityWithWindow() throws Exception {
-        String queryString = "SELECT TITLE FROM mockCorpusSent WHERE CONTAINS(\"window\") GRANULARITY SENTENCE 1";
+        String queryString = "SELECT DOCUMENT_ID FROM mockCorpusSent WHERE CONTAINS(\"window\") GRANULARITY SENTENCE 1";
         
         Map<String, PositionListSoA> mockData = new HashMap<>();
         PositionListSoA windowPositions = new PositionListSoA();
@@ -151,7 +166,7 @@ public class SentenceGranularityTest {
 
     @Test
     public void testSentenceGranularityWithLargerWindow() throws Exception {
-        String queryString = "SELECT TITLE FROM mockCorpusSent WHERE CONTAINS(\"window\") GRANULARITY SENTENCE 2";
+        String queryString = "SELECT DOCUMENT_ID FROM mockCorpusSent WHERE CONTAINS(\"window\") GRANULARITY SENTENCE 2";
 
         Map<String, PositionListSoA> mockData = new HashMap<>();
         PositionListSoA windowPositions = new PositionListSoA();

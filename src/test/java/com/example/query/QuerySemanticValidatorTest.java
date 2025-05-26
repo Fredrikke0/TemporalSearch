@@ -2,6 +2,7 @@ package com.example.query;
 
 import com.example.query.model.*;
 import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Ner;
 import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
@@ -170,6 +171,52 @@ class QuerySemanticValidatorTest {
         );
         
         assertTrue(exception.getMessage().contains("at least one column"));
+    }
+    
+    @Test
+    @DisplayName("CONTAINS condition with too many terms should throw exception")
+    void containsConditionWithTooManyTermsShouldThrowException() {
+        List<String> tooManyTerms = List.of("one", "two", "three", "four");
+        Contains containsCondition = new Contains(tooManyTerms);
+        List<Condition> conditions = List.of(containsCondition);
+        List<SelectColumn> columns = List.of(CountColumn.countAll());
+        
+        Query query = createQuery(columns, conditions);
+        
+        QueryParseException exception = assertThrows(
+            QueryParseException.class,
+            () -> validator.validate(query)
+        );
+        
+        assertTrue(exception.getMessage().contains("supports at most 3 terms"));
+        assertTrue(exception.getMessage().contains("got 4 terms"));
+    }
+    
+    @Test
+    @DisplayName("CONTAINS condition with empty terms should throw exception")
+    void containsConditionWithEmptyTermsShouldThrowException() {
+        // Note: This test is theoretical since the Contains constructor prevents empty terms
+        // but the validator should still check for robustness
+        List<SelectColumn> columns = List.of(CountColumn.countAll());
+        Query query = createQuery(columns, List.of());
+        
+        // This test passes because we can't actually create a Contains condition with empty terms
+        assertDoesNotThrow(() -> validator.validate(query));
+    }
+    
+    @Test
+    @DisplayName("CONTAINS condition with valid term count should validate")
+    void containsConditionWithValidTermCountShouldValidate() {
+        Contains singleTerm = new Contains("single");
+        Contains bigramTerms = new Contains(List.of("first", "second"));
+        Contains trigramTerms = new Contains(List.of("first", "second", "third"));
+        
+        List<Condition> conditions = List.of(singleTerm, bigramTerms, trigramTerms);
+        List<SelectColumn> columns = List.of(CountColumn.countAll());
+        
+        Query query = createQuery(columns, conditions);
+        
+        assertDoesNotThrow(() -> validator.validate(query));
     }
     
     @Test

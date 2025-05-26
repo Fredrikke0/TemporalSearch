@@ -5,6 +5,7 @@ import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.Variable;
 import com.example.query.binding.VariableType;
 import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Ner;
 
 import org.slf4j.Logger;
@@ -47,6 +48,9 @@ public class QuerySemanticValidator {
         if (registry == null) {
             throw new QueryParseException("Query does not have a variable registry");
         }
+        
+        // Validate condition structures and constraints
+        validateConditionConstraints(query.conditions());
         
         // Validate NER types in conditions *before* validating variable usage
         validateNerTypes(query.conditions());
@@ -114,6 +118,35 @@ public class QuerySemanticValidator {
             // For now, assuming a flat list or structure handled by the Query object itself.
             // If conditions can be nested (e.g., AND(NER(...), NOT(POS(...)))), 
             // a recursive traversal might be needed here.
+        }
+    }
+    
+    /**
+     * Validates structural constraints on conditions.
+     * 
+     * @param conditions The list of conditions to validate.
+     * @throws QueryParseException If a condition violates structural constraints.
+     */
+    private void validateConditionConstraints(List<Condition> conditions) throws QueryParseException {
+        for (Condition condition : conditions) {
+            if (condition instanceof Contains containsCondition) {
+                // CONTAINS condition can have at most 3 terms (unigram, bigram, trigram)
+                List<String> terms = containsCondition.terms();
+                if (terms.size() > 3) {
+                    throw new QueryParseException(String.format(
+                        "CONTAINS condition supports at most 3 terms, but got %d terms: %s",
+                        terms.size(), String.join(", ", terms)
+                    ));
+                }
+                
+                // Empty terms are also invalid
+                if (terms.isEmpty()) {
+                    throw new QueryParseException("CONTAINS condition must have at least one term");
+                }
+            }
+            
+            // Add other condition constraint validations here as needed
+            // For example: POS conditions, temporal conditions, etc.
         }
     }
     

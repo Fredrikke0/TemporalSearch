@@ -202,19 +202,7 @@ public class ContainsConditionExecutorTest {
         assertTrue(result.getAllDetails().isEmpty());
     }
     
-    @Test
-    void testExecuteTooManyTerms() {
-        // Setup - more than 3 terms should throw an exception
-        Contains condition = new Contains(Arrays.asList("one", "two", "three", "four"));
-        
-        // Execute and verify exception
-        QueryExecutionException exception = assertThrows(
-            QueryExecutionException.class,
-            () -> executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus")
-        );
-        
-        assertEquals(QueryExecutionException.ErrorType.INVALID_CONDITION, exception.getErrorType());
-    }
+
     
     @Test
     void testExecuteMissingIndex() throws QueryExecutionException {
@@ -230,7 +218,7 @@ public class ContainsConditionExecutorTest {
         
         // Verify the exception details
         assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
-        assertTrue(exception.getMessage().contains("Missing required unigram index"));
+        assertTrue(exception.getMessage().contains("Required unigram index not found"));
     }
     
     @Test
