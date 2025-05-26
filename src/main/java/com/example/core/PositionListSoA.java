@@ -31,7 +31,6 @@ import it.unimi.dsi.fastutil.ints.IntComparator;
  */
 public class PositionListSoA {
 
-    // Internal SoA representation
     private IntArrayList documentIds;
     private IntArrayList sentenceIds;
     private IntArrayList beginChars;
@@ -277,9 +276,7 @@ public class PositionListSoA {
      *
      * Structure:
      * - num_positions (int)
-     * - isStitchList (byte: 1 for true, 0 for false)
-     * - IF isStitchList is true: stitchAnnotationTypeOrdinal (byte)
-     * - For each attribute array (docIds, sentenceIds, beginChars, endChars, and synonymIds if stitch):
+     * - For each attribute array (docIds, sentenceIds, beginChars, endChars, and synonymIds):
      *   - Compressed data (prefixed by its own length metadata, see writeCompressedIntArraySoA)
      *
      * @return A byte array representing the serialized {@code PositionListSoA}.
@@ -291,12 +288,12 @@ public class PositionListSoA {
             // 1. Write Metadata Header
             dos.writeInt(this.numPositions);
 
-            // 2. Write Attribute Blobs (always all 5)
+            // 2. Write Attribute Blobs
             writeCompressedIntArray(dos, this.documentIds.elements(), this.numPositions);
             writeCompressedIntArray(dos, this.sentenceIds.elements(), this.numPositions);
             writeCompressedIntArray(dos, this.beginChars.elements(), this.numPositions);
             writeCompressedIntArray(dos, this.endChars.elements(), this.numPositions);
-            writeCompressedIntArray(dos, this.synonymIds.elements(), this.numPositions); // Always write synonymIds
+            writeCompressedIntArray(dos, this.synonymIds.elements(), this.numPositions);
             dos.flush();
         }
         return baos.toByteArray();

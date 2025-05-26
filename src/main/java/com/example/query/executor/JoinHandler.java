@@ -45,7 +45,8 @@ public class JoinHandler {
     }
 
     /**
-     * Executes the join specified in the query using pre-computed subquery QueryResults.
+     * Backward compatibility method for handleJoin without AttributeRequirements.
+     * Uses default requirements with all optimizations enabled.
      *
      * @param query           The query containing the join condition and subquery definitions.
      * @param subqueryContext Context containing the results of executed subqueries as QueryResults.
@@ -55,6 +56,30 @@ public class JoinHandler {
     public List<JoinedMatch> handleJoin(
             Query query,
             SubqueryContext subqueryContext)
+            throws QueryExecutionException {
+        
+        // Create default requirements for backward compatibility
+        AttributeRequirements defaultRequirements = new AttributeRequirements();
+        defaultRequirements.needsSentenceId = true; // Enable for maximum compatibility
+        defaultRequirements.needsPositions = true;  // Enable for maximum compatibility
+        defaultRequirements.needsDateValues = true; // Enable for temporal joins
+        
+        return handleJoin(query, subqueryContext, defaultRequirements);
+    }
+
+    /**
+     * Executes the join specified in the query using pre-computed subquery QueryResults.
+     *
+     * @param query           The query containing the join condition and subquery definitions.
+     * @param subqueryContext Context containing the results of executed subqueries as QueryResults.
+     * @param requirements    Attribute requirements for SoA optimization
+     * @return A QueryResult representing the result of the join.
+     * @throws QueryExecutionException if the join execution fails.
+     */
+    public List<JoinedMatch> handleJoin(
+            Query query,
+            SubqueryContext subqueryContext,
+            AttributeRequirements requirements)
             throws QueryExecutionException {
 
         logger.debug("Handling JOIN operation based on subquery context results.");
@@ -131,24 +156,11 @@ public class JoinHandler {
 
         if (joinType == JoinCondition.JoinType.INNER) {
             if (operatorType == JoinCondition.JoinOperatorType.EQUALITY) {
-                logger.debug("Performing INNER EQUALITY JOIN on keys: {}.{} == {}.{}",
+                logger.debug("Performing INNER EQUALITY JOIN on keys: {}.{} == {}.{} (optimized)",
                              leftAlias, leftKey, rightAlias, rightKey);
-                // If both keys are 'date', use the date-specific hash join
-                if (leftKey.equals("date") && rightKey.equals("date")) {
-                     // Check if values are actually LocalDate before calling date-specific join
-                    ValueType leftType = extractTypeForKey(leftDetails, leftKey);
-                    ValueType rightType = extractTypeForKey(rightDetails, rightKey);
-                    if (leftType == ValueType.DATE && rightType == ValueType.DATE) {
-                        joinedDetails = performHashJoinOnDate(leftDetails, rightDetails, leftKey, rightKey);
-                    } else {
-                        logger.warn("Equality join requested on 'date' keys, but types are not LocalDate ({}={}, {}={}). Falling back to generic hash join.",
-                                    leftKey, leftType, rightKey, rightType);
-                        joinedDetails = performGenericHashJoin(leftDetails, rightDetails, leftKey, rightKey);
-                    }
-                } else {
-                    // Generic hash join for any key type
-                    joinedDetails = performGenericHashJoin(leftDetails, rightDetails, leftKey, rightKey);
-                }
+                // Use SoA-optimized join operations
+                joinedDetails = SoAJoinOptimizer.performOptimizedHashJoin(
+                    leftDetails, rightDetails, leftKey, rightKey, requirements);
 
             } else if (operatorType == JoinCondition.JoinOperatorType.TEMPORAL) {
                 TemporalPredicate predicate = temporalPredicateOpt.orElseThrow(() ->
@@ -159,22 +171,14 @@ public class JoinHandler {
                              predicate, leftAlias, leftKey, predicate, rightAlias, rightKey);
 
                 if (predicate == TemporalPredicate.BEFORE || predicate == TemporalPredicate.AFTER) {
-                    // Use Sort-Merge for BEFORE/AFTER
-                    joinedDetails = performTemporalSortMergeJoin(leftDetails, rightDetails, leftKey, rightKey, predicate);
+                    // Use optimized Sort-Merge for BEFORE/AFTER
+                    joinedDetails = SoAJoinOptimizer.performOptimizedTemporalJoin(
+                        leftDetails, rightDetails, leftKey, rightKey, predicate.toString(), requirements);
                 } else if (predicate == TemporalPredicate.INTERSECT || predicate == TemporalPredicate.EQUAL) {
-                    // Use Hash Join for INTERSECT/EQUAL (on dates, this is effectively equality)
-                    logger.debug("Temporal predicate {} identified, using Hash Join strategy.", predicate);
-                    if (leftKey.equals("date") && rightKey.equals("date")) {
-                        // Directly use the date-specific hash join.
-                        // It internally handles filtering details that don't have a LocalDate value.
-                        logger.debug("Joining on 'date' keys using performHashJoinOnDate.");
-                        joinedDetails = performHashJoinOnDate(leftDetails, rightDetails, leftKey, rightKey);
-                    } else {
-                        // If keys are not 'date', use generic hash join for INTERSECT/EQUAL
-                        logger.warn("Temporal join predicate {} used with non-'date' keys ({}={}, {}={}). Using generic hash join.",
-                                    predicate, leftAlias, leftKey, rightAlias, rightKey);
-                        joinedDetails = performGenericHashJoin(leftDetails, rightDetails, leftKey, rightKey);
-                    }
+                    // Use optimized Hash Join for INTERSECT/EQUAL (on dates, this is effectively equality)
+                    logger.debug("Temporal predicate {} identified, using optimized Hash Join strategy.", predicate);
+                    joinedDetails = SoAJoinOptimizer.performOptimizedHashJoin(
+                        leftDetails, rightDetails, leftKey, rightKey, requirements);
                 } else if (predicate == TemporalPredicate.PROXIMITY) {
                     logger.warn("Temporal join predicate {} (PROXIMITY) not yet implemented. Returning empty result.", predicate);
                     // TODO: Implement Proximity Join (likely different algorithm)

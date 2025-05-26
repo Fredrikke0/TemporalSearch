@@ -112,12 +112,40 @@ public class QueryExecutor {
      */
     public Object execute(Query query, Map<String, IndexAccessInterface> indexes) 
             throws QueryExecutionException {
+        
+        long startTime = System.nanoTime();
+        
         // Analyze query to determine attribute requirements for SoA optimization
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
-        logger.debug("Query requires attributes: {}", requirements.getRequiredSoAAttributes());
+        logger.info("=== Query Execution Started ===");
+        logger.info("Query: {}", query);
+        logger.info("SoA Attribute Requirements: {}", requirements.getRequiredSoAAttributes());
+        logger.debug("Full requirements: {}", requirements);
         
-        // Call executeWithContext with requirements
-        return executeWithContext(query, indexes, new SubqueryContext(), requirements);
+        try {
+            Object result = executeWithRequirements(query, indexes, requirements, new SubqueryContext());
+            
+            long executionTime = System.nanoTime() - startTime;
+            logger.info("=== Query Execution Completed Successfully ===");
+            logger.info("Total execution time: {} ms", executionTime / 1_000_000.0);
+            
+            // Log result summary
+            if (result instanceof QueryResult queryResult) {
+                logger.info("Result type: QueryResult, matches: {}, granularity: {}", 
+                           queryResult.getAllDetails().size(), queryResult.getGranularity());
+            } else if (result instanceof List<?> list) {
+                logger.info("Result type: List (JoinedMatch), size: {}", list.size());
+            }
+            
+            return result;
+            
+        } catch (QueryExecutionException e) {
+            long executionTime = System.nanoTime() - startTime;
+            logger.error("=== Query Execution Failed ===");
+            logger.error("Execution time before failure: {} ms", executionTime / 1_000_000.0);
+            logger.error("Error: {}", e.getMessage(), e);
+            throw e;
+        }
     }
     
     /**
@@ -328,10 +356,10 @@ public class QueryExecutor {
         // Ensure all subqueries defined in the query are executed and their results are in the context
         executeSubqueries(query.subqueries(), indexes, subqueryContext);
     
-        // Now, perform the join using JoinHandler
+        // Now, perform the join using JoinHandler with AttributeRequirements
         JoinHandler joinHandler = new JoinHandler();
         try {
-            return joinHandler.handleJoin(query, subqueryContext);
+            return joinHandler.handleJoin(query, subqueryContext, requirements);
         } catch (Exception e) { // Catch a broader exception if handleJoin throws something not QueryExecutionException
             logger.error("Error during independent join execution: {}", e.getMessage(), e);
             throw new QueryExecutionException("Failed to execute independent join", e, query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
@@ -594,4 +622,30 @@ public class QueryExecutor {
      * @return Set of document IDs
      */
     // public Set<Integer> getDocumentIds(QueryResult result) { ... }
+
+    private Object executeWithRequirements(Query query, Map<String, IndexAccessInterface> indexes,
+                                        AttributeRequirements requirements, SubqueryContext subqueryContext)
+            throws QueryExecutionException {
+        
+        logger.debug("Executing query with SoA requirements: {}", requirements);
+        
+        // Use existing executeWithContext method but with enhanced logging
+        long executionStart = System.nanoTime();
+        
+        try {
+            Object result = executeWithContext(query, indexes, subqueryContext, requirements);
+            
+            long executionTime = System.nanoTime() - executionStart;
+            logger.debug("Query execution with SoA optimization completed in {} ms", 
+                        executionTime / 1_000_000.0);
+            
+            return result;
+            
+        } catch (QueryExecutionException e) {
+            long executionTime = System.nanoTime() - executionStart;
+            logger.warn("Query execution with SoA optimization failed after {} ms: {}", 
+                       executionTime / 1_000_000.0, e.getMessage());
+            throw e;
+        }
+    }
 } 
