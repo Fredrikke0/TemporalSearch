@@ -41,7 +41,6 @@ public class PositionListSoA {
 
     private static final IntegerCODEC CODEC = new FastPFOR128();
     private static final int UNCOMPRESSED_THRESHOLD = 128; // Small arrays might not benefit from compression.
-    private static final int CODEC_BLOCK_SIZE = 128; // Block size for FastPFOR128
 
     /**
      * Convenience constructor, defaults to a non-stitch list (isStitchList = false).
@@ -277,7 +276,7 @@ public class PositionListSoA {
      * Structure:
      * - num_positions (int)
      * - For each attribute array (docIds, sentenceIds, beginChars, endChars, and synonymIds):
-     *   - Compressed data (prefixed by its own length metadata, see writeCompressedIntArraySoA)
+     *   - Compressed data (prefixed by its own length metadata, see writeCompressedIntArray)
      *
      * @return A byte array representing the serialized {@code PositionListSoA}.
      * @throws IOException If an I/O error occurs during serialization.
@@ -326,7 +325,7 @@ public class PositionListSoA {
             int[] exactData = (data.length == numElementsInArray) ? data : Arrays.copyOf(data, numElementsInArray);
             
             // FastPFOR requires input buffer to be padded if its length is not a multiple of its block size (128 for FastPFOR128)
-            int blockSize = FastPFOR128.BLOCK_SIZE; // Typically 128
+            int blockSize = FastPFOR128.BLOCK_SIZE;
             int remainder = exactData.length % blockSize;
             int[] inputForCompression = exactData;
             if (remainder != 0) {

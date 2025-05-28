@@ -85,7 +85,7 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
             if (isFirstBatch) {
                 stmt.setInt(1, this.batchSize);
             } else {
-                stmt.setInt(1, lastProcessedEntry.getDependencyId());
+                stmt.setLong(1, lastProcessedEntry.getDependencyId());
                 stmt.setInt(2, this.batchSize);
             }
             

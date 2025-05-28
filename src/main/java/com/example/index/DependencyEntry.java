@@ -1,13 +1,12 @@
 package com.example.index;
 
-import java.time.LocalDate;
 import java.util.Objects;
 
 /**
  * Represents a dependency relation entry for indexing.
  */
 public final class DependencyEntry implements IndexEntry {
-    private final int dependencyId; // Added for keyset pagination
+    private final long dependencyId; // Added for keyset pagination
     private final int documentId;
     private final int sentenceId;
     private final int beginChar;
@@ -16,7 +15,7 @@ public final class DependencyEntry implements IndexEntry {
     private final String dependentToken;
     private final String relation;
 
-    public DependencyEntry(int dependencyId, int documentId, int sentenceId, int beginChar, int endChar,
+    public DependencyEntry(long dependencyId, int documentId, int sentenceId, int beginChar, int endChar,
                            String headToken, String dependentToken, String relation) {
         this.dependencyId = dependencyId;
         this.documentId = documentId;
@@ -29,7 +28,7 @@ public final class DependencyEntry implements IndexEntry {
     }
 
     // Getter for dependencyId
-    public int getDependencyId() {
+    public long getDependencyId() {
         return dependencyId;
     }
 

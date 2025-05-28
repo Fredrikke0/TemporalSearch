@@ -93,7 +93,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
             if (lastProcessedEntry == null) {
                 stmt.setInt(1, batchSize);
             } else {
-                stmt.setInt(1, lastProcessedEntry.getAnnotationId());
+                stmt.setLong(1, lastProcessedEntry.getAnnotationId());
                 stmt.setInt(2, batchSize);
             }
             try (ResultSet rs = stmt.executeQuery()) {

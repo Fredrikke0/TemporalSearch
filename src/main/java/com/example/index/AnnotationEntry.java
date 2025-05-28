@@ -7,7 +7,7 @@ import java.time.LocalDate;
  * Contains information about a token and its linguistic features.
  */
 public final class AnnotationEntry implements IndexEntry {
-    private final int annotationId;
+    private final long annotationId;
     private final int documentId;
     private final int sentenceId;
     private final int beginChar;
@@ -18,7 +18,7 @@ public final class AnnotationEntry implements IndexEntry {
     private final String normalizedNer;  // Added normalized NER value
     private final String lemma;          // Added lemma
 
-    public AnnotationEntry(int annotationId, int documentId, int sentenceId, int beginChar, int endChar,
+    public AnnotationEntry(long annotationId, int documentId, int sentenceId, int beginChar, int endChar,
             String token, String pos, String ner, String normalizedNer, String lemma) {
         this.annotationId = annotationId;
         this.documentId = documentId;
@@ -35,7 +35,7 @@ public final class AnnotationEntry implements IndexEntry {
     /**
      * @return The unique identifier for this annotation
      */
-    public int getAnnotationId() {
+    public long getAnnotationId() {
         return annotationId;
     }
 

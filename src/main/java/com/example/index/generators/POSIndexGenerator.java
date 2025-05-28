@@ -65,7 +65,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
             int paramIdx = 1;
             if (!isFirstBatch) {
-                stmt.setInt(paramIdx++, lastProcessedEntry.getAnnotationId());
+                stmt.setLong(paramIdx++, lastProcessedEntry.getAnnotationId());
             }
             stmt.setInt(paramIdx, this.batchSize);
             

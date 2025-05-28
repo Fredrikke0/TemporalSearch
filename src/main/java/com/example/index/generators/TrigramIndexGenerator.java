@@ -57,7 +57,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             if (isFirstBatch) {
                 stmt.setInt(1, this.batchSize);
             } else {
-                stmt.setInt(1, lastProcessedEntry.getAnnotationId());
+                stmt.setLong(1, lastProcessedEntry.getAnnotationId());
                 stmt.setInt(2, this.batchSize);
             }
             

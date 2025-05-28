@@ -68,7 +68,7 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
             if (lastProcessedEntry == null) {
                 stmt.setInt(1, batchSize);
             } else {
-                stmt.setInt(1, lastProcessedEntry.getDependencyId());
+                stmt.setLong(1, lastProcessedEntry.getDependencyId());
                 stmt.setInt(2, batchSize);
             }
             try (ResultSet rs = stmt.executeQuery()) {

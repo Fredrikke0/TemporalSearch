@@ -64,7 +64,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             if (isFirstBatch) {
                 stmt.setInt(1, this.batchSize);
             } else {
-                stmt.setInt(1, lastProcessedEntry.getAnnotationId());
+                stmt.setLong(1, lastProcessedEntry.getAnnotationId());
                 stmt.setInt(2, this.batchSize);
             }
             
@@ -73,7 +73,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                     String rawToken = rs.getString("token");
                     String token = (rawToken != null) ? rawToken.trim() : null;
                     AnnotationEntry entry = new AnnotationEntry(
-                        rs.getInt("annotation_id"),
+                        rs.getLong("annotation_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
@@ -119,7 +119,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // Unigrams are derived from annotations, so count documents with annotations.
+        // Unigrams are derived from annotations, so count documents with annotations. This is an intentional approximation for speed.
         String countSql = "SELECT MAX(annotation_id) FROM annotations";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
