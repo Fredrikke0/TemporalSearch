@@ -165,7 +165,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         String compositeKey = entityType.toUpperCase() + IndexAccessInterface.DELIMITER + entityValue;
 
         PositionListSoA pl = map.computeIfAbsent(compositeKey, k -> new PositionListSoA());
-        pl.add(new Position(docId, sentId, beginChar, endChar));
+        pl.add(docId, sentId, beginChar, endChar);
     }
 
     @Override

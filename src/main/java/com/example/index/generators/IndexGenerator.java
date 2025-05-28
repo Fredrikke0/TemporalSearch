@@ -275,7 +275,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         long entriesSinceLastReport = 0;
         long lastReportTime = System.currentTimeMillis();
         final long reportIntervalMillis = 30000; 
-        final long TARGET_BATCH_BYTES = 4 * 1024 * 1024; // 4MB target batch size
+        final long TARGET_BATCH_BYTES = 64 * 1024 * 1024; // 64MB target batch size
         long currentBatchSizeBytes = 0;
         int termsInCurrentBatch = 0;
 
@@ -330,19 +330,19 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                                 // Convert accumulated raw bytes back to int arrays and compress properly
                                 int[] termDocIdInts = convertByteArrayToIntArray(baosDocIds.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length);
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length, true);
                                 
                                 int[] termSentIdInts = convertByteArrayToIntArray(baosSentIds.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length);
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length, true);
                                 
                                 int[] termBeginCharInts = convertByteArrayToIntArray(baosBeginChars.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length);
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length, true);
                                 
                                 int[] termEndCharInts = convertByteArrayToIntArray(baosEndChars.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length);
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length, true);
                                 
                                 int[] termSynonymIdInts = convertByteArrayToIntArray(baosSynonymIds.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length);
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length, false); // No delta coding for synonym IDs
                             }
                             
                             byte[] termKeyBytes = bytes(currentTerm);
@@ -353,8 +353,8 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                                 writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
                                 batch.close(); 
                                 batch = indexAccess.createWriteBatch(); 
-                                logger.info("Written batch of {} terms (approx {:.2f} MB) to LevelDB due to size limit. Total terms written: {}.", 
-                                    termsInCurrentBatch, currentBatchSizeBytes / (1024.0 * 1024.0), totalTermsWritten);
+                                logger.debug("\n Written batch of {} terms (approx {} MB) to LevelDB due to size limit. Total terms written: {}.\n", 
+                                    termsInCurrentBatch, currentBatchSizeBytes / (1024 * 1024), totalTermsWritten);
                                 termsInCurrentBatch = 0;
                                 currentBatchSizeBytes = 0;
                             }
@@ -395,35 +395,35 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                         if (chunkNumPositions > 0) {
                             
                             // Process docIds: decompress, stream to accumulator, discard
-                            IntArrayList tempChunkDocIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            IntArrayList tempChunkDocIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkDocIds.size(); i++) {
                                 dosDocIds.writeInt(tempChunkDocIds.getInt(i));
                             }
                             // tempChunkDocIds goes out of scope and becomes eligible for GC
                             
                             // Process sentIds: decompress, stream to accumulator, discard
-                            IntArrayList tempChunkSentIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            IntArrayList tempChunkSentIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkSentIds.size(); i++) {
                                 dosSentIds.writeInt(tempChunkSentIds.getInt(i));
                             }
                             // tempChunkSentIds goes out of scope and becomes eligible for GC
                             
                             // Process beginChars: decompress, stream to accumulator, discard
-                            IntArrayList tempChunkBeginChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            IntArrayList tempChunkBeginChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkBeginChars.size(); i++) {
                                 dosBeginChars.writeInt(tempChunkBeginChars.getInt(i));
                             }
                             // tempChunkBeginChars goes out of scope and becomes eligible for GC
                             
                             // Process endChars: decompress, stream to accumulator, discard
-                            IntArrayList tempChunkEndChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            IntArrayList tempChunkEndChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkEndChars.size(); i++) {
                                 dosEndChars.writeInt(tempChunkEndChars.getInt(i));
                             }
                             // tempChunkEndChars goes out of scope and becomes eligible for GC
                             
                             // Process synonymIds: decompress, stream to accumulator, discard
-                            IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, false); // No delta coding for synonym IDs
                             for (int i = 0; i < tempChunkSynonymIds.size(); i++) {
                                 dosSynonymIds.writeInt(tempChunkSynonymIds.getInt(i));
                             }
@@ -457,19 +457,19 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                     // Convert accumulated raw bytes back to int arrays and compress properly
                     int[] termDocIdInts = convertByteArrayToIntArray(baosDocIds.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length);
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length, true);
                     
                     int[] termSentIdInts = convertByteArrayToIntArray(baosSentIds.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length);
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length, true);
                     
                     int[] termBeginCharInts = convertByteArrayToIntArray(baosBeginChars.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length);
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length, true);
                     
                     int[] termEndCharInts = convertByteArrayToIntArray(baosEndChars.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length);
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length, true);
                     
                     int[] termSynonymIdInts = convertByteArrayToIntArray(baosSynonymIds.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length);
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length, false); // No delta coding for synonym IDs
                 }
 
                 byte[] termKeyBytes = bytes(currentTerm);

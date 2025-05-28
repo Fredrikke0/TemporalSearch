@@ -21,6 +21,7 @@ import java.util.TreeSet;
 import java.util.Set;
 import it.unimi.dsi.fastutil.ints.IntArrays;
 import it.unimi.dsi.fastutil.ints.IntComparator;
+import me.lemire.integercompression.differential.Delta;
 
 /**
  * Manages collections of position data using a Structure of Arrays (SoA) approach.
@@ -268,7 +269,7 @@ public class PositionListSoA {
         };
     }
 
-    // --- Methods for Serialization / Deserialization (to be added next) ---
+    // --- Methods for Serialization / Deserialization ---
     /**
      * Serializes the {@code PositionListSoA} into a single composite binary blob.
      * The blob contains a metadata header followed by individually compressed attribute arrays.
@@ -288,11 +289,11 @@ public class PositionListSoA {
             dos.writeInt(this.numPositions);
 
             // 2. Write Attribute Blobs
-            writeCompressedIntArray(dos, this.documentIds.elements(), this.numPositions);
-            writeCompressedIntArray(dos, this.sentenceIds.elements(), this.numPositions);
-            writeCompressedIntArray(dos, this.beginChars.elements(), this.numPositions);
-            writeCompressedIntArray(dos, this.endChars.elements(), this.numPositions);
-            writeCompressedIntArray(dos, this.synonymIds.elements(), this.numPositions);
+            writeCompressedIntArrayList(dos, this.documentIds, true);     // applyDelta = true
+            writeCompressedIntArrayList(dos, this.sentenceIds, true);     // applyDelta = true
+            writeCompressedIntArrayList(dos, this.beginChars, true);      // applyDelta = true
+            writeCompressedIntArrayList(dos, this.endChars, true);        // applyDelta = true
+            writeCompressedIntArrayList(dos, this.synonymIds, false);     // applyDelta = false
             dos.flush();
         }
         return baos.toByteArray();
@@ -310,28 +311,38 @@ public class PositionListSoA {
      * @param out The DataOutputStream to write to.
      * @param data The integer array to write.
      * @param numElementsInArray The number of elements from the beginning of the array to write.
+     * @param applyDelta Whether to apply delta coding before compression.
      * @throws IOException If an I/O error occurs.
      */
-    public static void writeCompressedIntArray(DataOutputStream out, int[] data, int numElementsInArray) throws IOException {
+    public static void writeCompressedIntArray(DataOutputStream out, int[] data, int numElementsInArray, boolean applyDelta) throws IOException {
         out.writeInt(numElementsInArray); // Store the original number of elements
 
         if (numElementsInArray <= UNCOMPRESSED_THRESHOLD || numElementsInArray == 0) {
             out.writeInt(-numElementsInArray); // Negative marker for uncompressed (or zero for empty)
+            // For uncompressed, write original data regardless of applyDelta
             for (int i = 0; i < numElementsInArray; i++) {
                 out.writeInt(data[i]);
             }
         } else {
-            // Ensure input array for compression is correctly sized for FastPFOR
-            int[] exactData = (data.length == numElementsInArray) ? data : Arrays.copyOf(data, numElementsInArray);
+            // Ensure input array for compression is correctly sized
+            int[] dataToCompress = (data.length == numElementsInArray) ? data : Arrays.copyOf(data, numElementsInArray);
+
+            if (applyDelta && numElementsInArray > 0) {
+                // Apply delta coding in-place on a copy if it's the original 'data' array,
+                // or on dataToCompress if it's already a copy.
+                if (dataToCompress == data) { // If dataToCompress points to the original 'data'
+                    dataToCompress = Arrays.copyOf(dataToCompress, numElementsInArray); // Make a true copy
+                }
+                Delta.delta(dataToCompress);
+            }
             
             // FastPFOR requires input buffer to be padded if its length is not a multiple of its block size (128 for FastPFOR128)
             int blockSize = FastPFOR128.BLOCK_SIZE;
-            int remainder = exactData.length % blockSize;
-            int[] inputForCompression = exactData;
+            int remainder = dataToCompress.length % blockSize; // numElementsInArray is the effective length
+            int[] inputForCompression = dataToCompress;
             if (remainder != 0) {
-                int paddedLength = exactData.length + (blockSize - remainder);
-                inputForCompression = Arrays.copyOf(exactData, paddedLength); 
-                // Padding with zeros is fine as FastPFOR handles it, and we only decompress originalLength.
+                int paddedLength = dataToCompress.length + (blockSize - remainder);
+                inputForCompression = Arrays.copyOf(dataToCompress, paddedLength); 
             }
 
             // Sufficiently large buffer: original size + 50% + fixed overhead
@@ -339,10 +350,6 @@ public class PositionListSoA {
             IntWrapper inPos = new IntWrapper(0);
             IntWrapper outPos = new IntWrapper(0);
             CODEC.compress(inputForCompression, inPos, inputForCompression.length - inPos.get(), compressedData, outPos);
-            
-            // Adjust inPos to reflect the actual number of elements from inputForCompression that were consumed to produce outPos.get() compressed integers.
-            // For FastPFOR, it typically consumes in multiples of block size.
-            // What we care about is how many integers are in compressedData (outPos.get())
             
             out.writeInt(outPos.get()); // Number of integers in the compressed data
             for (int i = 0; i < outPos.get(); i++) {
@@ -377,11 +384,11 @@ public class PositionListSoA {
             }
 
             // Read attribute arrays (always all 5)
-            soaList.documentIds = readCompressedIntArray(dis, numPositions);
-            soaList.sentenceIds = readCompressedIntArray(dis, numPositions);
-            soaList.beginChars = readCompressedIntArray(dis, numPositions);
-            soaList.endChars = readCompressedIntArray(dis, numPositions);
-            soaList.synonymIds = readCompressedIntArray(dis, numPositions); // Always read synonymIds
+            soaList.documentIds = readCompressedIntArray(dis, numPositions, true);
+            soaList.sentenceIds = readCompressedIntArray(dis, numPositions, true);
+            soaList.beginChars = readCompressedIntArray(dis, numPositions, true);
+            soaList.endChars = readCompressedIntArray(dis, numPositions, true);
+            soaList.synonymIds = readCompressedIntArray(dis, numPositions, false);
 
             soaList.numPositions = numPositions; 
 
@@ -403,10 +410,11 @@ public class PositionListSoA {
      *
      * @param in The DataInputStream to read from.
      * @param numExpectedPositions The number of positions expected in the list (used for initial sizing and FastPFOR decompression).
+     * @param applyInverseDelta Whether to apply inverse delta transformation after decompression.
      * @return An IntArrayList containing the deserialized integers.
      * @throws IOException If an I/O error occurs.
      */
-    public static IntArrayList readCompressedIntArray(DataInputStream in, int numExpectedPositions) throws IOException {
+    public static IntArrayList readCompressedIntArray(DataInputStream in, int numExpectedPositions, boolean applyInverseDelta) throws IOException {
         int originalLength = in.readInt(); // Original number of elements
         if (originalLength == 0) {
             return new IntArrayList(0); // Handle empty array case
@@ -419,6 +427,7 @@ public class PositionListSoA {
             if (-compressedLengthOrMarker != originalLength && originalLength !=0) { // Check marker consistency for non-empty
                  throw new IOException("Uncompressed length marker mismatch. Expected: " + originalLength + ", Got from marker: " + (-compressedLengthOrMarker));
             }
+            // For uncompressed, read original data regardless of applyInverseDelta
             for (int i = 0; i < originalLength; i++) {
                 list.add(in.readInt());
             }
@@ -428,8 +437,6 @@ public class PositionListSoA {
                 compressedData[i] = in.readInt();
             }
 
-            // For FastPFOR, the output array for decompression needs to be padded if originalLength is not a multiple of block size.
-            // The originalLength is the exact count. Decompress into a buffer that can hold originalLength + padding.
             int blockSize = FastPFOR128.BLOCK_SIZE;
             int remainder = originalLength % blockSize;
             int paddedOutputLength = originalLength;
@@ -437,24 +444,43 @@ public class PositionListSoA {
                 paddedOutputLength = originalLength + (blockSize - remainder);
             }
 
-            int[] decompressed = new int[paddedOutputLength]; // Use padded length for decompression buffer
+            int[] decompressed = new int[paddedOutputLength]; 
             IntWrapper inPos = new IntWrapper(0);
-            IntWrapper outPos = new IntWrapper(0); // Will store actual numbers of ints recovered
+            IntWrapper outPos = new IntWrapper(0); 
             
-            // codec.uncompress needs the compressed data, its length, and the output buffer.
-            // It will decompress 'originalLength' integers into 'decompressed'.
             CODEC.uncompress(compressedData, inPos, compressedLengthOrMarker - inPos.get(), decompressed, outPos);
 
             if (outPos.get() < originalLength) {
-                 // This can happen if the compressed data was shorter than expected or an issue during decompression.
-                 // The FastPFOR codec might stop early if it detects end of compressed stream or issues.
-                 // We should trust originalLength for the number of elements to actually take, provided outPos.get() is at least that.
-                 // However, if outPos.get() is less, it means not enough data was decompressed.
                  throw new IOException("Decompression output size mismatch. Expected to decompress " + originalLength + " ints, but got " + outPos.get() + " ints.");
             }
-            
-            // Add only the original number of elements to the list
-            list.addElements(0, decompressed, 0, originalLength);
+
+            if (applyInverseDelta && originalLength > 0) { 
+                // Apply inverse delta only to the 'originalLength' part of the decompressed array
+                // Delta.inverseDelta operates in-place. If 'decompressed' is larger due to padding,
+                // we need to be careful. However, inverseDelta should correctly handle operating
+                // on the prefix if its length is passed or implied by the array structure.
+                // For simplicity, let's assume Delta.inverseDelta works on the whole array
+                // and the extra padded values (if any) won't affect the first 'originalLength' values.
+                // Or, more robustly, copy to an exact-size array first if Delta.inverseDelta
+                // might misbehave with padding.
+                // Given Delta.inverseDelta(int[] arr) modifies arr in place, we should be fine as long
+                // as we only use the first originalLength elements later.
+                
+                // Create an exact-sized array for inverse delta if needed, or ensure inverseDelta handles it.
+                // Let's assume inverseDelta works correctly on the 'decompressed' array up to 'originalLength'.
+                // We'll copy the relevant part to 'finalData' before inverseDelta if 'decompressed' is padded.
+                int[] dataForInverseDelta;
+                if (paddedOutputLength > originalLength) {
+                    dataForInverseDelta = Arrays.copyOf(decompressed, originalLength);
+                    Delta.inverseDelta(dataForInverseDelta);
+                     list.addElements(0, dataForInverseDelta, 0, originalLength);
+                } else { // originalLength == paddedOutputLength, no padding was applied
+                    Delta.inverseDelta(decompressed); // Apply in-place
+                    list.addElements(0, decompressed, 0, originalLength);
+                }
+            } else {
+                list.addElements(0, decompressed, 0, originalLength);
+            }
         }
         return list;
     }
@@ -494,7 +520,7 @@ public class PositionListSoA {
 
             int numPositions = dis.readInt();
             if (numPositions == 0) return new IntArrayList(0);
-            return readCompressedIntArray(dis, numPositions);
+            return readCompressedIntArray(dis, numPositions, true); // applyInverseDelta = true
         }
     }
 
@@ -518,7 +544,7 @@ public class PositionListSoA {
             skipCompressedIntArray(dis, numPositions); 
             
             if (numPositions == 0) return new IntArrayList(0); // Should have been caught by skip or read logic if numPos=0 led to lengthMarker=0
-            return readCompressedIntArray(dis, numPositions);
+            return readCompressedIntArray(dis, numPositions, true); // applyInverseDelta = true
         }
     }
     
@@ -571,7 +597,7 @@ public class PositionListSoA {
             skipCompressedIntArray(dis, numPositions); // Skip SentenceIDs
             
             if (numPositions == 0) return new IntArrayList(0);
-            return readCompressedIntArray(dis, numPositions);
+            return readCompressedIntArray(dis, numPositions, true); // applyInverseDelta = true
         }
     }
 
@@ -596,7 +622,7 @@ public class PositionListSoA {
             skipCompressedIntArray(dis, numPositions); // Skip BeginChars
             
             if (numPositions == 0) return new IntArrayList(0);
-            return readCompressedIntArray(dis, numPositions);
+            return readCompressedIntArray(dis, numPositions, true); // applyInverseDelta = true
         }
     }
 
@@ -625,7 +651,7 @@ public class PositionListSoA {
             skipCompressedIntArray(dis, numPositions); // Skip EndChars
             
             if (numPositions == 0) return new IntArrayList(0);
-            return readCompressedIntArray(dis, numPositions);
+            return readCompressedIntArray(dis, numPositions, false); // applyInverseDelta = false for synonymIds
         }
     }
 
@@ -803,10 +829,11 @@ public class PositionListSoA {
      *
      * @param dos The DataOutputStream to write to.
      * @param list The IntArrayList whose elements are to be written.
+     * @param applyDelta Whether to apply delta coding before compression.
      * @throws IOException If an I/O error occurs.
      */
-    private void writeCompressedIntArrayList(DataOutputStream dos, IntArrayList list) throws IOException {
-        writeCompressedIntArray(dos, list.elements(), list.size());
+    private void writeCompressedIntArrayList(DataOutputStream dos, IntArrayList list, boolean applyDelta) throws IOException {
+        writeCompressedIntArray(dos, list.elements(), list.size(), applyDelta);
     }
 
 } 

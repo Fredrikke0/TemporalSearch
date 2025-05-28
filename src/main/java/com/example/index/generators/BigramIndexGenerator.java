@@ -112,11 +112,9 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                     DELIMITER,
                     secondEntry.getToken());
 
-                Position position = new Position(secondEntry.getDocumentId(), secondEntry.getSentenceId(),
-                    firstEntry.getBeginChar(), secondEntry.getEndChar());
-
                 PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
-                posList.add(position);
+                posList.add(secondEntry.getDocumentId(), secondEntry.getSentenceId(),
+                    firstEntry.getBeginChar(), secondEntry.getEndChar());
             }
         }
 

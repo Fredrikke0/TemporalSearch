@@ -22,7 +22,7 @@ import java.util.regex.Pattern;
 public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(DateStitchIndexGenerator.class);
     private static final Pattern DATE_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
-    private static final String MY_INDEX_NAME = "stitch-date";
+    public static final String MY_INDEX_NAME = "stitch-date";
 
     public DateStitchIndexGenerator(
             String indexBaseDir,

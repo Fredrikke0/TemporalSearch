@@ -141,7 +141,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                             
                             // Process docIds: decompress, stream to accumulator, discard
                             recordArrayStart("docIds");
-                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkDocIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkDocIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkDocIds.size(); i++) {
                                 dosDocIds.writeInt(tempChunkDocIds.getInt(i));
                             }
@@ -150,7 +150,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                             
                             // Process sentIds: decompress, stream to accumulator, discard
                             recordArrayStart("sentIds");
-                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkSentIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkSentIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkSentIds.size(); i++) {
                                 dosSentIds.writeInt(tempChunkSentIds.getInt(i));
                             }
@@ -159,7 +159,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                             
                             // Process beginChars: decompress, stream to accumulator, discard
                             recordArrayStart("beginChars");
-                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkBeginChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkBeginChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkBeginChars.size(); i++) {
                                 dosBeginChars.writeInt(tempChunkBeginChars.getInt(i));
                             }
@@ -168,7 +168,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                             
                             // Process endChars: decompress, stream to accumulator, discard
                             recordArrayStart("endChars");
-                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkEndChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkEndChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkEndChars.size(); i++) {
                                 dosEndChars.writeInt(tempChunkEndChars.getInt(i));
                             }
@@ -177,7 +177,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                             
                             // Process synonymIds: decompress, stream to accumulator, discard
                             recordArrayStart("synonymIds");
-                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions);
+                            it.unimi.dsi.fastutil.ints.IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, false); // No delta coding for synonym IDs
                             for (int i = 0; i < tempChunkSynonymIds.size(); i++) {
                                 dosSynonymIds.writeInt(tempChunkSynonymIds.getInt(i));
                             }

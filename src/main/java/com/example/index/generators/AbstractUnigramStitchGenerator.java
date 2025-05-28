@@ -285,19 +285,14 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
             // and also stored within StitchPosition.
             String key = unigram;
 
-            StitchPosition stitchPos = new StitchPosition(
-                    entry.documentId(),
-                    entry.sentenceId(),
-                    entry.beginChar(),        // Unigram's begin char from StitchEntry
-                    entry.endChar(),          // Unigram's end char from StitchEntry
-                    currentType,              // AnnotationType
-                    entry.synonymId(),        // Annotation's synonymId from StitchEntry
-                    entry.annotationBeginChar(), // Annotation's begin char from StitchEntry
-                    entry.annotationEndChar()   // Annotation's end char from StitchEntry
-            );
-
             PositionListSoA pl = tempAggregator.computeIfAbsent(key, k -> new PositionListSoA());
-            pl.add(stitchPos);
+            pl.add(
+                entry.documentId(),
+                entry.sentenceId(),
+                entry.beginChar(),        // Unigram's begin char from StitchEntry
+                entry.endChar(),          // Unigram's end char from StitchEntry
+                entry.synonymId()         // Annotation's synonymId from StitchEntry
+            );
         }
 
         for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {

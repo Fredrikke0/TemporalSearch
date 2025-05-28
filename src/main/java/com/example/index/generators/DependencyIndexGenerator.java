@@ -117,10 +117,8 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
             
             String key = headTokenLower + DELIMITER + relationLower + DELIMITER + dependentTokenLower;
             
-            Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
-            
             PositionListSoA pl = tempAggregator.computeIfAbsent(key, k -> new PositionListSoA());
-            pl.add(pos);
+            pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
         }
         
         for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {

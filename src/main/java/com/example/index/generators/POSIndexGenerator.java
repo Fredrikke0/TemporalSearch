@@ -105,10 +105,8 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
             String token = entry.getToken().toLowerCase();
             String compositeKey = posTag + com.example.core.IndexAccessInterface.DELIMITER + token;
 
-            Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
-            
             PositionListSoA pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionListSoA());
-            pl.add(pos);
+            pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
         }
         
         for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {

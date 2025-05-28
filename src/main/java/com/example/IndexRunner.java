@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import com.google.common.base.Stopwatch;
+import java.util.stream.Stream;
 
 
 public class IndexRunner {
@@ -56,6 +57,7 @@ public class IndexRunner {
         parser.addArgument("--custom-temp-dir").dest("custom_temp_dir").type(String.class).required(false)
                 .help("Path to a custom directory for temporary files during index generation.");
         parser.addArgument("--debug").action(net.sourceforge.argparse4j.impl.Arguments.storeTrue()).help("Enable debug logging to console");
+        parser.addArgument("--force").action(net.sourceforge.argparse4j.impl.Arguments.storeTrue()).help("Force re-generation of indexes, overwriting existing ones.");
         try {
             Namespace ns = parser.parseArgs(args);
             if (ns.getBoolean("debug")) {
@@ -67,7 +69,8 @@ public class IndexRunner {
                 ns.getString("stopwords"),
                 ns.getInt("batch_size"),
                 ns.getString("type"),
-                ns.getString("custom_temp_dir")
+                ns.getString("custom_temp_dir"),
+                ns.getBoolean("force")
             );
         } catch (ArgumentParserException e) {
             parser.handleError(e);
@@ -79,8 +82,8 @@ public class IndexRunner {
     }
 
     public static void runIndexing(String dbPath, String indexDir, String stopwordsPath,
-            int batchSize, String indexType, String customTempDirStr) throws Exception {
-        logger.info("Starting indexing process");
+            int batchSize, String indexType, String customTempDirStr, boolean force) throws Exception {
+        logger.info("Starting indexing process (force={})", force);
         logger.debug("Database: {}", dbPath);
         logger.debug("Index directory: {}", indexDir);
         if (customTempDirStr != null) {
@@ -119,11 +122,33 @@ public class IndexRunner {
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
             try {
                 for (String type : indexTypesToProcess) {
+                    Path specificIndexDir = indexPath.resolve(type);
+                    boolean generateThisIndex = true;
+
+                    if (!force && Files.exists(specificIndexDir) && Files.isDirectory(specificIndexDir)) {
+                        // Check if directory is not empty. An empty dir might mean it was created by setupIndexDirectories but generation failed/was skipped.
+                        try (Stream<Path> stream = Files.list(specificIndexDir)) {
+                            if (stream.findAny().isPresent()) {
+                                logger.info("Index for type '{}' already exists at '{}' and --force is false. Skipping generation.", type, specificIndexDir.toAbsolutePath());
+                                generateThisIndex = false;
+                            } else {
+                                logger.info("Index directory for type '{}' exists but is empty: '{}'. Proceeding with generation.", type, specificIndexDir.toAbsolutePath());
+                            }
+                        }
+                    } else if (force && Files.exists(specificIndexDir)) {
+                        // Pipeline.java should have handled deletion based on its own --force and index_type logic.
+                        // IndexRunner will proceed assuming the path is clear or will be created by the generator.
+                        logger.info("--force is true. Proceeding with generation for type '{}', assuming directory '{}' is clear or will be handled by generator.", type, specificIndexDir.toAbsolutePath());
+                    }
+
+                    if (!generateThisIndex) {
+                        continue; // Skip to the next index type
+                    }
+
                     if (type.equals("unigram")) {
                         metrics.startBatch(batchSize, "unigram");
-                        Path unigramPath = Path.of(indexDir).resolve("unigram");
                         try (UnigramIndexGenerator gen = new UnigramIndexGenerator(
-                                unigramPath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
                             gen.generateIndex();
                             metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
                         } catch (Exception e) {
@@ -136,9 +161,8 @@ public class IndexRunner {
 
                     if (type.equals("bigram")) {
                         metrics.startBatch(batchSize, "bigram");
-                        Path bigramPath = Path.of(indexDir).resolve("bigram");
                         try (BigramIndexGenerator gen = new BigramIndexGenerator(
-                                bigramPath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
                             gen.generateIndex();
                             metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
                         } catch (Exception e) {
@@ -151,9 +175,8 @@ public class IndexRunner {
 
                     if (type.equals("trigram")) {
                         metrics.startBatch(batchSize, "trigram");
-                        Path trigramPath = Path.of(indexDir).resolve("trigram");
                         try (TrigramIndexGenerator gen = new TrigramIndexGenerator(
-                                trigramPath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
                             gen.generateIndex();
                             metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
                         } catch (Exception e) {
@@ -166,9 +189,8 @@ public class IndexRunner {
 
                     if (type.equals("dependency")) {
                         metrics.startBatch(batchSize, "dependency");
-                        Path dependencyPath = Path.of(indexDir).resolve("dependency");
                         try (DependencyIndexGenerator gen = new DependencyIndexGenerator(
-                                dependencyPath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
                             gen.generateIndex();
                             metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
                         } catch (Exception e) {
@@ -181,9 +203,8 @@ public class IndexRunner {
 
                     if (type.equals("ner_date")) {
                         metrics.startBatch(batchSize, "ner_date");
-                        Path nerDatePath = Path.of(indexDir).resolve("ner_date");
                         try (NerDateIndexGenerator gen = new NerDateIndexGenerator(
-                                nerDatePath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
                             gen.generateIndex();
                             metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
                         } catch (Exception e) {
@@ -196,9 +217,8 @@ public class IndexRunner {
 
                     if (type.equals("ner")) {
                         metrics.startBatch(batchSize, "ner");
-                        Path nerPath = Path.of(indexDir).resolve("ner");
                         try (NerIndexGenerator gen = new NerIndexGenerator(
-                                nerPath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
                             gen.generateIndex();
                             metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
                         } catch (Exception e) {
@@ -211,9 +231,8 @@ public class IndexRunner {
 
                     if (type.equals("pos")) {
                         metrics.startBatch(batchSize, "pos");
-                        Path posPath = Path.of(indexDir).resolve("pos");
                         try (POSIndexGenerator gen = new POSIndexGenerator(
-                                posPath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
                             gen.generateIndex();
                             metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
                         } catch (Exception e) {
@@ -226,9 +245,8 @@ public class IndexRunner {
 
                     if (type.equals("hypernym")) {
                         metrics.startBatch(batchSize, "hypernym");
-                        Path hypernymPath = Path.of(indexDir).resolve("hypernym");
                         try (HypernymIndexGenerator gen = new HypernymIndexGenerator(
-                                hypernymPath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
                             gen.generateIndex();
                             metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
                         } catch (Exception e) {
@@ -241,48 +259,74 @@ public class IndexRunner {
                 }
 
                 if (indexTypesToProcess.contains("stitch")) {
-                    logger.info("Starting generation for all stitch indexes...");
-                    Stopwatch stitchSw = Stopwatch.createStarted();
-                    
-                    // Date Stitch Index
-                    DateStitchIndexGenerator dateStitchGenerator = new DateStitchIndexGenerator(indexDir, stopwordsPath, conn, progress, batchSize, customTempPath);
-                    logger.info("Generating DATE stitch index at {}/{}...", indexDir, dateStitchGenerator.getIndexName());
-                    dateStitchGenerator.generateIndex();
-                    dateStitchGenerator.close(); // Ensure resources are released
-                    logger.info("Finished DATE stitch index in {}.", stitchSw.elapsed(TimeUnit.SECONDS));
-                    
-                    // NER Stitch Index (excluding DATE)
-                    stitchSw.reset().start();
-                    NerStitchIndexGenerator nerStitchGenerator = new NerStitchIndexGenerator(indexDir, stopwordsPath, conn, progress, batchSize, customTempPath);
-                    logger.info("Generating NER stitch index at {}/{}...", indexDir, nerStitchGenerator.getIndexName());
-                    nerStitchGenerator.generateIndex();
-                    nerStitchGenerator.close();
-                    logger.info("Finished NER stitch index in {}.", stitchSw.elapsed(TimeUnit.SECONDS));
+                    boolean generateStitch = true;
+                    // Check a representative stitch index dir. If one exists, assume others might too.
+                    // Pipeline.java handles deletion for 'all' or specific 'stitch' types.
+                    Path representativeStitchDir = indexPath.resolve(DateStitchIndexGenerator.MY_INDEX_NAME); // e.g. stitch-date
+                    if (!force && Files.exists(representativeStitchDir) && Files.isDirectory(representativeStitchDir)) {
+                        try (Stream<Path> stream = Files.list(representativeStitchDir)) {
+                            if (stream.findAny().isPresent()) {
+                                logger.info("Stitch indexes (e.g., '{}') seem to exist and --force is false. Skipping stitch generation.", representativeStitchDir.toAbsolutePath());
+                                generateStitch = false;
+                            }
+                        }
+                    }
 
-                    // POS Stitch Index
-                    stitchSw.reset().start();
-                    PosStitchIndexGenerator posStitchGenerator = new PosStitchIndexGenerator(indexDir, stopwordsPath, conn, progress, batchSize, customTempPath);
-                    logger.info("Generating POS stitch index at {}/{}...", indexDir, posStitchGenerator.getIndexName());
-                    posStitchGenerator.generateIndex();
-                    posStitchGenerator.close();
-                    logger.info("Finished POS stitch index in {}.", stitchSw.elapsed(TimeUnit.SECONDS));
+                    if (generateStitch) {
+                        logger.info("Starting generation for all stitch indexes...");
+                        Stopwatch stitchSw = Stopwatch.createStarted();
+                        
+                        // Date Stitch Index
+                        DateStitchIndexGenerator dateStitchGenerator = new DateStitchIndexGenerator(indexDir, stopwordsPath, conn, progress, batchSize, customTempPath);
+                        logger.info("Generating DATE stitch index at {}/{}...", indexDir, dateStitchGenerator.getIndexName());
+                        dateStitchGenerator.generateIndex();
+                        dateStitchGenerator.close(); // Ensure resources are released
+                        logger.info("Finished DATE stitch index in {}.", stitchSw.elapsed(TimeUnit.SECONDS));
+                        
+                        // NER Stitch Index (excluding DATE)
+                        stitchSw.reset().start();
+                        NerStitchIndexGenerator nerStitchGenerator = new NerStitchIndexGenerator(indexDir, stopwordsPath, conn, progress, batchSize, customTempPath);
+                        logger.info("Generating NER stitch index at {}/{}...", indexDir, nerStitchGenerator.getIndexName());
+                        nerStitchGenerator.generateIndex();
+                        nerStitchGenerator.close();
+                        logger.info("Finished NER stitch index in {}.", stitchSw.elapsed(TimeUnit.SECONDS));
 
-                    metrics.addTiming("stitch_indexes_total", stitchSw.elapsed(TimeUnit.MILLISECONDS)); // This will be the time for the last one. Consider summing them or logging individually.
-                    logger.info("All stitch indexes completed.");
+                        // POS Stitch Index
+                        stitchSw.reset().start();
+                        PosStitchIndexGenerator posStitchGenerator = new PosStitchIndexGenerator(indexDir, stopwordsPath, conn, progress, batchSize, customTempPath);
+                        logger.info("Generating POS stitch index at {}/{}...", indexDir, posStitchGenerator.getIndexName());
+                        posStitchGenerator.generateIndex();
+                        posStitchGenerator.close();
+                        logger.info("Finished POS stitch index in {}.", stitchSw.elapsed(TimeUnit.SECONDS));
+
+                        metrics.addTiming("stitch_indexes_total", stitchSw.elapsed(TimeUnit.MILLISECONDS)); // This will be the time for the last one. Consider summing them or logging individually.
+                        logger.info("All stitch indexes completed.");
+                    }
                 }
 
                 if (indexTypesToProcess.contains("nash")) {
-                    metrics.startBatch(batchSize, "nash");
-                    Path nashPath = Path.of(indexDir).resolve("nash");
-                    try (NashIndexGenerator gen = new NashIndexGenerator(
-                            nashPath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                        gen.generateIndex();
-                        metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                    } catch (Exception e) {
-                        metrics.recordBatchFailure();
-                        logger.error("Error generating nash index: {}", e.getMessage(), e);
-                    } finally {
-                        progress.completeIndex();
+                    Path nashSpecificPath = indexPath.resolve("nash");
+                    boolean generateNash = true;
+                    if (!force && Files.exists(nashSpecificPath) && Files.isDirectory(nashSpecificPath)) {
+                         try (Stream<Path> stream = Files.list(nashSpecificPath)) {
+                            if (stream.findAny().isPresent()) {
+                                logger.info("Index for type 'nash' already exists at '{}' and --force is false. Skipping generation.", nashSpecificPath.toAbsolutePath());
+                                generateNash = false;
+                            }
+                        }
+                    }
+                    if (generateNash) {
+                        metrics.startBatch(batchSize, "nash");
+                        try (NashIndexGenerator gen = new NashIndexGenerator(
+                                nashSpecificPath.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                            gen.generateIndex();
+                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
+                        } catch (Exception e) {
+                            metrics.recordBatchFailure();
+                            logger.error("Error generating nash index: {}", e.getMessage(), e);
+                        } finally {
+                            progress.completeIndex();
+                        }
                     }
                 }
 
@@ -330,9 +374,9 @@ public class IndexRunner {
     private static void ensureDirectoryExists(Path dirPath) throws IOException {
         if (!Files.exists(dirPath)) {
             Files.createDirectories(dirPath);
-            logger.info("Created/ensured index directory: {}", dirPath.toAbsolutePath());
+            logger.debug("Created/ensured index directory: {}", dirPath.toAbsolutePath());
         } else {
-            logger.debug("Directory already exists: {}", dirPath.toAbsolutePath());
+            logger.trace("Directory already exists: {}", dirPath.toAbsolutePath());
         }
     }
 }

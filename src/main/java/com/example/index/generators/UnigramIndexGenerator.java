@@ -105,10 +105,8 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                 continue;
             }
 
-            Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
-            
             PositionListSoA pl = tempAggregator.computeIfAbsent(tokenLower, k -> new PositionListSoA());
-            pl.add(pos);
+            pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
         }
 
         for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {

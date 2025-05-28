@@ -109,9 +109,9 @@ public class Pipeline {
                 .help("Path to file containing stopwords to exclude (default: stopwords.txt)");
 
         indexGroup.addArgument("--idx-batch-size")
-                .setDefault(100000)
+                .setDefault(200000)
                 .type(Integer.class)
-                .help("Number of documents to fetch from DB at a time by an index generator (default: 100000). Critical for memory usage of complex indexes like 'stitch'.");
+                .help("Number of documents to fetch from DB at a time by an index generator (default: 200000). Critical for memory usage of complex indexes like 'stitch'.");
 
         indexGroup.addArgument("-y", "--index-type")
                 .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch", "nash", "all") // Added 'nash'
@@ -354,7 +354,8 @@ public class Pipeline {
                      stopwordsPath,
                      indexBatchSize, // Pass specific index batch size
                      indexType, // Pass specific type ('all' or single)
-                     effectiveCustomTempDirStr // Pass the effective custom temp dir path
+                     effectiveCustomTempDirStr, // Pass the effective custom temp dir path
+                     force // Pass the force flag
                  );
                  logger.info("Indexing stage completed.");
             }

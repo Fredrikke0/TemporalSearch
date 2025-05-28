@@ -132,17 +132,15 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
         Map<String, PositionListSoA> positionLists = new HashMap<>();
         
         for (DependencyEntry entry : batch) {
-            Position position = new Position(
+            String key = createKey(entry.getHeadToken(), entry.getDependentToken());
+            
+            PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
+            posList.add(
                 entry.getDocumentId(),
                 entry.getSentenceId(),
                 entry.getBeginChar(),
                 entry.getEndChar()
             );
-
-            String key = createKey(entry.getHeadToken(), entry.getDependentToken());
-            
-            PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
-            posList.add(position);
         }
         
         for (Map.Entry<String, PositionListSoA> entryMap : positionLists.entrySet()) {

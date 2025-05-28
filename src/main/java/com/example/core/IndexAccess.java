@@ -73,7 +73,7 @@ public class IndexAccess implements IndexAccessInterface {
         checkOpen();
         try {
             db.write(batch, new WriteOptions().sync(true));
-            logger.debug("Executed synchronous batch write for index: {}", indexType);
+            //logger.debug("Executed synchronous batch write for index: {}", indexType);
         } catch (Exception e) {
             throw new IndexAccessException(
                 "Failed to write batch: " + e.getMessage(),

@@ -19,7 +19,7 @@ import java.util.Set;
 
 public class NerStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(NerStitchIndexGenerator.class);
-    private static final String MY_INDEX_NAME = "stitch-ner";
+    public static final String MY_INDEX_NAME = "stitch-ner";
     private static final String NER_TAGS_TO_EXCLUDE_SQL = NerIndexGenerator.NER_TAGS_TO_EXCLUDE_SQL;
 
     public NerStitchIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn,

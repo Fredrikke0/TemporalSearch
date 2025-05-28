@@ -119,11 +119,9 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                     DELIMITER,
                     thirdEntry.getToken()); // Already lowercased
 
-                Position position = new Position(thirdEntry.getDocumentId(), thirdEntry.getSentenceId(),
-                    firstEntry.getBeginChar(), thirdEntry.getEndChar());
-
                 PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
-                posList.add(position);
+                posList.add(thirdEntry.getDocumentId(), thirdEntry.getSentenceId(),
+                    firstEntry.getBeginChar(), thirdEntry.getEndChar());
             }
         }
 
