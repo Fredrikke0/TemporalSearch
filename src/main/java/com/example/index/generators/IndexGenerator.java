@@ -275,7 +275,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         long entriesSinceLastReport = 0;
         long lastReportTime = System.currentTimeMillis();
         final long reportIntervalMillis = 30000; 
-        final long TARGET_BATCH_BYTES = 64 * 1024 * 1024; // 64MB target batch size
+        final long TARGET_BATCH_BYTES = 8 * 1024 * 1024; // 8MB target batch size
         long currentBatchSizeBytes = 0;
         int termsInCurrentBatch = 0;
 
