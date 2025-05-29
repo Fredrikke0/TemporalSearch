@@ -228,6 +228,17 @@ public class IndexAccess implements IndexAccessInterface {
         return isOpen.get();
     }
 
+    /**
+     * Gets the index metadata.
+     * For the generic IndexAccess, this currently returns empty.
+     * Specific subclasses or wrappers might provide metadata.
+     * @return An Optional containing the index metadata, or an empty Optional if none exists.
+     */
+    @Override
+    public Optional<java.util.Map<String, String>> getIndexMetadata() {
+        return Optional.empty(); // Basic implementation
+    }
+
     private void checkOpen() throws IndexAccessException {
         if (!isOpen.get()) {
             throw new IndexAccessException(

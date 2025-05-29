@@ -371,7 +371,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                             entriesSinceLastReport++;
 
                             // Update Progress periodically
-                            if (entriesSinceLastReport % 1000 == 0) {
+                            if (entriesSinceLastReport % 10000 == 0) {
                                 progress.updateIndex(entriesSinceLastReport);
                                 entriesSinceLastReport = 0;
                             }

@@ -45,14 +45,21 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
     private boolean modified = false;
     private volatile boolean closed = false;
 
-    public TypedAnnotationSynonymStore(Path baseDir, AnnotationType type) throws IOException {
+    /**
+     * Creates a new TypedAnnotationSynonymStore.
+     *
+     * @param synonymFilePath The direct path to the synonym file (e.g., index_dir/synonyms.dat).
+     * @param type The annotation type this store manages (for validation purposes).
+     * @throws IOException If an I/O error occurs during loading.
+     */
+    public TypedAnnotationSynonymStore(Path synonymFilePath, AnnotationType type) throws IOException {
         this.managedType = type;
-        String fileName = FILE_NAME_MAP.get(type);
-        if (fileName == null) {
-            throw new IllegalArgumentException("No synonym file name defined for AnnotationType: " + type);
+        this.storageFile = synonymFilePath;
+        // The caller (generator or IndexAccess) is responsible for ensuring the parent directory exists before calling this constructor,
+        // or this constructor can ensure it.
+        if (storageFile.getParent() != null) {
+            Files.createDirectories(storageFile.getParent()); // Ensure directory exists
         }
-        this.storageFile = baseDir.resolve(fileName);
-        Files.createDirectories(storageFile.getParent()); // Ensure directory exists
 
         loadMappings();
         logger.info("Initialized {} annotation synonyms from file: {}", managedType, storageFile.toAbsolutePath());

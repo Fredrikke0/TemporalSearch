@@ -109,7 +109,7 @@ public class QueryEndToEndTest {
 
         SqliteAccessor.initialize(indexBasePath.getAbsolutePath());
 
-        mockUnigramIndex = new MockIndexAccess();
+        mockUnigramIndex = new MockIndexAccess("unigram", null, null, null);
         mockUnigramIndex.addTestData("apple", 1, 1, 0, 5);
         mockUnigramIndex.addTestData("apple", 2, 1, 10, 15);
         mockUnigramIndex.addTestData("banana", 2, 2, 20, 25);
@@ -139,7 +139,7 @@ public class QueryEndToEndTest {
         mockNerIndex.addTestData("SET" + DELIMITER + "weekly", 10, 1, 0, 6);
         mockNerIndex.addTestData("PERSON" + DELIMITER + "albrecht kossel", 12, 1, 5, 20);
 
-        mockNerDateIndex = new MockIndexAccess("ner_date");
+        mockNerDateIndex = new MockIndexAccess("ner_date", null, null, null);
         mockNerDateIndex.addTestData("20230115", 2, 1, 0, 10);
         mockNerDateIndex.addTestData("20230320", 1, 1, 30, 40);
         mockNerDateIndex.addTestData("20240101", 3, 1, 50, 60);
@@ -245,7 +245,7 @@ public class QueryEndToEndTest {
         factory.setTemporalStrategy("nash");
         logger.info("QueryEndToEndTest: ConditionExecutorFactory temporal strategy set to NASH.");
 
-        queryExecutor = new QueryExecutor(factory);
+        queryExecutor = new QueryExecutor(factory, "none");
         tableResultService = new TableResultService();
         queryParser = new QueryParser();
         defaultTestRequirements = new AttributeRequirements();

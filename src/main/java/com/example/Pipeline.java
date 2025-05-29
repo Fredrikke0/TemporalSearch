@@ -52,10 +52,10 @@ public class Pipeline {
         parser.addArgument("-s", "--stage")
                 .choices("all", "annotate", "index")
                 .required(true) // Stage is now mandatory
-                .help("Pipeline stage(s) to run:\\n" +
-                      "  all      - Run annotation and indexing\\n" +
-                      "  annotate - Annotate documents\\n" +
-                      "  index    - Generate indexes from annotations");
+                .help("Pipeline stage(s) to run: " +
+                      "all - Run annotation and indexing; " +
+                      "annotate - Annotate documents; " +
+                      "index - Generate indexes from annotations");
 
         // Project arguments group -> Paths group
         var pathsGroup = parser.addArgumentGroup("Path arguments");
@@ -111,18 +111,18 @@ public class Pipeline {
         indexGroup.addArgument("-y", "--index-type")
                 .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch", "nash", "all") // Added 'nash'
                 .setDefault("all")
-                .help("Type of index to generate:\\n" +
-                      "  unigram    - Single word index\\n" +
-                      "  bigram     - Two word phrases\\n" +
-                      "  trigram    - Three word phrases\\n" +
-                      "  dependency - Grammatical dependencies\\n" +
-                      "  ner_date   - Named entity dates\\n" +
-                      "  ner        - Named entity recognition\\n" +
-                      "  pos        - Part-of-speech tagging\\n" +
-                      "  hypernym   - Word hypernyms\\n" +
-                      "  stitch     - Connects unigrams with their associated dates\\n" +
-                      "  nash       - Efficient index for searching for dates\\n" +
-                      "  all        - Generate all available index types");
+                .help("Type of index to generate: " +
+                      "unigram - Single word index; " +
+                      "bigram - Two word phrases; " +
+                      "trigram - Three word phrases; " +
+                      "dependency - Grammatical dependencies; " +
+                      "ner_date - Named entity dates; " +
+                      "ner - Named entity recognition; " +
+                      "pos - Part-of-speech tagging; " +
+                      "hypernym - Word hypernyms; " +
+                      "stitch - Connects unigrams with their associated dates; " +
+                      "nash - Efficient index for searching for dates; " +
+                      "all - Generate all available index types");
 
         indexGroup.addArgument("--custom-temp-dir")
                 .dest("custom_temp_dir")

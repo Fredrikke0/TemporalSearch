@@ -1,16 +1,18 @@
 package com.example.index;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 // import java.util.EnumSet; // No longer needed for all types in one instance
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Tests for the TypedAnnotationSynonymStore class.
@@ -30,19 +32,19 @@ public class TypedAnnotationSynonymStoreTest {
         // Each type gets its own store, in its own subdirectory to mimic AbstractUnigramStitchGenerator
         Path dateDir = tempDir.resolve("stitch-date");
         Files.createDirectories(dateDir);
-        dateSynonyms = new TypedAnnotationSynonymStore(dateDir, AnnotationType.DATE);
+        dateSynonyms = new TypedAnnotationSynonymStore(dateDir.resolve("synonyms.dat"), AnnotationType.DATE);
 
         Path nerDir = tempDir.resolve("stitch-ner");
         Files.createDirectories(nerDir);
-        nerSynonyms = new TypedAnnotationSynonymStore(nerDir, AnnotationType.NER);
+        nerSynonyms = new TypedAnnotationSynonymStore(nerDir.resolve("synonyms.dat"), AnnotationType.NER);
 
         Path posDir = tempDir.resolve("stitch-pos");
         Files.createDirectories(posDir);
-        posSynonyms = new TypedAnnotationSynonymStore(posDir, AnnotationType.POS);
+        posSynonyms = new TypedAnnotationSynonymStore(posDir.resolve("synonyms.dat"), AnnotationType.POS);
 
         Path depDir = tempDir.resolve("stitch-dependency"); // Example path
         Files.createDirectories(depDir);
-        dependencySynonyms = new TypedAnnotationSynonymStore(depDir, AnnotationType.DEPENDENCY);
+        dependencySynonyms = new TypedAnnotationSynonymStore(depDir.resolve("synonyms.dat"), AnnotationType.DEPENDENCY);
     }
 
     @AfterEach
@@ -148,7 +150,9 @@ public class TypedAnnotationSynonymStoreTest {
         dateSynonyms.close(); // Save and close
 
         // Reopen and check if data is still there
-        dateSynonyms = new TypedAnnotationSynonymStore(tempDir.resolve("stitch-date"), AnnotationType.DATE);
+        // Ensure we use the correct file path for reopening
+        Path dateSynonymFile = tempDir.resolve("stitch-date").resolve("synonyms.dat");
+        dateSynonyms = new TypedAnnotationSynonymStore(dateSynonymFile, AnnotationType.DATE);
         assertEquals(dateId, dateSynonyms.getOrCreateId(dateVal));
         assertEquals(dateVal, dateSynonyms.getValue(dateId));
         assertEquals(1, dateSynonyms.size());

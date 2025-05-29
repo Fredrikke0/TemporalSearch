@@ -40,6 +40,7 @@ public class QueryCLI {
     private final ConditionExecutorFactory executorFactory;
     private final QueryExecutor executor;
     private final JoinOptimizationStrategy joinStrategy;
+    private final String stitchStrategy;
 
     /**
      * Creates a new QueryCLI instance.
@@ -47,18 +48,21 @@ public class QueryCLI {
      * @param projectsDir The base directory containing project folders.
      * @param temporalStrategy The desired temporal execution strategy ("nash" or "naive")
      * @param joinStrategy The desired join execution strategy ("independent" or "dependent")
+     * @param stitchStrategy The desired stitch execution strategy ("none" or "optimized")
      */
-    public QueryCLI(Path projectsDir, String temporalStrategy, JoinOptimizationStrategy joinStrategy) {
+    public QueryCLI(Path projectsDir, String temporalStrategy, JoinOptimizationStrategy joinStrategy, String stitchStrategy) {
         this.projectsDir = projectsDir;
         this.parser = new QueryParser();
         this.validator = new QuerySemanticValidator();
         this.executorFactory = new ConditionExecutorFactory();
         this.executorFactory.setTemporalStrategy(temporalStrategy);
-        this.executor = new QueryExecutor(this.executorFactory);
+        this.executor = new QueryExecutor(this.executorFactory, stitchStrategy);
         this.executor.setJoinOptimizationStrategy(joinStrategy);
         this.joinStrategy = joinStrategy;
+        this.stitchStrategy = stitchStrategy;
         logger.info("Initialized QueryCLI with base projects directory: {}", projectsDir);
         logger.info("Project structure expected: {}/[PROJECT_NAME]/[PROJECT_NAME].db and {}/[PROJECT_NAME]/indexes/", projectsDir, projectsDir);
+        logger.info("Temporal Strategy: {}, Join Strategy: {}, Stitch Strategy: {}", temporalStrategy, joinStrategy, stitchStrategy);
     }
 
     /**
@@ -263,6 +267,12 @@ public class QueryCLI {
                 .setDefault("independent")
                 .help("Specifies the execution strategy for JOIN operations. 'independent' executes both sides fully before joining (default). 'dependent' attempts to optimize by filtering one side based on the results of the other.");
 
+        // Add the new stitch strategy flag
+        parser.addArgument("--stitch-strategy")
+                .choices("none", "optimized") // Define allowed choices
+                .setDefault("none")      // Set the default value
+                .help("Select the execution strategy for stitch index optimization (default: none)");
+
         parser.addArgument("query")
                 .nargs("?")
                 .help("Query string to execute");
@@ -275,6 +285,7 @@ public class QueryCLI {
             String exportArg = ns.getString("export");
             String temporalStrategy = ns.getString("temporal_strategy"); // Get the strategy name
             String joinStrategyStr = ns.getString("join_strategy");
+            String stitchStrategy = ns.getString("stitch_strategy"); // Get stitch strategy
             JoinOptimizationStrategy joinStrategy;
             if ("dependent".equalsIgnoreCase(joinStrategyStr)) {
                 joinStrategy = JoinOptimizationStrategy.DEPENDENT;
@@ -300,7 +311,8 @@ public class QueryCLI {
             // Create and run CLI, passing the chosen strategies
             logger.info("Configuring temporal strategy: {}", temporalStrategy);
             logger.info("Configuring join strategy: {}", joinStrategy);
-            QueryCLI cli = new QueryCLI(Path.of(projectsDirStr), temporalStrategy, joinStrategy);
+            logger.info("Configuring stitch strategy: {}", stitchStrategy);
+            QueryCLI cli = new QueryCLI(Path.of(projectsDirStr), temporalStrategy, joinStrategy, stitchStrategy);
 
             if (query != null) {
                 // Execute the provided query
@@ -315,6 +327,7 @@ public class QueryCLI {
                 System.out.println("Specify project in query using: FROM [PROJECT_NAME]");
                 System.out.println("Temporal Strategy: " + temporalStrategy + " (Use --temporal-strategy nash|naive to change at startup)");
                 System.out.println("Join Strategy: " + joinStrategy.name().toLowerCase() + " (Use --join-strategy independent|dependent to change at startup)");
+                System.out.println("Stitch Strategy: " + stitchStrategy + " (Use --stitch-strategy none|optimized to change at startup)");
                 System.out.println("Snippet support is enabled. Use SNIPPET(variable) in SELECT clause to show text context.");
                 System.out.println("Export support: Add --export=format:filename to export results (formats: csv, json, html)");
 

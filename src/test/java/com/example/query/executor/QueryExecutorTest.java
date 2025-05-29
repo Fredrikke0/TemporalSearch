@@ -106,7 +106,7 @@ class QueryExecutorTest {
         indexes.put("dependency", dependencyIndex);
         indexes.put("ner_date", nerDateIndex);
 
-        queryExecutor = new QueryExecutor(factory, mockTableResultService);
+        queryExecutor = new QueryExecutor(factory, mockTableResultService, "none");
 
         // Mock the factory to return specific executors when needed
         lenient().doReturn(containsExecutor).when(factory).getExecutor(isA(Contains.class));

@@ -19,8 +19,10 @@ import com.example.query.model.Query;
 import com.example.query.model.SubquerySpec;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Logical.LogicalOperator;
+import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Temporal;
 import com.example.query.result.TableResultService;
 
@@ -38,14 +40,17 @@ public class QueryExecutor {
     private TableResultService tableResultService;
     private boolean nashInitialized = false;
     private JoinOptimizationStrategy joinStrategy = JoinOptimizationStrategy.INDEPENDENT;
+    private final String stitchStrategy;
+    private Query currentQuery;
 
     /**
-     * Creates a new QueryExecutor with the provided executor factory.
+     * Creates a new QueryExecutor with the provided executor factory and stitch strategy.
      *
      * @param executorFactory Factory for creating condition executors
+     * @param stitchStrategy The stitch execution strategy ("none" or "optimized")
      */
-    public QueryExecutor(ConditionExecutorFactory executorFactory) {
-        this(executorFactory, new TableResultService());
+    public QueryExecutor(ConditionExecutorFactory executorFactory, String stitchStrategy) {
+        this(executorFactory, new TableResultService(), stitchStrategy);
     }
 
     /**
@@ -53,10 +58,13 @@ public class QueryExecutor {
      *
      * @param executorFactory Factory for creating condition executors
      * @param tableResultService Mocked TableResultService
+     * @param stitchStrategy The stitch execution strategy ("none" or "optimized")
      */
-    public QueryExecutor(ConditionExecutorFactory executorFactory, TableResultService tableResultService) {
+    public QueryExecutor(ConditionExecutorFactory executorFactory, TableResultService tableResultService, String stitchStrategy) {
         this.executorFactory = executorFactory;
         this.tableResultService = tableResultService;
+        this.stitchStrategy = (stitchStrategy == null || stitchStrategy.isBlank()) ? "none" : stitchStrategy;
+        logger.debug("Initialized QueryExecutor with stitch strategy: {}", this.stitchStrategy);
     }
 
     /**
@@ -101,6 +109,7 @@ public class QueryExecutor {
             throws QueryExecutionException {
 
         long startTime = System.nanoTime();
+        this.currentQuery = query;
 
         // Analyze query to determine attribute requirements for SoA optimization
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
@@ -306,6 +315,47 @@ public class QueryExecutor {
             throws QueryExecutionException {
         logger.debug("Executing condition: {} with granularity: {} and size: {}",
                 condition, granularity, granularitySize);
+
+        // --- STITCH STRATEGY LOGIC --- START ---
+        if (this.stitchStrategy.equals("optimized") &&
+            this.currentQuery != null && // Ensure currentQuery is set
+            this.currentQuery.granularity() == Query.Granularity.SENTENCE &&
+            condition instanceof Logical logicalCondition &&
+            logicalCondition.operator() == Logical.LogicalOperator.AND) {
+
+            List<Condition> childConditions = logicalCondition.conditions();
+            // For Phase 1, we simplify: look for exactly two conditions: one CONTAINS (unigram) and one NER.
+            if (childConditions.size() == 2) {
+                Condition c1 = childConditions.get(0);
+                Condition c2 = childConditions.get(1);
+
+                Contains containsCond = null;
+                Ner nerCond = null;
+
+                if (c1 instanceof Contains && ((Contains)c1).terms().size() == 1 && c2 instanceof Ner) {
+                    containsCond = (Contains) c1;
+                    nerCond = (Ner) c2;
+                } else if (c2 instanceof Contains && ((Contains)c2).terms().size() == 1 && c1 instanceof Ner) {
+                    containsCond = (Contains) c2;
+                    nerCond = (Ner) c1;
+                }
+
+                if (containsCond != null && nerCond != null) {
+                    logger.info("Attempting optimized stitch execution for CONTAINS (unigram) AND NER.");
+                    StitchContainsNerExecutor stitchExecutor = new StitchContainsNerExecutor();
+                    try {
+                        return stitchExecutor.execute(containsCond, nerCond, indexes, granularity, granularitySize, source, requirements);
+                    } catch (QueryExecutionException e) {
+                        logger.warn("StitchContainsNerExecutor execution failed: {}. Falling back to standard AND execution.", e.getMessage());
+                        // Fall through to standard execution if stitch execution fails
+                    } catch (Exception e) {
+                        logger.error("Unexpected error during stitch execution: {}. Falling back to standard AND execution.", e.getMessage(), e);
+                        // Fall through for unexpected errors too
+                    }
+                }
+            }
+        }
+        // --- STITCH STRATEGY LOGIC --- END ---
 
         try {
             ConditionExecutor<Condition> executor = executorFactory.getExecutor(condition);

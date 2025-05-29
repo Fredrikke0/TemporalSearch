@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -44,6 +45,7 @@ public class SoALargeResultSetTest {
 
     private ConditionExecutorFactory executorFactory;
     private QueryExecutor queryExecutor;
+    private Map<String, IndexAccessInterface> mockIndexes;
 
     // Test parameters for large result sets
     private static final int LARGE_RESULT_SET_SIZE = 100_000; // 100K results
@@ -54,7 +56,12 @@ public class SoALargeResultSetTest {
     void setUp() {
         MockitoAnnotations.openMocks(this);
         executorFactory = new ConditionExecutorFactory();
-        queryExecutor = new QueryExecutor(executorFactory);
+        queryExecutor = new QueryExecutor(executorFactory, "none");
+
+        // Setup mock index access as needed for these tests
+        // For SoA tests, we might not always need deep index interaction if focusing on QueryResultSoA structure.
+        mockIndexes = new HashMap<>();
+        // Example: mockIndexes.put("unigram", new MockIndexAccess("unigram", null, null, null));
     }
 
     @Test

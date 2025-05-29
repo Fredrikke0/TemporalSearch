@@ -1,9 +1,13 @@
 package com.example.core;
 
+import java.util.Map;
 import java.util.Optional;
 
 import org.iq80.leveldb.DBIterator;
 import org.iq80.leveldb.WriteBatch;
+
+import com.example.index.AnnotationType;
+import com.example.index.TypedAnnotationSynonymStore;
 
 /**
  * Interface defining the core access methods for indexes.
@@ -80,6 +84,30 @@ public interface IndexAccessInterface extends AutoCloseable {
      * Checks if the index access is currently open and usable.
      */
     boolean isOpen();
+
+    /**
+     * Gets the index metadata.
+     * @return An Optional containing the index metadata, or an empty Optional if none exists.
+     */
+    Optional<Map<String, String>> getIndexMetadata();
+
+    /**
+     * Gets the specific type of annotation this index provides (e.g., NER, POS, DATE).
+     * This helps in understanding what kind of data to expect from the index.
+     * @return The AnnotationType of the index, or {@link AnnotationType#UNKNOWN} if not specified.
+     */
+    default AnnotationType getAnnotationType() {
+        return AnnotationType.UNKNOWN;
+    }
+
+    /**
+     * Gets the synonym store associated with this index, if any.
+     * This is primarily used by stitch indexes to resolve synonym IDs for stitched annotations.
+     * @return An Optional containing the TypedAnnotationSynonymStore, or an empty Optional if none exists.
+     */
+    default Optional<TypedAnnotationSynonymStore> getSynonymStore() {
+        return Optional.empty();
+    }
 
     /**
      * Closes the index access, releasing any underlying resources.

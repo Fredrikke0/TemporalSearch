@@ -46,7 +46,7 @@ public class SentenceGranularityTest {
 
     @BeforeAll
     public static void setUp() throws IOException, IndexAccessException {
-        queryExecutor = new QueryExecutor(new ConditionExecutorFactory());
+        queryExecutor = new QueryExecutor(new ConditionExecutorFactory(), "none");
         queryParser = new QueryParser();
         System.out.println("Sentence Granularity Test Setup Complete.");
     }

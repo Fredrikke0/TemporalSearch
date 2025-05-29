@@ -69,10 +69,12 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         // this.db = null; // No longer managing its own DB instance
         // logger.info("Skipping LevelDB initialization for {} (initializeDB=false)", this.resolvedIndexName);
 
-        this.annotationSynonyms = new TypedAnnotationSynonymStore(this.indexDBPath, managedAnnotationType);
+        // Construct the specific path for the synonym file for this stitch index
+        Path synonymFilePath = this.indexDBPath.resolve("synonyms.dat");
+        this.annotationSynonyms = new TypedAnnotationSynonymStore(synonymFilePath, managedAnnotationType);
 
         try {
-            logger.info("Initializing annotation synonyms for {} stitch index using inherited sqliteConn within directory: {}", managedAnnotationType, this.indexDBPath);
+            logger.info("Initializing annotation synonyms for {} stitch index using inherited sqliteConn. Synonym file: {}", managedAnnotationType, synonymFilePath.toAbsolutePath());
             populateSpecificAnnotationSynonyms(managedAnnotationType);
             logger.info("Successfully initialized {} annotation synonyms with {} entries for type {}",
                     managedAnnotationType, annotationSynonyms.size(), managedAnnotationType);
@@ -430,27 +432,19 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
 
     @Override
     public void close() throws IOException {
-        logger.info("Closing AbstractUnigramStitchGenerator {}...", this.resolvedIndexName);
-        // if (db != null) { // db field is removed
-        //     try {
-        //         db.close();
-        //         logger.debug("Internal LevelDB closed for {}.", this.resolvedIndexName);
-        //     } catch (IOException e) {
-        //         logger.error("Error closing internal LevelDB for {}: {}", this.resolvedIndexName, e.getMessage(), e);
-        //     } finally {
-        //         db = null;
-        //     }
-        // }
+        super.close(); // Closes indexAccess (LevelDB) and other resources from parent
+
         if (annotationSynonyms != null) {
             try {
-                annotationSynonyms.close();
-                logger.debug("Annotation synonyms closed for {}.", this.resolvedIndexName);
-            } catch (Exception e) {
-                logger.error("Error closing annotation synonyms for {}: {}", this.resolvedIndexName, e.getMessage(), e);
+                logger.info("Closing annotation synonym store for index {}...", getIndexName());
+                annotationSynonyms.close(); // This will save if modified
+                logger.info("Annotation synonym store for index {} closed successfully.", getIndexName());
+            } catch (IOException e) {
+                logger.error("Failed to close annotation synonym store for index {}: {}", getIndexName(), e.getMessage(), e);
+                // Decide if this should re-throw or just log
             }
         }
-        super.close();
-        logger.info("AbstractUnigramStitchGenerator {} closed.", this.resolvedIndexName);
+        // Any other specific cleanup for AbstractUnigramStitchGenerator can go here
     }
 
     // Helper record for unigram data

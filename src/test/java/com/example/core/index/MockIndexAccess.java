@@ -23,6 +23,8 @@ import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
+import com.example.index.AnnotationType;
+import com.example.index.TypedAnnotationSynonymStore;
 
 /**
  * A mock implementation providing an IndexAccess-like API for testing purposes.
@@ -34,16 +36,22 @@ public class MockIndexAccess implements IndexAccessInterface {
     private final String indexType;
     private final NavigableMap<ByteArrayWrapper, byte[]> dataStore;
     private boolean closed = false;
+    private final AnnotationType annotationType;
+    private final TypedAnnotationSynonymStore synonymStore;
+    private final Map<String, String> metadata;
 
-    public MockIndexAccess(String indexType) {
+    public MockIndexAccess(String indexType, AnnotationType annotationType, TypedAnnotationSynonymStore synonymStore, Map<String, String> metadata) {
         this.indexType = indexType;
+        this.annotationType = annotationType;
+        this.synonymStore = synonymStore;
+        this.metadata = metadata;
         // Use ConcurrentSkipListMap for thread safety and sorting (like LevelDB)
         this.dataStore = new ConcurrentSkipListMap<>();
     }
 
     // Convenience constructor for common "unigram" type
     public MockIndexAccess() {
-        this("unigram");
+        this("unigram", null, null, null);
     }
 
     /**
@@ -195,6 +203,21 @@ public class MockIndexAccess implements IndexAccessInterface {
 
     public int getStoreSize() {
         return dataStore.size();
+    }
+
+    @Override
+    public AnnotationType getAnnotationType() {
+        return this.annotationType;
+    }
+
+    @Override
+    public Optional<TypedAnnotationSynonymStore> getSynonymStore() {
+        return Optional.ofNullable(this.synonymStore);
+    }
+
+    @Override
+    public Optional<Map<String, String>> getIndexMetadata() {
+        return Optional.ofNullable(this.metadata);
     }
 
     // --- Inner Mock Iterator Class ---
