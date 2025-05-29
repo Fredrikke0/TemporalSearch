@@ -1,17 +1,21 @@
 package com.example.query.executor;
 
-import com.example.query.model.condition.*;
-import com.example.query.model.TemporalPredicate;
-import com.example.query.model.condition.Not;
-import com.example.query.model.condition.Contains;
-import com.example.query.executor.ContainsExecutor;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
+import com.example.query.model.TemporalPredicate;
+import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Contains;
+import com.example.query.model.condition.Dependency;
+import com.example.query.model.condition.Logical;
+import com.example.query.model.condition.Ner;
+import com.example.query.model.condition.Not;
+import com.example.query.model.condition.Pos;
+import com.example.query.model.condition.Temporal;
 
 /**
  * Factory for creating or retrieving ConditionExecutor instances based on Condition type.
@@ -145,4 +149,4 @@ public class ConditionExecutorFactory {
          Temporal dummyTemporal = new Temporal(TemporalPredicate.EQUAL, java.time.LocalDateTime.now());
          return (TemporalExecutor) getExecutor(dummyTemporal);
      }
-} 
+}

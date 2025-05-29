@@ -1,21 +1,31 @@
 package com.example;
 
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import me.tongfei.progressbar.ProgressBar;
+import me.tongfei.progressbar.ProgressBarBuilder;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import me.tongfei.progressbar.ProgressBar;
-import me.tongfei.progressbar.ProgressBarBuilder;
-
-import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.sql.*;
 
 /**
  * Standalone tool to convert Wikipedia JSON dumps (in Elasticsearch bulk format)
@@ -77,12 +87,12 @@ public class WikiJsonToSqlite {
         if (outputDb.getParent() != null) {
             Files.createDirectories(outputDb.getParent());
         }
-        
+
         // Removed the initial line counting block for performance with large files.
         // Progress will be based on processed entries or the specified limit.
         logger.info("Starting conversion for input file {}{}", inputFile,
             limit != null ? String.format(" (will process up to %d entries)", limit) : " (processing all entries)");
-        
+
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + outputDb.toString())) {
             // Enable WAL mode and other optimizations for better performance
             try (Statement pragma = conn.createStatement()) {
@@ -214,4 +224,4 @@ public class WikiJsonToSqlite {
             System.exit(1);
         }
     }
-} 
+}

@@ -1,24 +1,30 @@
 package com.example;
 
-import com.example.query.*;
-import com.example.query.executor.*;
-import com.example.query.index.IndexManager;
-import com.example.query.model.*;
-import com.example.query.result.*;
-import com.example.query.sqlite.SqliteAccessor;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Optional;
+import java.util.Scanner;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.query.QueryParseException;
+import com.example.query.QueryParser;
+import com.example.query.QuerySemanticValidator;
+import com.example.query.executor.ConditionExecutorFactory;
 import com.example.query.executor.JoinOptimizationStrategy;
+import com.example.query.executor.QueryExecutor;
+import com.example.query.executor.QueryResultSoA;
+import com.example.query.index.IndexManager;
+import com.example.query.model.Query;
+import com.example.query.result.TableResultService;
+import com.example.query.sqlite.SqliteAccessor;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import tech.tablesaw.api.Table;
-
-import java.nio.file.Path;
-import java.util.*;
-import java.io.IOException;
 
 /**
  * Command-line interface for executing queries against the indexed corpus.
@@ -27,7 +33,7 @@ import java.io.IOException;
 public class QueryCLI {
     private static final Logger logger = LoggerFactory.getLogger(QueryCLI.class);
     private final Path projectsDir;
-    
+
     // Core components
     private final QueryParser parser;
     private final QuerySemanticValidator validator;
@@ -54,7 +60,7 @@ public class QueryCLI {
         logger.info("Initialized QueryCLI with base projects directory: {}", projectsDir);
         logger.info("Project structure expected: {}/[PROJECT_NAME]/[PROJECT_NAME].db and {}/[PROJECT_NAME]/indexes/", projectsDir, projectsDir);
     }
-    
+
     /**
      * Executes a query string.
      *
@@ -67,14 +73,14 @@ public class QueryCLI {
             // 1. Parse query string into Query object
             logger.debug("Parsing query: {}", queryStr);
             Query query = parser.parse(queryStr);
-            
+
             // 2. Validate query semantics
             logger.debug("Validating query: {}", query);
             validator.validate(query);
-            
+
             // Check for date queries and display helpful information
             checkAndDisplayDateQueryHelp(queryStr, query);
-            
+
             // 3. Get project name from FROM clause
             String projectName = query.source();
             logger.debug("Using project name from FROM clause: {}", projectName);
@@ -110,89 +116,68 @@ public class QueryCLI {
             // Create a new TableResultService with the project-specific database path
             TableResultService tableResultService = new TableResultService(corpusDbPath);
             logger.info("Using project-specific database at: {}", corpusDbPath);
-            
+
             // 4. Create IndexManager for the resolved paths, passing the query and strategy
             // Pass the projectPath, IndexManager will resolve its own indexBaseDir
             try (IndexManager indexManager = new IndexManager(projectPath, projectName, query, this.executorFactory.getTemporalStrategy())) {
                 logger.debug("Created IndexManager for project: {} using project path: {}", projectName, projectPath);
-                
+
                 // Initialize Nash index with the index manager
                 executor.initializeNashIndex(projectName, indexManager); // Pass projectName
-                
+
                 // 5. Execute query using QueryExecutor
                 logger.debug("Executing query against project: {}", projectName);
                 Query.Granularity granularity = query.granularity();
                 int windowSize = query.granularitySize().orElse(0); // Use 0 if not present
                 logger.info("Query granularity: {} with size: {}", granularity, windowSize);
-                
-                // executor.execute now returns QueryResult or List<JoinedMatch>
-                Object execResult = executor.execute(query, indexManager.getAllIndexes());
-                
+
+                // QueryExecutor now consistently returns QueryResultSoA
+                QueryResultSoA execResult = executor.execute(query, indexManager.getAllIndexes());
+
                 Table resultTable;
                 int matchCount;
                 String matchUnit;
 
-                if (execResult instanceof QueryResult result) {
-                    // --- Handle QueryResult (Non-Join) ---
-                    matchCount = result.getAllDetails().size(); 
-                    matchUnit = (granularity == Query.Granularity.DOCUMENT) ? "documents (approx details)" : "sentences (approx details)";
-                logger.info("Query executed, found {} matching details (granularity: {})", matchCount, granularity);
+                // Simplified result handling: execResult is always QueryResultSoA
+                if (execResult != null) {
+                    matchCount = execResult.size();
+                    // Determine match unit based on whether it was a join (by checking query structure) or simple query
+                    if (query.joinCondition().isPresent()) {
+                        matchUnit = "conceptual joined rows";
+                    } else {
+                        matchUnit = (granularity == Query.Granularity.DOCUMENT) ? "documents" : "sentences";
+                    }
+                    logger.info("Query executed, found {} matching {} (granularity for base parts: {})", matchCount, matchUnit, granularity);
 
-                    // Generate table from QueryResult
-                    logger.debug("Generating result table from QueryResult");
+                    logger.debug("Generating result table from QueryResultSoA");
                     resultTable = tableResultService.generateTable(
-                    query, 
-                    result, // Pass QueryResult 
-                    indexManager.getAllIndexes()
-                );
-
-                } else if (execResult instanceof List<?> joinResultList && !joinResultList.isEmpty() && joinResultList.get(0) instanceof com.example.query.binding.JoinedMatch) {
-                    // --- Handle List<JoinedMatch> (Join) ---
-                    @SuppressWarnings("unchecked") // Cast is safe due to instanceof check above
-                    List<com.example.query.binding.JoinedMatch> joinedMatches = (List<com.example.query.binding.JoinedMatch>) joinResultList;
-                    
-                    matchCount = joinedMatches.size();
-                    matchUnit = "joined pairs"; // Granularity might not directly apply here
-                    logger.info("Join query executed, found {} matching {} (granularity: {})", matchCount, matchUnit, granularity);
-                    
-                    // Generate table from List<JoinedMatch>
-                    logger.debug("Generating result table from List<JoinedMatch>");
-                    resultTable = tableResultService.generateTableForJoin(
                         query,
-                        joinedMatches,
+                        execResult,
                         indexManager.getAllIndexes()
                     );
-                } else if (execResult instanceof List<?> emptyList && emptyList.isEmpty()) {
-                     // --- Handle Empty List (likely from an empty JOIN result) ---
-                    matchCount = 0;
-                    matchUnit = "joined pairs"; 
-                    logger.info("Join query executed, found 0 matching {}", matchUnit);
-                     
-                    // Create an empty table reflecting the SELECT columns
-                    resultTable = tableResultService.generateTableForJoin(
-                        query,
-                        Collections.emptyList(), // Pass empty list
-                        indexManager.getAllIndexes()
-                    ); // generateTableForJoin should handle empty list gracefully
                 } else {
-                     // --- Handle unexpected result type ---
-                    String resultType = (execResult == null) ? "null" : execResult.getClass().getName();
-                     throw new IllegalStateException("Unexpected query execution result type: " + resultType);
+                    // This case should ideally not happen if QueryExecutor guarantees a non-null QueryResultSoA (even if empty)
+                    logger.error("Query execution returned a null QueryResultSoA.");
+                    System.err.println("Error: Query execution resulted in an unexpected null result.");
+                    // Create an empty table or handle error appropriately
+                    resultTable = Table.create("Empty Result"); // Placeholder for an empty table
+                    matchCount = 0;
+                    matchUnit = "results";
                 }
 
                 // 6. Generate results using TableResultService (removed from inside if/else)
                 // The specific generation logic is now handled within the if/else branches above
-                
+
                 // NOTE: We're now using Tablesaw's sorting capabilities directly
                 // The orderBy list in Query now contains Tablesaw-compatible sort strings
                 // (column names with optional "-" prefix for descending order)
-                
+
                 // 7. Handle export if requested
                 if (exportFormat.isPresent() && exportFilename.isPresent()) {
                     String format = exportFormat.get();
                     String filename = exportFilename.get();
                     logger.info("Exporting results to {} format in file: {}", format, filename);
-                    
+
                     try {
                         tableResultService.exportTable(resultTable, format, filename);
                         System.out.println("Results exported to " + filename);
@@ -204,12 +189,12 @@ public class QueryCLI {
                     // 8. Format and display results
                     logger.debug("Formatting results for display");
                     String formattedResults = tableResultService.formatTable(resultTable);
-                    
+
                     // Output the formatted results
                     System.out.println(formattedResults);
                 }
             }
-            
+
         } catch (QueryParseException e) {
             logger.error("Query parse error: {}", e.getMessage());
             System.err.println("Error parsing query: " + e.getMessage());
@@ -219,10 +204,10 @@ public class QueryCLI {
             System.err.println("Error: " + e.getMessage());
         }
     }
-    
+
     /**
      * Checks if the query involves date operations and displays helpful information.
-     * 
+     *
      * @param queryStr The original query string
      * @param query The parsed query object
      */
@@ -236,7 +221,7 @@ public class QueryCLI {
             } else if (queryStr.toUpperCase().contains("DATE(INTERSECT [")) {
                 logger.info("Date INTERSECT query detected - matches any overlap with date range");
             }
-            
+
             // Check for granularity
             if (query.granularity() == Query.Granularity.SENTENCE) {
                 logger.info("Date query with sentence granularity detected");
@@ -247,7 +232,7 @@ public class QueryCLI {
             }
         }
     }
-    
+
     /**
      * Main entry point for the CLI.
      *
@@ -258,30 +243,30 @@ public class QueryCLI {
         ArgumentParser parser = ArgumentParsers.newFor("QueryCLI").build()
                 .defaultHelp(true)
                 .description("Execute queries against indexed projects. Queries specify the project via the FROM clause.");
-        
+
         parser.addArgument("-pd", "--projects-dir")
                 .setDefault("projects")
                 .help("Base directory containing project folders (default: projects)");
-        
+
         parser.addArgument("--export")
                 .help("Export results to a file in the specified format: csv:filename.csv, json:filename.json, or html:filename.html");
-        
+
         // Add the new temporal strategy flag
         parser.addArgument("--temporal-strategy")
                 .choices("nash", "naive") // Define allowed choices
                 .setDefault("naive")      // Set the default value
                 .help("Select the execution strategy for temporal conditions (default: naive)");
-        
+
         // Add the new join strategy flag
         parser.addArgument("--join-strategy")
                 .choices("independent", "dependent")
                 .setDefault("independent")
                 .help("Specifies the execution strategy for JOIN operations. 'independent' executes both sides fully before joining (default). 'dependent' attempts to optimize by filtering one side based on the results of the other.");
-        
+
         parser.addArgument("query")
                 .nargs("?")
                 .help("Query string to execute");
-        
+
         try {
             // Parse arguments
             Namespace ns = parser.parseArgs(args);
@@ -296,11 +281,11 @@ public class QueryCLI {
             } else {
                 joinStrategy = JoinOptimizationStrategy.INDEPENDENT;
             }
-            
+
             // Parse export argument if provided
             Optional<String> exportFormat = Optional.empty();
             Optional<String> exportFilename = Optional.empty();
-            
+
             if (exportArg != null && !exportArg.isEmpty()) {
                 String[] parts = exportArg.split(":", 2);
                 if (parts.length == 2) {
@@ -311,12 +296,12 @@ public class QueryCLI {
                     System.exit(1);
                 }
             }
-            
+
             // Create and run CLI, passing the chosen strategies
             logger.info("Configuring temporal strategy: {}", temporalStrategy);
             logger.info("Configuring join strategy: {}", joinStrategy);
             QueryCLI cli = new QueryCLI(Path.of(projectsDirStr), temporalStrategy, joinStrategy);
-            
+
             if (query != null) {
                 // Execute the provided query
                 cli.executeQuery(query, exportFormat, exportFilename);
@@ -332,27 +317,27 @@ public class QueryCLI {
                 System.out.println("Join Strategy: " + joinStrategy.name().toLowerCase() + " (Use --join-strategy independent|dependent to change at startup)");
                 System.out.println("Snippet support is enabled. Use SNIPPET(variable) in SELECT clause to show text context.");
                 System.out.println("Export support: Add --export=format:filename to export results (formats: csv, json, html)");
-                
+
                 while (true) {
                     System.out.print("\nQuery> ");
                     String input = scanner.nextLine().trim();
-                    
+
                     if (input.equalsIgnoreCase("exit") || input.equalsIgnoreCase("quit")) {
                         break;
                     }
-                    
+
                     if (!input.isEmpty()) {
                         // Note: In interactive mode, the strategy chosen at startup is used for all queries.
                         cli.executeQuery(input, exportFormat, exportFilename);
                     }
                 }
-                
+
                 scanner.close();
             }
-            
+
         } catch (ArgumentParserException e) {
             parser.handleError(e);
             System.exit(1);
         }
     }
-} 
+}

@@ -10,11 +10,11 @@ import com.example.query.binding.VariableType;
 /**
  * Represents a POS (Part-of-Speech) condition in the query language.
  * This condition checks for terms with a specific POS tag, optionally binding the term.
- * 
+ *
  * **Note:** POS tags are stored and queried in lowercase.
- * 
+ *
  * Available POS tags (based on CoreNLP annotations on the Wikipedia dataset):
- * 
+ *
  * - jj: Adjective
  * - nn: Noun, singular or mass
  * - vbz: Verb, 3rd person singular present
@@ -65,7 +65,7 @@ import com.example.query.binding.VariableType;
  * - ls: List item marker
  * - gw: Go word (e.g., goin')
  * - afx: Affix
- * 
+ *
  */
 public record Pos(
     String posTag,
@@ -73,39 +73,51 @@ public record Pos(
     String qualifiedVariableName, // Renamed from variableName
     boolean isVariable
 ) implements Condition {
-    
+
     /**
      * Creates a condition with validation.
      */
     public Pos {
         Objects.requireNonNull(posTag, "posTag cannot be null");
-        
+
         if (isVariable) {
-            // When binding a variable, term can be null (extract any term with the tag)
             Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
+            // Term can be null (e.g. POS(tag) BIND ?var - term is irrelevant for binding value which is the tag)
+            // or term could be a variable name if another executor type consumes it (e.g. POS(tag, ?textVar))
         } else {
-            // When searching for a specific term/tag combination, term must be provided
-            Objects.requireNonNull(term, "term cannot be null when isVariable is false");
+            // If not a variable binding, then qualifiedVariableName must be null.
+            if (qualifiedVariableName != null) {
+                throw new IllegalArgumentException("qualifiedVariableName must be null when isVariable is false");
+            }
+            // For PosExecutor: term must be null (it throws if term is not null).
+            // For other potential executors using POS(tag, 'literal'): term would be non-null.
+            // The check `Objects.requireNonNull(term, "term cannot be null when isVariable is false");` is removed
+            // to allow PosExecutor to work with Pos conditions representing POS(tag).
         }
-        
+
         // No defensive copy needed for Strings
     }
 
     /**
-     * Creates a condition with a term and POS tag (non-variable).
+     * Creates a condition for a specific term and POS tag (non-variable).
+     * For use with executors that support term specification.
+     * PosExecutor will reject this if term is non-null.
      *
      * @param posTag The part-of-speech tag
-     * @param term The search term
+     * @param term The search term (must be non-null for this constructor's typical use)
      */
     public Pos(String posTag, String term) {
         this(posTag, term, null, false);
+        // The canonical constructor will now validate based on the modified logic.
+        // If term is null here, it's now allowed by canonical if qualifiedVariableName is also null and isVariable is false.
     }
 
     /**
-     * Creates a new POS condition with variable binding.
+     * Creates a new POS condition with variable binding for the matched term/tag.
+     * The 'term' field here is effectively ignored by PosExecutor if non-null, as it binds the tag.
+     * If 'term' is null, it means bind any term with that tag.
      */
     public Pos(String posTag, String term, String variableName) {
-        // Assumes variableName passed here is already qualified by the builder
         this(posTag, term, variableName, true);
     }
 
@@ -127,30 +139,30 @@ public record Pos(
 
     /**
      * Returns the variable name if this is a variable binding condition.
-     * 
+     *
      * @return The qualified variable name, or null if not bound
      */
     public String variableName() {
         return qualifiedVariableName;
     }
-    
+
     @Override
     public String getType() {
         return "POS";
     }
-    
+
     @Override
     public Set<String> getProducedVariables() {
         // Return the qualified name if bound
         return isVariable ? Set.of(qualifiedVariableName) : Collections.emptySet();
     }
-    
+
     @Override
     public VariableType getProducedVariableType() {
         // Changed to reflect the "term/TAG" format - TEXT_SPAN is most appropriate
-        return VariableType.TEXT_SPAN; 
+        return VariableType.TEXT_SPAN;
     }
-    
+
     @Override
     public void registerVariables(VariableRegistry registry) {
         if (isVariable) {
@@ -159,7 +171,7 @@ public record Pos(
         }
         // Consumption of 'term' if it were a variable would also be handled in builder
     }
-    
+
     @Override
     public String toString() {
         if (isVariable) {
@@ -169,4 +181,4 @@ public record Pos(
             return String.format("POS(%s, %s)", posTag, term);
         }
     }
-} 
+}

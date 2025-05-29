@@ -14,7 +14,7 @@ public record Logical(
     LogicalOperator operator,
     List<Condition> conditions
 ) implements Condition {
-    
+
     /**
      * The type of logical operation.
      */
@@ -22,7 +22,7 @@ public record Logical(
         AND,
         OR
     }
-    
+
     /**
      * Creates a logical condition with validation.
      */
@@ -32,10 +32,10 @@ public record Logical(
         // Make defensive copy of conditions
         conditions = List.copyOf(conditions);
     }
-    
+
     /**
      * Creates a new logical condition with the specified operator and exactly two conditions.
-     * 
+     *
      * @param operator The logical operator (AND, OR)
      * @param left The left condition
      * @param right The right condition
@@ -46,12 +46,12 @@ public record Logical(
             Objects.requireNonNull(right, "right condition cannot be null")
         ));
     }
-    
+
     @Override
     public String getType() {
         return operator.name();
     }
-    
+
     @Override
     public Set<String> getProducedVariables() {
         Set<String> producedVariables = new HashSet<>();
@@ -60,7 +60,7 @@ public record Logical(
         }
         return producedVariables;
     }
-    
+
     @Override
     public Set<String> getConsumedVariables() {
         Set<String> consumedVariables = new HashSet<>();
@@ -69,7 +69,7 @@ public record Logical(
         }
         return consumedVariables;
     }
-    
+
     @Override
     public void registerVariables(VariableRegistry registry) {
         // Register variables from all child conditions
@@ -77,12 +77,12 @@ public record Logical(
             condition.registerVariables(registry);
         }
     }
-    
+
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
         sb.append("(");
-        
+
         boolean first = true;
         for (Condition condition : conditions) {
             if (!first) {
@@ -91,8 +91,8 @@ public record Logical(
             sb.append(condition.toString());
             first = false;
         }
-        
+
         sb.append(")");
         return sb.toString();
     }
-} 
+}

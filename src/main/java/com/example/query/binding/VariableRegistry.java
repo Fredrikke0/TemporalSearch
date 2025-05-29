@@ -2,10 +2,8 @@ package com.example.query.binding;
 
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -20,13 +18,13 @@ import org.slf4j.LoggerFactory;
  */
 public class VariableRegistry {
     private static final Logger logger = LoggerFactory.getLogger(VariableRegistry.class);
-    
+
     // Map of variable name (qualified) to producers
     private final Map<String, Set<ProducerVariable>> producers = new ConcurrentHashMap<>();
-    
+
     // Map of variable name (qualified) to consumers
     private final Map<String, Set<ConsumerVariable>> consumers = new ConcurrentHashMap<>();
-    
+
     /**
      * Registers a producer variable.
      *
@@ -37,16 +35,16 @@ public class VariableRegistry {
      */
     public ProducerVariable registerProducer(String qualifiedName, VariableType type, String conditionType) {
         ProducerVariable var = new ProducerVariable(qualifiedName, type, conditionType);
-        
+
         producers.computeIfAbsent(qualifiedName, k -> ConcurrentHashMap.newKeySet())
                 .add(var);
-        
-        logger.debug("Registered producer variable: {} with type {} from condition {}", 
+
+        logger.debug("Registered producer variable: {} with type {} from condition {}",
                     qualifiedName, type, conditionType);
-                
+
         return var;
     }
-    
+
     /**
      * Registers a consumer variable.
      *
@@ -57,16 +55,16 @@ public class VariableRegistry {
      */
     public ConsumerVariable registerConsumer(String qualifiedName, VariableType type, String conditionType) {
         ConsumerVariable var = new ConsumerVariable(qualifiedName, type, conditionType);
-        
+
         consumers.computeIfAbsent(qualifiedName, k -> ConcurrentHashMap.newKeySet())
                 .add(var);
-        
-        logger.debug("Registered consumer variable: {} with type {} from condition {}", 
+
+        logger.debug("Registered consumer variable: {} with type {} from condition {}",
                     qualifiedName, type, conditionType);
-                
+
         return var;
     }
-    
+
     /**
      * Gets all producer variables for a given qualified name.
      *
@@ -78,7 +76,7 @@ public class VariableRegistry {
         logger.debug("getProducers('{}') returning {} producers", qualifiedName, result.size());
         return Collections.unmodifiableSet(result);
     }
-    
+
     /**
      * Gets all consumer variables for a given qualified name.
      *
@@ -90,7 +88,7 @@ public class VariableRegistry {
         logger.debug("getConsumers('{}') returning {} consumers", qualifiedName, result.size());
         return Collections.unmodifiableSet(result);
     }
-    
+
     /**
      * Checks if a variable is produced (has at least one producer).
      *
@@ -102,7 +100,7 @@ public class VariableRegistry {
         logger.debug("isProduced('{}') returning {}", qualifiedName, result);
         return result;
     }
-    
+
     /**
      * Gets all qualified variable names in the registry.
      *
@@ -115,7 +113,7 @@ public class VariableRegistry {
         logger.debug("getAllVariableNames() returning {} variables: {}", allNames.size(), allNames);
         return Collections.unmodifiableSet(allNames);
     }
-    
+
     /**
      * Gets all producer variables in the registry.
      *
@@ -126,7 +124,7 @@ public class VariableRegistry {
             .flatMap(Set::stream)
             .collect(Collectors.toUnmodifiableSet());
     }
-    
+
     /**
      * Gets all consumer variables in the registry.
      *
@@ -137,7 +135,7 @@ public class VariableRegistry {
             .flatMap(Set::stream)
             .collect(Collectors.toUnmodifiableSet());
     }
-    
+
     /**
      * Gets the inferred type for a variable, based on all its producers and consumers.
      * If there are conflicting types, ANY is returned.
@@ -152,28 +150,28 @@ public class VariableRegistry {
             .map(Variable::getType)
             .filter(type -> type != VariableType.ANY)
             .collect(Collectors.toSet());
-            
+
         // Collect specific consumer types (excluding ANY)
         Set<VariableType> specificConsumerTypes = consumers.getOrDefault(qualifiedName, Collections.emptySet())
             .stream()
             .map(Variable::getType)
             .filter(type -> type != VariableType.ANY)
             .collect(Collectors.toSet());
-            
+
         // Combine all specific types
         Set<VariableType> allSpecificTypes = new HashSet<>();
         allSpecificTypes.addAll(specificProducerTypes);
         allSpecificTypes.addAll(specificConsumerTypes);
-        
+
         // If exactly one specific type exists across producers/consumers, return it
         if (allSpecificTypes.size() == 1) {
             VariableType specificType = allSpecificTypes.iterator().next();
              logger.debug("getInferredType('{}') returning single specific type: {}", qualifiedName, specificType);
             return specificType;
         }
-        
+
         // If there are multiple specific types (conflict) or no specific types,
-        // check if ANY was used at all. If so, the type is ANY. 
+        // check if ANY was used at all. If so, the type is ANY.
         // If no specific types AND no ANY usage, default to ANY (variable exists but type unknown).
         boolean anyProducer = producers.getOrDefault(qualifiedName, Collections.emptySet())
                                 .stream().anyMatch(v -> v.getType() == VariableType.ANY);
@@ -189,7 +187,7 @@ public class VariableRegistry {
             return VariableType.ANY;
         }
     }
-    
+
     /**
      * Validates that all consumer variables have corresponding producers.
      *
@@ -197,22 +195,22 @@ public class VariableRegistry {
      */
     public Set<String> validate() {
         Set<String> errors = new HashSet<>();
-        
+
         // Check that all consumed variables are produced
         for (String qualifiedName : consumers.keySet()) {
             if (!isProduced(qualifiedName)) {
                 errors.add("Variable " + qualifiedName + " is consumed but never produced");
             }
         }
-        
+
         logger.debug("Validate() result: {} errors", errors.size());
         if (!errors.isEmpty()) {
             logger.debug("Validation errors: {}", errors);
         }
-        
+
         return errors;
     }
-    
+
     /**
      * Clears all variables from the registry.
      */
@@ -221,7 +219,7 @@ public class VariableRegistry {
         consumers.clear();
         logger.debug("Registry cleared");
     }
-    
+
     /**
      * Re-qualifies all variable names in the registry from oldPrefix to newPrefix.
      * Used to map subquery variables from $main.var to alias.var.
@@ -247,4 +245,4 @@ public class VariableRegistry {
         consumers.clear();
         consumers.putAll(newConsumers);
     }
-} 
+}

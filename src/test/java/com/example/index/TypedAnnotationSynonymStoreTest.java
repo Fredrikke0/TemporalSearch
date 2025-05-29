@@ -16,15 +16,15 @@ import static org.junit.jupiter.api.Assertions.*;
  * Tests for the TypedAnnotationSynonymStore class.
  */
 public class TypedAnnotationSynonymStoreTest {
-    
+
     @TempDir
     Path tempDir;
-    
+
     private TypedAnnotationSynonymStore dateSynonyms;
     private TypedAnnotationSynonymStore nerSynonyms;
     private TypedAnnotationSynonymStore posSynonyms;
     private TypedAnnotationSynonymStore dependencySynonyms;
-    
+
     @BeforeEach
     public void setUp() throws Exception {
         // Each type gets its own store, in its own subdirectory to mimic AbstractUnigramStitchGenerator
@@ -44,7 +44,7 @@ public class TypedAnnotationSynonymStoreTest {
         Files.createDirectories(depDir);
         dependencySynonyms = new TypedAnnotationSynonymStore(depDir, AnnotationType.DEPENDENCY);
     }
-    
+
     @AfterEach
     public void tearDown() throws Exception {
         if (dateSynonyms != null) dateSynonyms.close();
@@ -52,15 +52,15 @@ public class TypedAnnotationSynonymStoreTest {
         if (posSynonyms != null) posSynonyms.close();
         if (dependencySynonyms != null) dependencySynonyms.close();
     }
-    
+
     @Test
     public void testDateSynonyms() {
         String date1 = "2023-01-01";
         String date2 = "2022-12-25";
-        
+
         int id1 = dateSynonyms.getOrCreateId(date1);
         int id2 = dateSynonyms.getOrCreateId(date2);
-        
+
         assertNotEquals(id1, id2);
         assertEquals(id1, dateSynonyms.getOrCreateId(date1));
         assertEquals(id2, dateSynonyms.getOrCreateId(date2));
@@ -69,15 +69,15 @@ public class TypedAnnotationSynonymStoreTest {
         assertEquals(2, dateSynonyms.size());
         assertEquals(AnnotationType.DATE, dateSynonyms.getManagedType());
     }
-    
+
     @Test
     public void testNerSynonyms() {
         String ner1 = "PERSON";
         String ner2 = "LOCATION";
-        
+
         int id1 = nerSynonyms.getOrCreateId(ner1);
         int id2 = nerSynonyms.getOrCreateId(ner2);
-        
+
         assertNotEquals(id1, id2);
         assertEquals(id1, nerSynonyms.getOrCreateId(ner1));
         assertEquals(id2, nerSynonyms.getOrCreateId(ner2));
@@ -86,15 +86,15 @@ public class TypedAnnotationSynonymStoreTest {
         assertEquals(2, nerSynonyms.size());
         assertEquals(AnnotationType.NER, nerSynonyms.getManagedType());
     }
-    
+
     @Test
     public void testPosSynonyms() {
         String pos1 = "NN";
         String pos2 = "VB";
-        
+
         int id1 = posSynonyms.getOrCreateId(pos1);
         int id2 = posSynonyms.getOrCreateId(pos2);
-        
+
         assertNotEquals(id1, id2);
         assertEquals(id1, posSynonyms.getOrCreateId(pos1));
         assertEquals(id2, posSynonyms.getOrCreateId(pos2));
@@ -103,15 +103,15 @@ public class TypedAnnotationSynonymStoreTest {
         assertEquals(2, posSynonyms.size());
         assertEquals(AnnotationType.POS, posSynonyms.getManagedType());
     }
-    
+
     @Test
     public void testDependencySynonyms() {
         String dep1 = "nsubj";
         String dep2 = "dobj";
-        
+
         int id1 = dependencySynonyms.getOrCreateId(dep1);
         int id2 = dependencySynonyms.getOrCreateId(dep2);
-        
+
         assertNotEquals(id1, id2);
         assertEquals(id1, dependencySynonyms.getOrCreateId(dep1));
         assertEquals(id2, dependencySynonyms.getOrCreateId(dep2));
@@ -120,18 +120,18 @@ public class TypedAnnotationSynonymStoreTest {
         assertEquals(2, dependencySynonyms.size());
         assertEquals(AnnotationType.DEPENDENCY, dependencySynonyms.getManagedType());
     }
-    
+
     @Test
     public void testIdUniquenessAcrossDifferentTypesButSameValue() {
         String value = "test";
-        
+
         int nerId = nerSynonyms.getOrCreateId(value);       // e.g., 1
         int posId = posSynonyms.getOrCreateId(value);       // e.g., 1 (in its own store)
         int depId = dependencySynonyms.getOrCreateId(value); // e.g., 1 (in its own store)
 
         // IDs will likely be the same (e.g., 1) because they are from different stores,
         // each starting its own sequence. This is expected and correct.
-        assertEquals(1, nerId); 
+        assertEquals(1, nerId);
         assertEquals(1, posId);
         assertEquals(1, depId);
 
@@ -140,7 +140,7 @@ public class TypedAnnotationSynonymStoreTest {
         assertEquals(value, posSynonyms.getValue(posId));
         assertEquals(value, dependencySynonyms.getValue(depId));
     }
-    
+
     @Test
     public void testPersistence() throws IOException {
         String dateVal = "2024-01-20";
@@ -153,12 +153,12 @@ public class TypedAnnotationSynonymStoreTest {
         assertEquals(dateVal, dateSynonyms.getValue(dateId));
         assertEquals(1, dateSynonyms.size());
     }
-    
+
     @Test
     public void testInvalidDateValue() {
-        assertThrows(IllegalArgumentException.class, () -> 
+        assertThrows(IllegalArgumentException.class, () ->
             dateSynonyms.getOrCreateId("not-a-date"));
-        assertThrows(IllegalArgumentException.class, () -> 
+        assertThrows(IllegalArgumentException.class, () ->
             dateSynonyms.getOrCreateId("2023-02-30")); // Invalid day
     }
 
@@ -167,4 +167,4 @@ public class TypedAnnotationSynonymStoreTest {
         assertThrows(IllegalArgumentException.class, () -> nerSynonyms.getOrCreateId(""));
         assertThrows(IllegalArgumentException.class, () -> nerSynonyms.getOrCreateId(null));
     }
-} 
+}

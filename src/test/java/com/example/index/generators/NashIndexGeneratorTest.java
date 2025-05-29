@@ -108,4 +108,4 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
         assertEquals(entry.position(), deserialized.get(0).position());
         assertEquals(entry.dateId(), deserialized.get(0).dateId());
     }
-} 
+}

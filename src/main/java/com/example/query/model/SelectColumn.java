@@ -1,13 +1,13 @@
 package com.example.query.model;
 
-import com.example.core.IndexAccessInterface;
-import com.example.query.binding.MatchDetail;
-import tech.tablesaw.api.Table;
-import tech.tablesaw.columns.Column;
-import tech.tablesaw.api.ColumnType;
-
 import java.util.List;
 import java.util.Map;
+
+import com.example.core.IndexAccessInterface;
+import com.example.query.executor.QueryResultSoA;
+
+import tech.tablesaw.api.Table;
+import tech.tablesaw.columns.Column;
 
 /**
  * Interface for all column types that can appear in a SELECT clause.
@@ -19,65 +19,37 @@ public interface SelectColumn {
      * @return The column name
      */
     String getColumnName();
-    
+
     /**
      * Creates a Tablesaw column for this select column.
      * @return A new Tablesaw column
      */
     Column<?> createColumn();
-    
+
     /**
      * Populates the column with data for a given result unit (document or sentence).
-     * Implementations should cast detailsForUnit to the appropriate type (e.g., List<MatchDetail> or List<JoinedMatch>)
-     * based on the column's purpose.
-     * 
-     * @param table The table containing the column
-     * @param rowIndex The row index to populate
-     * @param detailsForUnit A list of all details (MatchDetail or JoinedMatch) belonging to the current result unit
-     * @param source The source name (corpus) for this detail
-     * @param indexes The indexes for additional document information
+     * Implementations will extract necessary data from the QueryResultSoA using the provided indices.
+     *
+     * @param table The Tablesaw table to populate
+     * @param rowIndex The current row index in the table to set data for
+     * @param resultSoA The QueryResultSoA containing all match data
+     * @param indicesInSoA A list of indices into the resultSoA that pertain to the current table row
+     * @param source The source name from the query (e.g., corpus name)
+     * @param indexes A map of available indexes for fetching additional data if needed (e.g., document text for snippets)
+     * @param query The original query object, for context (e.g. select columns, date format)
+     * @param contextCache A map for caching data across multiple calls for the same row/document (e.g. fetched document text)
      */
-    void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
+    void populateColumn(Table table, int rowIndex,
+                        QueryResultSoA resultSoA, List<Integer> indicesInSoA,
                         String source,
-                        Map<String, IndexAccessInterface> indexes);
+                        Map<String, IndexAccessInterface> indexes,
+                        Query query,
+                        Map<String, Object> contextCache);
 
     /**
-     * Populates the column with data for a given result unit (document or sentence).
-     * This version includes the Query object for context, especially for joins.
-     * 
-     * @param table The table containing the column
-     * @param rowIndex The row index to populate
-     * @param detailsForUnit A list of all details (MatchDetail or JoinedMatch) belonging to the current result unit
-     * @param source The source name (corpus) for this detail
-     * @param indexes The indexes for additional document information
-     * @param query The original Query object for context (e.g., alias mapping)
-     * @param contextCache A cache for storing and retrieving data during population, like titles.
+     * Returns the string representation of the select column (e.g., variable name, function call).
+     * This is used in query string generation and potentially in column naming if getColumnName is simple.
      */
-    default void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
-                                String source, Map<String, IndexAccessInterface> indexes, Query query, Map<String, Object> contextCache) {
-        // Default implementation calls the older version for backward compatibility
-        // This might now cause a compile error if the older version doesn't exist or has a different signature.
-        // For now, let's assume the older one is still intended to be called if a class doesn't override this new one.
-        // However, classes *implementing* this will need to be updated.
-        // The most robust change here would be to make this method abstract and remove the default body,
-        // forcing all implementers to update. But for now, keeping the default.
-        populateColumn(table, rowIndex, detailsForUnit, source, indexes); // This call is problematic now.
-    }
-
-    /**
-     * Populates the column with data for a given result unit (document or sentence).
-     * This version includes the Query object for context, especially for joins.
-     * 
-     * @param table The table containing the column
-     * @param rowIndex The row index to populate
-     * @param detailsForUnit A list of all details (MatchDetail or JoinedMatch) belonging to the current result unit
-     * @param source The source name (corpus) for this detail
-     * @param indexes The indexes for additional document information
-     * @param query The original Query object for context (e.g., alias mapping)
-     */
-    default void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
-                                String source, Map<String, IndexAccessInterface> indexes, Query query) {
-        // Default implementation calls the older version for backward compatibility
-        populateColumn(table, rowIndex, detailsForUnit, source, indexes);
-    }
-} 
+    @Override
+    String toString();
+}

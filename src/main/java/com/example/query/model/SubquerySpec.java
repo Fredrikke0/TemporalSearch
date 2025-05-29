@@ -20,17 +20,17 @@ public record SubquerySpec(
         Objects.requireNonNull(subquery, "Subquery cannot be null");
         Objects.requireNonNull(alias, "Alias cannot be null");
         Objects.requireNonNull(projectedColumns, "Projected columns cannot be null");
-        
+
         if (alias.isEmpty()) {
             throw new IllegalArgumentException("Alias cannot be empty");
         }
-        
+
         // Make defensive copy of projected columns if present
         if (projectedColumns.isPresent()) {
             projectedColumns = Optional.of(List.copyOf(projectedColumns.get()));
         }
     }
-    
+
     /**
      * Creates a subquery specification without column projection specifications.
      * This means all columns from the subquery will be available for joining.
@@ -38,12 +38,12 @@ public record SubquerySpec(
     public SubquerySpec(Query subquery, String alias) {
         this(subquery, alias, Optional.empty());
     }
-    
+
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        sb.append("(").append(subquery).append(") AS ").append(alias);
-        
+        sb.append("(").append(subquery).append(") BIND ").append(alias);
+
         projectedColumns.ifPresent(columns -> {
             sb.append(" (");
             for (int i = 0; i < columns.size(); i++) {
@@ -52,7 +52,7 @@ public record SubquerySpec(
             }
             sb.append(")");
         });
-        
+
         return sb.toString();
     }
-} 
+}

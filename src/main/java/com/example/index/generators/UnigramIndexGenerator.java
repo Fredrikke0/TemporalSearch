@@ -1,25 +1,21 @@
 package com.example.index.generators;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import com.example.logging.ProgressTracker;
-import com.example.core.Position;
-import com.example.core.PositionList;
+
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
-
-import java.util.stream.Collectors;
-import java.nio.file.Path;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming unigram index from annotation entries.
@@ -67,7 +63,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                 stmt.setLong(1, lastProcessedEntry.getAnnotationId());
                 stmt.setInt(2, this.batchSize);
             }
-            
+
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String rawToken = rs.getString("token");
@@ -131,7 +127,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
     /**
      * Helper method to sanitize text by escaping null bytes.
      * This prevents conflicts with our delimiter while preserving the original meaning.
-     * 
+     *
      * @param text The text to sanitize
      * @return The sanitized text with null bytes escaped
      */
@@ -141,4 +137,4 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         }
         return text.replace(DELIMITER, ESCAPE_CHAR + "0" + ESCAPE_CHAR).trim();
     }
-} 
+}

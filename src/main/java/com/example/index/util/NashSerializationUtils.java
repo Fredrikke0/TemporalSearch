@@ -1,12 +1,16 @@
 package com.example.index.util;
 
-import com.example.core.Position;
-import com.example.index.NashDateEntryWithId;
-
-import java.io.*;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+
+import com.example.core.Position;
+import com.example.index.NashDateEntryWithId;
 
 /**
  * Utility class for serializing and deserializing data structures used by the Nash index.
@@ -98,4 +102,4 @@ public final class NashSerializationUtils {
         }
         return lookup;
     }
-} 
+}

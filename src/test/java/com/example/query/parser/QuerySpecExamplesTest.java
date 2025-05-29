@@ -73,7 +73,7 @@ public class QuerySpecExamplesTest {
         "SELECT person, COUNT(*) FROM corpus WHERE NER(\"PERSON\") BIND person"
         // "SELECT COUNT(UNIQUE missing_var) FROM corpus" // Semantic error, handled by validator
     );
-    
+
     private final List<String> dateComparisonExamples = List.of(
         "SELECT doc FROM corpus WHERE DATE(> 1990) BIND doc",
         "SELECT timestamp FROM corpus WHERE DATE(< 2000)",
@@ -86,7 +86,7 @@ public class QuerySpecExamplesTest {
         "SELECT doc FROM corpus WHERE DATE(<= 2005) BIND doc",
         "SELECT title FROM corpus WHERE DATE(= 2010)" // Allow = as alias for ==
     );
-    
+
     private final List<String> complexDateOperationsExamples = List.of(
         "SELECT doc FROM corpus WHERE DATE(CONTAINS [1990-01-01, 2000-01-01]) BIND doc",
         "SELECT timestamp FROM corpus WHERE DATE(CONTAINED_BY 2000)",
@@ -104,7 +104,7 @@ public class QuerySpecExamplesTest {
         "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity GRANULARITY SENTENCE",
         "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity GRANULARITY SENTENCE 3"
     );
-    
+
     private final List<String> orderByExamples = List.of(
         "SELECT company FROM corpus WHERE NER(\"ORGANIZATION\") BIND company ORDER BY company",
         "SELECT title FROM corpus ORDER BY title ASC",
@@ -113,19 +113,19 @@ public class QuerySpecExamplesTest {
         "SELECT title, timestamp FROM corpus ORDER BY timestamp DESC, title ASC",
         "SELECT company, date FROM corpus WHERE NER(\"ORGANIZATION\") BIND company AND DATE(> 2000) BIND date ORDER BY company ASC, date DESC"
     );
-    
+
     private final List<String> limitExamples = List.of(
         "SELECT entity FROM corpus WHERE NER(\"ORGANIZATION\") BIND entity LIMIT 10",
         "SELECT title FROM corpus ORDER BY timestamp DESC LIMIT 5"
     );
-    
+
     private final List<String> combinedFeaturesExamples = List.of(
         "SELECT person, SNIPPET(person, WINDOW=5) FROM corpus " +
             "WHERE NER(\"PERSON\") BIND person AND DATE(> 2000) BIND date " +
             "GRANULARITY SENTENCE 3 ORDER BY person DESC LIMIT 5",
         "SELECT COUNT(DOCUMENTS) FROM corpus WHERE NER(LOCATION) AND CONTAINS(\"city\") LIMIT 1"
     );
-    
+
     // Separate tests for groups
     @Test
     void testBasicQueryExamples() { basicQueryExamples.forEach(this::assertSpecExampleValid); }
@@ -145,7 +145,7 @@ public class QuerySpecExamplesTest {
     void testLimitExamples() { limitExamples.forEach(this::assertSpecExampleValid); }
     @Test
     void testCombinedFeaturesExamples() { combinedFeaturesExamples.forEach(this::assertSpecExampleValid); }
-    
+
     // Duplicate tests based on old names - consolidate if needed
     @Test
     void basicVariableBindingExamplesShouldBeValid() {
@@ -183,4 +183,4 @@ public class QuerySpecExamplesTest {
                                 "WHERE NER(\"PERSON\") BIND person AND NER(\"ORGANIZATION\") BIND org AND CONTAINS(\"founded\") " +
                                 "ORDER BY person");
     }
-} 
+}

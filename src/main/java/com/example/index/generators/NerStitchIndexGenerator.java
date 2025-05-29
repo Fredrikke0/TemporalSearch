@@ -1,10 +1,5 @@
 package com.example.index.generators;
 
-import com.example.index.AnnotationType;
-import com.example.logging.ProgressTracker;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -13,9 +8,13 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.index.AnnotationType;
+import com.example.logging.ProgressTracker;
 
 public class NerStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(NerStitchIndexGenerator.class);
@@ -214,4 +213,4 @@ public class NerStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     protected String getSpecificAnnotationTypeDBCondition() {
         return "ner IS NOT NULL AND ner NOT IN " + NER_TAGS_TO_EXCLUDE_SQL;
     }
-} 
+}

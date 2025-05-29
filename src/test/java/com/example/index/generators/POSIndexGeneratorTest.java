@@ -24,7 +24,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        
+
         // Create test stopwords file
         try (PrintWriter writer = new PrintWriter(TEST_STOPWORDS_PATH)) {
             writer.println("the");
@@ -52,7 +52,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
             pstmt.setInt(1, 1);
             pstmt.setString(2, "2024-01-28");
             pstmt.executeUpdate();
-            
+
             pstmt.setInt(1, 2);
             pstmt.setString(2, "2024-01-28");
             pstmt.executeUpdate();
@@ -112,10 +112,10 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
     public void testBasicPOSIndexing() throws Exception {
         // Fetch first batch of entries
         var entries = generator.fetchBatch(null);
-        
+
         // Process batch and verify results
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
-        
+
         // Check that POS tags exist in composite keys
         String[] expectedTags = {"NOUN", "VERB", "ADJ", "DET", "ADP", "PRON", "AUX"};
         for (String tag : expectedTags) {
@@ -123,7 +123,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
                 .anyMatch(key -> key.startsWith(tag + com.example.core.IndexAccessInterface.DELIMITER));
             assertTrue(hasTagKey, "Should contain at least one key with POS tag: " + tag);
         }
-        
+
         // Verify NOUN has multiple positions
         int totalNounPositions = result.keySet().stream()
             .filter(key -> key.startsWith("NOUN" + com.example.core.IndexAccessInterface.DELIMITER))
@@ -131,7 +131,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
             .mapToInt(pl -> pl.getNumPositions())
             .sum();
         assertEquals(3, totalNounPositions, "Should have 3 NOUN positions");
-        
+
         // Verify DET is indexed despite being a stopword
         int totalDetPositions = result.keySet().stream()
             .filter(key -> key.startsWith("DET" + com.example.core.IndexAccessInterface.DELIMITER))
@@ -201,4 +201,4 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
             .sum();
         assertEquals(2, totalVerbPositions, "Should have 2 VERB positions after case normalization");
     }
-} 
+}

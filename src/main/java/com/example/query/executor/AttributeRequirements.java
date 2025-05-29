@@ -14,6 +14,7 @@ public class AttributeRequirements {
     public boolean needsPositions = false;    // Only for SNIPPET() expressions
     public boolean needsSynonymIds = false;   // Only for stitch conditions
     public boolean needsDateValues = false;   // Only for temporal operations
+    public boolean needsConceptualRowIds = false; // For grouping bindings into conceptual rows
 
     /**
      * Creates AttributeRequirements with default values.
@@ -24,8 +25,42 @@ public class AttributeRequirements {
     }
 
     /**
+     * Creates AttributeRequirements optimized for Phase 1 compatibility.
+     * Enables all attributes to ensure backward compatibility with existing systems.
+     *
+     * @return AttributeRequirements with full compatibility enabled
+     */
+    public static AttributeRequirements forPhase1Compatibility() {
+        AttributeRequirements requirements = new AttributeRequirements();
+        requirements.needsDocumentId = true;
+        requirements.needsSentenceId = true;  // Enable for maximum compatibility
+        requirements.needsPositions = true;   // Enable for maximum compatibility
+        requirements.needsSynonymIds = true;  // Enable for maximum compatibility
+        requirements.needsDateValues = true;  // Enable for temporal joins
+        requirements.needsConceptualRowIds = true; // Enable for new join/logical op logic
+        return requirements;
+    }
+
+    /**
+     * Creates AttributeRequirements for join operations.
+     * Join operations typically need access to most attributes.
+     *
+     * @return AttributeRequirements optimized for joins
+     */
+    public static AttributeRequirements forJoinOperations() {
+        AttributeRequirements requirements = new AttributeRequirements();
+        requirements.needsDocumentId = true;
+        requirements.needsSentenceId = true;  // Joins may need sentence-level granularity
+        requirements.needsPositions = true;   // Joins may need position access
+        requirements.needsSynonymIds = false; // Usually not needed for joins
+        requirements.needsDateValues = true;  // Temporal joins need date values
+        requirements.needsConceptualRowIds = true; // Joins will use conceptual rows
+        return requirements;
+    }
+
+    /**
      * Gets the set of required SoA attribute names for selective deserialization.
-     * 
+     *
      * @return Set of attribute names that need to be deserialized
      */
     public Set<String> getRequiredSoAAttributes() {
@@ -37,12 +72,13 @@ public class AttributeRequirements {
             required.add("endChars");
         }
         if (needsSynonymIds) required.add("synonymIds");
+        if (needsConceptualRowIds) required.add("conceptualRowIds");
         return required;
     }
 
     /**
      * Checks if position offsets (beginChars, endChars) are required.
-     * 
+     *
      * @return true if position offsets are needed
      */
     public boolean needsPositionOffsets() {
@@ -51,7 +87,7 @@ public class AttributeRequirements {
 
     /**
      * Merges another AttributeRequirements into this one, taking the union of all requirements.
-     * 
+     *
      * @param other The other requirements to merge
      */
     public void merge(AttributeRequirements other) {
@@ -60,6 +96,7 @@ public class AttributeRequirements {
         this.needsPositions = this.needsPositions || other.needsPositions;
         this.needsSynonymIds = this.needsSynonymIds || other.needsSynonymIds;
         this.needsDateValues = this.needsDateValues || other.needsDateValues;
+        this.needsConceptualRowIds = this.needsConceptualRowIds || other.needsConceptualRowIds;
     }
 
     @Override
@@ -70,7 +107,8 @@ public class AttributeRequirements {
                ", positions=" + needsPositions +
                ", synonymIds=" + needsSynonymIds +
                ", dateValues=" + needsDateValues +
+               ", conceptualRowIds=" + needsConceptualRowIds +
                ", required=" + getRequiredSoAAttributes() +
                '}';
     }
-} 
+}

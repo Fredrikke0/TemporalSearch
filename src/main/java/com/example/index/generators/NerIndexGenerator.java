@@ -1,27 +1,25 @@
 package com.example.index.generators;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import com.example.logging.ProgressTracker;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.index.AnnotationEntry;
-import com.example.core.IndexAccess;
-import com.example.core.IndexAccessInterface;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.core.IndexAccessInterface;
+import com.example.core.PositionListSoA;
+import com.example.index.AnnotationEntry;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming index for named entities from annotated text.
@@ -31,9 +29,9 @@ import java.util.Map;
  */
 public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(NerIndexGenerator.class);
-    
+
     public static final String NER_TAGS_TO_EXCLUDE_SQL = "('O', 'DATE')";
-    
+
     public NerIndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
@@ -150,13 +148,13 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         }
         return resultMultimap;
     }
-    
+
     private void addProcessedEntityToMap(Map<String, PositionListSoA> map,
                                          String entityType,
                                          List<String> rawTokens, int docId, int sentId,
                                          int beginChar, int endChar) {
         if (entityType == null || rawTokens.isEmpty() || beginChar == -1 || endChar == -1 || endChar < beginChar) {
-            logger.warn("Skipping invalid entity: type={}, tokens={}, doc={}, sent={}, begin={}, end={}", 
+            logger.warn("Skipping invalid entity: type={}, tokens={}, doc={}, sent={}, begin={}, end={}",
                         entityType, rawTokens, docId, sentId, beginChar, endChar);
             return;
         }
@@ -190,4 +188,4 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         // Return 0 to indicate an indeterminate progress bar, as MAX(annotation_id) is not representative.
         return 0;
     }
-} 
+}

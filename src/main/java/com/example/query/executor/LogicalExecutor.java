@@ -1,36 +1,33 @@
 package com.example.query.executor;
 
-import com.example.core.IndexAccessInterface;
-import com.example.query.model.condition.Condition;
-import com.example.query.model.condition.Logical;
-import com.example.query.model.condition.Logical.LogicalOperator;
-import com.example.query.model.Query;
-import com.example.query.binding.MatchDetail;
-import java.util.stream.Stream;
-
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
-import java.util.stream.Collectors;
-import java.util.LinkedHashSet;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.core.IndexAccessInterface;
+import com.example.query.model.Query;
+import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Logical;
+import com.example.query.model.condition.Logical.LogicalOperator;
+
 /**
  * Executor for logical conditions (AND, OR).
- * Handles recursive execution and result combination of subconditions using QueryResult.
+ * Handles recursive execution and result combination of subconditions using QueryResultSoA.
  */
 public final class LogicalExecutor implements ConditionExecutor<Logical> {
     private static final Logger logger = LoggerFactory.getLogger(LogicalExecutor.class);
-    
+
     private final ConditionExecutorFactory executorFactory;
-    
+
+    // Helper record for Sentence granularity keys
+    private record DocSentIdPair(int docId, int sentId) {}
+
     /**
      * Creates a new LogicalConditionExecutor that uses the provided factory to create
      * executors for subconditions.
@@ -40,18 +37,8 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
     public LogicalExecutor(ConditionExecutorFactory executorFactory) {
         this.executorFactory = executorFactory;
     }
-    
-    private <C extends Condition> QueryResult executeCondition(
-        C condition,
-        Map<String, IndexAccessInterface> indexes,
-        Query.Granularity granularity,
-        int granularitySize,
-        String corpusName) throws QueryExecutionException {
-        ConditionExecutor<C> executor = executorFactory.getExecutor(condition);
-        return executor.execute(condition, indexes, granularity, granularitySize, corpusName);
-    }
-    
-    private <C extends Condition> QueryResult executeCondition(
+
+    private <C extends Condition> QueryResultSoA executeCondition(
         C condition,
         Map<String, IndexAccessInterface> indexes,
         Query.Granularity granularity,
@@ -61,55 +48,35 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         ConditionExecutor<C> executor = executorFactory.getExecutor(condition);
         return executor.execute(condition, indexes, granularity, granularitySize, corpusName, requirements);
     }
-    
+
     @Override
-    public QueryResult execute(Logical condition, Map<String, IndexAccessInterface> indexes,
-                               Query.Granularity granularity,
-                               int granularitySize,
-                               String corpusName)
-        throws QueryExecutionException {
-         QueryResult internalResult = executeInternal(condition, indexes, granularity, granularitySize, corpusName);
-         return internalResult;
-    }
-    
-    @Override
-    public QueryResult execute(Logical condition, Map<String, IndexAccessInterface> indexes,
+    public QueryResultSoA execute(Logical condition, Map<String, IndexAccessInterface> indexes,
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
                                AttributeRequirements requirements)
         throws QueryExecutionException {
-        QueryResult internalResult = executeInternal(condition, indexes, granularity, granularitySize, corpusName, requirements);
+        QueryResultSoA internalResult = executeInternal(condition, indexes, granularity, granularitySize, corpusName, requirements);
          return internalResult;
     }
-    
-    // --- Internal execution logic using QueryResult ---
-    private QueryResult executeInternal(Logical condition, Map<String, IndexAccessInterface> indexes,
-                                      Query.Granularity granularity,
-                                      int granularitySize,
-                                      String corpusName)
-        throws QueryExecutionException {
-        // Call the new method with default requirements
-        AttributeRequirements defaultRequirements = new AttributeRequirements();
-        return executeInternal(condition, indexes, granularity, granularitySize, corpusName, defaultRequirements);
-    }
 
-    private QueryResult executeInternal(Logical condition, Map<String, IndexAccessInterface> indexes,
+    // --- Internal execution logic using QueryResultSoA ---
+    private QueryResultSoA executeInternal(Logical condition, Map<String, IndexAccessInterface> indexes,
                                       Query.Granularity granularity,
                                       int granularitySize,
                                       String corpusName,
                                       AttributeRequirements requirements)
         throws QueryExecutionException {
-        
+
         logger.debug("Executing logical condition internally: operator={}, subconditions={}, granularity={}, size={}, corpus={}, requirements={}",
                 condition.operator(), condition.conditions().size(), granularity, granularitySize, corpusName, requirements);
-        
+
         List<Condition> subConditions = condition.conditions();
         if (subConditions.isEmpty()) {
-            logger.debug("Logical condition has no subconditions, returning empty QueryResult");
-            return new QueryResult(granularity, granularitySize, Collections.emptyList());
+            logger.debug("Logical condition has no subconditions, returning empty QueryResultSoA");
+            return new QueryResultSoA(granularity, granularitySize, requirements);
         }
-        
+
         LogicalOperator operator = condition.operator();
         if (operator == LogicalOperator.AND) {
             return executeAnd(subConditions, indexes, granularity, granularitySize, corpusName, requirements);
@@ -119,361 +86,293 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             throw new QueryExecutionException("Unsupported logical operator: " + operator, condition.toString(), QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
         }
     }
-    
-    /**
-     * Executes a logical AND, operating on QueryResult.
-     */
-    private QueryResult executeAnd(
-            List<Condition> conditions, 
-            Map<String, IndexAccessInterface> indexes,
-            Query.Granularity granularity,
-            int granularitySize,
-            String corpusName)
-        throws QueryExecutionException {
-        // Call the new method with default requirements
-        AttributeRequirements defaultRequirements = new AttributeRequirements();
-        return executeAnd(conditions, indexes, granularity, granularitySize, corpusName, defaultRequirements);
-    }
 
-    private QueryResult executeAnd(
-            List<Condition> conditions, 
+    /**
+     * Executes a logical AND, operating on QueryResultSoA.
+     */
+    private QueryResultSoA executeAnd(List<Condition> conditions,
             Map<String, IndexAccessInterface> indexes,
             Query.Granularity granularity,
             int granularitySize,
             String corpusName,
             AttributeRequirements requirements)
         throws QueryExecutionException {
-        
-        logger.debug("Executing AND internally with {} subconditions (corpus: {}, requirements: {})", conditions.size(), corpusName, requirements);
+        if (conditions.isEmpty()) {
+            return new QueryResultSoA(granularity, granularitySize, requirements);
+        }
 
-        QueryResult combinedResult = null;
+        // Execute the first condition
+        QueryResultSoA combinedResult = executeCondition(conditions.get(0), indexes, granularity, granularitySize, corpusName, requirements);
+        if (combinedResult.isEmpty()) {
+            return combinedResult; // Early exit if any AND condition returns no results
+        }
 
-        for (Condition condition : conditions) {
-            QueryResult currentResult = executeCondition(condition, indexes, granularity, granularitySize, corpusName, requirements);
-
-            if (currentResult.getAllDetails().isEmpty()) {
-                logger.debug("Condition {} has no matches, short-circuiting AND", condition);
-                return new QueryResult(granularity, granularitySize, Collections.emptyList());
+        // Iteratively apply AND with subsequent conditions
+        for (int i = 1; i < conditions.size(); i++) {
+            QueryResultSoA currentResult = executeCondition(conditions.get(i), indexes, granularity, granularitySize, corpusName, requirements);
+            if (currentResult.isEmpty()) {
+                return currentResult; // Early exit
             }
-            
-            if (combinedResult == null) {
-                combinedResult = currentResult;
-            } else {
-                // Use the hash-based intersection which correctly handles detail merging
-                combinedResult = intersectQueryResultsHash(combinedResult, currentResult);
-                if (combinedResult.getAllDetails().isEmpty()) {
-                    logger.debug("Intersection is empty, short-circuiting AND");
-                    return combinedResult;
-                }
+            combinedResult = performAndSoA(combinedResult, currentResult, granularity, requirements);
+
+            if (combinedResult.isEmpty()) {
+                return combinedResult; // Early exit
             }
         }
-        logger.debug("AND execution complete with {} details", combinedResult != null ? combinedResult.getAllDetails().size() : 0);
-        return combinedResult != null ? combinedResult : new QueryResult(granularity, granularitySize, Collections.emptyList());
+        return combinedResult;
     }
 
     /**
-     * Executes a logical OR, operating on QueryResult.
+     * Executes a logical OR, operating on QueryResultSoA.
      */
-    private QueryResult executeOr(
-            List<Condition> conditions, 
-            Map<String, IndexAccessInterface> indexes,
-            Query.Granularity granularity,
-            int granularitySize,
-            String corpusName)
-        throws QueryExecutionException {
-        // Call the new method with default requirements
-        AttributeRequirements defaultRequirements = new AttributeRequirements();
-        return executeOr(conditions, indexes, granularity, granularitySize, corpusName, defaultRequirements);
-    }
-        
-    private QueryResult executeOr(
-            List<Condition> conditions, 
+    private QueryResultSoA executeOr(List<Condition> conditions,
             Map<String, IndexAccessInterface> indexes,
             Query.Granularity granularity,
             int granularitySize,
             String corpusName,
             AttributeRequirements requirements)
         throws QueryExecutionException {
-        
-        logger.debug("Executing OR internally with {} subconditions (corpus: {}, requirements: {})", conditions.size(), corpusName, requirements);
-        QueryResult combinedResult = null;
-        
-        for (Condition condition : conditions) {
-            QueryResult currentResult = executeCondition(condition, indexes, granularity, granularitySize, corpusName, requirements);
+        if (conditions.isEmpty()) {
+            return new QueryResultSoA(granularity, granularitySize, requirements);
+        }
 
-            if (currentResult.getAllDetails().isEmpty()) {
-                continue; // Skip empty results for OR
+        // Execute the first condition
+        QueryResultSoA combinedResult = executeCondition(conditions.get(0), indexes, granularity, granularitySize, corpusName, requirements);
+
+        // Iteratively apply OR with subsequent conditions
+        for (int i = 1; i < conditions.size(); i++) {
+            QueryResultSoA currentResult = executeCondition(conditions.get(i), indexes, granularity, granularitySize, corpusName, requirements);
+            if (currentResult.isEmpty()) {
+                // If current is empty, combinedResult remains as is
+                continue;
             }
-
-            if (combinedResult == null) {
+            if (combinedResult.isEmpty()) {
+                // If combined was empty and current is not, current becomes the new combined
                 combinedResult = currentResult;
-            } else {
-                combinedResult = unionQueryResults(combinedResult, currentResult);
+                continue;
             }
+            combinedResult = performOrSoA(combinedResult, currentResult, granularity, requirements);
         }
-        logger.debug("OR execution complete with {} details", combinedResult != null ? combinedResult.getAllDetails().size() : 0);
-        return combinedResult != null ? combinedResult : new QueryResult(granularity, granularitySize, Collections.emptyList());
+        return combinedResult;
     }
 
-    /**
-     * Computes the union of two QueryResult objects.
-     */
-    private QueryResult unionQueryResults(QueryResult r1, QueryResult r2) {
-        if (r1 == null) return r2;
-        if (r2 == null) return r1;
+    private QueryResultSoA performAndSoA(QueryResultSoA left, QueryResultSoA right,
+                                         Query.Granularity granularity, AttributeRequirements requirements) {
+        logger.debug("Performing SoA AND operation. Left size: {}, Right size: {}. Granularity: {}",
+                     left.size(), right.size(), granularity);
 
-        // Basic granularity check (can be enhanced)
-        if (r1.getGranularity() != r2.getGranularity()) {
-             logger.warn("Attempting to union QueryResults with different granularities: {} and {}. Using first result's granularity.",
-                       r1.getGranularity(), r2.getGranularity());
-             // Decide on a strategy: throw error, prefer finer, prefer first? Using first for now.
-        }
-        Query.Granularity resultGranularity = r1.getGranularity();
-        int resultGranularitySize = r1.getGranularitySize();
+        AttributeRequirements combinedReqs = new AttributeRequirements();
+        combinedReqs.merge(left.getRequirements());
+        combinedReqs.merge(right.getRequirements());
+        combinedReqs.needsConceptualRowIds = true; // Crucial for AND/JOIN logic
 
-        // Combine details - simple concatenation for now
-        List<MatchDetail> combinedDetails = Stream.concat(
-                r1.getAllDetails().stream(),
-                r2.getAllDetails().stream()
-        ).distinct() // Use distinct() based on MatchDetail record equality
-         .collect(Collectors.toList());
-
-        logger.debug("Union resulted in {} details", combinedDetails.size());
-        return new QueryResult(resultGranularity, resultGranularitySize, combinedDetails);
-    }
-
-    // Define SentenceKey within LogicalExecutor or ensure it's accessible
-    record SentenceKey(int documentId, int sentenceId) {}
-
-    /**
-     * Computes the intersection of two QueryResult objects using a hash-based approach.
-     */
-    private QueryResult intersectQueryResultsHash(QueryResult r1, QueryResult r2) {
-        // --- Start: Null/Empty/Granularity Checks (identical to QueryExecutor version) ---
-        if (r1 == null || r2 == null || r1.getAllDetails().isEmpty() || r2.getAllDetails().isEmpty()) {
-             Query.Granularity defaultGranularity = (r1 != null) ? r1.getGranularity() : ((r2 != null) ? r2.getGranularity() : Query.Granularity.DOCUMENT);
-             int defaultSize = (r1 != null) ? r1.getGranularitySize() : ((r2 != null) ? r2.getGranularitySize() : 0);
-             return new QueryResult(defaultGranularity, defaultSize, Collections.emptyList());
-        }
-        Query.Granularity granularity = r1.getGranularity();
-        if (r1.getGranularity() != r2.getGranularity() || r1.getGranularitySize() != r2.getGranularitySize()) {
-            logger.error("Intersection of QueryResults with different granularities/sizes is not supported. ({},{}) vs ({},{})", r1.getGranularity(), r1.getGranularitySize(), r2.getGranularity(), r2.getGranularitySize());
-            return new QueryResult(granularity, r1.getGranularitySize(), Collections.emptyList());
-        }
-        int windowSize = r1.getGranularitySize();
-        // --- End: Null/Empty/Granularity Checks ---
+        QueryResultSoA resultSoA = new QueryResultSoA(granularity, left.getGranularitySize(), combinedReqs);
+        int nextConceptualRowId = 0;
 
         if (granularity == Query.Granularity.DOCUMENT) {
-            Map<Integer, List<MatchDetail>> map1 = r1.getDetailsByDocId();
-            Map<Integer, List<MatchDetail>> map2 = r2.getDetailsByDocId();
-            Map<Integer, List<MatchDetail>> smallerMap = map1.size() < map2.size() ? map1 : map2;
-            Map<Integer, List<MatchDetail>> largerMap = smallerMap == map1 ? map2 : map1;
-            List<MatchDetail> combinedDocDetails = new ArrayList<>();
-            for (Map.Entry<Integer, List<MatchDetail>> entry : smallerMap.entrySet()) {
-                int docId = entry.getKey();
-                if (largerMap.containsKey(docId)) {
-                    List<MatchDetail> details1 = entry.getValue();
-                    List<MatchDetail> details2 = largerMap.get(docId);
-                    LinkedHashSet<MatchDetail> uniqueDetails = new LinkedHashSet<>();
-                    uniqueDetails.addAll(details1);
-                    uniqueDetails.addAll(details2);
-                    combinedDocDetails.addAll(uniqueDetails);
-                }
+            // Map docId to list of original indices in 'left'
+            Map<Integer, List<Integer>> leftDocIdToIndices = new HashMap<>();
+            for (int i = 0; i < left.size(); i++) {
+                leftDocIdToIndices.computeIfAbsent(left.getDocumentIdAt(i), k -> new ArrayList<>()).add(i);
             }
-            logger.trace("Intersection (DOCUMENT) resulted in {} details", combinedDocDetails.size());
-            return new QueryResult(granularity, windowSize, combinedDocDetails);
-        } else { // Granularity.SENTENCE
-            Map<Integer, Map<Integer, List<MatchDetail>>> map1 = r1.getDetailsBySentence();
-            Map<Integer, Map<Integer, List<MatchDetail>>> map2 = r2.getDetailsBySentence();
-            Set<SentenceKey> matchingSentenceUnits = new HashSet<>();
-            List<MatchDetail> combinedDetails = new ArrayList<>();
-            Set<Integer> commonDocIds = new HashSet<>(map1.keySet());
-            commonDocIds.retainAll(map2.keySet());
-            int allowedDistance = (windowSize > 0) ? (windowSize - 1) / 2 : 0;
-            for (int docId : commonDocIds) {
-                Map<Integer, List<MatchDetail>> sentMap1 = map1.get(docId);
-                Map<Integer, List<MatchDetail>> sentMap2 = map2.get(docId);
-                Set<Integer> sentIds1 = sentMap1.keySet();
-                Set<Integer> sentIds2 = sentMap2.keySet();
-                if (logger.isDebugEnabled()) {
-                    logger.debug("[intersectQueryResults] Doc {} - sentMap1 keys (r1): {}", docId, sentIds1);
-                    logger.debug("[intersectQueryResults] Doc {} - sentMap2 keys (r2): {}", docId, sentIds2);
-                }
-                for (int sentId1 : sentIds1) {
-                    boolean foundMatchInWindow = false;
-                    for (int sentId2 : sentIds2) {
-                        if (Math.abs(sentId1 - sentId2) <= allowedDistance) {
-                            foundMatchInWindow = true;
-                            break;
+
+            // Find common docIds and process them
+            Set<Integer> rightProcessedDocIds = new HashSet<>(); // To avoid processing right-side docs multiple times if they have multiple entries for the same docId
+            for (int i = 0; i < right.size(); i++) {
+                int rightDocId = right.getDocumentIdAt(i);
+                if (leftDocIdToIndices.containsKey(rightDocId) && !rightProcessedDocIds.contains(rightDocId)) {
+                    // Common docId found, generate a new conceptual row
+                    int currentOutputConceptualId = nextConceptualRowId++;
+
+                    // Add all left-side bindings for this common docId
+                    for (int leftIndex : leftDocIdToIndices.get(rightDocId)) {
+                        resultSoA.add(
+                            left.getValueAt(leftIndex),
+                            left.getValueTypeAt(leftIndex),
+                            left.getVariableNameAt(leftIndex),
+                            left.getDocumentIdAt(leftIndex),
+                            combinedReqs.needsSentenceId ? left.getSentenceIdAt(leftIndex) : -1,
+                            combinedReqs.needsPositions ? left.getBeginCharAt(leftIndex) : -1,
+                            combinedReqs.needsPositions ? left.getEndCharAt(leftIndex) : -1,
+                            combinedReqs.needsSynonymIds ? left.getSynonymIdAt(leftIndex) : -1,
+                            currentOutputConceptualId
+                        );
+                    }
+
+                    // Add all right-side bindings for this common docId
+                    // Need to iterate through 'right' to find all matches for rightDocId
+                    for (int j = 0; j < right.size(); j++) {
+                        if (right.getDocumentIdAt(j) == rightDocId) {
+                            resultSoA.add(
+                                right.getValueAt(j),
+                                right.getValueTypeAt(j),
+                                right.getVariableNameAt(j),
+                                right.getDocumentIdAt(j),
+                                combinedReqs.needsSentenceId ? right.getSentenceIdAt(j) : -1,
+                                combinedReqs.needsPositions ? right.getBeginCharAt(j) : -1,
+                                combinedReqs.needsPositions ? right.getEndCharAt(j) : -1,
+                                combinedReqs.needsSynonymIds ? right.getSynonymIdAt(j) : -1,
+                                currentOutputConceptualId
+                            );
                         }
                     }
-                    if (foundMatchInWindow) {
-                        matchingSentenceUnits.add(new SentenceKey(docId, sentId1));
-                    }
-                }
-                for (int sentId2 : sentIds2) {
-                    boolean foundMatchInWindow = false;
-                    for (int sentId1 : sentIds1) {
-                        if (Math.abs(sentId1 - sentId2) <= allowedDistance) {
-                            foundMatchInWindow = true;
-                            break;
-                        }
-                    }
-                    if (foundMatchInWindow) {
-                        matchingSentenceUnits.add(new SentenceKey(docId, sentId2));
-                    }
-                }
-            }
-            for (SentenceKey unit : matchingSentenceUnits) {
-                 int docId = unit.documentId();
-                 int sentId = unit.sentenceId();
-                 List<MatchDetail> details1 = map1.getOrDefault(docId, Collections.emptyMap()).get(sentId);
-                 List<MatchDetail> details2 = map2.getOrDefault(docId, Collections.emptyMap()).get(sentId);
-                 LinkedHashSet<MatchDetail> uniqueDetails = new LinkedHashSet<>();
-                 if (details1 != null) {
-                      uniqueDetails.addAll(details1);
-                 }
-                 if (details2 != null) {
-                      uniqueDetails.addAll(details2);
-                 }
-                 combinedDetails.addAll(uniqueDetails);
-            }
-            logger.trace("Intersection (SENTENCE, window={}, distance={}) resulted in {} final details from {} matching units", 
-                     windowSize, allowedDistance, combinedDetails.size(), matchingSentenceUnits.size());
-            return new QueryResult(granularity, windowSize, combinedDetails);
-        }
-    }
-
-    /**
-     * Computes the intersection of two QueryResult objects using a sort-merge approach.
-     * Assumes document IDs within QueryResult maps are effectively sorted or efficiently iterable in order.
-     */
-    QueryResult intersectQueryResultsSortMerge(QueryResult r1, QueryResult r2) {
-        // --- Start: Null/Empty/Granularity Checks (similar to hash version) ---
-        if (r1 == null || r2 == null || r1.getAllDetails().isEmpty() || r2.getAllDetails().isEmpty()) {
-             Query.Granularity defaultGranularity = (r1 != null) ? r1.getGranularity() : ((r2 != null) ? r2.getGranularity() : Query.Granularity.DOCUMENT);
-             int defaultSize = (r1 != null) ? r1.getGranularitySize() : ((r2 != null) ? r2.getGranularitySize() : 0);
-             return new QueryResult(defaultGranularity, defaultSize, Collections.emptyList());
-        }
-        Query.Granularity granularity = r1.getGranularity();
-        if (r1.getGranularity() != r2.getGranularity() || r1.getGranularitySize() != r2.getGranularitySize()) {
-            logger.error("Intersection of QueryResults with different granularities/sizes is not supported. ({},{}) vs ({},{})", r1.getGranularity(), r1.getGranularitySize(), r2.getGranularity(), r2.getGranularitySize());
-            return new QueryResult(granularity, r1.getGranularitySize(), Collections.emptyList());
-        }
-        int windowSize = r1.getGranularitySize();
-        // --- End: Null/Empty/Granularity Checks ---
-
-        List<MatchDetail> combinedDetails = new ArrayList<>();
-
-        if (granularity == Query.Granularity.DOCUMENT) {
-            Map<Integer, List<MatchDetail>> map1 = r1.getDetailsByDocId();
-            Map<Integer, List<MatchDetail>> map2 = r2.getDetailsByDocId();
-            List<Integer> docIds1 = new ArrayList<>(map1.keySet());
-            List<Integer> docIds2 = new ArrayList<>(map2.keySet());
-            Collections.sort(docIds1);
-            Collections.sort(docIds2);
-            int i = 0, j = 0;
-            while (i < docIds1.size() && j < docIds2.size()) {
-                int docId1 = docIds1.get(i);
-                int docId2 = docIds2.get(j);
-                if (docId1 == docId2) {
-                    LinkedHashSet<MatchDetail> uniqueDetails = new LinkedHashSet<>();
-                    uniqueDetails.addAll(map1.get(docId1));
-                    uniqueDetails.addAll(map2.get(docId2));
-                    combinedDetails.addAll(uniqueDetails);
-                    i++;
-                    j++;
-                } else if (docId1 < docId2) {
-                    i++;
-                } else {
-                    j++;
+                    rightProcessedDocIds.add(rightDocId);
                 }
             }
         } else { // Granularity.SENTENCE
-            Map<Integer, Map<Integer, List<MatchDetail>>> map1 = r1.getDetailsBySentence();
-            Map<Integer, Map<Integer, List<MatchDetail>>> map2 = r2.getDetailsBySentence();
-            List<Integer> docIds1 = new ArrayList<>(map1.keySet());
-            List<Integer> docIds2 = new ArrayList<>(map2.keySet());
-            Collections.sort(docIds1);
-            Collections.sort(docIds2);
-            int allowedDistance = (windowSize > 0) ? (windowSize - 1) / 2 : 0;
-            Set<SentenceKey> matchingSentenceUnits = new HashSet<>();
-            int i = 0, j = 0;
-            while (i < docIds1.size() && j < docIds2.size()) {
-                int docId1 = docIds1.get(i);
-                int docId2 = docIds2.get(j);
-                if (docId1 == docId2) {
-                    int currentDocId = docId1;
-                    Map<Integer, List<MatchDetail>> sentMap1 = map1.get(currentDocId);
-                    Map<Integer, List<MatchDetail>> sentMap2 = map2.get(currentDocId);
-                    Set<Integer> sentIds1 = sentMap1.keySet();
-                    Set<Integer> sentIds2 = sentMap2.keySet();
-                    List<Integer> sortedSentIds1 = new ArrayList<>(sentIds1);
-                    List<Integer> sortedSentIds2 = new ArrayList<>(sentIds2);
-                    Collections.sort(sortedSentIds1);
-                    Collections.sort(sortedSentIds2);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("[SortMerge-Intersect] Doc {} - Sorted SentIDs1 (r1): {}", currentDocId, sortedSentIds1);
-                        logger.debug("[SortMerge-Intersect] Doc {} - Sorted SentIDs2 (r2): {}", currentDocId, sortedSentIds2);
-                    }
-                    int p2 = 0;
-                    for (int p1 = 0; p1 < sortedSentIds1.size(); p1++) {
-                        int sentId1 = sortedSentIds1.get(p1);
-                        while (p2 < sortedSentIds2.size() && sortedSentIds2.get(p2) < sentId1 - allowedDistance) {
-                            p2++;
-                        }
-                        boolean foundMatch = false;
-                        int temp_p2 = p2;
-                        while (temp_p2 < sortedSentIds2.size() && sortedSentIds2.get(temp_p2) <= sentId1 + allowedDistance) {
-                            foundMatch = true;
-                            break;
-                        }
-                        if (foundMatch) {
-                            matchingSentenceUnits.add(new SentenceKey(currentDocId, sentId1));
-                        }
-                    }
-                    int p1 = 0;
-                    for (p2 = 0; p2 < sortedSentIds2.size(); p2++) {
-                        int sentId2 = sortedSentIds2.get(p2);
-                        while (p1 < sortedSentIds1.size() && sortedSentIds1.get(p1) < sentId2 - allowedDistance) {
-                            p1++;
-                        }
-                        boolean foundMatchInWindow = false;
-                        int temp_p1 = p1;
-                        while (temp_p1 < sortedSentIds1.size() && sortedSentIds1.get(temp_p1) <= sentId2 + allowedDistance) {
-                            foundMatchInWindow = true;
-                            break;
-                        }
-                        if (foundMatchInWindow) {
-                            matchingSentenceUnits.add(new SentenceKey(currentDocId, sentId2));
-                        }
-                    }
-                    i++;
-                    j++;
-                } else if (docId1 < docId2) {
-                    i++;
-                } else {
-                    j++;
+            // Map DocSentIdPair to list of original indices in 'left'
+            Map<DocSentIdPair, List<Integer>> leftPairToIndices = new HashMap<>();
+            if (left.getRequirements().needsSentenceId) {
+                for (int i = 0; i < left.size(); i++) {
+                    leftPairToIndices.computeIfAbsent(
+                        new DocSentIdPair(left.getDocumentIdAt(i), left.getSentenceIdAt(i)),
+                        k -> new ArrayList<>()
+                    ).add(i);
                 }
             }
-            for (SentenceKey unit : matchingSentenceUnits) {
-                 int docId = unit.documentId();
-                 int sentId = unit.sentenceId();
-                 List<MatchDetail> details1 = map1.getOrDefault(docId, Collections.emptyMap()).get(sentId);
-                 List<MatchDetail> details2 = map2.getOrDefault(docId, Collections.emptyMap()).get(sentId);
-                 LinkedHashSet<MatchDetail> uniqueDetails = new LinkedHashSet<>();
-                 if (details1 != null) {
-                      uniqueDetails.addAll(details1);
-                 }
-                 if (details2 != null) {
-                      uniqueDetails.addAll(details2);
-                 }
-                 combinedDetails.addAll(uniqueDetails);
+
+            Set<DocSentIdPair> rightProcessedPairs = new HashSet<>();
+            if (right.getRequirements().needsSentenceId && left.getRequirements().needsSentenceId) {
+                for (int i = 0; i < right.size(); i++) {
+                    DocSentIdPair rightPair = new DocSentIdPair(right.getDocumentIdAt(i), right.getSentenceIdAt(i));
+                    if (leftPairToIndices.containsKey(rightPair) && !rightProcessedPairs.contains(rightPair)) {
+                        int currentOutputConceptualId = nextConceptualRowId++;
+
+                        // Add all left-side bindings for this common pair
+                        for (int leftIndex : leftPairToIndices.get(rightPair)) {
+                            resultSoA.add(
+                                left.getValueAt(leftIndex),
+                                left.getValueTypeAt(leftIndex),
+                                left.getVariableNameAt(leftIndex),
+                                left.getDocumentIdAt(leftIndex),
+                                left.getSentenceIdAt(leftIndex), // SentenceId is definitely available
+                                combinedReqs.needsPositions ? left.getBeginCharAt(leftIndex) : -1,
+                                combinedReqs.needsPositions ? left.getEndCharAt(leftIndex) : -1,
+                                combinedReqs.needsSynonymIds ? left.getSynonymIdAt(leftIndex) : -1,
+                                currentOutputConceptualId
+                            );
+                        }
+
+                        // Add all right-side bindings for this common pair
+                        for (int j = 0; j < right.size(); j++) {
+                            if (right.getDocumentIdAt(j) == rightPair.docId() && right.getSentenceIdAt(j) == rightPair.sentId()) {
+                                resultSoA.add(
+                                    right.getValueAt(j),
+                                    right.getValueTypeAt(j),
+                                    right.getVariableNameAt(j),
+                                    right.getDocumentIdAt(j),
+                                    right.getSentenceIdAt(j), // SentenceId is definitely available
+                                    combinedReqs.needsPositions ? right.getBeginCharAt(j) : -1,
+                                    combinedReqs.needsPositions ? right.getEndCharAt(j) : -1,
+                                    combinedReqs.needsSynonymIds ? right.getSynonymIdAt(j) : -1,
+                                    currentOutputConceptualId
+                                );
+                            }
+                        }
+                        rightProcessedPairs.add(rightPair);
+                    }
+                }
             }
-            logger.trace("[SortMerge-Intersect] (SENTENCE, window={}, distance={}) resulted in {} collected details from {} matching units",
-                    windowSize, allowedDistance, combinedDetails.size(), matchingSentenceUnits.size());
         }
-         logger.debug("Sort-merge intersection (Granularity: {}) resulted in {} details", granularity, combinedDetails.size());
-        return new QueryResult(granularity, windowSize, combinedDetails);
+        logger.debug("SoA AND operation complete. Result size: {}", resultSoA.size());
+        return resultSoA;
+    }
+
+    private QueryResultSoA performOrSoA(QueryResultSoA left, QueryResultSoA right,
+                                        Query.Granularity granularity, AttributeRequirements baseRequirements) {
+        logger.debug("Performing SoA OR operation. Left size: {}, Right size: {}. Granularity: {}",
+                    left.size(), right.size(), granularity);
+
+        AttributeRequirements combinedReqs = new AttributeRequirements();
+        combinedReqs.merge(left.getRequirements());
+        combinedReqs.merge(right.getRequirements());
+        combinedReqs.needsConceptualRowIds = true; // OR operations also need to manage conceptual IDs
+
+        QueryResultSoA resultSoA = new QueryResultSoA(granularity, left.getGranularitySize(), combinedReqs);
+        int maxLeftConceptualId = -1;
+
+        // Add all from left, preserving conceptual IDs and finding max
+        if (left.getRequirements().needsConceptualRowIds) {
+            for (int i = 0; i < left.size(); i++) {
+                int conceptualId = left.getConceptualRowIdAt(i);
+                resultSoA.add(
+                    left.getValueAt(i),
+                    left.getValueTypeAt(i),
+                    left.getVariableNameAt(i),
+                    left.getDocumentIdAt(i),
+                    combinedReqs.needsSentenceId ? left.getSentenceIdAt(i) : -1,
+                    combinedReqs.needsPositions ? left.getBeginCharAt(i) : -1,
+                    combinedReqs.needsPositions ? left.getEndCharAt(i) : -1,
+                    combinedReqs.needsSynonymIds ? left.getSynonymIdAt(i) : -1,
+                    conceptualId
+                );
+                if (conceptualId > maxLeftConceptualId) {
+                    maxLeftConceptualId = conceptualId;
+                }
+            }
+        } else {
+            // If left doesn't have conceptual IDs (e.g., from a very old executor not yet updated), assign new ones.
+            // This is a fallback and ideally all executors should provide conceptual IDs.
+            int currentConceptualId = 0;
+            for (int i = 0; i < left.size(); i++) {
+                 currentConceptualId = i; // Simplistic: 1 new conceptual ID per entry
+                resultSoA.add(
+                    left.getValueAt(i),
+                    left.getValueTypeAt(i),
+                    left.getVariableNameAt(i),
+                    left.getDocumentIdAt(i),
+                    combinedReqs.needsSentenceId ? left.getSentenceIdAt(i) : -1,
+                    combinedReqs.needsPositions ? left.getBeginCharAt(i) : -1,
+                    combinedReqs.needsPositions ? left.getEndCharAt(i) : -1,
+                    combinedReqs.needsSynonymIds ? left.getSynonymIdAt(i) : -1,
+                    currentConceptualId
+                );
+                 if (currentConceptualId > maxLeftConceptualId) {
+                    maxLeftConceptualId = currentConceptualId;
+                }
+            }
+             logger.warn("Left QueryResultSoA in OR operation did not have conceptualRowIds. Assigning new ones. This may indicate an older executor.");
+        }
+
+
+        // Add all from right, offsetting conceptual IDs to ensure uniqueness
+        int offset = maxLeftConceptualId + 1;
+        if (right.getRequirements().needsConceptualRowIds) {
+            for (int i = 0; i < right.size(); i++) {
+                int conceptualId = right.getConceptualRowIdAt(i) + offset;
+                resultSoA.add(
+                    right.getValueAt(i),
+                    right.getValueTypeAt(i),
+                    right.getVariableNameAt(i),
+                    right.getDocumentIdAt(i),
+                    combinedReqs.needsSentenceId ? right.getSentenceIdAt(i) : -1,
+                    combinedReqs.needsPositions ? right.getBeginCharAt(i) : -1,
+                    combinedReqs.needsPositions ? right.getEndCharAt(i) : -1,
+                    combinedReqs.needsSynonymIds ? right.getSynonymIdAt(i) : -1,
+                    conceptualId
+                );
+            }
+        } else {
+            // Fallback for right side if no conceptual IDs
+            int currentConceptualIdOffset = 0;
+            for (int i = 0; i < right.size(); i++) {
+                currentConceptualIdOffset = i; // Simplistic: 1 new conceptual ID per entry
+                resultSoA.add(
+                    right.getValueAt(i),
+                    right.getValueTypeAt(i),
+                    right.getVariableNameAt(i),
+                    right.getDocumentIdAt(i),
+                    combinedReqs.needsSentenceId ? right.getSentenceIdAt(i) : -1,
+                    combinedReqs.needsPositions ? right.getBeginCharAt(i) : -1,
+                    combinedReqs.needsPositions ? right.getEndCharAt(i) : -1,
+                    combinedReqs.needsSynonymIds ? right.getSynonymIdAt(i) : -1,
+                    offset + currentConceptualIdOffset
+                );
+            }
+            logger.warn("Right QueryResultSoA in OR operation did not have conceptualRowIds. Assigning new offset ones. This may indicate an older executor.");
+        }
+
+        logger.debug("SoA OR operation complete. Result size: {}", resultSoA.size());
+        return resultSoA;
     }
 }

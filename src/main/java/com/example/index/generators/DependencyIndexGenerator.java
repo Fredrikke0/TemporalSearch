@@ -1,7 +1,5 @@
 package com.example.index.generators;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -13,12 +11,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.example.logging.ProgressTracker;
-import com.example.core.Position;
+
 import com.example.core.PositionListSoA;
 import com.example.index.DependencyEntry;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming dependency index from dependency relation entries.
@@ -26,7 +27,7 @@ import com.example.index.DependencyEntry;
 public final class DependencyIndexGenerator extends IndexGenerator<DependencyEntry> {
     private static final Logger logger = LoggerFactory.getLogger(DependencyIndexGenerator.class);
 
-    // Example: Blacklist common, less informative relations if needed
+    //Blacklist common, less informative relations
     private static final Set<String> BLACKLISTED_RELATIONS = Set.of(
         "punct"
     );
@@ -77,9 +78,9 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
                     String dependentToken = rs.getString("dependent_token");
                     String relation = rs.getString("relation");
 
-                    if (headToken == null || dependentToken == null || relation == null || 
+                    if (headToken == null || dependentToken == null || relation == null ||
                         headToken.isEmpty() || dependentToken.isEmpty() || relation.isEmpty()) {
-                        logger.debug("Skipping dependency due to null or empty field. Original: head='{}', dep='{}', rel='{}'", 
+                        logger.debug("Skipping dependency due to null or empty field. Original: head='{}', dep='{}', rel='{}'",
                                      headToken, dependentToken, relation);
                         continue;
                     }
@@ -90,7 +91,7 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
-                        headToken, 
+                        headToken,
                         dependentToken,
                         relation
                     ));
@@ -106,21 +107,21 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
 
         for (DependencyEntry entry : batch) {
-            String headTokenLower = entry.getHeadToken().toLowerCase(); 
+            String headTokenLower = entry.getHeadToken().toLowerCase();
             String dependentTokenLower = entry.getDependentToken().toLowerCase();
             String relationLower = entry.getRelation().toLowerCase();
 
-            if (isStopword(headTokenLower) || isStopword(dependentTokenLower) || 
+            if (isStopword(headTokenLower) || isStopword(dependentTokenLower) ||
                 BLACKLISTED_RELATIONS.contains(relationLower)) {
                 continue;
             }
-            
+
             String key = headTokenLower + DELIMITER + relationLower + DELIMITER + dependentTokenLower;
-            
+
             PositionListSoA pl = tempAggregator.computeIfAbsent(key, k -> new PositionListSoA());
             pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
         }
-        
+
         for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
             indexData.put(mapEntry.getKey(), mapEntry.getValue());
         }
@@ -138,4 +139,4 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
         }
         return 0;
     }
-} 
+}

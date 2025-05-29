@@ -182,7 +182,7 @@ public record Query(
 
     /**
      * Checks if this query has subqueries.
-     * 
+     *
      * @return true if the query has one or more subqueries, false otherwise
      */
     public boolean hasSubqueries() {
@@ -192,7 +192,7 @@ public record Query(
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        
+
         // Start with SELECT clause
         if (!selectColumns.isEmpty()) {
             sb.append("SELECT ");
@@ -203,20 +203,19 @@ public record Query(
         } else {
             // Handle case with no select columns explicitly, maybe SELECT * or COUNT(*)?
             // For now, let's assume valid queries always have select columns based on validator
-            sb.append("SELECT [Missing Columns]"); 
+            sb.append("SELECT [Missing Columns]");
         }
-        
+
         // Add FROM clause
         sb.append(" FROM ").append(source);
-        mainAlias.ifPresent(alias -> sb.append(" AS ").append(alias)); // Using AS for alias for now
-        
+        mainAlias.ifPresent(alias -> sb.append(" BIND ").append(alias));
+
         // Add JOIN clauses (if any)
         if (!subqueries.isEmpty()) {
             for (SubquerySpec subquery : subqueries) {
-                 // TODO: Add join type (INNER, LEFT, RIGHT) if available
-                sb.append(" JOIN ").append(subquery); // Subquery toString should handle its structure
+                sb.append(" JOIN ").append(subquery);
             }
-            joinCondition.ifPresent(jc -> sb.append(" ON ").append(jc)); // JoinCondition toString needed
+            joinCondition.ifPresent(jc -> sb.append(" ON ").append(jc));
         }
 
         // Add WHERE clause
@@ -225,7 +224,7 @@ public record Query(
             // This simple loop assumes conditions are implicitly ANDed.
             // A more robust implementation would handle Logical conditions (AND/OR/NOT).
             for (int i = 0; i < conditions.size(); i++) {
-                if (i > 0) sb.append(" AND "); 
+                if (i > 0) sb.append(" AND ");
                 sb.append(conditions.get(i)); // Relies on Condition.toString()
             }
         }
@@ -250,10 +249,10 @@ public record Query(
                 }
             }
         }
-        
+
         // Add LIMIT clause
         limit.ifPresent(l -> sb.append(" LIMIT ").append(l));
-        
+
         return sb.toString();
     }
-} 
+}

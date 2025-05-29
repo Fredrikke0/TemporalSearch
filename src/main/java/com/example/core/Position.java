@@ -3,10 +3,10 @@ package com.example.core;
 import java.util.Objects;
 
 /**
- * Represents the exact location of a word, phrase, or entity within the document collection. 
- * Each Position instance stores a document ID, sentence ID, character-level begin and end positions, 
- * and a timestamp. This immutable class serves as the fundamental building block for all index 
- * operations, enabling precise text location tracking and temporal analysis. It includes proper 
+ * Represents the exact location of a word, phrase, or entity within the document collection.
+ * Each Position instance stores a document ID, sentence ID, character-level begin and end positions,
+ * and a timestamp. This immutable class serves as the fundamental building block for all index
+ * operations, enabling precise text location tracking and temporal analysis. It includes proper
  * equality checking and comparison methods to support set operations and sorting.
  */
 public class Position {

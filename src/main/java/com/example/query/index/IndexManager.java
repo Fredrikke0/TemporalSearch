@@ -1,24 +1,35 @@
 package com.example.query.index;
 
-import com.example.core.IndexAccessInterface;
-import com.example.core.IndexAccess;
-import com.example.core.IndexAccessException;
-import com.example.query.model.*;
-import com.example.query.model.condition.*;
-import com.example.query.model.condition.Contains;
-import com.example.query.model.condition.Dependency;
-import com.example.query.model.condition.Ner;
-import com.example.query.model.condition.Temporal;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Optional;
+import java.util.Set;
 
 import org.iq80.leveldb.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.*;
-import java.util.stream.Collectors;
+import com.example.core.IndexAccess;
+import com.example.core.IndexAccessException;
+import com.example.core.IndexAccessInterface;
+import com.example.query.model.Query;
+import com.example.query.model.SubquerySpec;
+import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Contains;
+import com.example.query.model.condition.Dependency;
+import com.example.query.model.condition.Logical;
+import com.example.query.model.condition.Ner;
+import com.example.query.model.condition.Not;
+import com.example.query.model.condition.Pos;
+import com.example.query.model.condition.Temporal;
 
 /**
  * Manages access to LevelDB indexes for a specific index set.
@@ -26,7 +37,7 @@ import java.util.stream.Collectors;
  */
 public class IndexManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(IndexManager.class);
-    
+
     private final Map<String, IndexAccessInterface> indexes;
     private final Path indexBaseDir;
     private final String indexSetName;
@@ -45,13 +56,13 @@ public class IndexManager implements AutoCloseable {
      */
     public IndexManager(Path projectBaseDir, String indexSetName, Query query, String temporalStrategy) throws IndexAccessException {
         // Resolve the specific index directory *within* the project directory
-        this.indexBaseDir = projectBaseDir.resolve("indexes"); 
+        this.indexBaseDir = projectBaseDir.resolve("indexes");
         this.indexSetName = indexSetName; // Still needed for context/potential future use?
         this.indexes = new HashMap<>();
         this.levelDbOptions = new Options();
         this.levelDbOptions.createIfMissing(false); // Don't create if missing
         this.levelDbOptions.cacheSize(64 * 1024 * 1024); // 64MB cache
-        
+
         // Check existence of the resolved index base directory (e.g., project/indexes)
         if (!Files.exists(this.indexBaseDir)) {
             throw new IndexAccessException(
@@ -60,7 +71,7 @@ public class IndexManager implements AutoCloseable {
                 IndexAccessException.ErrorType.INITIALIZATION_ERROR
             );
         }
-        
+
         initializeRequiredIndexes(query, temporalStrategy);
     }
 
@@ -99,14 +110,14 @@ public class IndexManager implements AutoCloseable {
 
                 indexes.put(type, new IndexAccess(indexPath, type, levelDbOptions));
                 logger.info("Successfully initialized required {} index", type);
-                
+
             } catch (IndexAccessException e) {
                 // Log specific IndexAccess errors but continue trying others
-                logger.error("Failed to initialize required {} index at {}: {} [Type: {}]", 
+                logger.error("Failed to initialize required {} index at {}: {} [Type: {}]",
                     type, indexBaseDir.resolve(type), e.getMessage(), e.getErrorType());
                  // Potentially re-throw if a critical index fails, or collect errors
             } catch (Exception e) {
-                logger.error("Unexpected error initializing required {} index at {}: {}", 
+                logger.error("Unexpected error initializing required {} index at {}: {}",
                     type, indexBaseDir.resolve(type), e.getMessage(), e);
             }
         }
@@ -115,7 +126,7 @@ public class IndexManager implements AutoCloseable {
         if (indexes.isEmpty() && !requiredIndexNames.isEmpty()) {
              String missing = String.join(", ", requiredIndexNames);
             throw new IndexAccessException(
-                "None of the required indexes could be initialized in index set '" + indexSetName + 
+                "None of the required indexes could be initialized in index set '" + indexSetName +
                 "'. Required: [" + missing + "]. Please ensure the index directories exist and contain valid LevelDB databases.",
                 "index_manager",
                 IndexAccessException.ErrorType.INITIALIZATION_ERROR
@@ -160,7 +171,7 @@ public class IndexManager implements AutoCloseable {
                  logger.debug("Naive strategy selected (or DATE condition present), requiring 'ner_date' index.");
             }
         }
-        
+
         // Ensure ner_date is included if any specific NER(DATE) condition exists, regardless of strategy
         if(queryHasNerDateCondition(query)) {
             required.add("ner_date");
@@ -201,10 +212,10 @@ public class IndexManager implements AutoCloseable {
             // No specific index needed *just* for Temporal condition itself here, strategy dictates it.
         }
     }
-    
+
     /**
      * Checks if the query (including subquery) contains any Temporal or NER(DATE) conditions.
-     * 
+     *
      * @param query The query to check
      * @return true if a temporal-related condition exists, false otherwise
      */
@@ -223,10 +234,10 @@ public class IndexManager implements AutoCloseable {
          }
          return false;
      }
-     
+
      /**
       * Checks if the query (including subquery) contains any NER(DATE) conditions.
-      * 
+      *
       * @param query The query to check
       * @return true if a NER(DATE) condition exists, false otherwise
       */
@@ -262,7 +273,7 @@ public class IndexManager implements AutoCloseable {
          }
          return false;
      }
-     
+
      /**
       * Helper to recursively check a list of conditions specifically for NER(DATE).
       */
@@ -297,7 +308,7 @@ public class IndexManager implements AutoCloseable {
         }
         return index;
     }
-    
+
      /**
       * Gets an optional index by name. Returns empty optional if not available.
       *
@@ -310,7 +321,7 @@ public class IndexManager implements AutoCloseable {
      }
 
     /**
-     * Gets the appropriate index for a condition type. 
+     * Gets the appropriate index for a condition type.
      * Assumes the required indexes were already initialized.
      *
      * @param condition The condition to get an index for
@@ -318,7 +329,7 @@ public class IndexManager implements AutoCloseable {
      */
     public Optional<IndexAccessInterface> getIndexForCondition(Condition condition) {
         checkClosed();
-        
+
         // Map condition types to appropriate REQUIRED indexes
         if (condition instanceof Contains containsCondition) {
             String[] terms = containsCondition.terms().toArray(new String[0]);
@@ -350,9 +361,9 @@ public class IndexManager implements AutoCloseable {
         } else if (condition instanceof Pos && indexes.containsKey("pos")) {
              return Optional.of(indexes.get("pos"));
         }
-        
+
         // If no specific index type matches or the required one wasn't initialized
-        logger.warn("No appropriate *initialized* index found for condition type: {}. Available: {}", 
+        logger.warn("No appropriate *initialized* index found for condition type: {}. Available: {}",
                     condition.getClass().getSimpleName(), indexes.keySet());
         return Optional.empty();
     }
@@ -366,10 +377,10 @@ public class IndexManager implements AutoCloseable {
         checkClosed();
         return new HashMap<>(indexes); // Return copy
     }
-    
+
     /**
      * Gets the base directory for the current index set
-     * 
+     *
      * @return The base directory path as a string
      */
     public String getIndexBaseDir() {
@@ -388,27 +399,35 @@ public class IndexManager implements AutoCloseable {
     }
 
     @Override
-    public void close() throws Exception {
-        if (!isClosed) {
-            isClosed = true; // Mark as closed early to prevent races
-            logger.info("Closing IndexManager for index set '{}'. Shutting down {} indexes...", indexSetName, indexes.size());
-            List<Exception> closeErrors = new ArrayList<>();
-            for (Map.Entry<String, IndexAccessInterface> entry : indexes.entrySet()) {
-                try {
-                    entry.getValue().close();
-                    logger.debug("Closed index {}", entry.getKey());
-                } catch (Exception e) {
-                    logger.error("Error closing index {}: {}", entry.getKey(), e.getMessage());
-                    closeErrors.add(e);
-                }
-            }
-            indexes.clear();
-            if (!closeErrors.isEmpty()) {
-                 // Combine exceptions or throw the first one
-                 throw new IOException("Errors occurred while closing indexes: " + 
-                     closeErrors.stream().map(Throwable::getMessage).collect(Collectors.joining("; ")));
-            }
-            logger.info("IndexManager closed successfully for index set '{}'", indexSetName);
+    public void close() throws IndexAccessException {
+        if (isClosed) {
+            return;
         }
+        isClosed = true;
+        logger.info("Closing IndexManager for index set: {}", indexSetName);
+        List<String> failedToClose = new ArrayList<>();
+        for (Map.Entry<String, IndexAccessInterface> entry : indexes.entrySet()) {
+            try {
+                entry.getValue().close();
+                logger.debug("Closed index: {}", entry.getKey());
+            } catch (IndexAccessException e) { // Catch specific IndexAccessException
+                logger.error("Failed to close index {} for set {}: {} [Type: {}]",
+                             entry.getKey(), indexSetName, e.getMessage(), e.getErrorType(), e);
+                failedToClose.add(entry.getKey() + " (Type: " + e.getErrorType() + ")");
+            } catch (Exception e) { // Catch any other unexpected exceptions during close
+                logger.error("Unexpected error closing index {} for set {}: {}",
+                             entry.getKey(), indexSetName, e.getMessage(), e);
+                failedToClose.add(entry.getKey() + " (Unexpected)");
+            }
+        }
+        indexes.clear(); // Clear the map after attempting to close all
+        if (!failedToClose.isEmpty()) {
+            throw new IndexAccessException(
+                "Failed to close one or more indexes: " + String.join(", ", failedToClose),
+                indexSetName,
+                IndexAccessException.ErrorType.RESOURCE_ERROR // Changed to RESOURCE_ERROR
+            );
+        }
+        logger.info("IndexManager closed for index set: {}", indexSetName);
     }
-} 
+}

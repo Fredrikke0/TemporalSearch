@@ -23,7 +23,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        
+
         // Create test stopwords file
         try (PrintWriter writer = new PrintWriter(TEST_STOPWORDS_PATH)) {
             writer.println("the");
@@ -100,30 +100,30 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
     public void testEntityIndexing() throws Exception {
         // Fetch first batch of entries
         var entries = generator.fetchBatch(null);
-        
+
         // Check entity count
         assertEquals(4, entries.size(), "Should have fetched 4 entities");
-        
+
         // Process batch and verify results
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
-        
+
         // Verify person entity
         String personKey = "PERSON" + IndexAccessInterface.DELIMITER + "john smith";
         assertTrue(result.containsKey(personKey), "Should contain PERSON entity");
-        assertEquals(1, result.get(personKey).get(0).getNumPositions(), 
+        assertEquals(1, result.get(personKey).get(0).getNumPositions(),
             "Should have one position for PERSON entity");
-        
+
         // Verify organization entities
         String orgKey1 = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "google";
         assertTrue(result.containsKey(orgKey1), "Should contain ORGANIZATION entity (Google)");
         assertEquals(1, result.get(orgKey1).get(0).getNumPositions(),
             "Should have one position for ORGANIZATION entity (Google)");
-        
+
         String orgKey2 = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "microsoft";
         assertTrue(result.containsKey(orgKey2), "Should contain ORGANIZATION entity (Microsoft)");
         assertEquals(1, result.get(orgKey2).get(0).getNumPositions(),
             "Should have one position for ORGANIZATION entity (Microsoft)");
-        
+
         // Verify location entity
         String locKey = "LOCATION" + IndexAccessInterface.DELIMITER + "mountain view";
         assertTrue(result.containsKey(locKey), "Should contain LOCATION entity");
@@ -165,16 +165,16 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
 
         // Fetch and process entries
         var entries = generator.fetchBatch(null);
-        
+
         // Check that DATE entity is excluded
         assertEquals(4, entries.size(), "Should still have 4 entities (DATE excluded)");
-        
+
         // Verify no DATE entity in results
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
         String dateKey = "DATE" + IndexAccessInterface.DELIMITER + "january 15, 2024";
         assertFalse(result.containsKey(dateKey), "Should not contain DATE entity");
     }
-    
+
     @Test
     public void testEntityCaseNormalization() throws Exception {
         // Add entities with varied casing
@@ -212,7 +212,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         // Fetch and process entries
         var entries = generator.fetchBatch(null);
         var result = generator.processBatch(entries);
-        
+
         // Verify case normalization - both APPLE and Apple should be mapped to the same key
         String appleKey = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "apple";
         assertTrue(result.containsKey(appleKey), "Should contain normalized ORGANIZATION entity (apple)");
@@ -262,20 +262,20 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         // Fetch and process entries
         var entries = generator.fetchBatch(null);
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
-        
+
         // Verify multi-token entity
         // The generator should concatenate "New", "Zealand", "Army", "Corps" into "new zealand army corps"
         String expectedKey = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "new zealand army corps";
-        assertTrue(result.containsKey(expectedKey), 
+        assertTrue(result.containsKey(expectedKey),
             "Should contain the combined multi-token ORGANIZATION entity 'new zealand army corps'. Actual keys: " + result.keySet());
-        
+
         if (result.containsKey(expectedKey)) {
             assertEquals(1, result.get(expectedKey).size(), "Should be one PositionList for the entity.");
-            assertEquals(1, result.get(expectedKey).get(0).getNumPositions(), 
+            assertEquals(1, result.get(expectedKey).get(0).getNumPositions(),
                 "Should have one position for the combined entity 'new zealand army corps'");
             Position pos = result.get(expectedKey).get(0).getPositionAt(0);
             assertEquals(0, pos.getBeginPosition(), "Begin char of combined entity should be 0");
             assertEquals(22, pos.getEndPosition(), "End char of combined entity should be 22"); // "Corps" ends at 22
         }
     }
-} 
+}

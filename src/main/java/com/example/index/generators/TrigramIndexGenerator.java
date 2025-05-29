@@ -1,25 +1,22 @@
 package com.example.index.generators;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import com.example.logging.ProgressTracker;
-import com.example.core.Position;
+import java.util.stream.Collectors;
+
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
-import com.example.core.IndexAccess;
-import com.example.core.IndexAccessException;
-import java.util.stream.Collectors;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming trigram index from annotation entries.
@@ -43,7 +40,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         boolean isFirstBatch = (lastProcessedEntry == null);
 
         if (isFirstBatch) {
-            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " + 
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
                     "FROM annotations " +
                     "ORDER BY annotation_id LIMIT ?";
         } else {
@@ -52,7 +49,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                     "WHERE annotation_id > ? " +
                     "ORDER BY annotation_id LIMIT ?";
         }
-        
+
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
             if (isFirstBatch) {
                 stmt.setInt(1, this.batchSize);
@@ -60,7 +57,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                 stmt.setLong(1, lastProcessedEntry.getAnnotationId());
                 stmt.setInt(2, this.batchSize);
             }
-            
+
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String rawToken = rs.getString("token");
@@ -81,7 +78,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                 }
             }
         }
-        
+
         return batch;
     }
 
@@ -92,7 +89,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             .map(entry -> {
                 String lowerToken = entry.getToken().toLowerCase();
                 if (isStopword(lowerToken) || !lowerToken.chars().anyMatch(Character::isLetterOrDigit)) {
-                    return null; 
+                    return null;
                 }
                 return new AnnotationEntry(entry.getAnnotationId(), entry.getDocumentId(), entry.getSentenceId(),
                                            entry.getBeginChar(), entry.getEndChar(), lowerToken, entry.getPos(),
@@ -152,4 +149,4 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         }
         return 0;
     }
-} 
+}

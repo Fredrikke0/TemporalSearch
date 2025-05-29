@@ -1,9 +1,8 @@
 package com.example.index;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.*;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -15,6 +14,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * A simple lookup table that maps date strings to integer IDs to improve compression.
  * Instead of storing duplicate date strings like [2024-01-01, 2020-01-01, 1680-01-01],
@@ -25,7 +27,7 @@ public class DateSynonyms implements AutoCloseable {
     private static final Pattern DATE_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
     private static final String FILENAME = "date_synonyms.ser";
-    
+
     // Bidirectional mappings
     private final Map<String, Integer> dateToId = new ConcurrentHashMap<>();
     private final Map<Integer, String> idToDate = new ConcurrentHashMap<>();
@@ -36,7 +38,7 @@ public class DateSynonyms implements AutoCloseable {
 
     /**
      * Creates a new DateSynonyms instance, loading existing mappings if available.
-     * 
+     *
      * @param baseDir Base directory for storing the synonym mappings
      * @throws IOException If there's an error loading existing mappings
      */
@@ -53,7 +55,7 @@ public class DateSynonyms implements AutoCloseable {
 
     /**
      * Gets or creates an ID for the given date value.
-     * 
+     *
      * @param dateValue The date in YYYY-MM-DD format
      * @return The ID for the date
      * @throws IllegalArgumentException if the date format is invalid
@@ -63,7 +65,7 @@ public class DateSynonyms implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("DateSynonyms is closed");
         }
-        
+
         validateDateFormat(dateValue);
 
         // Check cache first
@@ -77,7 +79,7 @@ public class DateSynonyms implements AutoCloseable {
             if (closed) {
                 throw new IllegalStateException("DateSynonyms was closed during operation");
             }
-            
+
             // Check again in case another thread created it
             existingId = dateToId.get(dateValue);
             if (existingId != null) {
@@ -88,7 +90,7 @@ public class DateSynonyms implements AutoCloseable {
             dateToId.put(dateValue, id);
             idToDate.put(id, dateValue);
             modified = true;
-            
+
             //logger.debug("Created new date synonym: {} -> {}", dateValue, id);
             return id;
         }
@@ -96,7 +98,7 @@ public class DateSynonyms implements AutoCloseable {
 
     /**
      * Gets the date value for a given synonym ID.
-     * 
+     *
      * @param synonymId The ID to look up
      * @return The date value, or null if not found
      * @throws IllegalStateException if the synonyms database is closed
@@ -105,13 +107,13 @@ public class DateSynonyms implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("DateSynonyms is closed");
         }
-        
+
         return idToDate.get(synonymId);
     }
 
     /**
      * Validates that a date string is in the correct format (YYYY-MM-DD).
-     * 
+     *
      * @param dateValue The date string to validate
      * @throws IllegalArgumentException if the date format is invalid
      */
@@ -136,13 +138,13 @@ public class DateSynonyms implements AutoCloseable {
             try (ObjectInputStream ois = new ObjectInputStream(Files.newInputStream(storageFile))) {
                 Map<String, Integer> loadedDateToId = (Map<String, Integer>) ois.readObject();
                 int maxId = 0;
-                
+
                 for (Map.Entry<String, Integer> entry : loadedDateToId.entrySet()) {
                     dateToId.put(entry.getKey(), entry.getValue());
                     idToDate.put(entry.getValue(), entry.getKey());
                     maxId = Math.max(maxId, entry.getValue());
                 }
-                
+
                 nextId.set(maxId + 1);
                 logger.info("Loaded {} date synonyms with next ID {}", dateToId.size(), nextId.get());
             } catch (ClassNotFoundException e) {
@@ -173,7 +175,7 @@ public class DateSynonyms implements AutoCloseable {
             int id = entry.getKey();
             String date = entry.getValue();
             Integer mappedId = dateToId.get(date);
-            
+
             if (mappedId == null || mappedId != id) {
                 logger.error("Inconsistent synonym mappings detected: {} maps to {} but {} maps to {}",
                     date, mappedId, id, date);
@@ -183,7 +185,7 @@ public class DateSynonyms implements AutoCloseable {
 
     /**
      * Returns the number of date synonyms in this collection.
-     * 
+     *
      * @return The number of date synonyms
      */
     public int size() {
@@ -202,4 +204,4 @@ public class DateSynonyms implements AutoCloseable {
             }
         }
     }
-} 
+}

@@ -72,7 +72,7 @@ public class VariableRegistryTest {
 
         assertEquals(VariableType.ANY, registry.getInferredType("data"));
     }
-    
+
     @Test
     @DisplayName("Inferring type with ANY type present")
     void testInferTypeWithAny() {
@@ -111,10 +111,10 @@ public class VariableRegistryTest {
         String variableName = "date";
         registry.registerProducer(variableName, VariableType.TEMPORAL, "DATE1");
         registry.registerProducer(variableName, VariableType.TEMPORAL, "DATE2");
-        
+
         // Verify registry state
         assertEquals(2, registry.getProducers(variableName).size());
-        
+
         // Test all producers collection
         Collection<ProducerVariable> allProducers = registry.getAllProducers();
         assertEquals(2, allProducers.size());
@@ -125,15 +125,15 @@ public class VariableRegistryTest {
         // Test with single type
         registry.registerProducer("person", VariableType.ENTITY, "NER");
         assertEquals(VariableType.ENTITY, registry.getInferredType("person"));
-        
+
         // Test with same types
         registry.registerConsumer("person", VariableType.ENTITY, "CONTAINS");
         assertEquals(VariableType.ENTITY, registry.getInferredType("person"));
-        
+
         // Test with conflicting types
         registry.registerConsumer("person", VariableType.TEXT_SPAN, "SNIPPET");
         assertEquals(VariableType.ANY, registry.getInferredType("person"));
-        
+
         // Test with ANY type
         registry.registerProducer("unknown", VariableType.ANY, "CUSTOM");
         registry.registerConsumer("unknown", VariableType.ENTITY, "USE");
@@ -144,11 +144,11 @@ public class VariableRegistryTest {
     public void testClear() {
         registry.registerProducer("person", VariableType.ENTITY, "NER");
         registry.registerConsumer("org", VariableType.ENTITY, "CONTAINS");
-        
+
         // Clear and verify
         registry.clear();
         assertTrue(registry.getAllVariableNames().isEmpty());
         assertTrue(registry.getAllProducers().isEmpty());
         assertTrue(registry.getAllConsumers().isEmpty());
     }
-} 
+}

@@ -1,24 +1,28 @@
 package com.example.core.index;
 
-// Note: Does NOT implement IndexAccess directly to avoid complex mocking/inheritance
-// It provides a compatible API for testing purposes where an IndexAccess object is expected.
-// import com.example.core.IndexAccess; 
-import com.example.core.IndexAccessException;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.ReadOptions;
-import org.iq80.leveldb.WriteBatch;
-import org.mockito.Mockito;
-
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDate;
-import java.util.*;
+import java.util.AbstractMap.SimpleImmutableEntry;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.NavigableMap;
+import java.util.NoSuchElementException;
+import java.util.Optional;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
+import org.iq80.leveldb.DBIterator;
+import org.iq80.leveldb.WriteBatch;
+
+// Note: Does NOT implement IndexAccess directly to avoid complex mocking/inheritance
+// It provides a compatible API for testing purposes where an IndexAccess object is expected.
+// import com.example.core.IndexAccess;
+import com.example.core.IndexAccessException;
 // Implement the interface
-import com.example.core.IndexAccessInterface; 
+import com.example.core.IndexAccessInterface;
+import com.example.core.Position;
+import com.example.core.PositionListSoA;
 
 /**
  * A mock implementation providing an IndexAccess-like API for testing purposes.
@@ -50,7 +54,7 @@ public class MockIndexAccess implements IndexAccessInterface {
         if (closed) throw new IllegalStateException("Index is closed");
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
         Position pos = new Position(docId, sentenceId, begin, end);
-        
+
         // Retrieve existing list if present, or create a new one
         PositionListSoA list;
         byte[] existingValue = dataStore.get(wrappedKey);
@@ -81,7 +85,7 @@ public class MockIndexAccess implements IndexAccessInterface {
         }
         dataStore.put(wrappedKey, mergedList.serializeToCompositeBlob());
     }
-    
+
      /**
      * Helper method to add pre-serialized test data with byte key.
      * Renamed from addTestData to addRawTestData.
@@ -102,73 +106,71 @@ public class MockIndexAccess implements IndexAccessInterface {
 
     @Override
     public Optional<PositionListSoA> get(byte[] key) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed", indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         byte[] value = dataStore.get(new ByteArrayWrapper(key));
         if (value == null) {
             return Optional.empty();
         }
         try {
             // Deserialize to PositionListSoA
-            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(value)); 
-        } catch (IOException e) { 
+            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(value));
+        } catch (IOException e) {
             throw new IndexAccessException(
-                "Failed to deserialize PositionListSoA due to IO error for key", 
-                indexType, 
+                "Failed to deserialize PositionListSoA due to IO error for key",
+                indexType,
                 IndexAccessException.ErrorType.READ_ERROR,
                 e
             );
-        } catch (RuntimeException e) { 
+        } catch (RuntimeException e) {
             throw new IndexAccessException(
-                "Failed to deserialize PositionListSoA for key", 
-                indexType, 
-                IndexAccessException.ErrorType.READ_ERROR, 
-                e 
-            ); 
+                "Failed to deserialize PositionListSoA for key",
+                indexType,
+                IndexAccessException.ErrorType.READ_ERROR,
+                e
+            );
         }
     }
 
     @Override
     public Optional<byte[]> getRaw(byte[] key) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed", indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         return Optional.ofNullable(dataStore.get(new ByteArrayWrapper(key)));
     }
 
     @Override
-    public DBIterator iterator() throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed", indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
-        // Return a simple iterator over the current snapshot of the map
-        return new MockDBIterator(dataStore);
+    public DBIterator seek(byte[] key) throws IndexAccessException {
+        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        return new MockDBIterator(dataStore, key, false);
     }
 
     @Override
-    public DBIterator iterator(ReadOptions options) throws IndexAccessException {
-         if (closed) throw new IndexAccessException("Index is closed", indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
-        // Ignore ReadOptions for this mock
-        return iterator();
+    public DBIterator iterateFromFirst() throws IndexAccessException {
+        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        return new MockDBIterator(dataStore, null, true);
     }
 
     @Override
     public void put(byte[] key, byte[] value) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed", indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         dataStore.put(new ByteArrayWrapper(key), value);
     }
 
     @Override
     public void delete(byte[] key) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed", indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         dataStore.remove(new ByteArrayWrapper(key));
     }
 
     @Override
     public WriteBatch createWriteBatch() throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed", indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         // WriteBatch operations are complex to mock properly, throw unsupported for now
         throw new UnsupportedOperationException("WriteBatch not supported by MockIndexAccess");
     }
 
     @Override
     public void write(WriteBatch batch) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed", indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         throw new UnsupportedOperationException("WriteBatch not supported by MockIndexAccess");
     }
 
@@ -183,7 +185,7 @@ public class MockIndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() {
         if (!closed) {
             closed = true;
             dataStore.clear(); // Clear data on close
@@ -191,60 +193,71 @@ public class MockIndexAccess implements IndexAccessInterface {
         }
     }
 
+    public int getStoreSize() {
+        return dataStore.size();
+    }
+
     // --- Inner Mock Iterator Class ---
 
     private static class MockDBIterator implements DBIterator {
-        private final NavigableMap<ByteArrayWrapper, byte[]> originalMap;
-        private Iterator<Map.Entry<ByteArrayWrapper, byte[]>> iterator;
-        private Map.Entry<ByteArrayWrapper, byte[]> currentEntry;
-        private Map.Entry<ByteArrayWrapper, byte[]> nextEntryBuffer = null;
+        private final List<Map.Entry<ByteArrayWrapper, byte[]>> entryList; // Holds all entries, sorted
+        private int currentIndex; // Index of the next element to be returned by next()
 
-        MockDBIterator(NavigableMap<ByteArrayWrapper, byte[]> map) {
-            // Store the original map for seeking
-            this.originalMap = map; 
-            // Initialize iterator over a copy of the full map
-            this.iterator = new TreeMap<>(this.originalMap).entrySet().iterator(); 
-            this.currentEntry = null;
+        MockDBIterator(NavigableMap<ByteArrayWrapper, byte[]> map, byte[] seekKey, boolean iterateAll) {
+            // Always create a sorted list of all entries
+            this.entryList = new ArrayList<>(new TreeMap<>(map).entrySet());
+
+            if (iterateAll) {
+                this.currentIndex = 0; // Position at the beginning
+            } else if (seekKey != null) {
+                performSeek(seekKey);
+            } else { // Should not happen: seekKey is null but not iterateAll
+                this.currentIndex = 0;
+            }
+        }
+
+        private void performSeek(byte[] key) {
+            ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key);
+            for (int i = 0; i < entryList.size(); i++) {
+                if (entryList.get(i).getKey().compareTo(wrappedKey) >= 0) {
+                    this.currentIndex = i;
+                    return;
+                }
+            }
+            this.currentIndex = entryList.size(); // Position after the last element if key is > all keys
         }
 
         @Override
         public void seek(byte[] key) {
-             // Wrap the key for comparison
-             ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key);
-             // Get the portion of the map >= key
-             NavigableMap<ByteArrayWrapper, byte[]> tailMap = originalMap.tailMap(wrappedKey, true);
-             // Reset iterator to the tailMap (using a copy)
-             this.iterator = new TreeMap<>(tailMap).entrySet().iterator();
-             this.currentEntry = null; // Invalidate current entry after seek
+            performSeek(key);
         }
 
         @Override
         public void seekToFirst() {
-            // Reset the iterator to the beginning of the original map (using a copy)
-            this.iterator = new TreeMap<>(this.originalMap).entrySet().iterator();
-            this.currentEntry = null; // Invalidate current entry
+            this.currentIndex = 0;
         }
 
         @Override
         public void seekToLast() {
-            throw new UnsupportedOperationException("seekToLast not implemented in MockDBIterator");
+            if (entryList.isEmpty()) {
+                this.currentIndex = 0;
+            } else {
+                this.currentIndex = entryList.size() - 1; // Position AT the last element
+            }
         }
 
         @Override
         public Map.Entry<byte[], byte[]> peekNext() {
-            if (nextEntryBuffer == null) {
-                if (!iterator.hasNext()) {
-                    throw new NoSuchElementException();
-                }
-                nextEntryBuffer = iterator.next();
+            if (currentIndex < entryList.size()) {
+                Map.Entry<ByteArrayWrapper, byte[]> entry = entryList.get(currentIndex);
+                return new SimpleImmutableEntry<>(entry.getKey().getData(), entry.getValue());
             }
-            // Return a copy as Map.Entry<byte[], byte[]>
-            return Map.entry(nextEntryBuffer.getKey().getData(), nextEntryBuffer.getValue());
+            throw new NoSuchElementException();
         }
-        
+
         @Override
         public boolean hasNext() {
-            return nextEntryBuffer != null || iterator.hasNext();
+            return currentIndex < entryList.size();
         }
 
         @Override
@@ -252,38 +265,44 @@ public class MockIndexAccess implements IndexAccessInterface {
             if (!hasNext()) {
                 throw new NoSuchElementException();
             }
-            if (nextEntryBuffer != null) {
-                currentEntry = nextEntryBuffer;
-                nextEntryBuffer = null;
-            } else {
-                currentEntry = iterator.next();
-            }
-            return Map.entry(currentEntry.getKey().getData(), currentEntry.getValue());
+            Map.Entry<ByteArrayWrapper, byte[]> entry = entryList.get(currentIndex);
+            currentIndex++;
+            return new SimpleImmutableEntry<>(entry.getKey().getData(), entry.getValue());
         }
-        
+
         @Override
         public Map.Entry<byte[], byte[]> peekPrev() {
-             throw new UnsupportedOperationException("peekPrev not implemented in MockDBIterator");
+            if (currentIndex > 0) {
+                Map.Entry<ByteArrayWrapper, byte[]> entry = entryList.get(currentIndex - 1);
+                return new SimpleImmutableEntry<>(entry.getKey().getData(), entry.getValue());
+            }
+            throw new NoSuchElementException();
         }
 
         @Override
         public boolean hasPrev() {
-            throw new UnsupportedOperationException("hasPrev not implemented in MockDBIterator");
+            return currentIndex > 0;
         }
 
         @Override
         public Map.Entry<byte[], byte[]> prev() {
-            throw new UnsupportedOperationException("prev not implemented in MockDBIterator");
+            if (!hasPrev()) {
+                throw new NoSuchElementException();
+            }
+            currentIndex--;
+            Map.Entry<ByteArrayWrapper, byte[]> entry = entryList.get(currentIndex);
+            return new SimpleImmutableEntry<>(entry.getKey().getData(), entry.getValue());
         }
 
         @Override
         public void remove() {
-            throw new UnsupportedOperationException("remove not supported");
+            throw new UnsupportedOperationException("Remove not supported by MockDBIterator");
         }
 
         @Override
         public void close() throws IOException {
-            // No resources to close for this simple mock iterator
+            // No-op for mock
+            // entryList.clear(); // Keep if iterator might be reused, though typically not.
         }
     }
-} 
+}

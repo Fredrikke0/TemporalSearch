@@ -1,8 +1,7 @@
 package com.example.index.generators;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -13,14 +12,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.example.logging.ProgressTracker;
-import com.example.core.Position;
+
 import com.example.core.PositionListSoA;
 import com.example.index.DependencyEntry;
-
-import java.nio.file.Path;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming hypernym index from dependency entries.
@@ -62,7 +62,7 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
     protected List<DependencyEntry> fetchBatch(DependencyEntry lastProcessedEntry) throws SQLException {
         List<DependencyEntry> batch = new ArrayList<>();
         boolean isFirstBatch = (lastProcessedEntry == null);
-        
+
         String inClause = HYPERNYM_RELATIONS.stream()
             .map(r -> "'" + r.replace("'", "''") + "'")
             .collect(Collectors.joining(", "));
@@ -80,7 +80,7 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
         } else {
             query = queryBase + "AND d.dependency_id > ? ORDER BY d.dependency_id LIMIT ?";
         }
-        
+
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
             if (isFirstBatch) {
                 stmt.setInt(1, this.batchSize);
@@ -88,13 +88,13 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
                 stmt.setLong(1, lastProcessedEntry.getDependencyId());
                 stmt.setInt(2, this.batchSize);
             }
-            
+
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String headToken = sanitizeText(rs.getString("head_token"));
                     String dependentToken = sanitizeText(rs.getString("dependent_token"));
                     String relation = rs.getString("relation");
-                    
+
                     if (headToken == null || headToken.isEmpty() ||
                         dependentToken == null || dependentToken.isEmpty() ||
                         relation == null || relation.isEmpty()) {
@@ -102,7 +102,7 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
                                    headToken, dependentToken, relation);
                         continue;
                     }
-                    
+
                     String headTokenLower = headToken.toLowerCase();
                     String dependentTokenLower = dependentToken.toLowerCase();
 
@@ -130,10 +130,10 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
     protected ListMultimap<String, PositionListSoA> processBatch(List<DependencyEntry> batch) {
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> positionLists = new HashMap<>();
-        
+
         for (DependencyEntry entry : batch) {
             String key = createKey(entry.getHeadToken(), entry.getDependentToken());
-            
+
             PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
             posList.add(
                 entry.getDocumentId(),
@@ -142,11 +142,11 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
                 entry.getEndChar()
             );
         }
-        
+
         for (Map.Entry<String, PositionListSoA> entryMap : positionLists.entrySet()) {
             index.put(entryMap.getKey(), entryMap.getValue());
         }
-        
+
         return index;
     }
 
@@ -178,4 +178,4 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
         }
         return 0;
     }
-} 
+}

@@ -1,253 +1,163 @@
 package com.example.query.executor;
 
-import com.example.core.IndexAccess;
-import com.example.core.IndexAccessException;
-import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.query.binding.MatchDetail;
-import com.example.query.binding.ValueType;
-import com.example.query.executor.QueryResult;
-import com.example.query.model.Query;
-import com.example.query.model.condition.Contains;
-import com.example.query.model.condition.Not;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.iq80.leveldb.DBIterator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.IOException;
-import java.time.LocalDate;
-import java.util.*;
-import java.util.stream.Collectors;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import com.example.core.IndexAccessInterface;
+import com.example.core.Position;
+import com.example.core.PositionListSoA;
+import com.example.query.binding.ValueType;
+import com.example.query.model.Query;
+import com.example.query.model.condition.Contains;
+import com.example.query.model.condition.Not;
 
 @ExtendWith(MockitoExtension.class)
-class NotConditionExecutorTest {
+public class NotConditionExecutorTest {
 
-    @Mock private ConditionExecutorFactory executorFactory;
-    @Mock private IndexAccess unigramIndex;
-    @Mock private DBIterator unigramIterator;
-    @Mock private IndexAccess mockIndexAccess;
-    @Mock private ConditionExecutorFactory factory;
+    @Mock
+    private ConditionExecutorFactory mockFactory;
+    @Mock
+    private ContainsExecutor mockSubExecutor;
+    @Mock
+    private IndexAccessInterface mockUnigramIndex;
+    @Mock
+    private DBIterator mockDBIterator;
+
+    private NotExecutor notExecutor;
     private Map<String, IndexAccessInterface> indexes;
-
-    @InjectMocks private NotExecutor notExecutor;
+    private Query.Granularity granularity;
+    private String corpusName = "test_corpus";
+    private Contains subCondition;
+    private QueryResultSoA emptySubResult;
+    private QueryResultSoA nonEmptySubResult;
+    private AttributeRequirements defaultTestRequirements;
 
     @BeforeEach
     void setUp() throws Exception {
-        indexes = Map.of("unigram", unigramIndex);
-        lenient().when(unigramIndex.iterator()).thenReturn(unigramIterator);
-        lenient().when(unigramIterator.hasNext()).thenReturn(false);
-        lenient().when(unigramIterator.next()).thenReturn(null);
-        
-        notExecutor = new NotExecutor(executorFactory);
+        notExecutor = new NotExecutor(mockFactory);
+        indexes = Map.of("unigram", mockUnigramIndex);
+        granularity = Query.Granularity.DOCUMENT;
+        subCondition = new Contains("test");
+        defaultTestRequirements = new AttributeRequirements();
+        defaultTestRequirements.needsConceptualRowIds = true;
+        defaultTestRequirements.needsSentenceId = true;
+
+        emptySubResult = new QueryResultSoA(granularity, 0, defaultTestRequirements);
+
+        nonEmptySubResult = new QueryResultSoA(granularity, 0, defaultTestRequirements);
+        nonEmptySubResult.add("test", ValueType.TERM, null, 1, -1, 0, 4, -1, 0);
+
+        when(mockFactory.getExecutor(any(Contains.class))).thenReturn(mockSubExecutor);
+        when(mockUnigramIndex.iterateFromFirst()).thenReturn(mockDBIterator);
     }
 
-    @Test
-    void testExecuteDocumentGranularity() throws Exception {
-        Contains containsCondition = new Contains("test");
-        Not notCondition = new Not(containsCondition);
-
-        QueryResult innerResult = new QueryResult(Query.Granularity.DOCUMENT, 0, List.of(
-            createMatchDetail(1, "test"), 
-            createMatchDetail(2, "test")
-        ));
-        ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
-        when(executorFactory.getExecutor(any(Contains.class))).thenReturn(mockContainsExecutor);
-        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
-            .thenReturn(innerResult);
-
-        PositionListSoA posList1 = createPositionList(new Position(1, 0, 0, 0));
-        PositionListSoA posList2 = createPositionList(new Position(2, 0, 0, 0));
-        PositionListSoA posList3 = createPositionList(new Position(3, 0, 0, 0));
-        PositionListSoA posList4 = createPositionList(new Position(4, 0, 0, 0));
-        
-        when(unigramIterator.hasNext()).thenReturn(true, true, true, true, false);
-        when(unigramIterator.next()).thenReturn(
-            Map.entry("key1".getBytes(), posList1.serializeToCompositeBlob()),
-            Map.entry("key2".getBytes(), posList2.serializeToCompositeBlob()),
-            Map.entry("key3".getBytes(), posList3.serializeToCompositeBlob()),
-            Map.entry("key4".getBytes(), posList4.serializeToCompositeBlob())
-        );
-
-        QueryResult result = notExecutor.execute(notCondition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
-
-        assertNotNull(result);
-        assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(2, result.getAllDetails().size());
-        Set<Integer> docIds = result.getAllDetails().stream().map(MatchDetail::getDocumentId).collect(Collectors.toSet());
-        assertTrue(docIds.containsAll(Set.of(3, 4)), "Expected documents 3 and 4 only");
-        assertFalse(docIds.contains(1), "Document 1 should be excluded");
-        assertFalse(docIds.contains(2), "Document 2 should be excluded");
-        
-        verify(unigramIndex).iterator();
-        verify(unigramIterator, times(5)).hasNext();
-        verify(unigramIterator, times(4)).next();
-    }
-
-    @Test
-    void testExecuteSentenceGranularity() throws Exception {
-        Contains containsCondition = new Contains("test");
-        Not notCondition = new Not(containsCondition);
-        
-        QueryResult innerResult = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(
-            createMatchDetail(1, 1, "test"),
-            createMatchDetail(2, 1, "test")
-        ));
-        ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
-        when(executorFactory.getExecutor(any(Contains.class))).thenReturn(mockContainsExecutor);
-        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), anyInt(), anyString(), any(AttributeRequirements.class)))
-            .thenReturn(innerResult);
-
-        PositionListSoA posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
-        PositionListSoA posListD1S1 = createPositionList(new Position(1, 1, 0, 0)); 
-        PositionListSoA posListD2S0 = createPositionList(new Position(2, 0, 0, 0)); 
-        PositionListSoA posListD2S1 = createPositionList(new Position(2, 1, 0, 0)); 
-        PositionListSoA posListD2S2 = createPositionList(new Position(2, 2, 0, 0)); 
-        PositionListSoA posListD3S0 = createPositionList(new Position(3, 0, 0, 0)); 
-        
-        when(unigramIterator.hasNext()).thenReturn(true, true, true, true, true, true, false);
-        when(unigramIterator.next()).thenReturn(
-            Map.entry("k10".getBytes(), posListD1S0.serializeToCompositeBlob()),
-            Map.entry("k11".getBytes(), posListD1S1.serializeToCompositeBlob()),
-            Map.entry("k20".getBytes(), posListD2S0.serializeToCompositeBlob()),
-            Map.entry("k21".getBytes(), posListD2S1.serializeToCompositeBlob()),
-            Map.entry("k22".getBytes(), posListD2S2.serializeToCompositeBlob()),
-            Map.entry("k30".getBytes(), posListD3S0.serializeToCompositeBlob())
-        );
-
-        QueryResult result = notExecutor.execute(notCondition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus");
-
-        assertNotNull(result);
-        assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
-        
-        assertEquals(4, result.getAllDetails().size());
-        
-        Set<String> resultSetIds = result.getAllDetails().stream()
-            .map(d -> d.getDocumentId() + "|" + d.getSentenceId())
-            .collect(Collectors.toSet());
-            
-        assertTrue(resultSetIds.contains("1|0"), "Expected 1|0");
-        assertTrue(resultSetIds.contains("2|0"), "Expected 2|0");
-        assertTrue(resultSetIds.contains("2|2"), "Expected 2|2");
-        assertTrue(resultSetIds.contains("3|0"), "Expected 3|0");
-
-        assertFalse(resultSetIds.contains("1|1"), "Should not contain 1|1");
-        assertFalse(resultSetIds.contains("2|1"), "Should not contain 2|1");
-
-        verify(unigramIndex).iterator();
-        verify(unigramIterator, times(7)).hasNext();
-        verify(unigramIterator, times(6)).next();
-    }
-
-    @Test
-    void testExecuteSentenceGranularityWithWindow() throws Exception {
-        Contains containsCondition = new Contains("test");
-        Not notCondition = new Not(containsCondition);
-        int windowSize = 1;
-
-        QueryResult innerResult = new QueryResult(Query.Granularity.SENTENCE, windowSize, List.of(
-            createMatchDetail(1, 0, "test"),
-            createMatchDetail(1, 1, "test"),
-            createMatchDetail(1, 2, "test")
-        ));
-        ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
-        when(executorFactory.getExecutor(any(Contains.class))).thenReturn(mockContainsExecutor);
-        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.SENTENCE), eq(windowSize), anyString(), any(AttributeRequirements.class)))
-            .thenReturn(innerResult);
-
-        PositionListSoA posListD1S0 = createPositionList(new Position(1, 0, 0, 0)); 
-        PositionListSoA posListD1S1 = createPositionList(new Position(1, 1, 0, 0)); 
-        PositionListSoA posListD1S2 = createPositionList(new Position(1, 2, 0, 0)); 
-
-        when(unigramIterator.hasNext()).thenReturn(true, true, true, false);
-        when(unigramIterator.next()).thenReturn(
-            Map.entry("k10".getBytes(), posListD1S0.serializeToCompositeBlob()),
-            Map.entry("k11".getBytes(), posListD1S1.serializeToCompositeBlob()),
-            Map.entry("k12".getBytes(), posListD1S2.serializeToCompositeBlob())
-        );
-
-        QueryResult result = notExecutor.execute(notCondition, indexes, Query.Granularity.SENTENCE, windowSize, "test_corpus");
-
-        assertNotNull(result);
-        assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
-        
-        assertEquals(0, result.getAllDetails().size(), "Expected empty result as inner result covered the universe");
-
-        verify(unigramIndex).iterator();
-        verify(unigramIterator, times(4)).hasNext();
-        verify(unigramIterator, times(3)).next();
-    }
-
-    @Test
-    void testVariableBinding() throws Exception {
-        Contains containsCondition = new Contains("test", "?termVar", true);
-        Not notCondition = new Not(containsCondition);
-
-        QueryResult innerResult = new QueryResult(Query.Granularity.DOCUMENT, 0, List.of(
-            createMatchDetail(1, "test"), 
-            createMatchDetail(2, "test")
-        ));
-        ContainsExecutor mockContainsExecutor = mock(ContainsExecutor.class);
-        when(executorFactory.getExecutor(any(Contains.class))).thenReturn(mockContainsExecutor);
-        Position pos1 = new Position(1, 1, 0, 5);
-        Position pos2 = new Position(2, 1, 0, 5);
-        when(mockContainsExecutor.execute(eq(containsCondition), eq(indexes), eq(Query.Granularity.DOCUMENT), anyInt(), anyString(), any(AttributeRequirements.class)))
-                .thenReturn(new QueryResult(Query.Granularity.DOCUMENT, 0,
-                    List.of(createMatchDetail(pos1.getDocumentId(), "test"), 
-                            createMatchDetail(pos2.getDocumentId(), "test"))
-                ));
-
-        PositionListSoA posList1 = createPositionList(new Position(1, 0, 0, 0));
-        PositionListSoA posList2 = createPositionList(new Position(2, 0, 0, 0));
-        PositionListSoA posList3 = createPositionList(new Position(3, 0, 0, 0));
-        PositionListSoA posList4 = createPositionList(new Position(4, 0, 0, 0));
-        
-        when(unigramIterator.hasNext()).thenReturn(true, true, true, true, false);
-        when(unigramIterator.next()).thenReturn(
-            Map.entry("key1".getBytes(), posList1.serializeToCompositeBlob()),
-            Map.entry("key2".getBytes(), posList2.serializeToCompositeBlob()),
-            Map.entry("key3".getBytes(), posList3.serializeToCompositeBlob()),
-            Map.entry("key4".getBytes(), posList4.serializeToCompositeBlob())
-        );
-
-        QueryResult result = notExecutor.execute(notCondition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
-
-        assertNotNull(result);
-        assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(2, result.getAllDetails().size());
-        Set<Integer> docIds = result.getAllDetails().stream().map(MatchDetail::getDocumentId).collect(Collectors.toSet());
-        assertTrue(docIds.containsAll(Set.of(3, 4)), "Expected documents 3 and 4 only");
-        assertFalse(docIds.contains(1), "Document 1 should be excluded");
-        assertFalse(docIds.contains(2), "Document 2 should be excluded");
-        
-        verify(unigramIndex).iterator();
-        verify(unigramIterator, times(5)).hasNext();
-        verify(unigramIterator, times(4)).next();
-    }
-
-    private MatchDetail createMatchDetail(int docId, int sentenceId, String value) {
-        Position pos = new Position(docId, sentenceId, 0, 0);
-        return new MatchDetail(value, ValueType.TERM, pos, (String) null);
-    }
-
-    private MatchDetail createMatchDetail(int docId, String value) {
-        return createMatchDetail(docId, -1, value);
-    }
-
-    private PositionListSoA createPositionList(Position... positions) {
-        PositionListSoA list = new PositionListSoA();
-        for (Position p : positions) {
-            list.add(p);
+    private void mockUnigramIndexForUniverse(List<Position> positionsInUniverse) throws Exception {
+        PositionListSoA universePositions = new PositionListSoA();
+        for (Position p : positionsInUniverse) {
+            universePositions.add(p);
         }
-        return list;
+        byte[] universeBlob = universePositions.serializeToCompositeBlob();
+
+        when(mockDBIterator.hasNext()).thenReturn(true, false);
+        when(mockDBIterator.next()).thenReturn(new java.util.AbstractMap.SimpleEntry<>("any_key".getBytes(), universeBlob));
     }
-} 
+
+    @Test
+    void testExecute_subConditionReturnsEmpty() throws Exception {
+        Not notCondition = new Not(subCondition);
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class)))
+            .thenReturn(emptySubResult);
+
+        mockUnigramIndexForUniverse(List.of(new Position(100, 0, 0, 1)));
+
+        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements);
+
+        assertNotNull(finalResult);
+        assertEquals(1, finalResult.size());
+        assertEquals(100, finalResult.getDocumentIdAt(0));
+    }
+
+    @Test
+    void testExecute_subConditionReturnsMatch_universeExcludesMatch() throws Exception {
+        Not notCondition = new Not(subCondition);
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class)))
+            .thenReturn(nonEmptySubResult);
+
+        mockUnigramIndexForUniverse(List.of(new Position(1, 0, 0, 1), new Position(2, 0, 0, 1)));
+
+        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements);
+
+        assertNotNull(finalResult);
+        assertEquals(1, finalResult.size());
+        assertEquals(2, finalResult.getDocumentIdAt(0));
+    }
+
+    @Test
+    void testExecute_subConditionReturnsAll_emptyUniverseLeadsToError() throws Exception {
+        Not notCondition = new Not(subCondition);
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class)))
+            .thenReturn(nonEmptySubResult);
+
+        when(mockDBIterator.hasNext()).thenReturn(false);
+
+        QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
+            notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements);
+        });
+        assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
+    }
+
+    @Test
+    void testExecute_sentenceGranularity() throws Exception {
+        granularity = Query.Granularity.SENTENCE;
+        AttributeRequirements sentenceGranularityRequirements = new AttributeRequirements();
+        sentenceGranularityRequirements.needsConceptualRowIds = true;
+        sentenceGranularityRequirements.needsSentenceId = true;
+        sentenceGranularityRequirements.needsDocumentId = true;
+
+        emptySubResult = new QueryResultSoA(granularity, 0, sentenceGranularityRequirements);
+        nonEmptySubResult = new QueryResultSoA(granularity, 0, sentenceGranularityRequirements);
+        nonEmptySubResult.add("test", ValueType.TERM, null, 1, 1, 0, 4, -1, 0);
+
+        Not notCondition = new Not(subCondition);
+
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class)))
+            .thenReturn(nonEmptySubResult);
+
+        mockUnigramIndexForUniverse(List.of(
+            new Position(1, 1, 0, 1),
+            new Position(1, 2, 0, 1),
+            new Position(2, 1, 0, 1)
+        ));
+
+        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, sentenceGranularityRequirements);
+
+        assertNotNull(finalResult);
+        assertEquals(2, finalResult.size());
+        Set<String> remainingSentenceKeys = new HashSet<>();
+        for (int i = 0; i < finalResult.size(); i++) {
+            remainingSentenceKeys.add(finalResult.getDocumentIdAt(i) + ":" + finalResult.getSentenceIdAt(i));
+    }
+        assertTrue(remainingSentenceKeys.contains("1:2"));
+        assertTrue(remainingSentenceKeys.contains("2:1"));
+        assertFalse(remainingSentenceKeys.contains("1:1"));
+    }
+}

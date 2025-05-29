@@ -1,12 +1,12 @@
 package com.example.logging.analysis;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Generates human-readable summary reports from analyzed log data.
@@ -23,12 +23,12 @@ public class LogSummarizer {
      * @param format The output format ("text" or "html")
      * @throws IOException if there's an error writing the report
      */
-    public void generateReport(Map<String, Object> analysisResults, Path outputPath, String format) 
+    public void generateReport(Map<String, Object> analysisResults, Path outputPath, String format)
             throws IOException {
-        String report = format.equalsIgnoreCase("html") ? 
-            generateHtmlReport(analysisResults) : 
+        String report = format.equalsIgnoreCase("html") ?
+            generateHtmlReport(analysisResults) :
             generateTextReport(analysisResults);
-        
+
         Files.writeString(outputPath, report);
         logger.info("Generated {} report at: {}", format, outputPath);
     }
@@ -43,19 +43,19 @@ public class LogSummarizer {
         Map<String, Object> summary = (Map<String, Object>) results.get("processing_summary");
         report.append("Processing Summary:\n");
         report.append("-----------------\n");
-        report.append(String.format("Total Documents Processed: %d\n", 
+        report.append(String.format("Total Documents Processed: %d\n",
             summary.get("total_documents_processed")));
-        report.append(String.format("Total N-grams Generated: %d\n", 
+        report.append(String.format("Total N-grams Generated: %d\n",
             summary.get("total_ngrams_generated")));
         if (summary.containsKey("avg_ngrams_per_document")) {
-            report.append(String.format("Average N-grams per Document: %.2f\n", 
+            report.append(String.format("Average N-grams per Document: %.2f\n",
                 summary.get("avg_ngrams_per_document")));
         }
         report.append("\n");
 
         // Performance Metrics
         @SuppressWarnings("unchecked")
-        Map<String, Map<String, Double>> metrics = 
+        Map<String, Map<String, Double>> metrics =
             (Map<String, Map<String, Double>>) results.get("performance_metrics");
         report.append("Performance Metrics:\n");
         report.append("-------------------\n");
@@ -77,7 +77,7 @@ public class LogSummarizer {
         report.append(String.format("Peak Usage: %.2f MB\n", memory.get("peak_usage_mb")));
         report.append(String.format("Minimum Usage: %.2f MB\n", memory.get("min_usage_mb")));
         if (memory.containsKey("growth_rate_mb_per_hour")) {
-            report.append(String.format("Memory Growth Rate: %.2f MB/hour\n", 
+            report.append(String.format("Memory Growth Rate: %.2f MB/hour\n",
                 memory.get("growth_rate_mb_per_hour")));
         }
         report.append("\n");
@@ -92,14 +92,14 @@ public class LogSummarizer {
         Map<String, Long> distribution = (Map<String, Long>) errors.get("error_distribution");
         if (!distribution.isEmpty()) {
             report.append("Error Distribution:\n");
-            distribution.forEach((type, count) -> 
+            distribution.forEach((type, count) ->
                 report.append(String.format("  %s: %d\n", type, count)));
         }
         report.append("\n");
 
         // State Verifications
         @SuppressWarnings("unchecked")
-        Map<String, Map<String, Object>> verifications = 
+        Map<String, Map<String, Object>> verifications =
             (Map<String, Map<String, Object>>) results.get("state_verification_summary");
         report.append("State Verifications:\n");
         report.append("-------------------\n");
@@ -140,19 +140,19 @@ public class LogSummarizer {
         Map<String, Object> summary = (Map<String, Object>) results.get("processing_summary");
         html.append("<h2>Processing Summary</h2>\n");
         html.append("<div class='metric'>")
-            .append(String.format("Total Documents Processed: <strong>%d</strong><br>\n", 
+            .append(String.format("Total Documents Processed: <strong>%d</strong><br>\n",
                 summary.get("total_documents_processed")))
-            .append(String.format("Total N-grams Generated: <strong>%d</strong><br>\n", 
+            .append(String.format("Total N-grams Generated: <strong>%d</strong><br>\n",
                 summary.get("total_ngrams_generated")));
         if (summary.containsKey("avg_ngrams_per_document")) {
-            html.append(String.format("Average N-grams per Document: <strong>%.2f</strong><br>\n", 
+            html.append(String.format("Average N-grams per Document: <strong>%.2f</strong><br>\n",
                 summary.get("avg_ngrams_per_document")));
         }
         html.append("</div>\n");
 
         // Performance Metrics
         @SuppressWarnings("unchecked")
-        Map<String, Map<String, Double>> metrics = 
+        Map<String, Map<String, Double>> metrics =
             (Map<String, Map<String, Double>>) results.get("performance_metrics");
         html.append("<h2>Performance Metrics</h2>\n");
         html.append("<table>\n")
@@ -174,14 +174,14 @@ public class LogSummarizer {
         Map<String, Object> memory = (Map<String, Object>) results.get("memory_usage_trend");
         html.append("<h2>Memory Usage</h2>\n");
         html.append("<div class='metric'>")
-            .append(String.format("Average Usage: <strong>%.2f MB</strong><br>\n", 
+            .append(String.format("Average Usage: <strong>%.2f MB</strong><br>\n",
                 memory.get("avg_usage_mb")))
-            .append(String.format("Peak Usage: <strong>%.2f MB</strong><br>\n", 
+            .append(String.format("Peak Usage: <strong>%.2f MB</strong><br>\n",
                 memory.get("peak_usage_mb")))
-            .append(String.format("Minimum Usage: <strong>%.2f MB</strong><br>\n", 
+            .append(String.format("Minimum Usage: <strong>%.2f MB</strong><br>\n",
                 memory.get("min_usage_mb")));
         if (memory.containsKey("growth_rate_mb_per_hour")) {
-            html.append(String.format("Memory Growth Rate: <strong>%.2f MB/hour</strong><br>\n", 
+            html.append(String.format("Memory Growth Rate: <strong>%.2f MB/hour</strong><br>\n",
                 memory.get("growth_rate_mb_per_hour")));
         }
         html.append("</div>\n");
@@ -190,21 +190,21 @@ public class LogSummarizer {
         @SuppressWarnings("unchecked")
         Map<String, Object> errors = (Map<String, Object>) results.get("error_patterns");
         html.append("<h2>Error Analysis</h2>\n");
-        html.append(String.format("<div class='metric error'>Total Errors: <strong>%d</strong></div>\n", 
+        html.append(String.format("<div class='metric error'>Total Errors: <strong>%d</strong></div>\n",
             errors.get("total_errors")));
         @SuppressWarnings("unchecked")
         Map<String, Long> distribution = (Map<String, Long>) errors.get("error_distribution");
         if (!distribution.isEmpty()) {
             html.append("<table>\n")
                 .append("<tr><th>Error Type</th><th>Count</th></tr>\n");
-            distribution.forEach((type, count) -> 
+            distribution.forEach((type, count) ->
                 html.append(String.format("<tr><td>%s</td><td>%d</td></tr>\n", type, count)));
             html.append("</table>\n");
         }
 
         // State Verifications
         @SuppressWarnings("unchecked")
-        Map<String, Map<String, Object>> verifications = 
+        Map<String, Map<String, Object>> verifications =
             (Map<String, Map<String, Object>>) results.get("state_verification_summary");
         html.append("<h2>State Verifications</h2>\n");
         html.append("<table>\n")
@@ -224,4 +224,4 @@ public class LogSummarizer {
         html.append("</body></html>");
         return html.toString();
     }
-} 
+}

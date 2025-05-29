@@ -1,13 +1,18 @@
 package com.example.query;
 
-import com.example.query.model.Query;
-import com.example.query.parser.QueryModelBuilder;
-import com.example.query.parser.QueryLangLexer;
-import com.example.query.parser.QueryLangParser;
-import org.antlr.v4.runtime.*;
+import org.antlr.v4.runtime.BaseErrorListener;
+import org.antlr.v4.runtime.CharStreams;
+import org.antlr.v4.runtime.CommonTokenStream;
+import org.antlr.v4.runtime.RecognitionException;
+import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.example.query.model.Query;
+import com.example.query.parser.QueryLangLexer;
+import com.example.query.parser.QueryLangParser;
+import com.example.query.parser.QueryModelBuilder;
 
 /**
  * Main entry point for parsing queries.
@@ -84,7 +89,7 @@ public class QueryParser {
             // Convert the subquery parse tree to our model objects
             QueryModelBuilder visitor = new QueryModelBuilder();
             Query subquery = visitor.buildSubquery(subqueryTree);
-            
+
             logger.debug("Successfully parsed subquery: {}", subquery);
             return subquery;
         } catch (RuntimeException e) {
@@ -96,4 +101,4 @@ public class QueryParser {
             throw new QueryParseException(message, e);
         }
     }
-} 
+}

@@ -1,18 +1,19 @@
 package com.example.logging;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 
 /**
@@ -24,10 +25,10 @@ public class IndexingMetrics {
     private static final Logger logger = LoggerFactory.getLogger(IndexingMetrics.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final MemoryMXBean MEMORY_BEAN = ManagementFactory.getMemoryMXBean();
-    
+
     // Sampling configuration
     private final LogSampler batchMetricsSampler;
-    
+
     // Overall metrics
     private final long startTime;
     private final long initialHeapUsed;
@@ -35,14 +36,14 @@ public class IndexingMetrics {
     private final AtomicInteger totalEntriesProcessed;
     private final AtomicInteger uniqueDocumentsProcessed;
     private final AtomicInteger totalBatchesProcessed;
-    
+
     // Batch-level metrics
     private final AtomicInteger nullCount;
     private final AtomicInteger errorCount;
     private final AtomicLong maxProcessingTimeNanos;
     private final AtomicLong minProcessingTimeNanos;
     private final List<Long> recentProcessingTimes;
-    
+
     // Stage-level metrics (new)
     private final AtomicLong totalFetchTimeNanos;
     private final AtomicLong totalProcessTimeNanos;
@@ -55,10 +56,10 @@ public class IndexingMetrics {
     private final AtomicLong minProcessTimeNanos;
     private final AtomicLong maxWriteTempTimeNanos;
     private final AtomicLong minWriteTempTimeNanos;
-    
+
     // For storing arbitrary named timings
     private final Map<String, Long> customTimingsMs = new ConcurrentHashMap<>();
-    
+
     // Current batch tracking
     private long currentBatchStartTime;
     private int currentBatchSize;
@@ -67,10 +68,10 @@ public class IndexingMetrics {
     public IndexingMetrics() {
         this.startTime = System.nanoTime();
         this.initialHeapUsed = MEMORY_BEAN.getHeapMemoryUsage().getUsed();
-        
+
         // Initialize samplers
         this.batchMetricsSampler = new LogSampler(0.05);    // 5% sampling for batch metrics
-        
+
         // Initialize counters
         this.totalProcessingTimeNanos = new AtomicLong(0);
         this.totalEntriesProcessed = new AtomicInteger(0);
@@ -187,14 +188,14 @@ public class IndexingMetrics {
         updateMinMaxForStat(fetchNanos, minFetchTimeNanos, maxFetchTimeNanos);
         updateMinMaxForStat(processNanos, minProcessTimeNanos, maxProcessTimeNanos);
         updateMinMaxForStat(writeTempNanos, minWriteTempTimeNanos, maxWriteTempTimeNanos);
-        
+
         // Update document/item counts
         totalEntriesProcessed.addAndGet(rawEntriesInBatch); // Raw entries from input
         totalOutputItems.addAndGet(itemsInBatchOutput);     // Output items from processBatch
         // uniqueDocumentsProcessed is typically updated based on input, might need specific handling if tied to output items
 
         totalBatchesProcessed.incrementAndGet();
-        
+
         // Log batch metrics if sampled
         if (batchMetricsSampler.shouldLog()) {
             logBatchMetrics(batchDurationNanos, true, fetchNanos, processNanos, writeTempNanos, itemsInBatchOutput, rawEntriesInBatch);
@@ -208,7 +209,7 @@ public class IndexingMetrics {
 
         totalProcessingTimeNanos.addAndGet(durationNanos);
         updateMinMaxForStat(durationNanos, minProcessingTimeNanos, maxProcessingTimeNanos);
-        
+
         if (success) {
             // If called directly (e.g. from old code path), we don't have itemsInBatchOutput or rawEntriesInBatch here
             // totalEntriesProcessed might be incremented by currentBatchSize if this path is taken.
@@ -216,12 +217,12 @@ public class IndexingMetrics {
              totalEntriesProcessed.addAndGet(currentBatchSize); // Fallback if not using stage durations
         }
         totalBatchesProcessed.incrementAndGet();
-        
+
         recentProcessingTimes.add(durationNanos);
-        if (recentProcessingTimes.size() > 100) { 
+        if (recentProcessingTimes.size() > 100) {
             recentProcessingTimes.remove(0);
         }
-        
+
         if (batchMetricsSampler.shouldLog() || !success) {
             // Log with -1 or null for stage-specific timings if not available
             logBatchMetrics(durationNanos, success, -1, -1, -1, -1, currentBatchSize);
@@ -256,7 +257,7 @@ public class IndexingMetrics {
                 .put("index_type", currentIndexType)
                 .put("success", success)
                 .put("batch_input_size", rawItemsInBatch) // Renamed from batch_size for clarity
-                .put("batch_output_items", itemsInOutput) 
+                .put("batch_output_items", itemsInOutput)
                 .put("batch_duration_ms", durationNanos / 1_000_000.0)
                 .put("avg_overall_batch_duration_ms", avgProcessingTime / 1_000_000.0); // Avg of sum of stages
 
@@ -265,7 +266,7 @@ public class IndexingMetrics {
                 json.put("process_stage_ms", processNanos / 1_000_000.0);
                 json.put("write_temp_stage_ms", writeTempNanos / 1_000_000.0);
             }
-            
+
             json.put("total_raw_entries_processed", totalEntriesProcessed.get()) // Total raw entries from input
                 .put("total_output_items_generated", totalOutputItems.get()) // Total items for index
                 .put("unique_documents", uniqueDocumentsProcessed.get()) // This count needs careful updating logic
@@ -294,7 +295,7 @@ public class IndexingMetrics {
             long totalBatches = totalBatchesProcessed.get();
             long currentTotalOutputItems = totalOutputItems.get();
             long currentTotalRawEntries = totalEntriesProcessed.get();
-            
+
             ObjectNode json = MAPPER.createObjectNode()
                 .put("event", "indexing_summary") // Changed event name for clarity
                 .put("index_type", currentIndexType != null ? currentIndexType : "overall") // Add index type if available
@@ -313,7 +314,7 @@ public class IndexingMetrics {
                 json.put("output_items_per_second", 0);
                 json.put("raw_entries_per_second", 0);
             }
-            
+
             json.put("avg_batch_input_size", totalBatches > 0 ? (double) currentTotalRawEntries / totalBatches : 0.0)
                 .put("avg_batch_output_items", totalBatches > 0 ? (double) currentTotalOutputItems / totalBatches : 0.0)
                 .put("min_overall_batch_duration_ms", minProcessingTimeNanos.get() != Long.MAX_VALUE ? minProcessingTimeNanos.get() / 1_000_000.0 : 0)
@@ -323,7 +324,7 @@ public class IndexingMetrics {
                 json.put("avg_fetch_stage_ms", (totalFetchTimeNanos.get() / totalBatches) / 1_000_000.0);
                 json.put("avg_process_stage_ms", (totalProcessTimeNanos.get() / totalBatches) / 1_000_000.0);
                 json.put("avg_write_temp_stage_ms", (totalWriteTempTimeNanos.get() / totalBatches) / 1_000_000.0);
-                
+
                 json.put("min_fetch_stage_ms", minFetchTimeNanos.get() != Long.MAX_VALUE ? minFetchTimeNanos.get() / 1_000_000.0 : 0);
                 json.put("max_fetch_stage_ms", maxFetchTimeNanos.get() / 1_000_000.0);
                 json.put("min_process_stage_ms", minProcessTimeNanos.get() != Long.MAX_VALUE ? minProcessTimeNanos.get() / 1_000_000.0 : 0);
@@ -359,23 +360,23 @@ public class IndexingMetrics {
     public int getTotalEntries() {
         return totalEntriesProcessed.get(); // This now refers to raw input entries
     }
-    
+
     public int getUniqueDocuments() {
         return uniqueDocumentsProcessed.get();
     }
-    
+
     public int getTotalBatches() {
         return totalBatchesProcessed.get();
     }
-    
+
     public int getErrorCount() {
         return errorCount.get();
     }
-    
+
     public int getNullCount() {
         return nullCount.get();
     }
-    
+
     public long getTotalProcessingTimeNanos() {
         return totalProcessingTimeNanos.get();
     }
@@ -383,4 +384,4 @@ public class IndexingMetrics {
     public long getTotalOutputItems() { // New getter
         return totalOutputItems.get();
     }
-} 
+}

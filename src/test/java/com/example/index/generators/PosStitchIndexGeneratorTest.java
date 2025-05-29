@@ -92,7 +92,7 @@ public class PosStitchIndexGeneratorTest extends BaseIndexTest {
                 10, // batchSize
                 customSortTempPathPos
         );
-        
+
         Path posStitchPath = null; // Define before try-finally
         DB dbForVerification = null;
         TypedAnnotationSynonymStore verificationSynonymStore = null; // Define here
@@ -123,7 +123,7 @@ public class PosStitchIndexGeneratorTest extends BaseIndexTest {
             byte[] quickBytes = dbForVerification.get(Iq80DBFactory.bytes("quick"), readOpts);
             assertNotNull(quickBytes, "Entry for unigram 'quick' should exist.");
             PositionListSoA plQuick = PositionListSoA.deserializeFromCompositeBlob(quickBytes);
-            
+
             int nnFoxSynonymId = verificationSynonymStore.getOrCreateId("NN" + com.example.core.IndexAccessInterface.DELIMITER + "fox");
             logger.info("POS_TEST_DEBUG: Target nnFoxSynonymId (NN<DELIMITER>fox): {}", nnFoxSynonymId);
             logger.info("POS_TEST_DEBUG: Iterating {} positions for unigram 'quick':", plQuick.getNumPositions());
@@ -131,7 +131,7 @@ public class PosStitchIndexGeneratorTest extends BaseIndexTest {
                 Position p = plQuick.getPositionAt(i); // Get base Position
                 int currentSynonymId = plQuick.getSynonymIdAt(i);
                 String synonymValue = null;
-                try { 
+                try {
                     synonymValue = verificationSynonymStore.getValue(currentSynonymId);
                     if (synonymValue == null) {
                         synonymValue = "ID_NOT_FOUND_IN_STORE";
@@ -142,8 +142,8 @@ public class PosStitchIndexGeneratorTest extends BaseIndexTest {
                 }
                 // For debug, print only base Position fields and synonymId/Value
                 // AnnotationBegin/EndChar are not available on base Position and cause ClassCast if we try to get StitchPosition yet
-                logger.info("  POS_TEST_DEBUG: Pos {}: DocId={}, SentId={}, Begin={}, End={}, SynonymId={}, SynonymValue='{}'", 
-                    i, p.getDocumentId(), p.getSentenceId(), p.getBeginPosition(), p.getEndPosition(), 
+                logger.info("  POS_TEST_DEBUG: Pos {}: DocId={}, SentId={}, Begin={}, End={}, SynonymId={}, SynonymValue='{}'",
+                    i, p.getDocumentId(), p.getSentenceId(), p.getBeginPosition(), p.getEndPosition(),
                     currentSynonymId, synonymValue);
             }
 
@@ -151,7 +151,7 @@ public class PosStitchIndexGeneratorTest extends BaseIndexTest {
             for (int i = 0; i < plQuick.getNumPositions(); i++) {
                 Position p = plQuick.getPositionAt(i);
                 int synonymId = plQuick.getSynonymIdAt(i);
-                if (p.getDocumentId() == 1 && synonymId == nnFoxSynonymId && 
+                if (p.getDocumentId() == 1 && synonymId == nnFoxSynonymId &&
                     p.getBeginPosition() == 0 && p.getEndPosition() == 5) { // quick coordinates
                     quickStitchedWithFoxNN = Optional.of(new StitchPosition(
                         p.getDocumentId(), p.getSentenceId(), p.getBeginPosition(), p.getEndPosition(),
@@ -197,14 +197,14 @@ public class PosStitchIndexGeneratorTest extends BaseIndexTest {
         } finally {
             logger.info("Closing POS generator in finally block...");
             if (generator != null) {
-                generator.close(); 
+                generator.close();
             }
             logger.info("POS generator closed in finally block.");
             // No need to close verificationSynonymStore separately as it was the generator's instance
-            // if (verificationSynonymStore != null) { 
+            // if (verificationSynonymStore != null) {
             //     // verificationSynonymStore.close(); // This would be double-closing if it was generator's
             // }
         }
         // Old verification block (reopening DB) is removed.
     }
-} 
+}

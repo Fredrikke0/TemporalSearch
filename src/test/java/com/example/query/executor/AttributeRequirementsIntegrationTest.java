@@ -1,21 +1,22 @@
 package com.example.query.executor;
 
-import com.example.query.model.Query;
-import com.example.query.model.SelectColumn;
-import com.example.query.model.SnippetColumn;
-import com.example.query.model.StructuralColumn;
-import com.example.query.model.condition.Contains;
-import com.example.query.model.condition.Ner;
-import com.example.query.model.condition.Logical;
-import com.example.query.binding.VariableRegistry;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.DisplayName;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.example.query.binding.VariableRegistry;
+import com.example.query.model.Query;
+import com.example.query.model.SnippetColumn;
+import com.example.query.model.StructuralColumn;
+import com.example.query.model.condition.Contains;
+import com.example.query.model.condition.Logical;
+import com.example.query.model.condition.Ner;
 
 @DisplayName("AttributeRequirements Integration Tests")
 class AttributeRequirementsIntegrationTest {
@@ -26,12 +27,12 @@ class AttributeRequirementsIntegrationTest {
         VariableRegistry registry = new VariableRegistry();
         registry.registerProducer("$main.term", com.example.query.binding.VariableType.TEXT_SPAN, "CONTAINS");
         registry.registerProducer("$main.person", com.example.query.binding.VariableType.ENTITY, "NER");
-        
+
         // Create a complex query: CONTAINS('test') AND NER(PERSON) with SNIPPET and SENTENCE_ID columns
         Contains containsCondition = new Contains(List.of("test"), "$main.term", true);
         Ner nerCondition = new Ner("PERSON", null, "$main.person", true);
         Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(containsCondition, nerCondition));
-        
+
         Query query = new Query(
             "test",
             List.of(andCondition),
@@ -65,7 +66,7 @@ class AttributeRequirementsIntegrationTest {
         assertTrue(requiredAttributes.contains("beginChars"), "Should require begin chars");
         assertTrue(requiredAttributes.contains("endChars"), "Should require end chars");
         assertTrue(requiredAttributes.contains("synonymIds"), "Should require synonym IDs");
-        assertEquals(5, requiredAttributes.size(), "Should require exactly 5 SoA attributes");
+        assertEquals(6, requiredAttributes.size(), "Should require exactly 6 SoA attributes");
     }
 
     @Test
@@ -87,4 +88,4 @@ class AttributeRequirementsIntegrationTest {
         assertTrue(req1.needsSynonymIds, "Synonym IDs should be merged");
         assertTrue(req1.needsDateValues, "Date values should be merged");
     }
-} 
+}

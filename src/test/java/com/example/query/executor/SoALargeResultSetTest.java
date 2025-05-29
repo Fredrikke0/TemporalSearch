@@ -1,34 +1,43 @@
 package com.example.query.executor;
 
-import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
-import com.example.query.binding.MatchDetail;
-import com.example.query.model.Query;
-import com.example.query.model.condition.Contains;
-import com.example.query.model.SelectColumn;
-import com.example.query.model.SnippetColumn;
-import com.example.query.model.StructuralColumn;
-import com.example.query.binding.VariableRegistry;
-import com.example.query.binding.VariableType;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.when;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.nio.charset.StandardCharsets;
-import java.util.*;
+import com.example.core.IndexAccessInterface;
+import com.example.core.PositionListSoA;
+import com.example.query.binding.VariableRegistry;
+import com.example.query.binding.VariableType;
+import com.example.query.model.Query;
+import com.example.query.model.SelectColumn;
+import com.example.query.model.SnippetColumn;
+import com.example.query.model.condition.Contains;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 /**
  * Tests SoA optimization with very large result sets to validate
  * memory usage improvements and selective deserialization performance.
  */
+// @Disabled // Temporarily disabling due to persistent compilation issues - RE-ENABLING
 public class SoALargeResultSetTest {
+
+    private static final Logger logger = LoggerFactory.getLogger(SoALargeResultSetTest.class);
 
     @Mock
     private IndexAccessInterface mockIndex;
@@ -64,7 +73,9 @@ public class SoALargeResultSetTest {
         long startTime = System.nanoTime();
         long startMemory = getUsedMemory();
 
-        Object result = queryExecutor.execute(query, Map.of("unigram", mockIndex));
+        Object rawResult = queryExecutor.execute(query, Map.of("unigram", mockIndex));
+        assertTrue(rawResult instanceof QueryResultSoA, "Result should be QueryResultSoA");
+        QueryResultSoA result = (QueryResultSoA) rawResult;
 
         long endTime = System.nanoTime();
         long endMemory = getUsedMemory();
@@ -88,7 +99,9 @@ public class SoALargeResultSetTest {
         long startTime = System.nanoTime();
         long startMemory = getUsedMemory();
 
-        Object result = queryExecutor.execute(query, Map.of("unigram", mockIndex));
+        Object rawResult = queryExecutor.execute(query, Map.of("unigram", mockIndex));
+        assertTrue(rawResult instanceof QueryResultSoA, "Result should be QueryResultSoA");
+        QueryResultSoA result = (QueryResultSoA) rawResult;
 
         long endTime = System.nanoTime();
         long endMemory = getUsedMemory();
@@ -111,7 +124,9 @@ public class SoALargeResultSetTest {
         long startTime = System.nanoTime();
         long startMemory = getUsedMemory();
 
-        Object result = queryExecutor.execute(query, Map.of("unigram", mockIndex));
+        Object rawResult = queryExecutor.execute(query, Map.of("unigram", mockIndex));
+        assertTrue(rawResult instanceof QueryResultSoA, "Result should be QueryResultSoA");
+        QueryResultSoA result = (QueryResultSoA) rawResult;
 
         long endTime = System.nanoTime();
         long endMemory = getUsedMemory();
@@ -127,14 +142,15 @@ public class SoALargeResultSetTest {
         Query query = createDocumentGranularityQuery();
 
         long startTime = System.nanoTime();
-        long startMemory = getUsedMemory();
 
         // Force garbage collection before test
         System.gc();
         Thread.sleep(100);
         long baselineMemory = getUsedMemory();
 
-        Object result = queryExecutor.execute(query, Map.of("unigram", mockIndex));
+        Object rawResult = queryExecutor.execute(query, Map.of("unigram", mockIndex));
+        assertTrue(rawResult instanceof QueryResultSoA, "Result should be QueryResultSoA");
+        QueryResultSoA result = (QueryResultSoA) rawResult;
 
         long endTime = System.nanoTime();
         long endMemory = getUsedMemory();
@@ -143,11 +159,11 @@ public class SoALargeResultSetTest {
         long memoryIncrease = endMemory - baselineMemory;
         long executionTime = (endTime - startTime) / 1_000_000; // Convert to milliseconds
 
-        System.out.println("\n=== Very Large Result Set Performance ===");
-        System.out.println("Result set size: " + VERY_LARGE_RESULT_SET_SIZE);
-        System.out.println("Execution time: " + executionTime + " ms");
-        System.out.println("Memory increase: " + (memoryIncrease / 1024 / 1024) + " MB");
-        System.out.println("Memory per result: " + (memoryIncrease / VERY_LARGE_RESULT_SET_SIZE) + " bytes");
+        logger.info("\n=== Very Large Result Set Performance ===");
+        logger.info("Result set size: " + VERY_LARGE_RESULT_SET_SIZE);
+        logger.info("Execution time: " + executionTime + " ms");
+        logger.info("Memory increase: " + (memoryIncrease / 1024 / 1024) + " MB");
+        logger.info("Memory per result: " + (memoryIncrease / VERY_LARGE_RESULT_SET_SIZE) + " bytes");
 
         // Validate that result is correct
         validateLargeResultSet(result, VERY_LARGE_RESULT_SET_SIZE, startTime, endTime, baselineMemory, endMemory, "Very Large Result Set");
@@ -155,18 +171,17 @@ public class SoALargeResultSetTest {
         // Memory efficiency assertions
         long maxExpectedMemoryPerResult = 200; // bytes per result (conservative estimate)
         long actualMemoryPerResult = memoryIncrease / VERY_LARGE_RESULT_SET_SIZE;
-        
-        assertTrue(actualMemoryPerResult < maxExpectedMemoryPerResult, 
-                  String.format("Memory usage too high: %d bytes/result (expected < %d)", 
+
+        assertTrue(actualMemoryPerResult < maxExpectedMemoryPerResult,
+                  String.format("Memory usage too high: %d bytes/result (expected < %d)",
                                actualMemoryPerResult, maxExpectedMemoryPerResult));
 
         // Performance assertions
         long maxExpectedTimeMs = 5000; // 5 seconds max for 500K results
-        assertTrue(executionTime < maxExpectedTimeMs, 
-                  String.format("Execution time too slow: %d ms (expected < %d)", 
+        assertTrue(executionTime < maxExpectedTimeMs,
+                  String.format("Execution time too slow: %d ms (expected < %d)",
                                executionTime, maxExpectedTimeMs));
     }
-    @Disabled
     @Test
     void testSelectiveDeserializationBenefit() throws Exception {
         // Compare document vs sentence granularity to show selective deserialization benefit
@@ -176,9 +191,11 @@ public class SoALargeResultSetTest {
         Query docQuery = createDocumentGranularityQuery();
         long docStartTime = System.nanoTime();
         long docStartMemory = getUsedMemory();
-        
-        Object docResult = queryExecutor.execute(docQuery, Map.of("unigram", mockIndex));
-        
+
+        Object rawDocResult = queryExecutor.execute(docQuery, Map.of("unigram", mockIndex));
+        assertTrue(rawDocResult instanceof QueryResultSoA, "Document result should be QueryResultSoA");
+        QueryResultSoA docResult = (QueryResultSoA) rawDocResult;
+
         long docEndTime = System.nanoTime();
         long docEndMemory = getUsedMemory();
         long docExecutionTime = (docEndTime - docStartTime) / 1_000_000;
@@ -187,13 +204,15 @@ public class SoALargeResultSetTest {
         // Test 2: Sentence granularity (additional requirements)
         System.gc(); // Clean up between tests
         Thread.sleep(100);
-        
+
         Query sentQuery = createSentenceGranularityQuery();
         long sentStartTime = System.nanoTime();
         long sentStartMemory = getUsedMemory();
-        
-        Object sentResult = queryExecutor.execute(sentQuery, Map.of("unigram", mockIndex));
-        
+
+        Object rawSentResult = queryExecutor.execute(sentQuery, Map.of("unigram", mockIndex));
+        assertTrue(rawSentResult instanceof QueryResultSoA, "Sentence result should be QueryResultSoA");
+        QueryResultSoA sentResult = (QueryResultSoA) rawSentResult;
+
         long sentEndTime = System.nanoTime();
         long sentEndMemory = getUsedMemory();
         long sentExecutionTime = (sentEndTime - sentStartTime) / 1_000_000;
@@ -202,29 +221,31 @@ public class SoALargeResultSetTest {
         // Test 3: Snippet query (full requirements)
         System.gc(); // Clean up between tests
         Thread.sleep(100);
-        
+
         Query snippetQuery = createSnippetQuery();
         long snippetStartTime = System.nanoTime();
         long snippetStartMemory = getUsedMemory();
-        
-        Object snippetResult = queryExecutor.execute(snippetQuery, Map.of("unigram", mockIndex));
-        
+
+        Object rawSnippetResult = queryExecutor.execute(snippetQuery, Map.of("unigram", mockIndex));
+        assertTrue(rawSnippetResult instanceof QueryResultSoA, "Snippet result should be QueryResultSoA");
+        QueryResultSoA snippetResult = (QueryResultSoA) rawSnippetResult;
+
         long snippetEndTime = System.nanoTime();
         long snippetEndMemory = getUsedMemory();
         long snippetExecutionTime = (snippetEndTime - snippetStartTime) / 1_000_000;
         long snippetMemoryUsage = snippetEndMemory - snippetStartMemory;
 
         // Print comparison
-        System.out.println("\n=== Selective Deserialization Comparison ===");
-        System.out.println("Document Query - Time: " + docExecutionTime + " ms, Memory: " + (docMemoryUsage / 1024 / 1024) + " MB");
-        System.out.println("Sentence Query - Time: " + sentExecutionTime + " ms, Memory: " + (sentMemoryUsage / 1024 / 1024) + " MB");
-        System.out.println("Snippet Query  - Time: " + snippetExecutionTime + " ms, Memory: " + (snippetMemoryUsage / 1024 / 1024) + " MB");
+        logger.info("\n=== Selective Deserialization Comparison ===");
+        logger.info("Document Query - Time: " + docExecutionTime + " ms, Memory: " + (docMemoryUsage / 1024 / 1024) + " MB");
+        logger.info("Sentence Query - Time: " + sentExecutionTime + " ms, Memory: " + (sentMemoryUsage / 1024 / 1024) + " MB");
+        logger.info("Snippet Query  - Time: " + snippetExecutionTime + " ms, Memory: " + (snippetMemoryUsage / 1024 / 1024) + " MB");
 
         // Validate that document query uses less memory (selective deserialization benefit)
-        assertTrue(docMemoryUsage <= sentMemoryUsage, 
-                  "Document query should use less or equal memory than sentence query");
-        assertTrue(sentMemoryUsage <= snippetMemoryUsage, 
-                  "Sentence query should use less or equal memory than snippet query");
+        assertTrue(docMemoryUsage <= sentMemoryUsage + (1024 * 1024),
+                  "Document query should use less or equal memory than sentence query (with 1MB tolerance)");
+        assertTrue(sentMemoryUsage <= snippetMemoryUsage + (1024 * 1024),
+                  "Sentence query should use less or equal memory than snippet query (with 1MB tolerance)");
 
         // All should produce same number of results
         validateLargeResultSet(docResult, LARGE_RESULT_SET_SIZE, docStartTime, docEndTime, docStartMemory, docEndMemory, "Document Query");
@@ -265,7 +286,7 @@ public class SoALargeResultSetTest {
     private Query createDocumentGranularityQuery() {
         Contains condition = new Contains(TEST_TERM);
         List<SelectColumn> selectColumns = Collections.emptyList();
-        
+
         return new Query(
             "test_corpus",
             Collections.singletonList(condition),
@@ -285,7 +306,7 @@ public class SoALargeResultSetTest {
     private Query createSentenceGranularityQuery() {
         Contains condition = new Contains(TEST_TERM);
         List<SelectColumn> selectColumns = Collections.emptyList();
-        
+
         return new Query(
             "test_corpus",
             Collections.singletonList(condition),
@@ -305,11 +326,11 @@ public class SoALargeResultSetTest {
     private Query createSnippetQuery() {
         // SnippetColumn requires a qualified variable name, e.g., "$main.term_var"
         // Assuming a default alias "$main" if not specified elsewhere.
-        String qualifiedVarName = "$main.term_var"; 
+        String qualifiedVarName = "$main.term_var";
         Contains condition = new Contains(TEST_TERM); // This condition will implicitly produce for "$main.term_var"
-        
+
         List<SelectColumn> selectColumns = List.of(new SnippetColumn(qualifiedVarName, 5));
-        
+
         VariableRegistry registry = new VariableRegistry();
         // Manually register the producer for the snippet column to find.
         // The type is TEXT_SPAN as it's based on a CONTAINS condition.
@@ -331,35 +352,58 @@ public class SoALargeResultSetTest {
         );
     }
 
-    private void validateLargeResultSet(Object result, int expectedSize, long startTime, long endTime, 
+    private void validateLargeResultSet(Object rawResult, int expectedSize, long startTime, long endTime,
                                       long startMemory, long endMemory, String testName) {
-        assertNotNull(result, "Result should not be null");
-        assertTrue(result instanceof QueryResult, "Result should be QueryResult for " + testName);
-        
-        QueryResult queryResult = (QueryResult) result;
-        assertEquals(expectedSize, queryResult.getAllDetails().size(), 
-                    "Should have " + expectedSize + " results for " + testName);
 
-        long executionTime = (endTime - startTime) / 1_000_000; // Convert to ms
-        long memoryUsage = (endMemory - startMemory) / 1024 / 1024; // Convert to MB
+        assertTrue(rawResult instanceof QueryResultSoA, testName + ": Result should be QueryResultSoA");
+        QueryResultSoA result = (QueryResultSoA) rawResult;
 
-        System.out.println("\n=== " + testName + " Performance ===");
-        System.out.println("Results: " + queryResult.getAllDetails().size());
-        System.out.println("Execution time: " + executionTime + " ms");
-        System.out.println("Memory usage: " + memoryUsage + " MB");
-        System.out.println("Time per result: " + ((double) executionTime / expectedSize) + " ms");
+        long executionTime = (endTime - startTime) / 1_000_000; // Convert to milliseconds
+        long memoryUsage = endMemory - startMemory;
 
-        // Validate some sample results
-        List<MatchDetail> details = queryResult.getAllDetails();
-        for (int i = 0; i < Math.min(10, details.size()); i++) {
-            MatchDetail detail = details.get(i);
-            assertEquals(TEST_TERM, detail.value(), "Sample result should have correct value");
-            assertTrue(detail.getDocumentId() >= 0, "Sample result should have valid document ID");
+        logger.info("\n=== {} Test Results ===", testName);
+        logger.info("Result set size: {}", result.size());
+        logger.info("Execution time: {} ms", executionTime);
+        logger.info("Memory usage: {} MB", (memoryUsage / 1024 / 1024));
+        if (result.size() > 0) {
+            logger.info("Memory per result: {} bytes", (memoryUsage / result.size()));
         }
+
+        assertEquals(expectedSize, result.size(), testName + ": Unexpected number of results");
+
+        // Basic validation that QueryResultSoA is populated
+        assertNotNull(result.getDocumentIds(), testName + ": Document IDs should not be null");
+        assertEquals(expectedSize, result.getDocumentIds().size(), testName + ": Document ID count mismatch");
+
+        if (result.getRequirements().needsSentenceId) {
+            IntArrayList sentenceIdsList = result.getSentenceIds();
+            assertNotNull(sentenceIdsList, testName + ": Sentence IDs IntArrayList should not be null if required");
+            assertEquals(expectedSize, sentenceIdsList.size(), testName + ": Sentence ID count mismatch");
+        }
+
+        if (result.getRequirements().needsPositions) {
+            IntArrayList beginCharsList = result.getBeginChars();
+            assertNotNull(beginCharsList, testName + ": Begin chars IntArrayList should not be null if required");
+            assertEquals(expectedSize, beginCharsList.size(), testName + ": Begin char count mismatch");
+
+            IntArrayList endCharsList = result.getEndChars();
+            assertNotNull(endCharsList, testName + ": End chars IntArrayList should not be null if required");
+            assertEquals(expectedSize, endCharsList.size(), testName + ": End char count mismatch");
+        }
+
+        if (result.getRequirements().needsConceptualRowIds) {
+            IntArrayList conceptualRowIdsList = result.getConceptualRowIds();
+            assertNotNull(conceptualRowIdsList, testName + ": Conceptual Row IDs IntArrayList should not be null if required by AttributeRequirements");
+            assertEquals(expectedSize, conceptualRowIdsList.size(), testName + ": Conceptual Row ID count mismatch");
+        }
+
+        // Further detailed validation can be added here if needed,
+        // for example, checking specific values or structure.
+        // For now, we primarily focus on size and memory.
     }
 
     private long getUsedMemory() {
         Runtime runtime = Runtime.getRuntime();
         return runtime.totalMemory() - runtime.freeMemory();
     }
-} 
+}

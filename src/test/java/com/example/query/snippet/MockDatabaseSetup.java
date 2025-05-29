@@ -10,7 +10,7 @@ import java.sql.Statement;
  * Utility class for setting up a mock database for testing
  */
 public class MockDatabaseSetup {
-    
+
     /**
      * Creates an in-memory SQLite database with test data
      * @return Connection to the in-memory database
@@ -18,7 +18,7 @@ public class MockDatabaseSetup {
      */
     public static Connection setupMockDatabase() throws SQLException {
         Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:");
-        
+
         // Create tables
         try (Statement stmt = connection.createStatement()) {
             // Create documents table
@@ -30,7 +30,7 @@ public class MockDatabaseSetup {
                     timestamp TEXT
                 )
             """);
-            
+
             // Create annotations table
             stmt.execute("""
                 CREATE TABLE annotations (
@@ -47,14 +47,14 @@ public class MockDatabaseSetup {
                 )
             """);
         }
-        
+
         // Insert test data
         insertTestDocument(connection);
         insertTestAnnotations(connection);
-        
+
         return connection;
     }
-    
+
     private static void insertTestDocument(Connection connection) throws SQLException {
         String sql = "INSERT INTO documents (document_id, title, text, timestamp) VALUES (?, ?, ?, ?)";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
@@ -65,7 +65,7 @@ public class MockDatabaseSetup {
             stmt.executeUpdate();
         }
     }
-    
+
     private static void insertTestAnnotations(Connection connection) throws SQLException {
         // First sentence tokens
         insertAnnotation(connection, 1, 0, 0, 4, "This", "O");
@@ -74,7 +74,7 @@ public class MockDatabaseSetup {
         insertAnnotation(connection, 1, 0, 12, 17, "first", "ORDINAL");
         insertAnnotation(connection, 1, 0, 18, 26, "sentence", "O");
         insertAnnotation(connection, 1, 0, 26, 27, ".", "O");
-        
+
         // Second sentence tokens
         insertAnnotation(connection, 1, 1, 28, 32, "This", "O");
         insertAnnotation(connection, 1, 1, 33, 35, "is", "O");
@@ -85,7 +85,7 @@ public class MockDatabaseSetup {
         insertAnnotation(connection, 1, 1, 61, 62, "a", "O");
         insertAnnotation(connection, 1, 1, 63, 68, "match", "O");
         insertAnnotation(connection, 1, 1, 68, 69, ".", "O");
-        
+
         // Third sentence tokens
         insertAnnotation(connection, 1, 2, 70, 73, "And", "O");
         insertAnnotation(connection, 1, 2, 74, 78, "this", "O");
@@ -95,15 +95,15 @@ public class MockDatabaseSetup {
         insertAnnotation(connection, 1, 2, 92, 100, "sentence", "O");
         insertAnnotation(connection, 1, 2, 100, 101, ".", "O");
     }
-    
-    private static void insertAnnotation(Connection connection, long documentId, int sentenceId, 
+
+    private static void insertAnnotation(Connection connection, long documentId, int sentenceId,
                                         int beginChar, int endChar, String token, String ner) throws SQLException {
         String sql = """
-            INSERT INTO annotations 
-            (document_id, sentence_id, begin_char, end_char, token, ner) 
+            INSERT INTO annotations
+            (document_id, sentence_id, begin_char, end_char, token, ner)
             VALUES (?, ?, ?, ?, ?, ?)
         """;
-        
+
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
             stmt.setLong(1, documentId);
             stmt.setInt(2, sentenceId);
@@ -114,4 +114,4 @@ public class MockDatabaseSetup {
             stmt.executeUpdate();
         }
     }
-} 
+}

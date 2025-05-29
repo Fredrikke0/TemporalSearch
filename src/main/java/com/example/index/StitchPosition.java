@@ -1,7 +1,6 @@
 package com.example.index;
 
 import com.example.core.Position;
-import java.time.LocalDate;
 
 /**
  * Represents a position in the stitch index, containing a unigram position and its associated annotation.
@@ -12,7 +11,7 @@ public class StitchPosition extends Position {
     private final AnnotationType type; // The type of annotation
     private final int annotationBeginChar; // Begin char of the linked annotation
     private final int annotationEndChar;   // End char of the linked annotation
-    
+
     // Type identifier for serialization
     public static final byte POSITION_TYPE = 1;
 
@@ -36,11 +35,11 @@ public class StitchPosition extends Position {
     public int getSynonymId() {
         return synonymId;
     }
-    
+
     public AnnotationType getType() {
         return type;
     }
-    
+
     public int getAnnotationBeginChar() {
         return annotationBeginChar;
     }
@@ -52,7 +51,7 @@ public class StitchPosition extends Position {
     /**
      * Creates a StitchPosition from a regular Position by adding the annotation type, synonym ID,
      * and annotation begin and end characters.
-     * 
+     *
      * @param position The base position
      * @param type The annotation type
      * @param synonymId The annotation synonym ID
@@ -72,11 +71,11 @@ public class StitchPosition extends Position {
             annotationEndChar
         );
     }
-    
+
     @Override
     public String toString() {
         return String.format("StitchPosition(doc=%d, sent=%d, unigram_begin=%d, unigram_end=%d, type=%s, synonymId=%d, ann_begin=%d, ann_end=%d)",
-                getDocumentId(), getSentenceId(), getBeginPosition(), getEndPosition(), 
+                getDocumentId(), getSentenceId(), getBeginPosition(), getEndPosition(),
                 type, synonymId, annotationBeginChar, annotationEndChar);
     }
-} 
+}

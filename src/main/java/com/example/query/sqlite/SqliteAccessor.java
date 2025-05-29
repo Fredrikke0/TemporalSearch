@@ -1,9 +1,5 @@
 package com.example.query.sqlite;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -12,6 +8,9 @@ import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Provides access to SQLite databases for different sources.
  * This class handles database connections and provides methods to retrieve metadata and other information.
@@ -19,16 +18,16 @@ import java.util.Map;
  */
 public class SqliteAccessor {
     private static final Logger logger = LoggerFactory.getLogger(SqliteAccessor.class);
-    
+
     // Singleton instance
     private static SqliteAccessor instance;
-    
+
     // Path to the currently configured SQLite database file. Set by initialize().
-    private String currentDbFilePath; 
-    
+    private String currentDbFilePath;
+
     // Cache of database paths (key: source name, value: currentDbFilePath). Cleared on re-initialization.
     private final Map<String, String> dbPathCache = new HashMap<>();
-    
+
     /**
      * Private constructor for singleton.
      *
@@ -38,7 +37,7 @@ public class SqliteAccessor {
         this.currentDbFilePath = dbFilePath;
         logger.info("SqliteAccessor instance created with database path: {}", dbFilePath);
     }
-    
+
     /**
      * Initializes or re-initializes the singleton instance with the specified database file path.
      * QueryCLI calls this for each query to set the correct database context.
@@ -56,7 +55,7 @@ public class SqliteAccessor {
             logger.info("SqliteAccessor re-initialized and cache cleared. Current DB path: {}", instance.currentDbFilePath);
         }
     }
-    
+
     /**
      * Gets the singleton instance of SqliteAccessor.
      * The instance must be initialized first with initialize().
@@ -70,7 +69,7 @@ public class SqliteAccessor {
         }
         return instance;
     }
-    
+
     /**
      * Gets a connection to the currently configured SQLite database.
      *
@@ -81,7 +80,7 @@ public class SqliteAccessor {
     public Connection getConnection(String source) throws SQLException {
         String dbPath = getDatabasePath(source); // 'source' is used as cache key
         // logger.debug("Opening connection to database: {} for source: {}", dbPath, source);
-        
+
         try {
             Class.forName("org.sqlite.JDBC");
             return DriverManager.getConnection("jdbc:sqlite:" + dbPath);
@@ -90,7 +89,7 @@ public class SqliteAccessor {
             throw new SQLException("SQLite JDBC driver not found", e);
         }
     }
-    
+
     /**
      * Gets metadata for a document from the specified source.
      *
@@ -101,7 +100,7 @@ public class SqliteAccessor {
      */
     public String getMetadata(String source, int documentId, String fieldName) {
         String value = null;
-        
+
         try (Connection conn = getConnection(source)) {
             // Query to get metadata from the database
             String sql;
@@ -112,7 +111,7 @@ public class SqliteAccessor {
                 // Get specific metadata field
                 sql = "SELECT " + fieldName + " FROM documents WHERE document_id = ?";
             }
-            
+
             try (PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setInt(1, documentId);
                 try (ResultSet rs = stmt.executeQuery()) {
@@ -136,18 +135,18 @@ public class SqliteAccessor {
                     }
                 }
             }
-            
+
             //logger.debug("Retrieved metadata for document {} from {}: {}", documentId, source, value);
         } catch (Exception e) {
             // Log error and continue
-            logger.error("Error getting metadata for document {} from {}: {}", 
+            logger.error("Error getting metadata for document {} from {}: {}",
                         documentId, source, e.getMessage(), e);
             value = null;
         }
-        
+
         return value;
     }
-    
+
     /**
      * Gets the document text from the specified source.
      *
@@ -157,10 +156,10 @@ public class SqliteAccessor {
      */
     public String getDocumentText(String source, int documentId) {
         String text = null;
-        
+
         try (Connection conn = getConnection(source)) {
             String sql = "SELECT text FROM documents WHERE document_id = ?";
-            
+
             try (PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setInt(1, documentId);
                 try (ResultSet rs = stmt.executeQuery()) {
@@ -169,19 +168,19 @@ public class SqliteAccessor {
                     }
                 }
             }
-            
-            logger.debug("Retrieved text for document {} from {}, length: {}", 
+
+            logger.debug("Retrieved text for document {} from {}, length: {}",
                         documentId, source, text != null ? text.length() : 0);
         } catch (Exception e) {
             // Log error and continue
-            logger.error("Error getting text for document {} from {}: {}", 
+            logger.error("Error getting text for document {} from {}: {}",
                         documentId, source, e.getMessage(), e);
             text = null;
         }
-        
+
         return text;
     }
-    
+
     /**
      * Gets the path to the SQLite database for the specified source.
      * Relies on currentDbFilePath being set correctly by initialize().
@@ -194,10 +193,10 @@ public class SqliteAccessor {
         if (dbPathCache.containsKey(source)) {
             return dbPathCache.get(source);
         }
-        
+
         // The path is simply what was provided during the last initialization.
         String actualDbPath = this.currentDbFilePath;
-        
+
         // Sanity check: ensure the initialized path is not null or empty
         if (actualDbPath == null || actualDbPath.trim().isEmpty()) {
              logger.error("SqliteAccessor: currentDbFilePath is null or empty for source '{}'. This indicates an issue with initialization.", source);
@@ -208,4 +207,4 @@ public class SqliteAccessor {
         logger.debug("SqliteAccessor: Using database path '{}' for source '{}' (from initialization). Path cached.", actualDbPath, source);
         return actualDbPath;
     }
-} 
+}

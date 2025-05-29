@@ -13,7 +13,7 @@ public record ConsumerVariable(
     String consumingConditionType,
     Set<String> consumedBy
 ) implements Variable {
-    
+
     /**
      * Creates a consumer variable with validation.
      */
@@ -27,27 +27,27 @@ public record ConsumerVariable(
         if (consumingConditionType == null || consumingConditionType.isBlank()) {
             throw new IllegalArgumentException("Consuming condition type cannot be null or blank");
         }
-        
+
         // Ensure defensive copies
-        consumedBy = consumedBy != null ? 
-            Collections.unmodifiableSet(Set.copyOf(consumedBy)) : 
+        consumedBy = consumedBy != null ?
+            Collections.unmodifiableSet(Set.copyOf(consumedBy)) :
             Collections.emptySet();
     }
-    
+
     /**
      * Creates a simple consumer variable with a single consuming condition.
      */
     public ConsumerVariable(String name, VariableType type, String consumingConditionType) {
         this(name, type, consumingConditionType, Set.of(consumingConditionType));
     }
-    
+
     @Override
     public String getName() {
         return name;
     }
-    
+
     @Override
     public VariableType getType() {
         return type;
     }
-} 
+}

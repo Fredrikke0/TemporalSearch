@@ -1,22 +1,21 @@
 package com.example;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.stream.Stream;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.example.annotation.Annotations;
-import com.example.index.generators.IndexGenerator;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.InvalidPathException;
-import java.util.Comparator;
-import java.util.stream.Stream;
 
 public class Pipeline {
     private static final Logger logger = LoggerFactory.getLogger(Pipeline.class);
@@ -47,7 +46,7 @@ public class Pipeline {
         ArgumentParser parser = ArgumentParsers.newFor("Pipeline").build()
                 .defaultHelp(true)
                 .description("Process and index text data through annotation and indexing stages using a project-based workflow.")
-                .usage("${prog} -p <project_path> -s <stage> [-d <source_db>] [--force] [--limit N] [stage-specific-options]\n\n" + 
+                .usage("${prog} -p <project_path> -s <stage> [-d <source_db>] [--force] [--limit N] [stage-specific-options]\n\n" +
                        "Example usage:\n" +
                        "  Create Project & Run All: ${prog} -p path/to/my_project -d source.db -s all\n" +
                        "  Annotate Existing Project: ${prog} -p path/to/my_project -s annotate -b 1000 -t 8\n" +
@@ -137,7 +136,7 @@ public class Pipeline {
 
         // Parse arguments
         Namespace ns = parser.parseArgs(args);
-        
+
         // --- Argument Processing and Validation ---
         String stage = ns.getString("stage");
         Path projectPath = Path.of(ns.getString("project_path")).toAbsolutePath(); // Ensure absolute path
@@ -148,7 +147,7 @@ public class Pipeline {
         boolean force = ns.getBoolean("force");
         Integer limit = ns.getInt("limit");
         Integer cliStartDocId = ns.get("cli_start_doc_id");
-        
+
         logger.info("Starting Pipeline for project '{}' at '{}' (Stage: {})", projectName, projectPath, stage);
 
         // --- Project Initialization ---
@@ -250,33 +249,6 @@ public class Pipeline {
                 logger.info("Using default temporary directory for indexing: {}", effectiveCustomTempDirStr);
                 // IndexRunner will create this path if it doesn't exist.
             }
-
-            // --- Add Shutdown Hook for Temp Cleanup ---
-            final String finalEffectiveCustomTempDirStr = effectiveCustomTempDirStr; // Effectively final for lambda
-            Path sortTempDirToDeleteOnShutdown = Path.of(finalEffectiveCustomTempDirStr).resolve(IndexGenerator.TEMP_SUBDIR_NAME);
-
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                logger.info("Shutdown hook triggered. Attempting to clean up temporary sort directory: {}", sortTempDirToDeleteOnShutdown);
-                if (Files.exists(sortTempDirToDeleteOnShutdown) && Files.isDirectory(sortTempDirToDeleteOnShutdown)) {
-                    try (Stream<Path> walk = Files.walk(sortTempDirToDeleteOnShutdown)) {
-                        walk.sorted(Comparator.reverseOrder()) // Delete contents first, then directory
-                            .forEach(path -> {
-                                try {
-                                    Files.delete(path);
-                                    logger.debug("Shutdown hook: Deleted temporary file/directory: {}", path);
-                                } catch (IOException e) {
-                                    logger.error("Shutdown hook: Failed to delete temporary path {}: {}", path, e.getMessage());
-                                }
-                            });
-                        logger.info("Shutdown hook: Successfully cleaned up temporary sort directory: {}", sortTempDirToDeleteOnShutdown);
-                    } catch (IOException e) {
-                        logger.error("Shutdown hook: Error walking temporary sort directory {} for cleanup: {}", sortTempDirToDeleteOnShutdown, e.getMessage());
-                    }
-                } else {
-                    logger.info("Shutdown hook: Temporary sort directory {} does not exist or is not a directory. No cleanup needed.", sortTempDirToDeleteOnShutdown);
-                }
-            }));
-            // --- End Shutdown Hook ---
 
             // Determine the specific index directory path
             Path specificIndexDir = indexBasePath.resolve(indexType.equals("all") ? "" : indexType); // Base path if 'all'

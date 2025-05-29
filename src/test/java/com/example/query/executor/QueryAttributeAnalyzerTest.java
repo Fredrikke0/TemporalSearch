@@ -78,7 +78,7 @@ class QueryAttributeAnalyzerTest {
     void snippetColumnRequiresPositions() {
         VariableRegistry registry = new VariableRegistry();
         registry.registerProducer("$main.term", com.example.query.binding.VariableType.TEXT_SPAN, "CONTAINS");
-        
+
         Query query = new Query(
             "test",
             List.of(new Contains(List.of("test"), "$main.term", true)),
@@ -131,7 +131,7 @@ class QueryAttributeAnalyzerTest {
     void nerVariableRequiresSynonymIds() {
         VariableRegistry registry = new VariableRegistry();
         registry.registerProducer("$main.person", com.example.query.binding.VariableType.ENTITY, "NER");
-        
+
         Query query = new Query(
             "test",
             List.of(new Ner("PERSON", null, "$main.person", true)),
@@ -159,7 +159,7 @@ class QueryAttributeAnalyzerTest {
     void requiredSoAAttributesCorrectlyIdentified() {
         VariableRegistry registry = new VariableRegistry();
         registry.registerProducer("$main.term", com.example.query.binding.VariableType.TEXT_SPAN, "CONTAINS");
-        
+
         Query query = new Query(
             "test",
             List.of(new Contains(List.of("test"), "$main.term", true)),
@@ -184,4 +184,4 @@ class QueryAttributeAnalyzerTest {
         assertTrue(requiredAttributes.contains("endChars"), "Should require end chars for SNIPPET");
         assertFalse(requiredAttributes.contains("synonymIds"), "Should not require synonym IDs for simple CONTAINS");
     }
-} 
+}

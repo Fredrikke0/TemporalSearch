@@ -14,4 +14,4 @@ public record TemporalRange(String value) {
     public String toString() {
         return value;
     }
-} 
+}

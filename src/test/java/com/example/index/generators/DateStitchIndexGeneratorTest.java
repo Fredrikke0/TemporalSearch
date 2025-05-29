@@ -42,7 +42,7 @@ public class DateStitchIndexGeneratorTest extends BaseIndexTest {
             writer.println("is");
             writer.println("a");
         }
-        
+
         // Minimal data, specific data population will be in test methods
         try (Statement stmt = sqliteConn.createStatement()) {
             // Ensure tables exist, data will be added per test
@@ -59,7 +59,7 @@ public class DateStitchIndexGeneratorTest extends BaseIndexTest {
                 tempDir.resolve(DATE_TEST_STOPWORDS_FILENAME).toString(),
                 sqliteConn,
                 progress,
-                10, 
+                10,
                 customSortTempPath
         );
 
@@ -97,7 +97,7 @@ public class DateStitchIndexGeneratorTest extends BaseIndexTest {
             byte[] catBytes = dbForVerification.get(Iq80DBFactory.bytes("cat"), readOpts);
             assertNotNull(catBytes, "Entry for unigram 'cat' should exist (verified via generator's DB).");
             PositionListSoA plCat = PositionListSoA.deserializeFromCompositeBlob(catBytes);
-            
+
             // USE THE GENERATOR'S OWN SYNONYM STORE FOR VERIFICATION
             TypedAnnotationSynonymStore verifierSynonyms = generator.getAnnotationSynonyms();
             assertNotNull(verifierSynonyms, "Generator's annotation synonym store should not be null.");
@@ -149,4 +149,4 @@ public class DateStitchIndexGeneratorTest extends BaseIndexTest {
         // The original verification block that reopens the DB has been superseded by the
         // verification above, which uses the generator's live DB instance and passes.
     }
-} 
+}

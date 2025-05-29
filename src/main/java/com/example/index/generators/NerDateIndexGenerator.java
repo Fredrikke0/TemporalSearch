@@ -1,8 +1,7 @@
 package com.example.index.generators;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -16,22 +15,24 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.example.logging.ProgressTracker;
+
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
-
-import java.nio.file.Path;
-import java.util.regex.Pattern;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming index for date entities from annotated text.
  * Extracts dates from the normalized_ner column where ner type is "DATE",
  * normalizes them to YYYYMMDD format, and stores their positions.
  * Uses streaming processing and external sorting for efficient memory usage.
- * 
+ *
  * <h2>Date Extraction and Indexing Process</h2>
  * <ol>
  *   <li>The NLP pipeline identifies date mentions in the text using Named Entity Recognition (NER)</li>
@@ -39,7 +40,7 @@ import java.util.regex.Pattern;
  *   <li>This index generator extracts those normalized dates and converts them to YYYYMMDD format for storage</li>
  *   <li>For each date mention, the document ID, sentence ID, and character position are recorded</li>
  * </ol>
- * 
+ *
  * <h2>Relationship with DATE Operator in Queries</h2>
  * <p>When querying with the DATE operator (e.g., DATE(CONTAINS [2023, 2024])), the system will:
  * <ol>
@@ -53,7 +54,7 @@ import java.util.regex.Pattern;
  *   <li>CONTAINED_BY: Returns documents where mentioned dates contain the entire query range</li>
  *   <li>BEFORE, AFTER, EQUAL: Compare with specific date values</li>
  * </ul>
- * 
+ *
  * <p>For optimal results with date range searches spanning multiple years, use the INTERSECT predicate
  * rather than CONTAINS, as CONTAINS requires dates to be fully contained within the range.
  */
@@ -141,12 +142,12 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                 logger.debug("Could not normalize date for key: {}", rawNormalizedDate);
                 continue;
             }
-            
+
             this.uniqueDatesProcessed.add(normalizedDateKey); // Populate for logging
 
             // Use standard Position class
             Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
-            
+
             PositionListSoA pl = tempAggregator.computeIfAbsent(normalizedDateKey, k -> new PositionListSoA());
             pl.add(pos);
         }
@@ -163,7 +164,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         logger.info("Starting NER Date index generation for index: {}", getIndexName());
         super.generateIndex(); // Execute standard batch processing and writing
         // Log the final count after super.generateIndex() finishes
-        logger.info("Finished NER Date index generation. Found {} unique dates (YYYYMMDD format).", 
+        logger.info("Finished NER Date index generation. Found {} unique dates (YYYYMMDD format).",
                     this.uniqueDatesProcessed.size());
     }
 
@@ -211,4 +212,4 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         // Return 0 to indicate an indeterminate progress bar, as MAX(annotation_id) is not representative.
         return 0;
     }
-} 
+}

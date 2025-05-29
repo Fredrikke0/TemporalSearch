@@ -5,6 +5,7 @@ package com.example.query.executor;
  * Provides detailed information about the cause of the failure.
  */
 public class QueryExecutionException extends Exception {
+    private static final long serialVersionUID = 1L;
     private final String queryPart;
     private final ErrorType errorType;
 
@@ -16,7 +17,8 @@ public class QueryExecutionException extends Exception {
         INVALID_CONDITION,
         UNSUPPORTED_OPERATION,
         INTERNAL_ERROR,
-        MISSING_INDEX
+        MISSING_INDEX,
+        MISSING_INDEX_DATA
     }
 
     /**
@@ -63,4 +65,4 @@ public class QueryExecutionException extends Exception {
     public ErrorType getErrorType() {
         return errorType;
     }
-} 
+}

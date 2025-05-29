@@ -11,12 +11,12 @@ import java.util.*;
 public class LevelDBConfigTest {
     private Path tempDir;
     private DB db;
-    
+
     @BeforeEach
     void setUp() throws IOException {
         tempDir = Files.createTempDirectory("leveldb-test");
     }
-    
+
     @AfterEach
     void tearDown() throws IOException {
         if (db != null) {
@@ -32,13 +32,13 @@ public class LevelDBConfigTest {
                  }
              });
     }
-    
+
     @Test
     void testOptimizedConfiguration() throws IOException {
         // Create DB with optimized config
         Options options = LevelDBConfig.createOptimizedOptions();
         db = factory.open(tempDir.resolve("optimized").toFile(), options);
-        
+
         // Write test data in batches
         WriteBatch batch = db.createWriteBatch();
         try {
@@ -47,7 +47,7 @@ public class LevelDBConfigTest {
                 String key = String.format("key-%06d", i);
                 String value = "value-" + i;
                 batch.put(bytes(key), bytes(value));
-                
+
                 if ((i + 1) % LevelDBConfig.BATCH_SIZE == 0) {
                     db.write(batch);
                     batch.close();
@@ -57,7 +57,7 @@ public class LevelDBConfigTest {
         } finally {
             batch.close();
         }
-        
+
         // Verify random reads
         Random random = new Random(42);
         for (int i = 0; i < 1000; i++) {
@@ -68,4 +68,4 @@ public class LevelDBConfigTest {
             assertEquals("value-" + keyNum, new String(value));
         }
     }
-} 
+}

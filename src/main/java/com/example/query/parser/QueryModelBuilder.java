@@ -1,6 +1,30 @@
 package com.example.query.parser;
 
-import com.example.query.model.*;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+
+import org.antlr.v4.runtime.tree.ParseTree;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.query.binding.VariableRegistry;
+import com.example.query.binding.VariableType;
+import com.example.query.model.CountColumn;
+import com.example.query.model.JoinCondition;
+import com.example.query.model.Query;
+import com.example.query.model.SelectColumn;
+import com.example.query.model.SnippetColumn;
+import com.example.query.model.SnippetNode;
+import com.example.query.model.StructuralColumn;
+import com.example.query.model.SubquerySpec;
+import com.example.query.model.TemporalPredicate;
+import com.example.query.model.TemporalRange;
+import com.example.query.model.VariableColumn;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Dependency;
@@ -9,22 +33,6 @@ import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
 import com.example.query.model.condition.Pos;
 import com.example.query.model.condition.Temporal;
-import com.example.query.model.TemporalPredicate;
-import com.example.query.model.TemporalRange;
-import com.example.query.binding.VariableRegistry;
-import com.example.query.binding.VariableType;
-
-import org.antlr.v4.runtime.tree.ParseTree;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.time.LocalDateTime;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
 
 /**
  * Visitor implementation that builds a Query model from the parse tree.
@@ -36,34 +44,34 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ISO_DATE_TIME;
     private static final String DEFAULT_MAIN_ALIAS = "$main"; // Default alias for main query without ALIAS
-    
+
     // Variable registry for tracking variables - qualified names will be used internally
     private final VariableRegistry variableRegistry = new VariableRegistry();
-    
+
     /**
      * Creates a new QueryModelBuilder.
      */
     public QueryModelBuilder() {
         // No parameters needed
     }
-    
+
     @Override
     public Query visitQuery(QueryLangParser.QueryContext ctx) {
         String source = null;
         Optional<String> explicitMainAlias = Optional.empty(); // Explicit alias given by user
-        
+
         // Get the FROM source identifier
         if (ctx.identifier() != null && !ctx.identifier().isEmpty()) {
             source = ctx.identifier(0).getText();
             // Check if an explicit alias is provided for the main source using ALIAS
-            if (ctx.ALIAS() != null && ctx.alias != null) { // Changed AS() to ALIAS()
+            if (ctx.ALIAS() != null && ctx.alias != null) {
                 explicitMainAlias = Optional.of(ctx.alias.getText());
             }
         }
-        
+
         // Determine the effective alias for this scope
         String effectiveMainAlias = explicitMainAlias.orElse(DEFAULT_MAIN_ALIAS);
-        
+
         List<Condition> conditions = new ArrayList<>();
         List<String> orderColumns = new ArrayList<>();
         Optional<Integer> limit = Optional.empty();
@@ -80,10 +88,10 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
                  // Pass qualification requirement to visitJoinClause
                  // Qualification is required if there's an explicit main alias OR if there are joins
                 boolean qualificationRequired = explicitMainAlias.isPresent() || !ctx.joinClause().isEmpty();
-                Object[] joinResult = (Object[]) visitJoinClause(joinCtx, qualificationRequired); // Pass flag
+                Object[] joinResult = visitJoinClause(joinCtx, qualificationRequired); // Pass flag
                 SubquerySpec subquery = (SubquerySpec) joinResult[0];
                 JoinCondition jc = (JoinCondition) joinResult[1];
-                
+
                 subqueries.add(subquery);
                 joinCondition = Optional.of(jc); // Use the last join condition
             }
@@ -132,7 +140,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         if (!validationErrors.isEmpty()) {
             throw new IllegalStateException("Variable binding errors: " + String.join(", ", validationErrors));
         }
-        
+
         // Updated Query constructor call - pass explicitMainAlias, not effectiveMainAlias
         // The Query object stores the user-provided alias, or empty if none.
         // Internal logic uses effectiveMainAlias ($main or explicit).
@@ -161,35 +169,35 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             return visitUnqualifiedDocumentIdColumn(udicc);
         } else if (ctx instanceof QueryLangParser.UnqualifiedSentenceIdColumnContext usicc) {
             return visitUnqualifiedSentenceIdColumn(usicc);
-        } 
+        }
         // Then handle other specific types
         else if (ctx instanceof QueryLangParser.QualifiedIdentifierColumnContext qicc) {
             return visitQualifiedIdentifier(qicc.qualifiedIdentifier());
-        } else if (ctx instanceof QueryLangParser.SnippetColumnContext scc) { 
+        } else if (ctx instanceof QueryLangParser.SnippetColumnContext scc) {
             return visitSnippetColumn(scc, qualificationRequired);
         } else if (ctx instanceof QueryLangParser.StructColumnContext scc) {
             return visitStructColumn(scc);
         } else if (ctx instanceof QueryLangParser.CountColumnContext ccc) {
             return visitCountColumn(ccc, qualificationRequired);
-        } 
+        }
         // THEN handle the generic VariableColumn as a fallback
         else if (ctx instanceof QueryLangParser.VariableColumnContext vcc) {
             logger.trace("Dispatching to visitVariableColumn for: {}", vcc.getText());
             return visitVariableColumn(vcc, qualificationRequired);
-        } 
+        }
         // If none of the above match
         else {
             throw new IllegalStateException("Unknown SelectColumnContext type: " + ctx.getClass().getName());
         }
     }
-    
+
     @Override
     public Object visitQualifiedIdentifier(QueryLangParser.QualifiedIdentifierContext ctx) {
         // Access children by position: child 0 is alias (identifier), child 2 is field
-        String alias = ctx.getChild(0).getText(); 
+        String alias = ctx.getChild(0).getText();
         String fieldName = ctx.getChild(2).getText();
         String fullQualifiedName = alias + "." + fieldName;
-        
+
         // Check if the field name is a known structural field
         if (Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID", "BEGIN", "END").contains(fieldName.toUpperCase())) {
             logger.trace("Identified StructuralColumn from qualifiedIdentifier: {}", fullQualifiedName);
@@ -219,7 +227,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
                                    variableName, variableName));
              }
              // Create the correct StructuralColumn using the default alias
-             return new StructuralColumn(DEFAULT_MAIN_ALIAS, upperVarName); 
+             return new StructuralColumn(DEFAULT_MAIN_ALIAS, upperVarName);
         }
         // *** END CORRECTION LOGIC ***
 
@@ -236,21 +244,21 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         logger.debug("Creating VariableColumn for implicitly qualified variable: {}", qualifiedName);
         return new VariableColumn(qualifiedName);
     }
-    
+
     // Overload visitSnippetColumn
     public Object visitSnippetColumn(QueryLangParser.SnippetColumnContext ctx, boolean qualificationRequired) {
          // Visit the expression first to get the SnippetNode (which contains the qualified name)
         SnippetNode snippetNode = (SnippetNode) visitSnippetExpression(ctx.snippetExpression(), qualificationRequired);
-        
+
         // Extract windowSize and qualified variableName from the node
-        int windowSize = snippetNode.windowSize(); 
+        int windowSize = snippetNode.windowSize();
         String qualifiedVariableName = snippetNode.variableName(); // Use variableName() getter
-        
+
         // Use qualifiedVariableName and windowSize to create SnippetColumn
         // Assuming SnippetColumn constructor takes qualified name and window size
         return new SnippetColumn(qualifiedVariableName, windowSize);
     }
-    
+
     @Override
     public Object visitStructColumn(QueryLangParser.StructColumnContext ctx) {
         String alias = ctx.qualifiedStructuralColumn().alias.getText();
@@ -301,11 +309,11 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
              throw new IllegalStateException("Unknown CountExpressionContext type: " + ctx.getClass().getName());
          }
     }
-    
+
     // Overload visitSnippetExpression
     public Object visitSnippetExpression(QueryLangParser.SnippetExpressionContext ctx, boolean qualificationRequired) {
         String qualifiedTargetName;
-        
+
         // Check if the target is a variable or a qualified identifier
         if (ctx.variable() != null) {
             String variableName = (String) visit(ctx.variable());
@@ -328,17 +336,17 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         if (ctx.windowSize != null) { // Grammar rule name for window size is 'windowSize'
             windowSize = Integer.parseInt(ctx.windowSize.getText());
         }
-        
+
         // Call the simplified SnippetNode constructor
         return new SnippetNode(qualifiedTargetName, windowSize);
     }
-    
-    
+
+
     @Override
     public Object visitCountAllExpression(QueryLangParser.CountAllExpressionContext ctx) {
         return CountColumn.countAll();
     }
-    
+
     public Object visitCountUniqueExpression(QueryLangParser.CountUniqueExpressionContext ctx, boolean qualificationRequired) {
         String varName = ctx.variable().getText();
         String qualifiedVarName;
@@ -348,7 +356,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             // However, the grammar for `variable` is just IDENTIFIER. We need to check if it's part of a qualifiedIdentifier context
             // OR assume it must be from the main query if no explicit alias is given. This is tricky.
             // For now, let's assume if qualificationRequired is true, it must be found in a subquery or aliased main.
-            // The SELECT column visitor logic is better suited to resolve this. 
+            // The SELECT column visitor logic is better suited to resolve this.
             // Here, we might need to throw if it's not parsable as a qualified name directly
             // or rely on a (currently non-existent) method to get the alias from the context of `variable`.
             // Let's assume for now that `variable` itself must be of the form `alias.var` if qualification is required here.
@@ -364,7 +372,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
         return CountColumn.countUnique(qualifiedVarName);
     }
-    
+
     @Override
     public Object visitCountDocumentsExpression(QueryLangParser.CountDocumentsExpressionContext ctx) {
         return CountColumn.countDocuments();
@@ -385,27 +393,27 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
                  throw new IllegalStateException("Visiting single condition did not return Condition or List<Condition>");
             }
         }
-        
+
         // Start with the first condition
         Object firstResult = visitCondition(ctx.condition(0), currentScopeAlias);
         Condition currentCondition = extractSingleCondition(firstResult, "first operand");
-        
+
         // Process the logical operations
         for (int i = 0; i < ctx.logicalOp().size(); i++) {
             // Get the logical operator
             Logical.LogicalOperator operator = parseLogicalOperator(ctx.logicalOp(i).getText());
-            
+
             // Get the right operand
             Object rightResult = visitCondition(ctx.condition(i + 1), currentScopeAlias);
             Condition rightCondition = extractSingleCondition(rightResult, "right operand");
-            
+
             // Create a logical condition
             currentCondition = new Logical(operator, currentCondition, rightCondition);
         }
-        
+
         return List.of(currentCondition);
     }
-    
+
     // Helper to extract a single condition from the result of visiting a condition node
     private Condition extractSingleCondition(Object visitResult, String operandDescription) {
          if (visitResult instanceof Condition) {
@@ -433,19 +441,19 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
              throw new IllegalStateException("Unexpected logical operator: " + opText); // TODO: Add context
          }
     }
-    
+
     // Overload visitCondition to pass alias
     public Object visitCondition(QueryLangParser.ConditionContext ctx, String currentScopeAlias) {
         return visit(ctx.getChild(0), currentScopeAlias); // Pass alias to child visit
     }
-    
+
     // Overload visitNotCondition to pass alias
     public Object visitNotCondition(QueryLangParser.NotConditionContext ctx, String currentScopeAlias) {
         Object result = visitAtomicCondition(ctx.atomicCondition(), currentScopeAlias);
         Condition conditionToNegate = extractSingleCondition(result, "operand of NOT");
         return new Not(conditionToNegate);
     }
-    
+
     // Overload visitAtomicCondition to pass alias
     public Object visitAtomicCondition(QueryLangParser.AtomicConditionContext ctx, String currentScopeAlias) {
         if (ctx.singleCondition() != null) {
@@ -475,7 +483,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         // Fallback or error if no condition matched
         throw new IllegalStateException("Unhandled single condition type: " + ctx.getText());
     }
-    
+
     // Need to overload the dispatcher 'visit' to accept the alias.
     // This requires modifying the base class or using a different approach.
     // Let's create helper methods for visiting specific types with context.
@@ -504,7 +512,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     public Object visitContainsExpression(QueryLangParser.ContainsExpressionContext ctx, String currentScopeAlias) {
         List<String> terms = new ArrayList<>();
-        
+
         // If only one string literal is provided, split it by spaces
         if (ctx.terms.size() == 1) {
             String singleTerm = unquote(ctx.terms.get(0).getText());
@@ -515,7 +523,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
                 terms.add(unquote(termNode.getText()));
             }
         }
-        
+
         String qualifiedVariableName = null;
         boolean isVariable = false; // Flag to track if variable is bound
         if (ctx.BIND() != null && ctx.var != null) {
@@ -525,7 +533,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             logger.debug("Registering producer: {} type: TEXT_SPAN for CONTAINS", qualifiedVariableName);
             variableRegistry.registerProducer(qualifiedVariableName, VariableType.TEXT_SPAN, "CONTAINS");
         }
-        
+
         // Model updated to store qualified name
         return new Contains(terms, qualifiedVariableName, isVariable); // Pass qualified name
     }
@@ -542,14 +550,14 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             logger.debug("Registering producer: {} type: {} for NER", qualifiedVariableName, varType);
             variableRegistry.registerProducer(qualifiedVariableName, varType, "NER");
         }
-        
+
         String termValue = null;
         if (ctx.termValue != null) {
              Object termResult = visitTerm(ctx.termValue, currentScopeAlias); // Pass alias
              termValue = (String) termResult; // visitTerm now returns plain name if variable
              // Consumption registration happens within visitTerm
         }
-        
+
         // Model updated to store qualified name
         return new Ner(type, termValue, qualifiedVariableName, isVariable); // Pass qualified name
     }
@@ -559,7 +567,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         if (nerType == null) {
             return VariableType.ANY;
         }
-        
+
         return switch (nerType.toUpperCase()) {
             case "PERSON", "ORGANIZATION", "LOCATION" -> VariableType.ENTITY;
             case "DATE", "TIME" -> VariableType.TEMPORAL;
@@ -589,7 +597,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         if (ctx.ORDINAL() != null) return "ORDINAL";
         if (ctx.PERCENT() != null) return "PERCENT";
         if (ctx.SET() != null) return "SET";
-        
+
         throw new IllegalStateException("Invalid entity type: " + ctx.getText());
     }
 
@@ -642,18 +650,18 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     public Object visitDateOperatorExpression(QueryLangParser.DateOperatorExpressionContext ctx, String currentScopeAlias) {
         String operator = ctx.dateOperator().getText();
         TemporalPredicate type = mapOperatorToTemporal(operator); // Corrected variable name: 'type' not 'dependencyType'
-        
+
         System.out.println("DEBUG: DateOperatorExpression with operator: " + operator);
         System.out.println("DEBUG: DateValue context: " + ctx.dateValue().getText());
-        
+
         // Directly visit the dateValue node instead of using visitChildren
         Object dateValue = visit(ctx.dateValue());
         System.out.println("DEBUG: Date value type: " + (dateValue != null ? dateValue.getClass().getName() : "null"));
         System.out.println("DEBUG: Date value: " + dateValue);
-        
+
         LocalDateTime startDate;
         Optional<LocalDateTime> endDate = Optional.empty();
-        
+
         if (dateValue instanceof Integer year) {
             System.out.println("DEBUG: Handling as Integer year: " + year);
             startDate = LocalDateTime.of(year, 1, 1, 0, 0);
@@ -667,14 +675,14 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             // Assume it's a single date
             startDate = (LocalDateTime) dateValue;
         }
-        
+
         Optional<TemporalRange> range = Optional.empty();
         if (ctx.radius != null && ctx.unit != null) {
             int radius = Integer.parseInt(ctx.radius.getText());
             String unit = ctx.unit.getText();
             range = Optional.of(new TemporalRange(radius + unit));
         }
-        
+
         String qualifiedVariableName = null;
         if (ctx.BIND() != null && ctx.var != null) {
             String plainVarName = (String) visit(ctx.var);
@@ -682,12 +690,12 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             logger.debug("Registering producer: {} type: TEMPORAL for TEMPORAL", qualifiedVariableName);
             variableRegistry.registerProducer(qualifiedVariableName, VariableType.TEMPORAL, "TEMPORAL");
         }
-        
+
         // Model updated to store qualified name (as Optional)
         // Wrap startDate in Optional.of() to match the updated Temporal constructor
         return new Temporal(Optional.of(startDate), endDate, Optional.ofNullable(qualifiedVariableName), range, type);
     }
-    
+
     @Override
     public Object visitDateRange(QueryLangParser.DateRangeContext ctx) {
         System.out.println("DEBUG: visitDateRange with text: " + ctx.getText());
@@ -700,7 +708,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         System.out.println("DEBUG: Returning LocalDateTime[] with values: " + result[0] + ", " + result[1]);
         return result;
     }
-    
+
     @Override
     public Object visitSingleYear(QueryLangParser.SingleYearContext ctx) {
         System.out.println("DEBUG: visitSingleYear with text: " + ctx.getText());
@@ -721,7 +729,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             default -> throw new IllegalStateException("Invalid comparison operator: " + operator);
         };
     }
-    
+
     /**
      * Maps a date operator string from the query language to the unified TemporalPredicate enum.
      * Used for both date expressions in the WHERE clause and join conditions.
@@ -762,7 +770,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             // Optionally print more context if possible, e.g., ctx.getText()
             logger.error("Parent dependsExpression context: {}", ctx.getText());
         }
-        
+
         String relation = (String) visitRelation(ctx.rel); // Revert back to direct call
 
         String dependent;
@@ -776,7 +784,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         } else {
             dependent = (String) depResult;
         }
-        
+
         String qualifiedVariableName = null;
         boolean isVariable = false; // Flag for BIND
         if (ctx.BIND() != null && ctx.var != null) {
@@ -786,7 +794,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             logger.debug("Registering producer: {} type: DEPENDENCY for DEPENDENCY", qualifiedVariableName);
             variableRegistry.registerProducer(qualifiedVariableName, VariableType.DEPENDENCY, "DEPENDENCY");
         }
-        
+
         // Model updated to store qualified BIND variable name
         // Governor and Dependent strings remain plain if they were variables
         return new Dependency(governor, relation, dependent, qualifiedVariableName, isVariable);
@@ -980,7 +988,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
         return text;
     }
-    
+
     public Query buildQuery(ParseTree tree) {
         return (Query) visit(tree);
     }
@@ -993,7 +1001,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
              termValue = (String) termResult; // visitTerm returns plain name if variable
              // Consumption registration happens within visitTerm
         }
-        
+
         String qualifiedVariableName = null;
         boolean isVariable = false; // Flag for BIND
         if (ctx.BIND() != null && ctx.var != null) {
@@ -1003,7 +1011,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             logger.debug("Registering producer: {} type: POS_TAG for POS", qualifiedVariableName);
             variableRegistry.registerProducer(qualifiedVariableName, VariableType.POS_TAG, "POS");
         }
-        
+
         // Model updated to store qualified BIND variable name
         return new Pos(posTag, termValue, qualifiedVariableName, isVariable); // Pass qualified name
     }
@@ -1043,22 +1051,22 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     public Object visitSubquery(QueryLangParser.SubqueryContext ctx) {
         // Get the source from the first identifier in the list
         String source = ctx.identifier(0).getText();
-        
+
         // --- Create a NEW QueryModelBuilder for the subquery ---
         // This isolates the variable registry and scope for the subquery.
         QueryModelBuilder subqueryBuilder = new QueryModelBuilder();
-        
+
         // Get the alias using ALIAS keyword - this is the alias for the subquery scope
         String subqueryAlias = ctx.alias.getText(); // Alias is mandatory based on grammar change
-        
+
         logger.debug("Creating subquery with alias: {}", subqueryAlias);
-        
+
         // Determine if qualification is required WITHIN the subquery
         boolean subqueryQualificationRequired = false; // Assume false for now
 
         // Visit the subquery's select list
         List<SelectColumn> selectColumns = subqueryBuilder.visitSelectList(ctx.selectList(), subqueryQualificationRequired);
-        
+
         List<Condition> conditions = new ArrayList<>();
         if (ctx.whereClause() != null) {
             // Visit the subquery's WHERE clause using the SUBQUERY'S alias
@@ -1079,7 +1087,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
                     // Check if this variable is actually produced in the requalified registry
                     // If not produced, validation will catch it later. We construct the expected name here.
                     return new VariableColumn(targetQualifiedName);
-                    
+
                 } else if (col instanceof SnippetColumn snipCol) {
                     String oldName = snipCol.getVariableName();
                      String plainName = oldName.contains(".") ? oldName.substring(oldName.indexOf(".") + 1) : oldName;
@@ -1094,7 +1102,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
                 return col; // Return non-variable/snippet columns unchanged
             })
             .collect(java.util.stream.Collectors.toList());
-        
+
         // Create the subquery Query object
         Query subquery = new Query(
             source,
@@ -1110,7 +1118,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             Optional.empty(), // Subquery's internal Query object doesn't have a main alias itself
             List.of() // Add empty list for groupByColumns for subquery's Query object
         );
-        
+
         // Return the SubquerySpec containing the Query object and its external alias
         return new SubquerySpec(subquery, subqueryAlias);
     }
@@ -1119,10 +1127,10 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     public Object[] visitJoinClause(QueryLangParser.JoinClauseContext ctx, boolean qualificationRequired) {
         // Visit the subquery first (its internal builder handles its scope)
         SubquerySpec subquery = (SubquerySpec) visit(ctx.subquery());
-        
+
         // Visit the join condition, passing the flag
         JoinCondition joinCondition = visitJoinCondition(ctx.joinCondition(), qualificationRequired);
-        
+
         // Get the join type - defaults to INNER if not specified
         JoinCondition.JoinType joinType = JoinCondition.JoinType.INNER;
         if (ctx.joinType() != null) {
@@ -1132,7 +1140,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
                 joinType = JoinCondition.JoinType.RIGHT;
             }
         }
-        
+
         // Update the join condition with the correct join type
         Optional<Integer> proximityWindow = joinCondition.proximityWindow();
         if (joinCondition.operatorType() != JoinCondition.JoinOperatorType.TEMPORAL ||
@@ -1148,7 +1156,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             joinCondition.temporalPredicate(), // Keep original
             proximityWindow                    // Only keep if valid
         );
-        
+
         // Return both the subquery and the updated join condition
         return new Object[] { subquery, joinCondition };
     }
@@ -1169,16 +1177,16 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         // Visit the left and right columns, passing the flag
         String leftColumn = visitJoinColumn(ctx.leftColumn, qualificationRequired);
         String rightColumn = visitJoinColumn(ctx.rightColumn, qualificationRequired);
-        
+
         // Get the temporal operator
         TemporalPredicate temporalPredicate = mapOperatorToTemporal(ctx.op.getText()); // Use labeled op
-        
+
         // Check if there's a window specification
         Optional<Integer> proximityWindow = Optional.empty();
         if (ctx.window != null) {
             proximityWindow = Optional.of(Integer.parseInt(ctx.window.getText()));
         }
-        
+
         // Create and return the TEMPORAL join condition
         return new JoinCondition(
             leftColumn, // Now potentially qualified
@@ -1205,10 +1213,10 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         if (ctx.qualifiedIdentifier() != null) {
             // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn
             Object qualifiedResult = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
-            
+
             if (qualifiedResult instanceof VariableColumn vc) {
                 // Return the qualified name (e.g., alias.variable) for the JoinCondition
-                return vc.getColumnName(); 
+                return vc.getColumnName();
             } else if (qualifiedResult instanceof com.example.query.model.StructuralColumn sc) {
                 // Return the qualified name (e.g., alias.FIELD) for the JoinCondition
                 return sc.getColumnName();
@@ -1235,10 +1243,27 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         String dateText = ctx.date.getText();
 
         // Parse the date literal which acts as the comparison point
-        LocalDateTime literalDateTime = parseDateLiteral(dateText);
+        LocalDateTime parsedStartDate = parseDateLiteral(dateText); // This gives the start of the period
 
         // Determine the correct TemporalPredicate based on the operator
         TemporalPredicate temporalType = mapComparisonOpToPredicate(operator);
+
+        Optional<LocalDateTime> effectiveEndDate = Optional.empty();
+        if (temporalType == TemporalPredicate.EQUAL) {
+            // For EQUAL, determine the end of the range based on original text precision
+            if (isYearOnly(dateText)) {
+                // Year only: "2000" means from Jan 1, 2000 00:00:00 to Dec 31, 2000 23:59:59
+                LocalDate yearEnd = LocalDate.of(parsedStartDate.getYear(), 12, 31);
+                effectiveEndDate = Optional.of(LocalDateTime.of(yearEnd, java.time.LocalTime.MAX));
+            } else if (isYearMonth(dateText)) {
+                // Year-month: "2000-01" means from Jan 1, 2000 00:00:00 to Jan 31, 2000 23:59:59
+                LocalDate monthEnd = getLastDayOfMonth(parsedStartDate.getYear(), parsedStartDate.getMonthValue());
+                effectiveEndDate = Optional.of(LocalDateTime.of(monthEnd, java.time.LocalTime.MAX));
+            } else {
+                // Full date: "2000-01-01" means the full day
+                effectiveEndDate = Optional.of(LocalDateTime.of(parsedStartDate.toLocalDate(), java.time.LocalTime.MAX));
+            }
+        }
 
         String qualifiedVariableName = null;
         if (ctx.BIND() != null && ctx.var != null) {
@@ -1257,20 +1282,21 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
 
         // Create Temporal model with the specific predicate and the literal date in startDate
+        // For EQUAL, effectiveEndDate will now be populated. For others, it remains empty.
         return new Temporal(
-            Optional.of(literalDateTime), // The literal date being compared against
-            Optional.empty(), // End date is not needed for simple comparison predicates
+            Optional.of(parsedStartDate),
+            effectiveEndDate, // Pass the calculated endDate for EQUAL, or empty for others
             Optional.ofNullable(qualifiedVariableName), // The (potentially implicit) variable/field being compared
             Optional.empty(), // Range not applicable here
             temporalType // Use the specific predicate (BEFORE, AFTER, etc.)
         );
     }
-    
+
     @Override
     public Object visitDateLiteralRange(QueryLangParser.DateLiteralRangeContext ctx) {
         LocalDateTime startDate = parseDateLiteral(ctx.start.getText());
         LocalDateTime endDate;
-        
+
         if (ctx.end != null) {
             // If end date is provided, use it
             endDate = parseDateLiteral(ctx.end.getText());
@@ -1310,12 +1336,12 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
                 endDate = LocalDateTime.of(startDate.toLocalDate(), java.time.LocalTime.MAX);
             }
         }
-        
+
         return new LocalDateTime[] { startDate, endDate };
     }
-    
+
     // Helper methods for date literal handling
-    
+
     /**
      * Parse a date literal in the format YYYY, YYYY-MM, or YYYY-MM-DD
      */
@@ -1336,21 +1362,21 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             return LocalDateTime.of(year, month, day, 0, 0);
         }
     }
-    
+
     /**
      * Check if the date literal is year only format (YYYY)
      */
     private boolean isYearOnly(String dateLiteral) {
         return dateLiteral.matches("\\d{4}");
     }
-    
+
     /**
      * Check if the date literal is year-month format (YYYY-MM)
      */
     private boolean isYearMonth(String dateLiteral) {
         return dateLiteral.matches("\\d{4}-\\d{1,2}");
     }
-    
+
     /**
      * Get the last day of a given month in a given year
      */
@@ -1431,4 +1457,4 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         throw new IllegalStateException("Unknown groupByItem type: " + ctx.getText());
     }
     // End new methods for Group By Clause
-} 
+}

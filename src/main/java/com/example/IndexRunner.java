@@ -1,42 +1,30 @@
 package com.example;
 
-import com.example.index.*;
-import com.example.index.generators.BigramIndexGenerator;
-import com.example.index.generators.DateStitchIndexGenerator;
-import com.example.index.generators.DependencyIndexGenerator;
-import com.example.index.generators.HypernymIndexGenerator;
-import com.example.index.generators.NashIndexGenerator;
-import com.example.index.generators.NerDateIndexGenerator;
-import com.example.index.generators.NerIndexGenerator;
-import com.example.index.generators.NerStitchIndexGenerator;
-import com.example.index.generators.POSIndexGenerator;
-import com.example.index.generators.PosStitchIndexGenerator;
-import com.example.index.generators.TrigramIndexGenerator;
-import com.example.index.generators.UnigramIndexGenerator;
-import com.example.logging.IndexingMetrics;
-import com.example.logging.ProgressTracker;
-import net.sourceforge.argparse4j.ArgumentParsers;
-import net.sourceforge.argparse4j.inf.ArgumentParser;
-import net.sourceforge.argparse4j.inf.ArgumentParserException;
-import net.sourceforge.argparse4j.inf.Namespace;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.Statement;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import com.google.common.base.Stopwatch;
 import java.util.stream.Stream;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.index.generators.*;
+import com.example.logging.IndexingMetrics;
+import com.example.logging.ProgressTracker;
+import com.google.common.base.Stopwatch;
+
+import net.sourceforge.argparse4j.ArgumentParsers;
+import net.sourceforge.argparse4j.inf.ArgumentParser;
+import net.sourceforge.argparse4j.inf.ArgumentParserException;
+import net.sourceforge.argparse4j.inf.Namespace;
 
 
 public class IndexRunner {
@@ -89,7 +77,7 @@ public class IndexRunner {
         if (customTempDirStr != null) {
             logger.debug("Custom temporary directory: {}", customTempDirStr);
         }
-        
+
         Path customTempPath = (customTempDirStr != null && !customTempDirStr.isBlank()) ? Path.of(customTempDirStr) : null;
         if (customTempPath != null) {
             Files.createDirectories(customTempPath);
@@ -275,14 +263,14 @@ public class IndexRunner {
                     if (generateStitch) {
                         logger.info("Starting generation for all stitch indexes...");
                         Stopwatch stitchSw = Stopwatch.createStarted();
-                        
+
                         // Date Stitch Index
                         DateStitchIndexGenerator dateStitchGenerator = new DateStitchIndexGenerator(indexDir, stopwordsPath, conn, progress, batchSize, customTempPath);
                         logger.info("Generating DATE stitch index at {}/{}...", indexDir, dateStitchGenerator.getIndexName());
                         dateStitchGenerator.generateIndex();
                         dateStitchGenerator.close(); // Ensure resources are released
                         logger.info("Finished DATE stitch index in {}.", stitchSw.elapsed(TimeUnit.SECONDS));
-                        
+
                         // NER Stitch Index (excluding DATE)
                         stitchSw.reset().start();
                         NerStitchIndexGenerator nerStitchGenerator = new NerStitchIndexGenerator(indexDir, stopwordsPath, conn, progress, batchSize, customTempPath);

@@ -1,25 +1,40 @@
 package com.example;
 
-import org.iq80.leveldb.*;
-import static org.iq80.leveldb.impl.Iq80DBFactory.*;
+import static org.iq80.leveldb.impl.Iq80DBFactory.asString;
+import static org.iq80.leveldb.impl.Iq80DBFactory.factory;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDate;
+import java.util.AbstractMap;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.iq80.leveldb.DB;
+import org.iq80.leveldb.DBIterator;
+import org.iq80.leveldb.Options;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.core.Position;
+import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
+import com.example.index.NashDateEntryWithId;
+import com.example.index.StitchPosition;
+import com.example.index.util.NashSerializationUtils;
+
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-import java.io.*;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
-import java.time.LocalDate;
-import java.util.List;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import com.example.core.Position;
-import com.example.core.PositionList;
-import com.example.index.StitchPosition;
-import com.example.index.NashDateEntryWithId;
-import com.example.index.util.NashSerializationUtils;
-import com.example.core.PositionListSoA;
 
 public class LevelDBBrowser {
     private static final String DELIMITER = "\0";
@@ -209,16 +224,16 @@ public class LevelDBBrowser {
         boolean isNash = indexType.equals("nash");
         System.out.printf("Entries with prefix '%s':%n", prefix);
         System.out.println("=".repeat(20 + prefix.length()));
-        
+
         int count = 0;
         try (DBIterator iterator = db.iterator()) {
             iterator.seek(bytes(prefix));
-            
+
             while (iterator.hasNext() && (limit == 0 || count < limit)) {
                 Map.Entry<byte[], byte[]> entry = iterator.peekNext();
                 String key = asString(entry.getKey());
                 if (!key.startsWith(prefix)) break;
-                
+
                 if (isNash) {
                     displayNashEntry(entry.getKey(), entry.getValue());
                 } else {
@@ -229,7 +244,7 @@ public class LevelDBBrowser {
                 iterator.next();
             }
         }
-        
+
         if (limit > 0 && count == limit) {
             System.out.printf("%nShowing first %d entries. Use --limit to see more.%n", limit);
         }
@@ -242,7 +257,7 @@ public class LevelDBBrowser {
 
         // For non-Nash, store pairs of <Key, PositionCount> for sorting
         List<Map.Entry<String, Integer>> keyAndCountsList = new ArrayList<>();
-        
+
         // For Nash, we'll process directly as before, as their value structure is different
         // and typically not as large in terms of individual entry *value* size for the summary.
         List<Map.Entry<byte[], byte[]>> nashEntriesList = new ArrayList<>();
@@ -293,7 +308,7 @@ public class LevelDBBrowser {
                 if (limit > 0 && count >= limit) break;
                 String formattedKey = formatKey(entry.getKey(), indexType);
                 // entry.getValue() is now the position count directly
-                System.out.printf("Key: %s, Position Count: %d%n", formattedKey, entry.getValue()); 
+                System.out.printf("Key: %s, Position Count: %d%n", formattedKey, entry.getValue());
                 count++;
             }
         }
@@ -311,20 +326,20 @@ public class LevelDBBrowser {
 
         int count = 0;
         int maxPositions = 100;  // Limit to 100 positions by default
-        
+
         for (Position pos : positions.getPositions()) {
             if (count >= maxPositions) {
                 System.out.printf("%nShowing first %d positions. Total positions: %d%n", maxPositions, positions.size());
                 break;
             }
-            
+
             if (pos instanceof StitchPosition stitchPos) {
                 String annotationType = stitchPos.getType().toString().toLowerCase();
                 int synonymId = stitchPos.getSynonymId();
                 String value = synonyms
                     .getOrDefault(annotationType, Map.of())
                     .getOrDefault(synonymId, "unknown");
-                
+
                 System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][%s:%s]%n",
                     pos.getDocumentId(),
                     pos.getSentenceId(),
@@ -357,17 +372,17 @@ public class LevelDBBrowser {
     @SuppressWarnings("unchecked")
     private static Map<String, Map<Integer, String>> loadAnnotationSynonyms(String basePath) {
         Map<String, Map<Integer, String>> allSynonyms = new HashMap<>();
-        
+
         for (String annotationType : ANNOTATION_TYPES) {
             String synonymsFileName = String.format(ANNOTATION_SYNONYMS_PREFIX, annotationType);
             Path synonymsPath = Paths.get(basePath, "stitch-" + annotationType, synonymsFileName);
             File synonymsFile = synonymsPath.toFile();
-            
+
             if (!synonymsFile.exists()) {
                 logger.warn("Synonym file not found for type '{}' at path: {}", annotationType, synonymsPath);
                 continue;
             }
-            
+
             try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(synonymsFile))) {
                 Map<String, Integer> valueToId = (Map<String, Integer>) ois.readObject();
                 Map<Integer, String> idToValue = new HashMap<>();
@@ -378,7 +393,7 @@ public class LevelDBBrowser {
                 logger.error("Error loading {} synonyms from {}: {}", annotationType, synonymsPath, e.getMessage());
             }
         }
-        
+
         return allSynonyms;
     }
 
@@ -441,21 +456,21 @@ public class LevelDBBrowser {
 
         int count = 0;
         int maxPositions = 100;  // Limit to 100 positions by default
-        
+
         for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
             Position pos = positionsSoA.getPositionAt(i);
             if (count >= maxPositions) {
                 System.out.printf("%nShowing first %d positions. Total positions: %d%n", maxPositions, positionsSoA.getNumPositions());
                 break;
             }
-            
+
             if (pos instanceof StitchPosition stitchPos) {
                 String annotationType = stitchPos.getType().toString().toLowerCase();
                 int synonymId = stitchPos.getSynonymId();
                 String value = synonyms
                     .getOrDefault(annotationType, Map.of())
                     .getOrDefault(synonymId, "unknown");
-                
+
                 System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][%s:%s]%n",
                     pos.getDocumentId(),
                     pos.getSentenceId(),

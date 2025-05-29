@@ -188,7 +188,7 @@ class PositionListSoATest {
         PositionListSoA plOriginal = new PositionListSoA();
         for (int i = 0; i < 300; i++) { // More than UNCOMPRESSED_THRESHOLD
             if (i % 2 == 0) {
-                plOriginal.add(i / 10, i % 10, i * 2, i * 2 + 5); 
+                plOriginal.add(i / 10, i % 10, i * 2, i * 2 + 5);
             } else {
                 plOriginal.add(i / 10, i % 10, i * 2, i * 2 + 5, 1000 + i);
             }
@@ -207,7 +207,7 @@ class PositionListSoATest {
         plOriginal.add(1, 0, 10, 15, 1001);
         // Doc 1, Sent 0, Pos 20-25, SynID -1 (e.g., 'brown' that is part of a stitch but 'brown' itself is not the primary term for this list)
         // Or, a non-stitch position that somehow got associated with this term temporarily before merging.
-        plOriginal.add(1, 0, 20, 25, -1); 
+        plOriginal.add(1, 0, 20, 25, -1);
         // Doc 2, Sent 1, Pos 5-10, SynID 1002
         plOriginal.add(2, 1, 5, 10, 1002);
 
@@ -236,9 +236,9 @@ class PositionListSoATest {
     @Test
     void testSelectiveDecompression() throws IOException {
         PositionListSoA plOriginal = new PositionListSoA();
-        plOriginal.add(1, 10, 100, 1000);          
-        plOriginal.add(2, 20, 200, 2000, 20000);   
-        plOriginal.add(3, 30, 300, 3000); 
+        plOriginal.add(1, 10, 100, 1000);
+        plOriginal.add(2, 20, 200, 2000, 20000);
+        plOriginal.add(3, 30, 300, 3000);
 
         byte[] blob = plOriginal.serializeToCompositeBlob();
 
@@ -272,7 +272,7 @@ class PositionListSoATest {
         assertEquals(20000, synIds.getInt(1));
         assertEquals(-1, synIds.getInt(2));
     }
-    
+
     // --- Manipulation Method Tests ---
     @Test
     void testClearAndIsEmpty() {
@@ -284,7 +284,7 @@ class PositionListSoATest {
         assertTrue(pl.isEmpty());
         assertEquals(0, pl.getNumPositions());
         // Check that internal lists are cleared (though they are replaced in some ops like sort/merge)
-        assertEquals(0, pl.getDocumentIds().size()); 
+        assertEquals(0, pl.getDocumentIds().size());
     }
 
     @Test
@@ -310,7 +310,7 @@ class PositionListSoATest {
         assertEquals(4, pl3.getNumPositions());
         assertEquals(101, pl3.getSynonymIdAt(1));
     }
-    
+
     @Test
     void testSort() {
         PositionListSoA pl = new PositionListSoA();
@@ -339,14 +339,14 @@ class PositionListSoATest {
     @Test
     void testMerge() {
         PositionListSoA pl1 = new PositionListSoA();
-        pl1.add(1,1,1,2);      
-        pl1.add(1,1,5,6, 101);  
-        pl1.add(2,1,10,12);     
+        pl1.add(1,1,1,2);
+        pl1.add(1,1,5,6, 101);
+        pl1.add(2,1,10,12);
 
         PositionListSoA pl2 = new PositionListSoA();
         pl2.add(1,1,5,6, 101); // Duplicate of one in pl1
-        pl2.add(2,1,15,16,102); 
-        pl2.add(3,1,1,1);       
+        pl2.add(2,1,15,16,102);
+        pl2.add(3,1,1,1);
 
         pl1.merge(pl2);
 
@@ -362,7 +362,7 @@ class PositionListSoATest {
         assertEquals(2, pl1.getDocIdAt(2)); assertEquals(1, pl1.getSentenceIdAt(2)); assertEquals(10, pl1.getBeginCharAt(2)); assertEquals(12, pl1.getEndCharAt(2)); assertEquals(-1, pl1.getSynonymIdAt(2));
         assertEquals(2, pl1.getDocIdAt(3)); assertEquals(1, pl1.getSentenceIdAt(3)); assertEquals(15, pl1.getBeginCharAt(3)); assertEquals(16, pl1.getEndCharAt(3)); assertEquals(102, pl1.getSynonymIdAt(3));
         assertEquals(3, pl1.getDocIdAt(4)); assertEquals(1, pl1.getSentenceIdAt(4)); assertEquals(1, pl1.getBeginCharAt(4)); assertEquals(1, pl1.getEndCharAt(4)); assertEquals(-1, pl1.getSynonymIdAt(4));
-    
+
         PositionListSoA plEmpty = new PositionListSoA();
         PositionListSoA plToMerge = new PositionListSoA();
         plToMerge.add(1,1,1,1);
@@ -372,7 +372,7 @@ class PositionListSoATest {
         plToMerge.merge(new PositionListSoA()); // Merge with empty
         assertEquals(1, plToMerge.getNumPositions());
     }
-    
+
     @Test
     void testPositionIterator() {
         PositionListSoA pl = new PositionListSoA();
@@ -404,4 +404,4 @@ class PositionListSoATest {
         assertEquals(2, pl.getNumPositions()); // Ensure list is still valid
     }
 
-} 
+}

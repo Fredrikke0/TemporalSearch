@@ -32,7 +32,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        
+
         // Create test stopwords file
         try (PrintWriter writer = new PrintWriter(TEST_STOPWORDS_PATH)) {
             writer.println("the");
@@ -58,7 +58,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
             pstmt.setInt(1, 1);
             pstmt.setString(2, "2024-01-28");
             pstmt.executeUpdate();
-            
+
             pstmt.setInt(1, 2);
             pstmt.setString(2, "2024-01-28");
             pstmt.executeUpdate();
@@ -182,13 +182,13 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
 
         // Test regular trigrams in first document (stopwords are filtered before trigram creation)
         // Tokens from Doc 1, Sent 1 after filtering: "black", "cat", "sits", "quietly", "now"
-        verifyTrigram("black" + IndexGenerator.DELIMITER + "cat" + 
+        verifyTrigram("black" + IndexGenerator.DELIMITER + "cat" +
             IndexGenerator.DELIMITER + "sits", 1, 0, 4, 18, 1);
-        verifyTrigram("cat" + IndexGenerator.DELIMITER + "sits" + 
+        verifyTrigram("cat" + IndexGenerator.DELIMITER + "sits" +
             IndexGenerator.DELIMITER + "quietly", 1, 0, 10, 26, 1);
-        verifyTrigram("sits" + IndexGenerator.DELIMITER + "quietly" + 
+        verifyTrigram("sits" + IndexGenerator.DELIMITER + "quietly" +
             IndexGenerator.DELIMITER + "now", 1, 0, 14, 30, 1);
-        
+
         // It would be good to add tests for trigrams from other sentences/documents here.
         // For example, from Doc 1, Sent 2 ("It purrs very softly today."):
         // Filtered: "it", "purrs", "very", "softly", "today"
@@ -198,7 +198,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
 
         // And from Doc 2, Sent 1 ("The black cat runs quickly away."):
         // Filtered: "black", "cat", "runs", "quickly", "away"
-        // verifyTrigram("black" + DELIMITER + "cat" + DELIMITER + "runs", 2, 0, 4, 18, 1); 
+        // verifyTrigram("black" + DELIMITER + "cat" + DELIMITER + "runs", 2, 0, 4, 18, 1);
         // verifyTrigram("cat" + DELIMITER + "runs" + DELIMITER + "quickly", 2, 0, 10, 26, 1);
         // verifyTrigram("runs" + DELIMITER + "quickly" + DELIMITER + "away", 2, 0, 14, 31, 1);
     }
@@ -216,9 +216,9 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         indexAccess = new IndexAccess(indexBaseDir.toPath(), "trigram", options);
 
         // Verify no trigrams cross sentence boundaries (using tokens)
-        Optional<PositionListSoA> quietly = indexAccess.get(bytes("quietly" + IndexGenerator.DELIMITER + "now" + 
+        Optional<PositionListSoA> quietly = indexAccess.get(bytes("quietly" + IndexGenerator.DELIMITER + "now" +
             IndexGenerator.DELIMITER + "it"));
-        Optional<PositionListSoA> now = indexAccess.get(bytes("now" + IndexGenerator.DELIMITER + "it" + 
+        Optional<PositionListSoA> now = indexAccess.get(bytes("now" + IndexGenerator.DELIMITER + "it" +
             IndexGenerator.DELIMITER + "purrs")); // Use token "purrs"
         assertTrue(quietly.isEmpty(), "Trigram should not cross sentence boundary");
         assertTrue(now.isEmpty(), "Trigram should not cross sentence boundary");
@@ -240,10 +240,10 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         indexAccess = new IndexAccess(indexBaseDir.toPath(), "trigram", options);
 
         // Expected trigrams (using tokens)
-        // "Anne Waldman born" 
+        // "Anne Waldman born"
         verifyTrigram("anne" + IndexGenerator.DELIMITER + "waldman" +
             IndexGenerator.DELIMITER + "born", 3, 0, 0, 19, 1);
-        // "Waldman born 1945" 
+        // "Waldman born 1945"
         verifyTrigram("waldman" + IndexGenerator.DELIMITER + "born" +
             IndexGenerator.DELIMITER + "1945", 3, 0, 5, 24, 1);
 
@@ -263,10 +263,10 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
             int expectedBeginChar, int expectedEndChar, int expectedCount) throws IOException, IndexAccessException {
         Optional<PositionListSoA> positions = indexAccess.get(bytes(trigram));
         assertTrue(positions.isPresent(), "Trigram '" + trigram + "' should be indexed");
-        
+
         assertEquals(expectedCount, positions.get().getNumPositions(),
                 String.format("Trigram '%s' should appear %d time(s)", trigram, expectedCount));
-        
+
         Position pos = positions.get().getPositionAt(0);
         assertEquals(expectedDocId, pos.getDocumentId());
         assertEquals(expectedSentenceId, pos.getSentenceId());
@@ -278,4 +278,4 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         Optional<PositionListSoA> positions = indexAccess.get(bytes(trigram));
         assertTrue(positions.isEmpty(), message != null ? message : "Trigram '" + trigram + "' should NOT be indexed");
     }
-} 
+}

@@ -10,7 +10,7 @@ public class NashDateEntryWithId {
     // Fields are deliberately package-private or have public getters for access by NashSerializationUtils
     // and NashIndexGenerator if they were in the same package. Making them public for simplicity if used across packages.
     final Position position;
-    final int dateId; 
+    final int dateId;
 
     public NashDateEntryWithId(Position position, int dateId) {
         this.position = position;
@@ -27,4 +27,4 @@ public class NashDateEntryWithId {
 
     // Consider adding equals, hashCode, and toString if these objects are stored in collections
     // or used in ways that require these methods.
-} 
+}

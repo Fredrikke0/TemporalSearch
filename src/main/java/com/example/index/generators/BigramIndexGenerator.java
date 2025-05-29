@@ -1,7 +1,5 @@
 package com.example.index.generators;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -13,10 +11,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-import com.example.logging.ProgressTracker;
-import com.example.core.Position;
+
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming bigram index from annotation entries.
@@ -48,7 +48,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
                     "FROM annotations WHERE annotation_id > ? ORDER BY annotation_id LIMIT ?";
         }
-        
+
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
             if (isFirstBatch) {
                 stmt.setInt(1, this.batchSize);
@@ -56,7 +56,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                 stmt.setLong(1, lastProcessedEntry.getAnnotationId());
                 stmt.setInt(2, this.batchSize);
             }
-            
+
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String rawToken = rs.getString("token");
@@ -123,7 +123,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
         }
         return index;
     }
-    
+
     @Override
     protected String getTableName() {
         return "annotations";
@@ -147,4 +147,4 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
         }
         return 0;
     }
-} 
+}

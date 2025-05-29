@@ -11,7 +11,7 @@ import java.time.LocalDate;
  * as well as methods to insert test data into the database.
  */
 public class TestData {
-    
+
     public static AnnotationEntry createAnnotation(int docId, String lemma, String pos) {
         // Default annotation id to 1 for backward compatibility
         return createAnnotation(1, docId, lemma, pos);
@@ -87,4 +87,4 @@ public class TestData {
     public static final AnnotationEntry ANNOTATION_ENTRY_1 = new AnnotationEntry(1, 1, 1, 0, 2, "He", "PRP", null, null, null);
     public static final AnnotationEntry ANNOTATION_ENTRY_2 = new AnnotationEntry(2, 1, 1, 3, 5, "is", "VBZ", null, null, null);
     public static final AnnotationEntry ANNOTATION_ENTRY_3 = new AnnotationEntry(3, 1, 1, 6, 10, "good", "JJ", null, null, null);
-} 
+}

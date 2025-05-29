@@ -1,420 +1,386 @@
 package com.example.query.executor;
 
-import com.example.query.binding.JoinedMatch;
-import com.example.query.binding.MatchDetail;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.LocalDate;
-import java.util.*;
+import com.example.query.binding.ValueType;
 
 /**
  * Optimizes join operations using SoA (Structure of Arrays) patterns.
- * Instead of iterating through individual MatchDetail objects, this class
- * extracts bulk arrays and performs operations on them for better performance.
+ * Operates directly on QueryResultSoA instances and returns pairs of matching conceptual IDs.
  */
 public class SoAJoinOptimizer {
     private static final Logger logger = LoggerFactory.getLogger(SoAJoinOptimizer.class);
 
     /**
+     * Represents a pair of conceptualRowIds from the left and right QueryResultSoA that have matched on a join key.
+     */
+    public record SoAJoinKeyMatch(int leftConceptualRowId, int rightConceptualRowId) {}
+
+    /**
      * Performs an optimized hash join by selecting the best algorithm based on join keys.
-     * 
-     * @param leftDetails List of MatchDetail from the left side
-     * @param rightDetails List of MatchDetail from the right side  
-     * @param leftKey The key to extract from left side
-     * @param rightKey The key to extract from right side
-     * @param requirements Attribute requirements for optimization hints
-     * @return List of JoinedMatch representing the join result
+     *
+     * @param leftSoA QueryResultSoA from the left side
+     * @param rightSoA QueryResultSoA from the right side
+     * @param leftJoinKey The key/variable name to extract from left side
+     * @param rightJoinKey The key/variable name to extract from right side
+     * @return List of SoAJoinKeyMatch representing the join result
      */
-    public static List<JoinedMatch> performOptimizedHashJoin(
-            List<MatchDetail> leftDetails, List<MatchDetail> rightDetails,
-            String leftKey, String rightKey, AttributeRequirements requirements) {
-        
-        logger.debug("Performing optimized join on keys: {} = {} (left size: {}, right size: {})",
-                    leftKey, rightKey, leftDetails.size(), rightDetails.size());
+    public static List<SoAJoinKeyMatch> performOptimizedHashJoin(
+            QueryResultSoA leftSoA, QueryResultSoA rightSoA,
+            String leftJoinKey, String rightJoinKey) {
 
-        // Choose specialized algorithm based on join keys
-        if ("date".equals(leftKey) && "date".equals(rightKey)) {
-            return performDateJoin(leftDetails, rightDetails, requirements);
-        } else if ("document_id".equals(leftKey) && "document_id".equals(rightKey)) {
-            return performDocumentIdJoin(leftDetails, rightDetails, requirements);
-        } else if ("sentence_id".equals(leftKey) && "sentence_id".equals(rightKey)) {
-            return performSentenceIdJoin(leftDetails, rightDetails, requirements);
+        logger.debug("Performing optimized SoA hash join on keys: {} = {} (left size: {}, right size: {})",
+                    leftJoinKey, rightJoinKey, leftSoA.size(), rightSoA.size());
+
+        if (!leftSoA.getRequirements().needsConceptualRowIds || !rightSoA.getRequirements().needsConceptualRowIds) {
+            logger.error("Critical: Input QueryResultSoA(s) for Hash Join are missing conceptualRowIds. Join cannot proceed correctly.");
+            return Collections.emptyList();
+        }
+
+        if (isStructuralDateKey(leftJoinKey) && isStructuralDateKey(rightJoinKey)) {
+            return performDateJoinSoA(leftSoA, rightSoA, leftJoinKey, rightJoinKey);
+        } else if (isStructuralDocumentIdKey(leftJoinKey) && isStructuralDocumentIdKey(rightJoinKey)) {
+            return performDocumentIdJoinSoA(leftSoA, rightSoA);
+        } else if (isStructuralSentenceIdKey(leftJoinKey) && isStructuralSentenceIdKey(rightJoinKey)) {
+            return performSentenceIdJoinSoA(leftSoA, rightSoA);
         } else {
-            return performGenericJoin(leftDetails, rightDetails, leftKey, rightKey, requirements);
+            return performGenericJoinSoA(leftSoA, rightSoA, leftJoinKey, rightJoinKey);
         }
     }
 
+    public static boolean isStructuralDateKey(String key) {
+        return "date".equalsIgnoreCase(key) || "DATE".equalsIgnoreCase(key);
+    }
+
+    public static boolean isStructuralDocumentIdKey(String key) {
+        return "document_id".equalsIgnoreCase(key) || "DOCID".equalsIgnoreCase(key);
+    }
+
+    public static boolean isStructuralSentenceIdKey(String key) {
+        return "sentence_id".equalsIgnoreCase(key) || "SENTID".equalsIgnoreCase(key);
+    }
+
+    private static <T> Map<T, Set<Integer>> buildKeyToConceptualIdsMap(
+            QueryResultSoA soa, String keyName, Class<T> keyType) {
+
+        Map<T, Set<Integer>> keyToConceptualIds = new HashMap<>();
+        if (!soa.getRequirements().needsConceptualRowIds) {
+            logger.warn("Building key map for SoA (key: '{}'), but it lacks conceptualRowIds. Results may be incorrect.", keyName);
+            // Still proceed, but be aware conceptual IDs might be default/missing.
+        }
+
+        for (int i = 0; i < soa.size(); i++) {
+            Object extractedValue = null;
+            boolean keyFound = false;
+
+            String varNameAtIndex = soa.getVariableNameAt(i);
+            if (varNameAtIndex != null && (varNameAtIndex.equals(keyName) || varNameAtIndex.equals("?" + keyName))) {
+                extractedValue = soa.getValueAt(i);
+                keyFound = true;
+            } else if (isStructuralDocumentIdKey(keyName) && soa.getRequirements().needsDocumentId) {
+                 extractedValue = soa.getDocumentIdAt(i);
+                 keyFound = true;
+            } else if (isStructuralSentenceIdKey(keyName) && soa.getRequirements().needsSentenceId) {
+                 extractedValue = soa.getSentenceIdAt(i);
+                 keyFound = true;
+            } else if (isStructuralDateKey(keyName)) {
+                 if (soa.getValueTypeAt(i) == ValueType.DATE) { // More direct check for date type
+                     extractedValue = soa.getValueAt(i);
+                     keyFound = true;
+                 } else if (varNameAtIndex != null && (varNameAtIndex.endsWith("date") || varNameAtIndex.endsWith("DATE"))) { // Fallback for var names
+                    extractedValue = soa.getValueAt(i);
+                    keyFound = true;
+                 }
+            }
+
+            if (keyFound && extractedValue != null) {
+                try {
+                    T castedValue = keyType.cast(extractedValue);
+                    int conceptualId = soa.getRequirements().needsConceptualRowIds ? soa.getConceptualRowIdAt(i) : i; // Fallback if no conceptualIDs
+                    keyToConceptualIds.computeIfAbsent(castedValue, k -> new HashSet<>()).add(conceptualId);
+                } catch (ClassCastException e) {
+                    logger.warn("Cast failed for key '{}', value '{}' to type '{}'. Skipping.", keyName, extractedValue, keyType.getSimpleName());
+                }
+            }
+        }
+        return keyToConceptualIds;
+    }
+
+    private static List<SoAJoinKeyMatch> performDateJoinSoA(
+            QueryResultSoA leftSoA, QueryResultSoA rightSoA,
+            String leftDateKeyName, String rightDateKeyName) {
+
+        logger.debug("Performing SoA DATE join: {} (left) vs {} (right)", leftDateKeyName, rightDateKeyName);
+
+        Map<LocalDate, Set<Integer>> leftMap = buildKeyToConceptualIdsMap(leftSoA, leftDateKeyName, LocalDate.class);
+        Map<LocalDate, Set<Integer>> rightMap = buildKeyToConceptualIdsMap(rightSoA, rightDateKeyName, LocalDate.class);
+        return combineMaps(leftMap, rightMap);
+    }
+
+    private static List<SoAJoinKeyMatch> performDocumentIdJoinSoA(
+            QueryResultSoA leftSoA, QueryResultSoA rightSoA) {
+        logger.debug("Performing SoA DOCUMENT_ID join");
+        Map<Integer, Set<Integer>> leftMap = buildKeyToConceptualIdsMap(leftSoA, "document_id", Integer.class);
+        Map<Integer, Set<Integer>> rightMap = buildKeyToConceptualIdsMap(rightSoA, "document_id", Integer.class);
+        return combineMaps(leftMap, rightMap);
+    }
+
+    private static List<SoAJoinKeyMatch> performSentenceIdJoinSoA(
+            QueryResultSoA leftSoA, QueryResultSoA rightSoA) {
+        logger.debug("Performing SoA SENTENCE_ID join");
+        Map<Integer, Set<Integer>> leftMap = buildKeyToConceptualIdsMap(leftSoA, "sentence_id", Integer.class);
+        Map<Integer, Set<Integer>> rightMap = buildKeyToConceptualIdsMap(rightSoA, "sentence_id", Integer.class);
+
+        // Filter out invalid sentence IDs from maps before combining
+        leftMap.keySet().removeIf(sentId -> sentId < 0);
+        rightMap.keySet().removeIf(sentId -> sentId < 0);
+
+        return combineMaps(leftMap, rightMap);
+    }
+
+    private static List<SoAJoinKeyMatch> performGenericJoinSoA(
+            QueryResultSoA leftSoA, QueryResultSoA rightSoA,
+            String leftKeyName, String rightKeyName) {
+        logger.debug("Performing generic SoA hash join: {} (left) vs {} (right)", leftKeyName, rightKeyName);
+        Map<Object, Set<Integer>> leftMap = buildKeyToConceptualIdsMap(leftSoA, leftKeyName, Object.class);
+        Map<Object, Set<Integer>> rightMap = buildKeyToConceptualIdsMap(rightSoA, rightKeyName, Object.class);
+        return combineMaps(leftMap, rightMap);
+    }
+
     /**
-     * Optimized join for date values using bulk array operations.
-     * This method extracts date values in bulk and creates index mappings
-     * for efficient joining.
+     * Helper to combine two maps (key -> Set<ConceptualId>) into List<SoAJoinKeyMatch>.
      */
-    private static List<JoinedMatch> performDateJoin(
-            List<MatchDetail> leftDetails, List<MatchDetail> rightDetails,
-            AttributeRequirements requirements) {
-        
-        logger.debug("Performing optimized DATE join");
-        
-        // Extract date values and indices in bulk
-        Map<LocalDate, IntArrayList> leftDateToIndices = new HashMap<>();
-        Map<LocalDate, IntArrayList> rightDateToIndices = new HashMap<>();
+    private static <K> List<SoAJoinKeyMatch> combineMaps(Map<K, Set<Integer>> leftMap, Map<K, Set<Integer>> rightMap) {
+        List<SoAJoinKeyMatch> results = new ArrayList<>();
+        Map<K, Set<Integer>> smallerMap = leftMap.size() <= rightMap.size() ? leftMap : rightMap;
+        Map<K, Set<Integer>> largerMap = smallerMap == leftMap ? rightMap : leftMap;
 
-        // Build left-side index
-        for (int i = 0; i < leftDetails.size(); i++) {
-            MatchDetail detail = leftDetails.get(i);
-            if (detail.value() instanceof LocalDate date) {
-                leftDateToIndices.computeIfAbsent(date, k -> new IntArrayList()).add(i);
-            }
-        }
+        for (Map.Entry<K, Set<Integer>> entry : smallerMap.entrySet()) {
+            K key = entry.getKey();
+            Set<Integer> conceptualIdsFromLargerMap = largerMap.get(key);
 
-        // Build right-side index  
-        for (int i = 0; i < rightDetails.size(); i++) {
-            MatchDetail detail = rightDetails.get(i);
-            if (detail.value() instanceof LocalDate date) {
-                rightDateToIndices.computeIfAbsent(date, k -> new IntArrayList()).add(i);
-            }
-        }
+            if (conceptualIdsFromLargerMap != null && !conceptualIdsFromLargerMap.isEmpty()) {
+                Set<Integer> conceptualIdsFromSmallerMap = entry.getValue();
 
-        // Perform join using bulk operations
-        List<JoinedMatch> results = new ArrayList<>();
-        
-        // Iterate through the smaller index for efficiency
-        Map<LocalDate, IntArrayList> smallerIndex = leftDateToIndices.size() <= rightDateToIndices.size() 
-            ? leftDateToIndices : rightDateToIndices;
-        Map<LocalDate, IntArrayList> largerIndex = smallerIndex == leftDateToIndices 
-            ? rightDateToIndices : leftDateToIndices;
-        boolean leftIsSmaller = smallerIndex == leftDateToIndices;
+                Set<Integer> leftConceptualIds = (smallerMap == leftMap) ? conceptualIdsFromSmallerMap : conceptualIdsFromLargerMap;
+                Set<Integer> rightConceptualIds = (smallerMap == leftMap) ? conceptualIdsFromLargerMap : conceptualIdsFromSmallerMap;
 
-        for (Map.Entry<LocalDate, IntArrayList> entry : smallerIndex.entrySet()) {
-            LocalDate date = entry.getKey();
-            IntArrayList rightIndices = largerIndex.get(date);
-            
-            if (rightIndices != null) {
-                IntArrayList leftIndices = leftIsSmaller ? entry.getValue() : rightIndices;
-                IntArrayList actualRightIndices = leftIsSmaller ? rightIndices : entry.getValue();
-                
-                // Create cross product using bulk array access
-                for (int leftIdx : leftIndices) {
-                    for (int rightIdx : actualRightIndices) {
-                        results.add(new JoinedMatch(
-                            leftDetails.get(leftIdx),
-                            rightDetails.get(rightIdx)
-                        ));
+                for (int leftCid : leftConceptualIds) {
+                    for (int rightCid : rightConceptualIds) {
+                        // Basic self-join on the exact same conceptual ID from the exact same input SoA instance might be problematic
+                        // depending on how JoinHandler processes these. If leftSoA == rightSoA and leftCid == rightCid,
+                        // it means an item is joining with itself. This check is subtle.
+                        // For now, allow all pairs; JoinHandler's logic for creating output rows is key.
+                        results.add(new SoAJoinKeyMatch(leftCid, rightCid));
                     }
                 }
             }
         }
-
-        logger.debug("DATE join completed: {} pairs created from {} left dates, {} right dates",
-                    results.size(), leftDateToIndices.size(), rightDateToIndices.size());
+        logger.debug("Map combination yielded {} key matches.", results.size());
         return results;
     }
 
-    /**
-     * Optimized join for document IDs using direct array access.
-     * Since document IDs are stored directly in MatchDetail, this can use
-     * very efficient integer-based indexing.
-     */
-    private static List<JoinedMatch> performDocumentIdJoin(
-            List<MatchDetail> leftDetails, List<MatchDetail> rightDetails,
-            AttributeRequirements requirements) {
-        
-        logger.debug("Performing optimized DOCUMENT_ID join");
+    public static List<SoAJoinKeyMatch> performOptimizedTemporalJoin(
+            QueryResultSoA leftSoA, QueryResultSoA rightSoA,
+            String leftKey, String rightKey, String predicate)
+            throws QueryExecutionException {
+        // Removed AttributeRequirements requirements parameter
+        logger.debug("Performing SoA-based Temporal Join for predicate '{}' on keys: {} (left) vs {} (right)", predicate, leftKey, rightKey);
 
-        // Use int-specialized maps for better performance
-        Object2IntOpenHashMap<Integer> leftDocToFirstIndex = new Object2IntOpenHashMap<>();
-        Map<Integer, IntArrayList> leftDocToIndices = new HashMap<>();
-        Map<Integer, IntArrayList> rightDocToIndices = new HashMap<>();
-
-        // Extract document IDs in bulk from left side
-        for (int i = 0; i < leftDetails.size(); i++) {
-            MatchDetail detail = leftDetails.get(i);
-            int docId = detail.getDocumentId();
-            leftDocToIndices.computeIfAbsent(docId, k -> new IntArrayList()).add(i);
+        if (!leftSoA.getRequirements().needsConceptualRowIds || !rightSoA.getRequirements().needsConceptualRowIds) {
+            logger.error("Critical: Input QueryResultSoA(s) for Temporal Join are missing conceptualRowIds. Join cannot proceed correctly.");
+            return Collections.emptyList();
         }
 
-        // Extract document IDs in bulk from right side
-        for (int i = 0; i < rightDetails.size(); i++) {
-            MatchDetail detail = rightDetails.get(i);
-            int docId = detail.getDocumentId();
-            rightDocToIndices.computeIfAbsent(docId, k -> new IntArrayList()).add(i);
+        List<TemporalConceptualPair> leftPairs = extractTemporalPairs(leftSoA, leftKey);
+        List<TemporalConceptualPair> rightPairs = extractTemporalPairs(rightSoA, rightKey);
+
+        if (leftPairs.isEmpty() || rightPairs.isEmpty()) {
+            logger.debug("One or both sides of the temporal join have no valid date entries. Left: {}, Right: {}.", leftPairs.size(), rightPairs.size());
+            return Collections.emptyList();
         }
 
-        // Perform join
-        List<JoinedMatch> results = new ArrayList<>();
-        
-        // Use the smaller map as the driver
-        Map<Integer, IntArrayList> smallerMap = leftDocToIndices.size() <= rightDocToIndices.size()
-            ? leftDocToIndices : rightDocToIndices;
-        Map<Integer, IntArrayList> largerMap = smallerMap == leftDocToIndices
-            ? rightDocToIndices : leftDocToIndices;
-        boolean leftIsSmaller = smallerMap == leftDocToIndices;
+        // Sort by date, then by conceptual ID for stable processing
+        Comparator<TemporalConceptualPair> pairComparator = Comparator.comparing(TemporalConceptualPair::date)
+                                                                    .thenComparingInt(TemporalConceptualPair::conceptualId);
+        leftPairs.sort(pairComparator);
+        rightPairs.sort(pairComparator);
 
-        for (Map.Entry<Integer, IntArrayList> entry : smallerMap.entrySet()) {
-            Integer docId = entry.getKey();
-            IntArrayList otherIndices = largerMap.get(docId);
-            
-            if (otherIndices != null) {
-                IntArrayList leftIndices = leftIsSmaller ? entry.getValue() : otherIndices;
-                IntArrayList rightIndices = leftIsSmaller ? otherIndices : entry.getValue();
-                
-                // Create cross product
-                for (int leftIdx : leftIndices) {
-                    for (int rightIdx : rightIndices) {
-                        // Avoid joining a detail with itself
-                        if (leftIdx != rightIdx || leftDetails != rightDetails) {
-                            results.add(new JoinedMatch(
-                                leftDetails.get(leftIdx),
-                                rightDetails.get(rightIdx)
-                            ));
+        List<SoAJoinKeyMatch> results = new ArrayList<>();
+
+        // Actual join logic depends on the predicate
+        // Example for "BEFORE": For each leftPair, find all rightPairs that are AFTER it.
+        // This is a naive N*M, can be optimized with sweep-line or interval tree approaches if performance critical.
+        // For now, a clear, correct nested loop is prioritized.
+
+        switch (predicate.toUpperCase()) {
+            case "BEFORE": // left occurs before right
+                for (TemporalConceptualPair left : leftPairs) {
+                    for (TemporalConceptualPair right : rightPairs) {
+                        if (left.date().isBefore(right.date())) {
+                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId()));
                         }
                     }
                 }
-            }
-        }
-
-        logger.debug("DOCUMENT_ID join completed: {} pairs created from {} left docs, {} right docs",
-                    results.size(), leftDocToIndices.size(), rightDocToIndices.size());
-        return results;
-    }
-
-    /**
-     * Optimized join for sentence IDs using direct array access.
-     */
-    private static List<JoinedMatch> performSentenceIdJoin(
-            List<MatchDetail> leftDetails, List<MatchDetail> rightDetails,
-            AttributeRequirements requirements) {
-        
-        logger.debug("Performing optimized SENTENCE_ID join");
-
-        Map<Integer, IntArrayList> leftSentToIndices = new HashMap<>();
-        Map<Integer, IntArrayList> rightSentToIndices = new HashMap<>();
-
-        // Extract sentence IDs in bulk from left side
-        for (int i = 0; i < leftDetails.size(); i++) {
-            MatchDetail detail = leftDetails.get(i);
-            int sentId = detail.getSentenceId();
-            if (sentId >= 0) { // Valid sentence ID
-                leftSentToIndices.computeIfAbsent(sentId, k -> new IntArrayList()).add(i);
-            }
-        }
-
-        // Extract sentence IDs in bulk from right side
-        for (int i = 0; i < rightDetails.size(); i++) {
-            MatchDetail detail = rightDetails.get(i);
-            int sentId = detail.getSentenceId();
-            if (sentId >= 0) { // Valid sentence ID
-                rightSentToIndices.computeIfAbsent(sentId, k -> new IntArrayList()).add(i);
-            }
-        }
-
-        // Perform join
-        List<JoinedMatch> results = new ArrayList<>();
-        
-        // Use the smaller map as the driver
-        Map<Integer, IntArrayList> smallerMap = leftSentToIndices.size() <= rightSentToIndices.size()
-            ? leftSentToIndices : rightSentToIndices;
-        Map<Integer, IntArrayList> largerMap = smallerMap == leftSentToIndices
-            ? rightSentToIndices : leftSentToIndices;
-        boolean leftIsSmaller = smallerMap == leftSentToIndices;
-
-        for (Map.Entry<Integer, IntArrayList> entry : smallerMap.entrySet()) {
-            Integer sentId = entry.getKey();
-            IntArrayList otherIndices = largerMap.get(sentId);
-            
-            if (otherIndices != null) {
-                IntArrayList leftIndices = leftIsSmaller ? entry.getValue() : otherIndices;
-                IntArrayList rightIndices = leftIsSmaller ? otherIndices : entry.getValue();
-                
-                // Create cross product
-                for (int leftIdx : leftIndices) {
-                    for (int rightIdx : rightIndices) {
-                        // Avoid joining a detail with itself
-                        if (leftIdx != rightIdx || leftDetails != rightDetails) {
-                            results.add(new JoinedMatch(
-                                leftDetails.get(leftIdx),
-                                rightDetails.get(rightIdx)
-                            ));
+                break;
+            case "AFTER": // left occurs after right
+                for (TemporalConceptualPair left : leftPairs) {
+                    for (TemporalConceptualPair right : rightPairs) {
+                        if (left.date().isAfter(right.date())) {
+                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId()));
                         }
                     }
                 }
-            }
-        }
-
-        logger.debug("SENTENCE_ID join completed: {} pairs created from {} left sentences, {} right sentences",
-                    results.size(), leftSentToIndices.size(), rightSentToIndices.size());
-        return results;
-    }
-
-    /**
-     * Generic optimized join for arbitrary keys using bulk value extraction.
-     * Still more efficient than the original implementation due to reduced 
-     * method calls and better memory access patterns.
-     */
-    private static List<JoinedMatch> performGenericJoin(
-            List<MatchDetail> leftDetails, List<MatchDetail> rightDetails,
-            String leftKey, String rightKey, AttributeRequirements requirements) {
-        
-        logger.debug("Performing optimized GENERIC join on keys: {} = {}", leftKey, rightKey);
-
-        Map<Object, IntArrayList> leftValueToIndices = new HashMap<>();
-        Map<Object, IntArrayList> rightValueToIndices = new HashMap<>();
-
-        // Extract values in bulk from left side
-        for (int i = 0; i < leftDetails.size(); i++) {
-            MatchDetail detail = leftDetails.get(i);
-            Optional<Object> valueOpt = JoinHandler.extractValueForKey(detail, leftKey);
-            if (valueOpt.isPresent()) {
-                Object value = valueOpt.get();
-                leftValueToIndices.computeIfAbsent(value, k -> new IntArrayList()).add(i);
-            }
-        }
-
-        // Extract values in bulk from right side
-        for (int i = 0; i < rightDetails.size(); i++) {
-            MatchDetail detail = rightDetails.get(i);
-            Optional<Object> valueOpt = JoinHandler.extractValueForKey(detail, rightKey);
-            if (valueOpt.isPresent()) {
-                Object value = valueOpt.get();
-                rightValueToIndices.computeIfAbsent(value, k -> new IntArrayList()).add(i);
-            }
-        }
-
-        // Perform join
-        List<JoinedMatch> results = new ArrayList<>();
-        
-        // Use the smaller map as the driver
-        Map<Object, IntArrayList> smallerMap = leftValueToIndices.size() <= rightValueToIndices.size()
-            ? leftValueToIndices : rightValueToIndices;
-        Map<Object, IntArrayList> largerMap = smallerMap == leftValueToIndices
-            ? rightValueToIndices : leftValueToIndices;
-        boolean leftIsSmaller = smallerMap == leftValueToIndices;
-
-        for (Map.Entry<Object, IntArrayList> entry : smallerMap.entrySet()) {
-            Object value = entry.getKey();
-            IntArrayList otherIndices = largerMap.get(value);
-            
-            if (otherIndices != null) {
-                IntArrayList leftIndices = leftIsSmaller ? entry.getValue() : otherIndices;
-                IntArrayList rightIndices = leftIsSmaller ? otherIndices : entry.getValue();
-                
-                // Create cross product
-                for (int leftIdx : leftIndices) {
-                    for (int rightIdx : rightIndices) {
-                        // Avoid joining a detail with itself
-                        if (leftIdx != rightIdx || leftDetails != rightDetails) {
-                            results.add(new JoinedMatch(
-                                leftDetails.get(leftIdx),
-                                rightDetails.get(rightIdx)
-                            ));
+                break;
+            case "EQUALS": // This was TemporalPredicate.EQUAL in the test
+                 for (TemporalConceptualPair left : leftPairs) {
+                    for (TemporalConceptualPair right : rightPairs) {
+                        if (left.date().isEqual(right.date())) {
+                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId()));
                         }
                     }
                 }
-            }
+                break;
+            // Other cases like OVERLAPS, DURING, STARTS, FINISHES would require interval data (start/end dates)
+            // which QueryResultSoA currently doesn't explicitly store per entry for temporal values.
+            // We assume temporal values are single LocalDate points.
+            // INTERSECT, CONTAINS, CONTAINED_BY, PROXIMITY from grammar might need specific handling here if they apply to single date points.
+            default:
+                // For predicates like CONTAINS, CONTAINED_BY, OVERLAPS etc., that are not
+                // directly applicable to two single LocalDate points or are not yet implemented.
+                logger.warn("Unsupported or not yet implemented temporal predicate: '{}' for single date point comparison.", predicate);
+                throw new QueryExecutionException(
+                    "Unsupported temporal predicate for SoA join: " + predicate,
+                    "Temporal Join",
+                    QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION
+                );
         }
 
-        logger.debug("GENERIC join completed: {} pairs created from {} left values, {} right values",
-                    results.size(), leftValueToIndices.size(), rightValueToIndices.size());
+        logger.debug("Temporal join with predicate '{}' produced {} matches.", predicate, results.size());
         return results;
     }
 
-    /**
-     * Optimized temporal sort-merge join using bulk array extraction.
-     * This method processes temporal data more efficiently by working with
-     * sorted arrays instead of individual object comparisons.
-     * 
-     * @param leftDetails List of MatchDetail from the left side
-     * @param rightDetails List of MatchDetail from the right side
-     * @param leftKey The key to extract temporal value from left side
-     * @param rightKey The key to extract temporal value from right side
-     * @param predicate The temporal predicate (BEFORE or AFTER)
-     * @param requirements Attribute requirements for optimization hints
-     * @return List of JoinedMatch representing the temporal join result
-     */
-    public static List<JoinedMatch> performOptimizedTemporalJoin(
-            List<MatchDetail> leftDetails, List<MatchDetail> rightDetails,
-            String leftKey, String rightKey, String predicate,
-            AttributeRequirements requirements) {
-        
-        logger.debug("Performing optimized TEMPORAL join with predicate: {}", predicate);
+    private record TemporalConceptualPair(LocalDate date, int conceptualId) {}
 
-        // Extract temporal values and indices in bulk
-        List<TemporalIndexPair> leftTemporal = extractTemporalPairs(leftDetails, leftKey);
-        List<TemporalIndexPair> rightTemporal = extractTemporalPairs(rightDetails, rightKey);
-
-        if (leftTemporal.isEmpty() || rightTemporal.isEmpty()) {
-            logger.debug("One or both temporal lists are empty after filtering. Returning empty result.");
-            return new ArrayList<>();
+    private static List<TemporalConceptualPair> extractTemporalPairs(QueryResultSoA soa, String keyName) {
+        List<TemporalConceptualPair> pairs = new ArrayList<>();
+        if (!soa.getRequirements().needsConceptualRowIds) {
+             logger.warn("Extracting temporal pairs for SoA (key: '{}'), but it lacks conceptualRowIds. Results may be incomplete or incorrect.", keyName);
         }
 
-        // Sort both lists by date for merge algorithm
-        leftTemporal.sort(Comparator.comparing(TemporalIndexPair::date));
-        rightTemporal.sort(Comparator.comparing(TemporalIndexPair::date));
+        Set<Integer> processedConceptualIdsForKey = new HashSet<>();
 
-        List<JoinedMatch> results = new ArrayList<>();
 
-        if ("BEFORE".equals(predicate)) { // Left Date < Right Date
-            int j = 0;
-            for (TemporalIndexPair left : leftTemporal) {
-                // Advance j until right date is strictly > left date
-                while (j < rightTemporal.size() && 
-                       rightTemporal.get(j).date().compareTo(left.date()) <= 0) {
-                    j++;
-                }
-                // All remaining right elements satisfy the condition
-                for (int k = j; k < rightTemporal.size(); k++) {
-                    TemporalIndexPair right = rightTemporal.get(k);
-                    results.add(new JoinedMatch(
-                        leftDetails.get(left.index()),
-                        rightDetails.get(right.index())
-                    ));
+        for (int i = 0; i < soa.size(); i++) {
+            int conceptualId = soa.getConceptualRowIdAt(i); // Always get conceptual ID
+
+            // Process each conceptualId only once for a given date key to avoid duplicate date points from the same conceptual row.
+            // However, different variables within the same conceptual row might hold different dates.
+            // The current design implies a keyName targets a specific variable or a structural date.
+            // For simplicity, if multiple entries for the *same keyName* exist under *one conceptualId*,
+            // we will take the first valid date encountered. This simplification might need review
+            // if a single conceptual row can have multiple distinct dates for the *same join key variable*.
+
+            String varNameAtIndex = soa.getVariableNameAt(i);
+            boolean isTargetKey = (varNameAtIndex != null && (varNameAtIndex.equals(keyName) || varNameAtIndex.equals("?" + keyName)));
+            boolean isStructuralDate = isStructuralDateKey(keyName); // Re-use existing helper
+
+            Object value = null;
+            ValueType type = null;
+
+            if (isTargetKey) {
+                value = soa.getValueAt(i);
+                type = soa.getValueTypeAt(i);
+            } else if (isStructuralDate) { // Check if keyName refers to a structural date (e.g. "date")
+                // This case is tricky. If keyName is "date", does it mean any date associated with the conceptualId?
+                // Or a specific structurally defined date column if QueryResultSoA had one?
+                // Assuming for now it implies looking for a ValueType.DATE under the conceptualId
+                // matching *any* variable if keyName is a generic "date".
+                // This might be too broad. A stricter interpretation:
+                // If keyName is "date", it must match a variable named "date" or a specific date attribute.
+                // Let's stick to: if keyName is a known structural key like "date", we check the type.
+                // If it is a variable, we match the variable name.
+
+                // Simplified: If the keyName is "date" (structural), we look for any value of type DATE.
+                // If keyName is a variable e.g. "$eventDate", we only look at that variable.
+                 if (soa.getValueTypeAt(i) == ValueType.DATE) {
+                    value = soa.getValueAt(i);
+                    type = ValueType.DATE;
                 }
             }
-        } else if ("AFTER".equals(predicate)) { // Left Date > Right Date
-            int i = 0;
-            for (TemporalIndexPair right : rightTemporal) {
-                // Advance i until left date is strictly > right date
-                while (i < leftTemporal.size() && 
-                       leftTemporal.get(i).date().compareTo(right.date()) <= 0) {
-                    i++;
+
+
+            if (value instanceof LocalDate && type == ValueType.DATE) {
+                // To ensure we only add one date per conceptual ID *for this specific key*,
+                // we can use a composite key for the set if needed, or simplify.
+                // The problem arises if conceptualId 1 has varX=dateA and varY=dateB, and we join on "date".
+                // Current buildKeyToConceptualIdsMap adds conceptualId once if *any* var matches.
+                // For temporal join, we need specific (date, conceptualId) pairs.
+
+                // Modification: A conceptual ID can yield multiple temporal pairs if it has multiple distinct date values
+                // for different variables that could all be aliased to the same join key in a more complex query.
+                // However, the keyName here is specific. So, for a given conceptualId and a given keyName,
+                // there should typically be one date.
+                // The current loop structure iterates all rows. If conceptualId X appears in rows 5 and 10,
+                // and keyName matches for both, we might add (date_at_row5, X) and (date_at_row10, X).
+                // If these dates are different, it's an issue for "one date per conceptualID per key".
+                // We will rely on the fact that `getValueAt(i)` and `getVariableNameAt(i)` give the specific binding.
+
+                // Let's assume for a given conceptualId and keyName, there's effectively one date.
+                // If not, the first one encountered for that conceptualId and keyName match is taken.
+                // To handle multiple distinct dates for the same conceptualID but different actual sources
+                // that map to the same `keyName` (e.g. through aliases in SELECT), this might need rework.
+                // For now, keep it simple: one (LocalDate, conceptualId) pair if a match is found.
+                // The processedConceptualIdsForKey set helps if multiple raw rows in SoA point to the same conceptualId
+                // and carry the same variable (keyName) - we only want that date once.
+
+                if (processedConceptualIdsForKey.add(conceptualId)) { // Add if not already processed for this key for this conceptualId
+                    pairs.add(new TemporalConceptualPair((LocalDate) value, conceptualId));
+                } else {
+                    // If we already processed this conceptualId for this keyName, check if the date is different.
+                    // This situation is complex: e.g. conceptualId 7 has varAnniv=2000-01-01 (row 3) and varAnniv=2000-01-01 (row 8)
+                    // The set above handles this fine.
+                    // But if conceptualId 7 has varA=2000-01-01 (row 3) and varB=2000-02-02 (row 8) and join key is $someDate
+                    // which could be varA or varB based on query. This needs resolver for keyName -> actual value in conceptualId.
+                    // The current SoA structure (flat list of bindings) makes this slightly indirect.
+                    // buildKeyToConceptualIdsMap has a similar challenge.
+
+                    // Sticking to: extract all (value, conceptualId) where value is a date and matches keyName.
+                    // Then let sorting and subsequent logic handle it.
+                    // The `processedConceptualIdsForKey` might be too restrictive if the same conceptual ID
+                    // can genuinely have multiple distinct date values for the *same* join key (e.g. if the key is not specific enough).
+                    // Removing `processedConceptualIdsForKey` to capture all specified dates. Duplicates will be handled by Set semantics later if needed.
+                    // Actually, for temporal pair extraction, multiple identical (date, conceptualId) are fine if they stem from different raw bindings
+                    // that all resolve to the same conceptualId and join key. The join logic itself (e.g. unique SoAJoinKeyMatch) handles final pairing.
                 }
-                // All remaining left elements satisfy the condition
-                for (int k = i; k < leftTemporal.size(); k++) {
-                    TemporalIndexPair left = leftTemporal.get(k);
-                    results.add(new JoinedMatch(
-                        leftDetails.get(left.index()),
-                        rightDetails.get(right.index())
-                    ));
-                }
+                 // Simpler: if it's a date and matches the key, add it.
+                 // The `buildKeyToConceptualIdsMap` logic is more about finding *any* conceptual ID that has a key.
+                 // Here we need all specific (date, conceptualID) instances matching the key.
+                 pairs.add(new TemporalConceptualPair((LocalDate) value, conceptualId));
+
+
+            } else if (value != null && type != ValueType.DATE && (isTargetKey || isStructuralDate) ) {
+                 logger.warn("Temporal join key '{}' for conceptual ID {} resolved to value '{}' of type {} but expected LocalDate. Skipping this entry.",
+                            keyName, conceptualId, value, type);
             }
         }
-
-        logger.debug("TEMPORAL join completed: {} pairs created", results.size());
-        return results;
+        // Remove duplicate TemporalConceptualPair if they arise from multiple bindings
+        // for the exact same date and conceptual ID under the same key.
+        // A simple List to Set to List conversion would do this.
+        if (!pairs.isEmpty()) {
+            return new ArrayList<>(new HashSet<>(pairs)); // Deduplicate identical pairs
+        }
+        return pairs; // Return distinct pairs
     }
-
-    /**
-     * Helper record to associate a temporal value with its index in the original list.
-     */
-    private record TemporalIndexPair(LocalDate date, int index) {}
-
-    /**
-     * Extracts temporal values and their indices in bulk.
-     */
-    private static List<TemporalIndexPair> extractTemporalPairs(
-            List<MatchDetail> details, String key) {
-        
-        List<TemporalIndexPair> pairs = new ArrayList<>();
-        for (int i = 0; i < details.size(); i++) {
-            MatchDetail detail = details.get(i);
-            Optional<Object> valueOpt = JoinHandler.extractValueForKey(detail, key);
-            if (valueOpt.isPresent() && valueOpt.get() instanceof LocalDate date) {
-                pairs.add(new TemporalIndexPair(date, i));
-            }
-        }
-        return pairs;
-    }
-} 
+}

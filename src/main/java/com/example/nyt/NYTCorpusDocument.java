@@ -1325,4 +1325,4 @@ public class NYTCorpusDocument {
 		}
 	}
 
-} 
+}

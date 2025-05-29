@@ -1,19 +1,21 @@
 package com.example.index.generators;
 
-import org.junit.jupiter.api.*;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.*;
-import java.sql.*;
-import java.util.List;
-import java.util.Optional;
+import java.io.File;
+import java.io.PrintWriter;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import com.example.core.IndexAccess;
+import com.example.core.PositionListSoA;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.index.generators.DependencyIndexGenerator;
-import com.example.index.generators.IndexGenerator;
-import com.example.core.IndexAccess;
 
 public class DependencyIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-dep.txt";
@@ -24,7 +26,7 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        
+
         // Create test stopwords file
         try (PrintWriter writer = new PrintWriter(TEST_STOPWORDS_PATH)) {
             writer.println("the");
@@ -99,20 +101,20 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
     public void testBasicDependencyIndexing() throws Exception {
         // Fetch first batch of entries
         var entries = generator.fetchBatch(null);
-        
+
         // Process batch and verify results
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
-        
+
         // Verify subject-verb dependency
         String key1 = "fox" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "jumps";
         assertTrue(result.containsKey(key1), "Should contain subject-verb dependency");
-        assertEquals(1, result.get(key1).get(0).getNumPositions(), 
+        assertEquals(1, result.get(key1).get(0).getNumPositions(),
             "Should have one position for subject-verb dependency");
-        
+
         // Verify verb-object dependency
         String key2 = "jumps" + IndexGenerator.DELIMITER + "prep" + IndexGenerator.DELIMITER + "over";
         assertTrue(result.containsKey(key2), "Should contain verb-object dependency");
-        assertEquals(1, result.get(key2).get(0).getNumPositions(), 
+        assertEquals(1, result.get(key2).get(0).getNumPositions(),
             "Should have one position for verb-object dependency");
     }
 
@@ -155,7 +157,7 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
         // Verify case normalization
         String key3 = "cat" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "chases";
         assertTrue(result.containsKey(key3), "Should contain normalized subject-verb dependency");
-        assertEquals(1, result.get(key3).get(0).getNumPositions(), 
+        assertEquals(1, result.get(key3).get(0).getNumPositions(),
             "Should have one position for normalized subject-verb dependency");
     }
-} 
+}

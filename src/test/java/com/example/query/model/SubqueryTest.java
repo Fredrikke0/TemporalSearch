@@ -50,7 +50,7 @@ class SubqueryTest {
         assertEquals(subquery, spec.subquery());
         assertFalse(spec.projectedColumns().isPresent());
     }
-    
+
     @Test
     @DisplayName("Test Query creation with subquery and join - Equality Join")
     void testQueryWithSubqueryAndJoinEquality() {
@@ -105,7 +105,7 @@ class SubqueryTest {
             Optional.of("main"), // mainAlias
             List.of() // groupByColumns
         );
-        
+
         assertEquals(1, mainQuery.subqueries().size());
         assertTrue(mainQuery.joinCondition().isPresent());
         assertEquals(joinCondition, mainQuery.joinCondition().get());
@@ -119,7 +119,7 @@ class SubqueryTest {
         // Test valid TEMPORAL condition (Non-Proximity)
         assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT), Optional.empty()));
         // Test factory method for Temporal
-        assertDoesNotThrow(() -> JoinCondition.createTemporalJoin("l.col", "r.col", JoinType.INNER, TemporalPredicate.INTERSECT)); 
+        assertDoesNotThrow(() -> JoinCondition.createTemporalJoin("l.col", "r.col", JoinType.INNER, TemporalPredicate.INTERSECT));
 
         // Test valid EQUALITY condition
         assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.empty()));
@@ -136,7 +136,7 @@ class SubqueryTest {
         // Test operator type / temporal predicate mismatch
         assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.empty(), Optional.empty()), "Temporal predicate required for TEMPORAL join");
         assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.of(TemporalPredicate.INTERSECT), Optional.empty()), "Temporal predicate not allowed for EQUALITY join");
-        
+
         // Test proximity validation
         assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.PROXIMITY), Optional.empty()),
             "Proximity window must be specified for PROXIMITY joins");
@@ -145,7 +145,7 @@ class SubqueryTest {
             "Proximity window should not be specified for non-PROXIMITY joins");
 
         // Test window with EQUALITY join
-        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.of(5)), 
+        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.of(5)),
             "Proximity window should not be specified for non-PROXIMITY joins"); // EQUALITY is implicitly non-proximity
     }
-} 
+}

@@ -1,24 +1,22 @@
 package com.example.query.executor;
 
-import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
-import com.example.core.Position;
-import com.example.query.model.Query;
-import com.example.query.model.condition.Condition;
-import com.example.query.model.condition.Not;
-import com.example.query.binding.MatchDetail;
-import com.example.query.binding.ValueType;
-import com.example.query.executor.QueryResult;
+import java.io.IOException;
+import java.util.AbstractMap.SimpleEntry;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
 import org.iq80.leveldb.DBIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
-import java.util.AbstractMap.SimpleEntry;
+import com.example.core.IndexAccessInterface;
+import com.example.core.Position;
+import com.example.core.PositionListSoA;
+import com.example.query.binding.ValueType;
+import com.example.query.model.Query;
+import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Not;
 
 /**
  * Executes a NOT condition.
@@ -41,72 +39,49 @@ public final class NotExecutor implements ConditionExecutor<Not> {
         logger.info("NotExecutor initialized.");
     }
 
-    @Override
-    public QueryResult execute(Not condition, Map<String, IndexAccessInterface> indexes,
+    public QueryResultSoA execute(Not condition, Map<String, IndexAccessInterface> indexes,
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName) throws QueryExecutionException {
-        logger.debug("Executing NOT condition: {}, Granularity: {}, Size: {}, Corpus: {}", 
+        logger.debug("Executing NOT condition (delegating to execute with default AttributeRequirements): {}, Granularity: {}, Size: {}, Corpus: {}",
                      condition, granularity, granularitySize, corpusName);
-
-        Condition operand = condition.condition();
-        ConditionExecutor<Condition> subExecutor = factory.getExecutor(operand);
-
-        // Execute the sub-condition using default requirements for backward compatibility
         AttributeRequirements defaultRequirements = new AttributeRequirements();
-        QueryResult subResult = subExecutor.execute(operand, indexes, granularity, granularitySize, corpusName, defaultRequirements);
-
-        // Extract IDs based on granularity from the sub-result
-        Set<?> subResultIds = extractIds(subResult, granularity);
-        logger.debug("Sub-condition executed. Found {} match details, {} unique IDs.", subResult.getAllDetails().size(), subResultIds.size());
-
-        // Get all possible matches (as IDs) based on granularity
-        Set<?> allPossibleIds = getAllPossibleIds(indexes, granularity);
-        if (allPossibleIds.isEmpty()) {
-            logger.warn("Could not determine the set of all possible matches. Check if '{}' index exists and is populated.", UNIGRAM_INDEX_NAME);
-            throw new QueryExecutionException(
-                "Failed to retrieve the set of all possible documents/sentences for NOT operation.",
-                condition.toString(),
-                QueryExecutionException.ErrorType.MISSING_INDEX
-            );
+        if (granularity == Query.Granularity.SENTENCE) {
+            defaultRequirements.needsSentenceId = true;
         }
-        logger.debug("Total possible IDs for granularity {}: {}", granularity, allPossibleIds.size());
-
-        // Perform the NOT operation (set difference on IDs)
-        Set<?> resultIds = new HashSet<>(allPossibleIds); // Create a mutable copy
-        resultIds.removeAll(subResultIds);
-        logger.debug("Resulting IDs after NOT operation: {}", resultIds.size());
-
-        // Create the final QueryResult from the remaining IDs by creating placeholder MatchDetails
-        // We need to reconstruct minimal Position objects based on the ID type
-        return new QueryResult(granularity, granularitySize, resultIds.stream()
-                .map(id -> createPlaceholderMatchDetail(id, granularity))
-                .collect(Collectors.toList()));
+        defaultRequirements.needsConceptualRowIds = true;
+        return execute(condition, indexes, granularity, granularitySize, corpusName, defaultRequirements);
     }
 
     /** Helper to extract IDs based on granularity */
-    private Set<?> extractIds(QueryResult queryResult, Query.Granularity granularity) {
+    private Set<?> extractIds(QueryResultSoA queryResult, Query.Granularity granularity) {
+        Set<Object> ids = new HashSet<>(); // Use Object to hold Integer or SimpleEntry
         if (granularity == Query.Granularity.DOCUMENT) {
-            return queryResult.getAllDetails().stream()
-                    .map(MatchDetail::getDocumentId)
-                    .collect(Collectors.toSet());
+            for (int i = 0; i < queryResult.size(); i++) {
+                // Ensure we only add unique document IDs, conceptual IDs might map to same docId multiple times
+                // This needs to be reviewed: if a conceptual ID maps to a doc ID, that doc ID is "hit".
+                // We are interested in the set of *document IDs* that the subquery matched.
+                // A simple iteration might give duplicate doc IDs if multiple bindings map to the same doc.
+                // Using a Set naturally handles this.
+                 ids.add(queryResult.getDocumentIdAt(i));
+            }
         } else { // SENTENCE granularity
-            return queryResult.getAllDetails().stream()
-                    .map(d -> new SimpleEntry<>(d.getDocumentId(), d.getSentenceId()))
-                    .collect(Collectors.toSet());
+            for (int i = 0; i < queryResult.size(); i++) {
+                if (queryResult.getRequirements().needsSentenceId) {
+                    ids.add(new SimpleEntry<>(queryResult.getDocumentIdAt(i), queryResult.getSentenceIdAt(i)));
+                } else {
+                    // This case should ideally not happen if granularity is SENTENCE.
+                    // Or, if it does, it implies only doc ID is available, which is like DOCUMENT granularity for this entry.
+                    // Log a warning, and potentially add just the doc ID if that makes sense.
+                    logger.warn("Sentence granularity requested for NOT, but sub-result for conceptual ID {} lacks sentence ID. Doc ID: {}",
+                                queryResult.getConceptualRowIdAt(i), queryResult.getDocumentIdAt(i));
+                    // Fallback: add document ID if sentence ID is missing but required by granularity.
+                    // This behavior might need refinement based on strictness.
+                    // ids.add(queryResult.getDocumentIdAt(i)); // Option: treat as document-level match if sentId missing
+                }
+            }
         }
-    }
-
-    /** Helper to create placeholder MatchDetail from an ID */
-    private MatchDetail createPlaceholderMatchDetail(Object id, Query.Granularity granularity) {
-        if (granularity == Query.Granularity.DOCUMENT) {
-            Integer docId = (Integer) id;
-            return new MatchDetail("NOT_MATCH", ValueType.TERM, (String) null, docId, -1, -1, -1);
-        } else { // SENTENCE granularity
-            @SuppressWarnings("unchecked")
-            SimpleEntry<Integer, Integer> pair = (SimpleEntry<Integer, Integer>) id;
-            return new MatchDetail("NOT_MATCH", ValueType.TERM, (String) null, pair.getKey(), pair.getValue(), -1, -1);
-        }
+        return ids;
     }
 
     /**
@@ -125,12 +100,11 @@ public final class NotExecutor implements ConditionExecutor<Not> {
             );
         }
 
-        Set<Object> allIds = new HashSet<>(); // Use Set<Object> to hold Integers or SimpleEntries
+        Set<Object> allIds = new HashSet<>();
         logger.debug("Iterating '{}' index to approximate universe for NOT (granularity: {})...", UNIGRAM_INDEX_NAME, granularity);
         long count = 0;
 
-        try (DBIterator iterator = unigramIndex.iterator()) {
-            iterator.seekToFirst();
+        try (DBIterator iterator = unigramIndex.iterateFromFirst()) {
             while (iterator.hasNext()) {
                 Map.Entry<byte[], byte[]> entry = iterator.next();
                 byte[] valueBytes = entry.getValue();
@@ -141,24 +115,26 @@ public final class NotExecutor implements ConditionExecutor<Not> {
                 try {
                     PositionListSoA positionList = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
                     count++;
-                    
-                    // Extract positions and add to the set
+
                     for (int i = 0; i < positionList.getNumPositions(); i++) {
                         Position actualPosition = positionList.getPositionAt(i);
                         if (granularity == Query.Granularity.DOCUMENT) {
                             allIds.add(actualPosition.getDocumentId());
-                        } else { // SENTENCE granularity
+                        } else {
                             allIds.add(new SimpleEntry<>(actualPosition.getDocumentId(), actualPosition.getSentenceId()));
                         }
                     }
-                } catch (Exception e) {
+                } catch (IOException e) { // Catch specific IOException for deserialization
                     logger.warn("Failed to deserialize PositionListSoA for key '{}' in '{}': {}",
                             new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8),
                             UNIGRAM_INDEX_NAME, e.getMessage());
-                    continue; // Skip this entry and continue with the next
+                } catch (Exception e) { // Catch other potential runtime exceptions during processing
+                    logger.warn("Error processing entry for key '{}' in '{}' during universe creation: {}",
+                            new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8),
+                            UNIGRAM_INDEX_NAME, e.getMessage());
                 }
             }
-        } catch (Exception e) {
+        } catch (Exception e) { // Catch exceptions from iterator creation or during iteration itself
             logger.error("Failed to iterate through '{}' index: {}", UNIGRAM_INDEX_NAME, e.getMessage(), e);
             throw new QueryExecutionException(
                 "Error accessing index '" + UNIGRAM_INDEX_NAME + "' for NOT operation.",
@@ -174,46 +150,74 @@ public final class NotExecutor implements ConditionExecutor<Not> {
     }
 
     @Override
-    public QueryResult execute(Not condition, Map<String, IndexAccessInterface> indexes,
+    public QueryResultSoA execute(Not condition, Map<String, IndexAccessInterface> indexes,
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
                                AttributeRequirements requirements)
         throws QueryExecutionException {
-        
+
         logger.debug("Executing NOT condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
-        
+
         Condition operand = condition.condition();
         ConditionExecutor<Condition> subExecutor = factory.getExecutor(operand);
 
         // Execute the sub-condition with the provided requirements
-        QueryResult subResult = subExecutor.execute(operand, indexes, granularity, granularitySize, corpusName, requirements);
+        // The sub-executor should ideally respect these requirements.
+        QueryResultSoA subResult = subExecutor.execute(operand, indexes, granularity, granularitySize, corpusName, requirements);
 
-        // Extract IDs based on granularity from the sub-result
         Set<?> subResultIds = extractIds(subResult, granularity);
-        logger.debug("Sub-condition executed. Found {} match details, {} unique IDs.", subResult.getAllDetails().size(), subResultIds.size());
+        logger.debug("Sub-condition executed. Found {} entries, resulting in {} unique IDs for NOT logic.", subResult.size(), subResultIds.size());
 
-        // Get all possible matches (as IDs) based on granularity
         Set<?> allPossibleIds = getAllPossibleIds(indexes, granularity);
         if (allPossibleIds.isEmpty()) {
-            logger.warn("Could not determine the set of all possible matches. Check if '{}' index exists and is populated.", UNIGRAM_INDEX_NAME);
+            logger.error("Universe for NOT operation is empty. Check if '{}' index exists and is populated.", UNIGRAM_INDEX_NAME);
             throw new QueryExecutionException(
-                "Failed to retrieve the set of all possible documents/sentences for NOT operation.",
-                condition.toString(),
+                "Could not determine the set of all possible matches (universe is empty). Check if '" + UNIGRAM_INDEX_NAME + "' index exists and is populated.",
+                "N/A",
                 QueryExecutionException.ErrorType.MISSING_INDEX
             );
         }
         logger.debug("Total possible IDs for granularity {}: {}", granularity, allPossibleIds.size());
 
-        // Perform the NOT operation (set difference on IDs)
-        Set<?> resultIds = new HashSet<>(allPossibleIds); // Create a mutable copy
+        Set<?> resultIds = new HashSet<>(allPossibleIds);
         resultIds.removeAll(subResultIds);
         logger.debug("Resulting IDs after NOT operation: {}", resultIds.size());
 
-        // Create the final QueryResult from the remaining IDs by creating placeholder MatchDetails
-        // We need to reconstruct minimal Position objects based on the ID type
-        return new QueryResult(granularity, granularitySize, resultIds.stream()
-                .map(id -> createPlaceholderMatchDetail(id, granularity))
-                .collect(Collectors.toList()));
+        // Directly populate the QueryResultSoA
+        QueryResultSoA finalResult = new QueryResultSoA(granularity, granularitySize, requirements);
+        int conceptualRowIdCounter = 0;
+
+        for (Object id : resultIds) {
+            int docId;
+            int sentenceId = -1; // Default if not applicable or not needed
+
+            if (granularity == Query.Granularity.DOCUMENT) {
+                docId = (Integer) id;
+            } else { // SENTENCE granularity
+                @SuppressWarnings("unchecked")
+                SimpleEntry<Integer, Integer> pair = (SimpleEntry<Integer, Integer>) id;
+                docId = pair.getKey();
+                if (requirements.needsSentenceId) {
+                    sentenceId = pair.getValue();
+                }
+            }
+
+            // For NOT results, value, variable, positions are typically not meaningful
+            // as they represent the *absence* of the sub-condition's match.
+            finalResult.add(
+                null,                             // value (placeholder)
+                ValueType.TERM,        // Using TERM with null value as a placeholder for NOT match
+                null,                             // variableName (placeholder)
+                docId,
+                sentenceId,
+                -1,                               // beginChar (placeholder)
+                -1,                               // endChar (placeholder)
+                -1,                               // synonymId (placeholder)
+                conceptualRowIdCounter++
+            );
+        }
+        logger.info("NOT condition execution complete. Produced {} result entries.", finalResult.size());
+        return finalResult;
     }
-} 
+}

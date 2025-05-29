@@ -5,7 +5,7 @@ import java.util.Set;
 
 /**
  * Represents a variable that produces values through extraction.
- * For example, NER(PERSON) AS person produces person entities.
+ * For example, NER(PERSON) BIND person produces person entities.
  */
 public record ProducerVariable(
     String name,
@@ -13,7 +13,7 @@ public record ProducerVariable(
     String sourceConditionType,
     Set<String> producedBy
 ) implements Variable {
-    
+
     /**
      * Creates a producer variable with validation.
      */
@@ -27,27 +27,27 @@ public record ProducerVariable(
         if (sourceConditionType == null || sourceConditionType.isBlank()) {
             throw new IllegalArgumentException("Source condition type cannot be null or blank");
         }
-        
+
         // Ensure defensive copies
-        producedBy = producedBy != null ? 
-            Collections.unmodifiableSet(Set.copyOf(producedBy)) : 
+        producedBy = producedBy != null ?
+            Collections.unmodifiableSet(Set.copyOf(producedBy)) :
             Collections.emptySet();
     }
-    
+
     /**
      * Creates a simple producer variable with a single producing condition.
      */
     public ProducerVariable(String name, VariableType type, String sourceConditionType) {
         this(name, type, sourceConditionType, Set.of(sourceConditionType));
     }
-    
+
     @Override
     public String getName() {
         return name;
     }
-    
+
     @Override
     public VariableType getType() {
         return type;
     }
-} 
+}

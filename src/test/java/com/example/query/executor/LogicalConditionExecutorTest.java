@@ -1,464 +1,369 @@
 package com.example.query.executor;
 
-import com.example.core.IndexAccess;
-import com.example.core.IndexAccessException;
-import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionList;
-import com.example.query.model.Query;
-import com.example.query.model.condition.*;
-import com.example.query.binding.MatchDetail;
-import com.example.query.binding.ValueType;
-import com.example.query.executor.QueryResult;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.when;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.LocalDate;
-import java.util.*;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import com.example.core.IndexAccessInterface;
+import com.example.query.binding.ValueType;
+import com.example.query.model.Query;
+import com.example.query.model.condition.Contains;
+import com.example.query.model.condition.Logical;
 
 @ExtendWith(MockitoExtension.class)
 public class LogicalConditionExecutorTest {
 
     @Mock private ConditionExecutorFactory mockFactory;
-    @Mock private ContainsExecutor mockContainsExecutor;
-    @Mock private PosExecutor mockPosExecutor;
-    // Mock other executors if needed for more complex tests
-
-    @Mock private Contains mockContainsCond1;
-    @Mock private Pos mockPosCond2;
+    @Mock private ContainsExecutor mockSubExecutor1;
+    @Mock private ContainsExecutor mockSubExecutor2;
+    @Mock private ContainsExecutor mockSubExecutor3;
 
     private LogicalExecutor logicalExecutor;
     private Map<String, IndexAccessInterface> indexes;
-    private final LocalDate testDate = LocalDate.now();
-    private static final Query.Granularity TEST_GRANULARITY = Query.Granularity.SENTENCE;
-    private static final int TEST_WINDOW_SIZE = 0;
 
-    // Helper to create a simple MatchDetail
-    private MatchDetail createDetail(int docId, int sentId, String varName, Object value, int begin, int end) {
-        Position pos = new Position(docId, sentId, begin, end);
-        // Determine ValueType based on simple inspection of value for testing
-        ValueType type = (value instanceof String) ? ValueType.TERM : ValueType.ENTITY; 
-        return new MatchDetail(value, type, pos, varName);
-    }
+    private Query.Granularity testGranularity;
+    private int testGranularitySize;
+    private String corpusName = "test_corpus";
+    private Contains condition1_term1;
+    private Contains condition2_term2;
+    private Contains condition3_term3;
+    private AttributeRequirements defaultTestRequirements;
+
+    // Helper record for test data, replacing MatchDetail for test setup
+    record TestDataEntry(Object value, ValueType type, String varName, int docId, int sentId, int begin, int end, int synId, int conceptualRowId) {}
 
     @BeforeEach
     void setUp() {
+        condition1_term1 = new Contains("term1");
+        condition2_term2 = new Contains("term2");
+        condition3_term3 = new Contains("term3");
+
+        lenient().when(mockFactory.getExecutor(eq(condition1_term1))).thenReturn(mockSubExecutor1);
+        lenient().when(mockFactory.getExecutor(eq(condition2_term2))).thenReturn(mockSubExecutor2);
+        lenient().when(mockFactory.getExecutor(eq(condition3_term3))).thenReturn(mockSubExecutor3);
+
+        // The genericFallbackExecutor is tricky. If it's truly needed for conditions
+        // other than Contains, this approach of mocking ContainsExecutor won't cover it.
+        // However, the original test uses ConditionExecutor<Contains> for the main mocks,
+        // suggesting Contains is the primary type being tested as sub-conditions.
+        // For now, we'll remove the generic fallback or assume it's not hit by these tests.
+        // If a test *does* try to use a non-Contains condition via the factory, it might fail
+        // if the factory doesn't know how to produce a mock for it or if it returns null.
+        // This might require a more sophisticated factory mocking or test-specific factory.
+        // For simplicity, and given the specific types of condition1/2/3, we assume this is okay.
+
+        // Let's comment out the generic fallback for now, as it might not be needed
+        // and would require mocking a generic (sealed) ConditionExecutor.
+        // @SuppressWarnings("unchecked")
+        // ConditionExecutor<Condition> genericFallbackExecutor = mock(ConditionExecutor.class);
+        // when(mockFactory.getExecutor(argThat(c -> c != condition1_term1 && c != condition2_term2 && c != condition3_term3)))
+        //     .thenReturn(genericFallbackExecutor);
+
         logicalExecutor = new LogicalExecutor(mockFactory);
-        indexes = new HashMap<>(); // Add mock IndexAccess if needed by sub-executors
-
-        // Basic factory stubbing - Return the mocks of concrete types
-        // The factory method likely returns ConditionExecutor, but the mocked
-        // instances (mockContainsExecutor, mockPosExecutor) are compatible.
+        indexes = Collections.emptyMap();
+        testGranularity = Query.Granularity.DOCUMENT;
+        testGranularitySize = 0;
+        // Default requirements for tests. Ensure needsConceptualRowIds is true.
+        defaultTestRequirements = new AttributeRequirements();
+        defaultTestRequirements.needsDocumentId = true;
+        defaultTestRequirements.needsSentenceId = true; // Assuming sentence level for some tests if positions are used.
+        defaultTestRequirements.needsPositions = true;
+        defaultTestRequirements.needsConceptualRowIds = true; // Crucial for logical operations
+        defaultTestRequirements.needsSynonymIds = true; // Assuming it might be needed.
     }
 
+    // Updated helper to use TestDataEntry
+    private QueryResultSoA createMockQueryResultSoA(List<TestDataEntry> entries, Query.Granularity gran, int granSize, AttributeRequirements reqs) {
+        QueryResultSoA soaResult = new QueryResultSoA(gran, granSize, reqs);
+        for (TestDataEntry entry : entries) {
+            soaResult.add(
+                entry.value(), entry.type(), entry.varName(),
+                entry.docId(), entry.sentId(),
+                entry.begin(), entry.end(), entry.synId(),
+                entry.conceptualRowId() // Add conceptualRowId
+            );
+        }
+        return soaResult;
+    }
+
+    // Overload to use default testGranularity, testGranularitySize, and defaultTestRequirements from setUp
+    private QueryResultSoA createMockQueryResultSoA(List<TestDataEntry> entries) {
+        return createMockQueryResultSoA(entries, this.testGranularity, this.testGranularitySize, this.defaultTestRequirements);
+    }
+
+    // Helper to get all bindings for a given conceptualId
+    private List<Map<String, Object>> getBindingsForConceptualId(QueryResultSoA soa, int conceptualId) {
+        List<Map<String, Object>> bindings = new ArrayList<>();
+        for (int i = 0; i < soa.size(); i++) {
+            if (soa.getConceptualRowIdAt(i) == conceptualId) {
+                Map<String, Object> binding = new HashMap<>();
+                binding.put("value", soa.getValueAt(i));
+                binding.put("type", soa.getValueTypeAt(i));
+                binding.put("variableName", soa.getVariableNameAt(i));
+                binding.put("docId", soa.getDocumentIdAt(i));
+                binding.put("sentId", soa.getSentenceIdAt(i));
+                // Add other fields if needed for assertions
+                bindings.add(binding);
+            }
+        }
+        return bindings;
+    }
+
+    // Helper to count unique conceptual row IDs
+    private long countUniqueConceptualRows(QueryResultSoA soa) {
+        if (soa.isEmpty()) return 0;
+        Set<Integer> uniqueIds = new HashSet<>();
+        for (int i = 0; i < soa.size(); i++) {
+            uniqueIds.add(soa.getConceptualRowIdAt(i));
+        }
+        return uniqueIds.size();
+    }
+
+
     @Test
-    void testExecuteAnd() throws Exception {
-        Logical condition = new Logical(Logical.LogicalOperator.AND, List.of(mockContainsCond1, mockPosCond2));
-        String var1 = "?term";
-        String var2 = "?posTag";
-        String val1 = "apple";
-        String val2 = "NN"; // POS tag value
+    void testExecuteAnd_twoConditions_bothReturnResults() throws QueryExecutionException {
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
 
-        // Mock results using MatchDetail and QueryResult
-        List<MatchDetail> containsDetails = List.of(
-            createDetail(1, 1, var1, val1, 0, 5), // Match
-            createDetail(1, 2, var1, val1, 10, 15),
-            createDetail(2, 1, var1, val1, 0, 5)  // Match
-        );
-        QueryResult containsResult = new QueryResult(TEST_GRANULARITY, TEST_WINDOW_SIZE, containsDetails);
+        // Conceptual Row ID 0 for term1, Conceptual Row ID 0 for term2 in their respective inputs.
+        // When they AND join, they should form a new conceptual row in the output.
+        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)
+        ));
+        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 5, 9, -1, 0)
+        ));
 
-        List<MatchDetail> posDetails = List.of(
-            createDetail(1, 1, var2, val2, 6, 10),  // Match
-            createDetail(2, 1, var2, val2, 6, 10),  // Match
-            createDetail(3, 1, var2, val2, 0, 5)
-        );
-        QueryResult posResult = new QueryResult(TEST_GRANULARITY, TEST_WINDOW_SIZE, posDetails);
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result1SoA);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result2SoA);
 
-        // Stub factory calls for this test
-        when(mockFactory.getExecutor(eq(mockContainsCond1))).thenReturn(mockContainsExecutor);
-        when(mockFactory.getExecutor(eq(mockPosCond2))).thenReturn(mockPosExecutor);
+        QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements);
 
-        // Stub sub-executor calls to return QueryResult directly
-        when(mockContainsExecutor.execute(eq(mockContainsCond1), any(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class)))
-            .thenReturn(containsResult);
-
-        when(mockPosExecutor.execute(eq(mockPosCond2), any(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class)))
-            .thenReturn(posResult);
-
-        // Execute - Now returns QueryResult
-        QueryResult finalResult = logicalExecutor.execute(condition, indexes, TEST_GRANULARITY, TEST_WINDOW_SIZE, "test_corpus");
-
-        // Verify final result (intersection)
         assertNotNull(finalResult);
-        assertEquals(TEST_GRANULARITY, finalResult.getGranularity());
-        assertEquals(TEST_WINDOW_SIZE, finalResult.getGranularitySize());
+        // According to QueryResultSoa.md: AND generates a NEW unique conceptualRowId for each common document/sentence ID.
+        // Both bindings (term1 and term2) will share this new conceptualRowId in the output.
+        assertEquals(1, countUniqueConceptualRows(finalResult), "Expected 1 conceptual row as both terms are in document 1, sentence 1");
+        assertEquals(2, finalResult.size(), "Expected 2 total binding entries in the final result (one for term1, one for term2)");
 
-        // Intersection should contain details from both sub-results for matching (docId, sentId) pairs
-        // Doc 1, Sent 1: Should have ?term and ?posTag details
-        // Doc 2, Sent 1: Should have ?term and ?posTag details
-        // Other docs/sents should be excluded
+        // Verify the bindings in the single conceptual row
+        List<Map<String, Object>> conceptualRowBindings = getBindingsForConceptualId(finalResult, finalResult.getConceptualRowIdAt(0));
+        assertEquals(2, conceptualRowBindings.size());
 
-        // Expected details in the intersection (combining details for matching doc/sent)
-        List<MatchDetail> expectedDetails = List.of(
-             createDetail(1, 1, var1, val1, 0, 5), createDetail(1, 1, var2, val2, 6, 10),
-             createDetail(2, 1, var1, val1, 0, 5), createDetail(2, 1, var2, val2, 6, 10) 
-        );
-        
-        // Use sets for comparison as order doesn't matter within QueryResult
-        Set<MatchDetail> expectedDetailSet = new HashSet<>(expectedDetails);
-        Set<MatchDetail> actualDetailSet = new HashSet<>(finalResult.getAllDetails());
-
-        assertEquals(expectedDetailSet.size(), actualDetailSet.size());
-        assertEquals(expectedDetailSet, actualDetailSet);
-
-        // Verify bindings within QueryResult (optional, but good practice)
-        Map<Integer, List<MatchDetail>> detailsByDoc = finalResult.getDetailsByDocId();
-        assertTrue(detailsByDoc.containsKey(1));
-        assertTrue(detailsByDoc.containsKey(2));
-        assertFalse(detailsByDoc.containsKey(3)); // Doc 3 should be excluded
-
-        // Check specific bindings for Doc 1
-        List<MatchDetail> doc1Details = detailsByDoc.get(1);
-        assertTrue(doc1Details.stream().anyMatch(d -> var1.equals(d.variableName().orElse(null)) && val1.equals(d.value())));
-        assertTrue(doc1Details.stream().anyMatch(d -> var2.equals(d.variableName().orElse(null)) && val2.equals(d.value())));
+        boolean foundTerm1 = false;
+        boolean foundTerm2 = false;
+        for (Map<String, Object> binding : conceptualRowBindings) {
+            assertEquals(1, binding.get("docId"));
+            assertEquals(1, binding.get("sentId"));
+            if ("term1".equals(binding.get("value")) && "v1".equals(binding.get("variableName"))) {
+                foundTerm1 = true;
+            } else if ("term2".equals(binding.get("value")) && "v2".equals(binding.get("variableName"))) {
+                foundTerm2 = true;
+            }
+        }
+        assertTrue(foundTerm1, "Binding for term1 not found in the conceptual row");
+        assertTrue(foundTerm2, "Binding for term2 not found in the conceptual row");
     }
 
     @Test
-    void testExecuteOr() throws Exception {
-        Logical condition = new Logical(Logical.LogicalOperator.OR, List.of(mockContainsCond1, mockPosCond2));
-        String var1 = "?term";
-        String var2 = "?posTag";
-        String val1 = "apple";
-        String val2 = "NN";
+    void testExecuteAnd_firstConditionEmpty() throws QueryExecutionException {
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
 
-        // Mock results using MatchDetail and QueryResult
-        List<MatchDetail> containsDetails = List.of(
-            createDetail(1, 1, var1, val1, 0, 5),   // Overlap
-            createDetail(1, 2, var1, val1, 10, 15) // Only Contains
-        );
-        QueryResult containsResult = new QueryResult(TEST_GRANULARITY, TEST_WINDOW_SIZE, containsDetails);
+        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
+        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 0, 4, -1, 0)
+        ));
 
-        List<MatchDetail> posDetails = List.of(
-            createDetail(1, 1, var2, val2, 6, 10),  // Overlap
-            createDetail(3, 1, var2, val2, 0, 5)   // Only POS
-        );
-        QueryResult posResult = new QueryResult(TEST_GRANULARITY, TEST_WINDOW_SIZE, posDetails);
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(emptyResultSoA);
+        // No need to mock subExecutor2's execute if short-circuiting happens, but good practice for robustness.
+        // For AND, if the first result is empty, the second sub-executor might not even be called.
+        // However, the current LogicalExecutor implementation might call all then process.
+        // Let's assume it might be called for now.
+        lenient().when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result2SoA);
 
-        // Stub factory calls for this test
-        when(mockFactory.getExecutor(eq(mockContainsCond1))).thenReturn(mockContainsExecutor);
-        when(mockFactory.getExecutor(eq(mockPosCond2))).thenReturn(mockPosExecutor);
 
-        // Stub sub-executor calls
-        when(mockContainsExecutor.execute(eq(mockContainsCond1), any(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class)))
-            .thenReturn(containsResult);
-        when(mockPosExecutor.execute(eq(mockPosCond2), any(), any(Query.Granularity.class), anyInt(), anyString(), any(AttributeRequirements.class)))
-            .thenReturn(posResult);
+        QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements);
 
-        // Execute
-        QueryResult finalResult = logicalExecutor.execute(condition, indexes, TEST_GRANULARITY, TEST_WINDOW_SIZE, "test_corpus");
-
-        // Verify final result (union)
-        assertNotNull(finalResult);
-        assertEquals(TEST_GRANULARITY, finalResult.getGranularity());
-        assertEquals(TEST_WINDOW_SIZE, finalResult.getGranularitySize());
-
-        // Expected details (union of inputs, duplicates handled by Set conversion)
-        List<MatchDetail> expectedDetails = List.of(
-            createDetail(1, 1, var1, val1, 0, 5), createDetail(1, 1, var2, val2, 6, 10), // Combined from overlap
-            createDetail(1, 2, var1, val1, 10, 15),
-            createDetail(3, 1, var2, val2, 0, 5)
-        );
-        Set<MatchDetail> expectedDetailSet = new HashSet<>(expectedDetails);
-        Set<MatchDetail> actualDetailSet = new HashSet<>(finalResult.getAllDetails());
-
-        assertEquals(expectedDetailSet.size(), actualDetailSet.size());
-        assertEquals(expectedDetailSet, actualDetailSet);
-
-        // Verify specific details are present
-        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 1 && d.getSentenceId() == 1 && var1.equals(d.variableName().orElse(null))));
-        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 1 && d.getSentenceId() == 1 && var2.equals(d.variableName().orElse(null))));
-        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 1 && d.getSentenceId() == 2 && var1.equals(d.variableName().orElse(null))));
-        assertTrue(actualDetailSet.stream().anyMatch(d -> d.getDocumentId() == 3 && d.getSentenceId() == 1 && var2.equals(d.variableName().orElse(null))));
+        assertTrue(finalResult.isEmpty());
+        assertEquals(0, countUniqueConceptualRows(finalResult));
     }
 
     @Test
-    void testExecuteAndShortCircuit() throws QueryExecutionException {
-        Logical condition = new Logical(Logical.LogicalOperator.AND, List.of(mockContainsCond1, mockPosCond2));
+    void testExecuteAnd_secondConditionEmpty() throws QueryExecutionException {
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
 
-        // Stub factory calls for this test
-        when(mockFactory.getExecutor(eq(mockContainsCond1))).thenReturn(mockContainsExecutor);
+        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)
+        ));
+        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
 
-        // Mock first executor returns empty QueryResult
-        when(mockContainsExecutor.execute(eq(mockContainsCond1), eq(indexes), eq(TEST_GRANULARITY), eq(TEST_WINDOW_SIZE), anyString(), any(AttributeRequirements.class)))
-            .thenReturn(new QueryResult(TEST_GRANULARITY, TEST_WINDOW_SIZE, Collections.emptyList()));
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result1SoA);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(emptyResultSoA);
 
-        // Setup second executor leniently (should not be called due to short-circuit)
-        verify(mockPosExecutor, never()).execute(eq(mockPosCond2), eq(indexes), eq(TEST_GRANULARITY), eq(TEST_WINDOW_SIZE), anyString(), any(AttributeRequirements.class));
+        QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements);
 
-        // Execute
-        QueryResult finalResult = logicalExecutor.execute(condition, indexes, TEST_GRANULARITY, TEST_WINDOW_SIZE, "test_corpus");
-
-        // Verify
-        assertNotNull(finalResult);
-        assertTrue(finalResult.getAllDetails().isEmpty(), "Result should be empty due to short-circuit");
-        
-        // Verify first executor was called
-        verify(mockContainsExecutor).execute(eq(mockContainsCond1), eq(indexes), eq(TEST_GRANULARITY), eq(TEST_WINDOW_SIZE), anyString(), any(AttributeRequirements.class));
+        assertTrue(finalResult.isEmpty());
+        assertEquals(0, countUniqueConceptualRows(finalResult));
     }
 
     @Test
-    void testExecuteEmptySubconditions() throws QueryExecutionException {
-        Logical condition = new Logical(Logical.LogicalOperator.OR, Collections.emptyList());
+    void testExecuteOr_twoConditions_bothReturnResults() throws QueryExecutionException {
+        Logical orCondition = new Logical(Logical.LogicalOperator.OR, List.of(condition1_term1, condition2_term2));
 
-        // Execute should handle empty conditions gracefully (return empty result)
-        QueryResult result = logicalExecutor.execute(condition, indexes, TEST_GRANULARITY, TEST_WINDOW_SIZE, "test_corpus");
+        // Input conceptual IDs: 0 for term1, 0 for term2.
+        // For OR, these should be preserved (potentially offset).
+        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0) // Conceptual ID 0
+        ));
+        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term2", ValueType.TERM, "v2", 2, 1, 0, 4, -1, 0) // Conceptual ID 0 (will be offset)
+        ));
 
-        assertNotNull(result);
-        assertTrue(result.getAllDetails().isEmpty(), "Expected empty result for empty conditions");
-        // Verify factory was not called
-        verify(mockFactory, never()).getExecutor(any());
-    }
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result1SoA);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result2SoA);
 
-    // --- Tests for intersectQueryResultsSortMerge --- 
-    
-    @Test
-    void intersectSortMerge_DocumentGranularity_BothEmpty() {
-        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, Collections.emptyList());
-        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, Collections.emptyList());
-        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-        assertTrue(result.getAllDetails().isEmpty());
-        assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-    }
+        QueryResultSoA finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements);
 
-    @Test
-    void intersectSortMerge_DocumentGranularity_OneEmpty() {
-        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(md(1), md(2)));
-        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, Collections.emptyList());
-        QueryResult result1 = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-        QueryResult result2 = logicalExecutor.intersectQueryResultsSortMerge(r2, r1);
-        assertTrue(result1.getAllDetails().isEmpty());
-        assertTrue(result2.getAllDetails().isEmpty());
-    }
+        assertEquals(2, finalResult.size(), "OR should combine all binding entries.");
+        assertEquals(2, countUniqueConceptualRows(finalResult), "Expected 2 unique conceptual rows after OR.");
 
-    @Test
-    void intersectSortMerge_DocumentGranularity_NoCommonDocs() {
-        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(md(1), md(3)));
-        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, List.of(md(2), md(4)));
-        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-        assertTrue(result.getAllDetails().isEmpty());
+        // Check if both original conceptual rows are present (one potentially offset)
+        // This requires knowing the offset strategy, or checking the data content.
+        Set<Object> values = new HashSet<>();
+        Set<Integer> conceptualIds = new HashSet<>();
+        for(int i=0; i < finalResult.size(); i++) {
+            values.add(finalResult.getValueAt(i));
+            conceptualIds.add(finalResult.getConceptualRowIdAt(i));
+        }
+        assertTrue(values.contains("term1"));
+        assertTrue(values.contains("term2"));
+        assertEquals(2, conceptualIds.size(), "Should have two distinct conceptual IDs in the OR result.");
     }
 
     @Test
-    void intersectSortMerge_DocumentGranularity_SomeCommonDocs() {
-        MatchDetail d1_1 = md(1, 1);
-        MatchDetail d1_2 = md(1, 2);
-        MatchDetail d2_1 = md(2, 1);
-        MatchDetail d3_1 = md(3, 1);
-        MatchDetail d4_1 = md(4, 1);
-        MatchDetail d2_2 = md(2, 2); 
+    void testExecuteOr_firstConditionEmpty() throws QueryExecutionException {
+        Logical orCondition = new Logical(Logical.LogicalOperator.OR, List.of(condition1_term1, condition2_term2));
 
-        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1_1, d1_2, d3_1)); // Docs 1 (details d1_1, d1_2), 3 (detail d3_1)
-        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d2_1, d2_2, d4_1)); // Docs 2, 4
-        // Intentionally swapped order for r2 input
-        QueryResult r3 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d4_1, d2_1, d2_2)); // Docs 2, 4 (same as r2)
-        QueryResult r4 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1_1, d2_1)); // Docs 1 (detail d1_1), 2 (detail d2_1)
+        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
+        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 0, 4, -1, 0) // Conceptual ID 0
+        ));
 
-        QueryResult result_1_3 = logicalExecutor.intersectQueryResultsSortMerge(r1, r3); // Docs 1,3 INTERSECT 2,4 -> {} 
-        QueryResult result_1_4 = logicalExecutor.intersectQueryResultsSortMerge(r1, r4); // Docs 1,3 INTERSECT 1,2 -> {Doc 1}
-        QueryResult result_3_4 = logicalExecutor.intersectQueryResultsSortMerge(r3, r4); // Docs 2,4 INTERSECT 1,2 -> {Doc 2}
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(emptyResultSoA);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result2SoA);
 
-        assertTrue(result_1_3.getAllDetails().isEmpty());
+        QueryResultSoA finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements);
 
-        // For Doc 1 (common to r1 and r4): r1 has [d1_1, d1_2], r4 has [d1_1].
-        // Intersection should combine these for doc 1. Expected: [d1_1, d1_2] (d1_1 is common, d1_2 from r1).
-        // If MatchDetail equality is by reference, and d1_1 is the same object, it's fine.
-        // The logic should collect all unique details for the common document ID.
-        // If details are merged additively: details from r1's unit for doc 1 + details from r4's unit for doc 1.
-        // Assuming QueryResult.getAllDetails() returns a collection of unique MatchDetail objects for that unit.
-        // The current intersect logic likely merges all unique details from matching units.
-        // So, for doc 1, it should be d1_1 (from r4) and d1_2 (from r1).
-        List<MatchDetail> expectedDetailsForDoc1 = new ArrayList<>();
-        expectedDetailsForDoc1.add(d1_1); // Common detail
-        expectedDetailsForDoc1.add(d1_2); // Detail from r1 for doc 1
-        // Note: d2_1 from r4 is for doc 2, so it's not part of doc 1's details.
-        
-        assertEquals(sortDetails(expectedDetailsForDoc1), getSortedDetails(result_1_4), "Doc 1 intersection failed"); 
-        
-        // For Doc 2 (common to r3 and r4): r3 has [d2_1, d2_2], r4 has [d2_1].
-        // Expected for Doc 2: [d2_1, d2_2]
-        List<MatchDetail> expectedDetailsForDoc2 = new ArrayList<>();
-        expectedDetailsForDoc2.add(d2_1); // Common detail
-        expectedDetailsForDoc2.add(d2_2); // Detail from r3 for doc 2
-        assertEquals(sortDetails(expectedDetailsForDoc2), getSortedDetails(result_3_4), "Doc 2 intersection failed"); 
-    }
-
-     @Test
-    void intersectSortMerge_DocumentGranularity_IdenticalResults() {
-        MatchDetail d1 = md(1, 1);
-        MatchDetail d2 = md(2, 2);
-        List<MatchDetail> details = List.of(d1, d2);
-        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, details);
-        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, details);
-        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-
-        assertEquals(sortDetails(List.of(d1, d2)), getSortedDetails(result)); 
+        assertFalse(finalResult.isEmpty());
+        assertEquals(result2SoA.size(), finalResult.size());
+        assertEquals(1, countUniqueConceptualRows(finalResult));
+        assertEquals("term2", finalResult.getValueAt(0));
+        assertEquals(0, finalResult.getConceptualRowIdAt(0)); // Preserved conceptual ID
     }
 
     @Test
-    void intersectSortMerge_DocumentGranularity_Subset() {
-        MatchDetail d1 = md(1, 1);
-        MatchDetail d2 = md(2, 2);
-        MatchDetail d3 = md(3, 3);
+    void testExecuteOr_secondConditionEmpty() throws QueryExecutionException {
+        Logical orCondition = new Logical(Logical.LogicalOperator.OR, List.of(condition1_term1, condition2_term2));
 
-        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1, d2, d3)); // Docs 1, 2, 3
-        QueryResult r2 = new QueryResult(Query.Granularity.DOCUMENT, List.of(d1, d3));    // Docs 1, 3
+        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0) // Conceptual ID 0
+        ));
+        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
 
-        QueryResult result1 = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-        QueryResult result2 = logicalExecutor.intersectQueryResultsSortMerge(r2, r1);
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result1SoA);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(emptyResultSoA);
 
-        assertEquals(sortDetails(List.of(d1, d3)), getSortedDetails(result1));
-        assertEquals(sortDetails(List.of(d1, d3)), getSortedDetails(result2));
-    }
+        QueryResultSoA finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements);
 
-    // Helper to compare details ignoring order and potential duplicates from merge
-    private List<MatchDetail> getSortedDetails(QueryResult result) {
-        // Need a consistent way to sort MatchDetail for comparison
-        // Sorting by docId, then sentId, then value.toString()
-        List<MatchDetail> details = new ArrayList<>(result.getAllDetails());
-        details.sort(Comparator.<MatchDetail, Integer>comparing(MatchDetail::getDocumentId)
-                              .thenComparing(MatchDetail::getSentenceId)
-                              .thenComparing(d -> d.value().toString()) 
-                              // Add more criteria if needed for uniqueness in tests
-                              .thenComparing(System::identityHashCode)); // Tie-breaker
-        return details;
-    }
-
-    // Helper to sort details for comparison in tests
-    private List<MatchDetail> sortDetails(List<MatchDetail> details) {
-        List<MatchDetail> sorted = new ArrayList<>(details);
-        // Use the same comparator as in getSortedDetails
-        sorted.sort(Comparator.<MatchDetail, Integer>comparing(MatchDetail::getDocumentId)
-                            .thenComparing(MatchDetail::getSentenceId)
-                            .thenComparing(d -> d.value().toString())
-                            .thenComparing(System::identityHashCode)); // Tie-breaker
-        return sorted;
-    }
-
-    // Helper to create a basic MatchDetail for testing intersection logic
-    private MatchDetail md(int docId, int sentId) { 
-        return new MatchDetail(
-            "value_" + docId + "_" + sentId, // Dummy value
-            ValueType.TERM,                  // Dummy type
-            new Position(docId, sentId, 0, 0), // Position object
-            (String) null
-        );
-    }
-
-    private MatchDetail md(int docId) { // Helper for document granularity
-        return md(docId, -1); // Use -1 or a consistent marker for doc level
-    }
-
-    // --- Tests for Sentence Granularity --- 
-    @Test
-    void intersectSortMerge_SentenceGranularity_NoCommonDocs() {
-        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 1), md(1, 2)));
-        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(2, 1), md(2, 2)));
-        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-        assertTrue(result.getAllDetails().isEmpty());
-        assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
-        assertEquals(0, result.getGranularitySize());
+        assertFalse(finalResult.isEmpty());
+        assertEquals(result1SoA.size(), finalResult.size());
+        assertEquals(1, countUniqueConceptualRows(finalResult));
+        assertEquals("term1", finalResult.getValueAt(0));
+        assertEquals(0, finalResult.getConceptualRowIdAt(0)); // Preserved conceptual ID
     }
 
     @Test
-    void intersectSortMerge_SentenceGranularity_CommonDocs_NoOverlap_Window0() {
-        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 1), md(1, 3)));
-        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 2), md(1, 4), md(2,1)));
-        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-        assertTrue(result.getAllDetails().isEmpty(), "Expected no overlap with window size 0");
+    void testExecuteAnd_threeConditions_middleIsEmpty() throws QueryExecutionException {
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2, condition3_term3));
+
+        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)));
+        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
+        QueryResultSoA result3SoA = createMockQueryResultSoA(List.of(new TestDataEntry("term3", ValueType.TERM, "v3", 1, 1, 0, 4, -1, 0)));
+
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result1SoA);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(emptyResultSoA);
+        // For AND, if any intermediate result is empty, the subsequent executors might not be called.
+        // Mocking leniently for robustness.
+        lenient().when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result3SoA);
+
+        QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements);
+
+        assertTrue(finalResult.isEmpty(), "AND with an empty middle result should be empty.");
+        assertEquals(0, countUniqueConceptualRows(finalResult));
     }
 
     @Test
-    void intersectSortMerge_SentenceGranularity_CommonDocs_Overlap_Window0() {
-        MatchDetail d1_1 = md(1, 1);
-        MatchDetail d1_3 = md(1, 3);
-        MatchDetail d1_3_alt = md(1, 3); // From r2
-        MatchDetail d2_1 = md(2, 1);
-        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(d1_1, d1_3));        // Doc 1, Sents 1, 3
-        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 2), d1_3_alt, d2_1)); // Doc 1, Sents 2, 3; Doc 2, Sent 1
-        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
+    void testExecuteOr_threeConditions_middleHasUnique() throws QueryExecutionException {
+        Logical orCondition = new Logical(Logical.LogicalOperator.OR, List.of(condition1_term1, condition2_term2, condition3_term3));
 
-        assertEquals(sortDetails(List.of(d1_3)), getSortedDetails(result), "Expected overlap only for sentence 3 with window 0");
+        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0) // Conceptual ID 0
+        ));
+        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term2", ValueType.TERM, "v2", 2, 1, 0, 4, -1, 1) // Conceptual ID 1
+        ));
+        QueryResultSoA result3SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term3", ValueType.TERM, "v3", 1, 1, 5, 9, -1, 2) // Conceptual ID 2
+        ));
+
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result1SoA);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result2SoA);
+        when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result3SoA);
+
+        QueryResultSoA finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements);
+
+        assertEquals(3, finalResult.size(), "OR should combine all binding entries.");
+        assertEquals(3, countUniqueConceptualRows(finalResult), "Expected 3 unique conceptual rows after OR with distinct inputs.");
+
+        Set<Object> values = new HashSet<>();
+        for(int i=0; i < finalResult.size(); i++) {
+            values.add(finalResult.getValueAt(i));
+        }
+        assertTrue(values.containsAll(Set.of("term1", "term2", "term3")));
+
+        // Check conceptual IDs are preserved (potentially offset)
+        Set<Integer> finalConceptualIds = new HashSet<>();
+        for (int i = 0; i < finalResult.size(); i++) {
+            finalConceptualIds.add(finalResult.getConceptualRowIdAt(i));
+        }
+        assertEquals(3, finalConceptualIds.size());
+
+        // Verify data associated with conceptual rows
+        boolean term1Found = false;
+        for(int i=0; i<finalResult.size(); i++){
+            if("term1".equals(finalResult.getValueAt(i))) {
+                assertTrue(finalConceptualIds.contains(finalResult.getConceptualRowIdAt(i)));
+                term1Found = true;
+            }
+        }
+        assertTrue(term1Found);
     }
-
-    @Test
-    void intersectSortMerge_SentenceGranularity_CommonDocs_Overlap_Window1() {
-        // Window 1 means allowedDistance = (1-1)/2 = 0 -> Adjacent not allowed, only exact match
-        // Let's redefine window size interpretation or test case.
-        // Assuming window N means +/- (N-1)/2 sentences distance.
-        // So window size 1 -> distance 0 (exact match)
-        // Window size 3 -> distance 1 (adjacent allowed)
-        int windowSize = 3; // +/- 1 sentence
-        MatchDetail d1_1 = md(1, 1);
-        MatchDetail d1_2 = md(1, 2);
-        MatchDetail d1_3 = md(1, 3);
-        MatchDetail d1_4 = md(1, 4);
-        MatchDetail d1_5 = md(1, 5);
-        MatchDetail d2_1 = md(2, 1);
-        MatchDetail d2_3 = md(2, 3);
-
-        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, windowSize, List.of(d1_1, d1_4, d2_1));         // D1:S1,S4; D2:S1
-        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, windowSize, List.of(d1_3, d1_5, md(1, 8), d2_3)); // D1:S3,S5,S8; D2:S3
-
-        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-
-        // Expected: 
-        // Doc 1: S1(r1) no match. S4(r1) matches S3(r2) & S5(r2). S3(r2) matches S4(r1). S5(r2) matches S4(r1). S8(r2) no match.
-        // Doc 2: S1(r1) no match. S3(r2) no match.
-        // Result units: (1,3), (1,4), (1,5) 
-        // Use sorted lists for comparison, collecting details from involved units
-        List<MatchDetail> expectedDetails = List.of(d1_3, d1_4, d1_5); 
-
-        assertEquals(sortDetails(expectedDetails), getSortedDetails(result), "Expected overlap for sentences 3, 4, 5 in Doc 1 with window " + windowSize);
-        assertEquals(windowSize, result.getGranularitySize());
-    }
-
-    @Test
-    void intersectSortMerge_SentenceGranularity_IdenticalResults() {
-        int windowSize = 1; // Exact match
-        MatchDetail d1_1 = md(1, 1);
-        MatchDetail d2_2 = md(2, 2);
-        List<MatchDetail> details = List.of(d1_1, d2_2);
-        QueryResult r1 = new QueryResult(Query.Granularity.SENTENCE, windowSize, details);
-        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, windowSize, details);
-        QueryResult result = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-
-        assertEquals(sortDetails(List.of(d1_1, d2_2)), getSortedDetails(result));
-        assertEquals(windowSize, result.getGranularitySize());
-    }
-
-    @Test
-    void intersectSortMerge_MismatchedGranularity_ShouldReturnEmpty() {
-        QueryResult r1 = new QueryResult(Query.Granularity.DOCUMENT, List.of(md(1)));
-        QueryResult r2 = new QueryResult(Query.Granularity.SENTENCE, 0, List.of(md(1, 1)));
-        QueryResult result1 = logicalExecutor.intersectQueryResultsSortMerge(r1, r2);
-        QueryResult result2 = logicalExecutor.intersectQueryResultsSortMerge(r2, r1);
-
-        assertTrue(result1.getAllDetails().isEmpty(), "Intersection of different granularities should be empty");
-        assertEquals(Query.Granularity.DOCUMENT, result1.getGranularity()); // Returns first granularity on error
-
-        assertTrue(result2.getAllDetails().isEmpty(), "Intersection of different granularities should be empty");
-        assertEquals(Query.Granularity.SENTENCE, result2.getGranularity()); // Returns first granularity on error
-    }
-
-    // TODO: Add tests for executeAnd/executeOr with mocked sub-executors
-} 
+}

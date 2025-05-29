@@ -35,12 +35,12 @@ public abstract class BaseIndexTest {
         // Create temp directory
         tempDir = Files.createTempDirectory("index-test-");
         logger.info("Created temp directory: {}", tempDir);
-        
+
         // Create index base directory
         indexBaseDir = tempDir.resolve("indexes");
         Files.createDirectories(indexBaseDir);
         logger.info("Created index directory: {}", indexBaseDir);
-        
+
         // Set up SQLite
         sqliteConn = createTestDatabase();
         createBasicTables();
@@ -58,14 +58,14 @@ public abstract class BaseIndexTest {
     @AfterEach
     protected void tearDown() throws Exception {
         logger.info("Starting test cleanup...");
-        
+
         // Close SQLite connection
         if (sqliteConn != null && !sqliteConn.isClosed()) {
             sqliteConn.close();
             sqliteConn = null;
             logger.info("Closed SQLite connection");
         }
-        
+
         // Delete test files
         if (tempDir.toFile().exists()) {
             try {
@@ -75,12 +75,12 @@ public abstract class BaseIndexTest {
                 logger.warn("Could not delete temp directory: {}", e.getMessage());
             }
         }
-        
+
         File stopwordsFile = new File(TEST_STOPWORDS_PATH);
         if (stopwordsFile.exists() && stopwordsFile.delete()) {
             logger.info("Deleted stopwords file: {}", TEST_STOPWORDS_PATH);
         }
-        
+
         // Reset instance variables
         tempDir = null;
         indexBaseDir = null;
@@ -155,4 +155,4 @@ public abstract class BaseIndexTest {
     protected Path getIndexPath(String indexType) {
         return indexBaseDir.resolve(indexType);
     }
-} 
+}

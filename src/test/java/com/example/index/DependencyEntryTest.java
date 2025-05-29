@@ -54,4 +54,4 @@ class DependencyEntryTest extends BaseIndexTest {
     void testTimestampHandling() {
         // This test is no longer relevant as DependencyEntry does not handle timestamps directly.
     }
-} 
+}

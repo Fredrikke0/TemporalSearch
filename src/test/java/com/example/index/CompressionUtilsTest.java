@@ -15,25 +15,25 @@ import java.util.Random;
 class CompressionUtilsTest {
     @TempDir
     Path tempDir;
-    
+
     private Path sourcePath;
     private Path compressedPath;
     private Path decompressedPath;
-    
+
     @BeforeEach
     void setUp() throws IOException {
         sourcePath = tempDir.resolve("source.txt");
         compressedPath = tempDir.resolve("compressed.gz");
         decompressedPath = tempDir.resolve("decompressed.txt");
     }
-    
+
     @AfterEach
     void tearDown() throws IOException {
         Files.deleteIfExists(sourcePath);
         Files.deleteIfExists(compressedPath);
         Files.deleteIfExists(decompressedPath);
     }
-    
+
     @Test
     void testCompressAndDecompress() throws IOException {
         // Create a test file with repeating content for good compression
@@ -43,32 +43,32 @@ class CompressionUtilsTest {
             builder.append(content);
         }
         Files.write(sourcePath, builder.toString().getBytes(StandardCharsets.UTF_8));
-        
+
         // Compress the file
         double compressionRatio = CompressionUtils.compressFile(sourcePath, compressedPath);
         assertTrue(compressionRatio > 1.0, "Compression should achieve some size reduction");
         assertTrue(Files.size(compressedPath) < Files.size(sourcePath),
             "Compressed file should be smaller than source");
-        
+
         // Decompress the file
         CompressionUtils.decompressFile(compressedPath, decompressedPath);
-        
+
         // Verify the content matches
         byte[] originalBytes = Files.readAllBytes(sourcePath);
         byte[] decompressedBytes = Files.readAllBytes(decompressedPath);
         assertArrayEquals(originalBytes, decompressedBytes,
             "Decompressed content should match original");
     }
-    
+
     @Test
     void testStreamCompression() throws IOException {
         String testData = "Test data for stream compression";
-        
+
         // Write compressed data
         try (OutputStream out = CompressionUtils.createCompressedOutputStream(compressedPath)) {
             out.write(testData.getBytes(StandardCharsets.UTF_8));
         }
-        
+
         // Read compressed data
         StringBuilder result = new StringBuilder();
         try (InputStream in = CompressionUtils.createDecompressionInputStream(compressedPath);
@@ -79,11 +79,11 @@ class CompressionUtilsTest {
                 result.append(buffer, 0, charsRead);
             }
         }
-        
+
         assertEquals(testData, result.toString(),
             "Data read from compressed stream should match original");
     }
-    
+
     @Test
     void testLargeFileCompression() throws IOException {
         // Create a large file with random data
@@ -95,27 +95,27 @@ class CompressionUtilsTest {
                 out.write(buffer);
             }
         }
-        
+
         // Compress and decompress
         CompressionUtils.compressFile(sourcePath, compressedPath);
         CompressionUtils.decompressFile(compressedPath, decompressedPath);
-        
+
         // Verify
         assertTrue(Files.mismatch(sourcePath, decompressedPath) == -1,
             "Large file content should match after compression/decompression");
     }
-    
+
     @Test
     void testCompressEmptyFile() throws IOException {
         // Create empty file
         Files.createFile(sourcePath);
-        
+
         // Compress empty file
         CompressionUtils.compressFile(sourcePath, compressedPath);
-        
+
         // Decompress empty file
         CompressionUtils.decompressFile(compressedPath, decompressedPath);
-        
+
         assertEquals(0, Files.size(sourcePath),
             "Source file should be empty");
         assertEquals(0, Files.size(decompressedPath),
@@ -123,4 +123,4 @@ class CompressionUtilsTest {
         assertTrue(Files.size(compressedPath) > 0,
             "Compressed file should contain at least GZIP header");
     }
-} 
+}

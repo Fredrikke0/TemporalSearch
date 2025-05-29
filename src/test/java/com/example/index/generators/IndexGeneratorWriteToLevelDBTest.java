@@ -1,18 +1,11 @@
 package com.example.index.generators;
 
-import com.example.core.PositionListSoA;
-import com.example.core.IndexAccess;
-import com.example.logging.ProgressTracker;
-import com.google.common.collect.ListMultimap;
-import com.example.index.IndexEntry; // Assuming a simple IndexEntry or mock if needed
-
-import org.iq80.leveldb.DB;
-import org.iq80.leveldb.Options;
-import org.iq80.leveldb.impl.Iq80DBFactory;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -22,17 +15,25 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.SQLException;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
-import java.util.UUID;
-import com.example.index.LevelDBConfig;
 
+import org.iq80.leveldb.DB;
+import org.iq80.leveldb.Options;
+import org.iq80.leveldb.impl.Iq80DBFactory;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static org.junit.jupiter.api.Assertions.*;
+import com.example.core.IndexAccess;
+import com.example.core.PositionListSoA;
+import com.example.index.IndexEntry; // Assuming a simple IndexEntry or mock if needed
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ListMultimap;
 
 public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
     private static final Logger logger = LoggerFactory.getLogger(IndexGeneratorWriteToLevelDBTest.class);
@@ -75,7 +76,7 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
         protected ListMultimap<String, PositionListSoA> processBatch(List<IndexEntry> batch) { return null; } // Not used
         @Override
         public long getDocumentCountForIndex() { return 0; } // Not used
-        
+
         // Make writeToLevelDB public for testing
         @Override
         public long writeToLevelDB(File sortedFile) throws IOException {
@@ -91,10 +92,10 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
     @Override
     protected void setUp() throws Exception {
         super.setUp(); // Sets up indexBaseDir, sqliteConn etc. from BaseIndexTest
-        
+
         // This generatorTempDir is the PARENT directory we pass to the constructor.
         // The IndexGenerator will create its unique subdirectory INSIDE this.
-        generatorTempDir = tempDir.resolve("generatorSpecificParentTemp"); 
+        generatorTempDir = tempDir.resolve("generatorSpecificParentTemp");
         Files.createDirectories(generatorTempDir);
 
         ProgressTracker mockProgressTracker = Mockito.mock(ProgressTracker.class);
@@ -129,7 +130,7 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
 
         PositionListSoA termB_list1 = new PositionListSoA();
         termB_list1.add(2, 0, 5, 10, 201);
-        
+
         PositionListSoA termC_emptyList = new PositionListSoA();
 
 
@@ -143,7 +144,7 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
         // 3. Create the 'sorted.tmp' file within the generator's actual temp directory
         Path actualGeneratorTempPath = testGenerator.getActualTempDir(); // This gets the unique dir like /tmp/.../generatorSpecificParentTemp/test-index-index-temp-UUID
         File sortedFile = actualGeneratorTempPath.resolve("sorted.tmp").toFile();
-        
+
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(sortedFile, StandardCharsets.UTF_8))) {
             writer.write("termA\t" + termA_blob1_b64 + "\n");
             writer.write("termA\t" + termA_blob2_b64 + "\n"); // Same term, different blob
@@ -159,8 +160,8 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
         try {
             logger.warn("Attempting to DESTROY database at: {} before generator writes.", dbPathForDestroy);
             // Ensure the parent directory exists for Iq80DBFactory.factory.destroy, as it might not if this is the very first run
-            Files.createDirectories(dbPathForDestroy.getParent()); 
-            Iq80DBFactory.factory.destroy(dbPathForDestroy.toFile(), new Options()); 
+            Files.createDirectories(dbPathForDestroy.getParent());
+            Iq80DBFactory.factory.destroy(dbPathForDestroy.toFile(), new Options());
             logger.info("Database at: {} reportedly destroyed before generator writes.", dbPathForDestroy);
         } catch (IOException e) {
             logger.error("Failed to destroy database at {}: {}. This might be okay if it didn't exist.", dbPathForDestroy, e.getMessage());
@@ -202,7 +203,7 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
             // Verify Term C (written with an empty PositionListSoA)
             byte[] termC_value_db = db.get(IndexGenerator.bytes("termC"));
             assertNull(termC_value_db, "Value for 'termC' (from empty list) should NOT exist in DB, as it has 0 positions and should be filtered.");
-            
+
             // Verify Term D
             byte[] termD_value_db = db.get(IndexGenerator.bytes("termD"));
             assertNotNull(termD_value_db, "Value for 'termD' should exist in DB.");
@@ -213,4 +214,4 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
         }
         // No explicit close of 'db' here, as it's managed by testGenerator which is closed in @AfterEach
     }
-} 
+}

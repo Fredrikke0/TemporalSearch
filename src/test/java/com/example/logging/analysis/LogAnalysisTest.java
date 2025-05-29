@@ -50,7 +50,7 @@ class LogAnalysisTest {
 
         // Verify state verifications
         @SuppressWarnings("unchecked")
-        Map<String, Map<String, Object>> verifications = 
+        Map<String, Map<String, Object>> verifications =
             (Map<String, Map<String, Object>>) results.get("state_verification_summary");
         assertTrue(verifications.containsKey("ngram_generation"));
         assertEquals(95.0, verifications.get("ngram_generation").get("pass_rate"));
@@ -136,4 +136,4 @@ class LogAnalysisTest {
         summarizer.generateReport(results, textReport, "text");
         assertTrue(Files.exists(textReport));
     }
-} 
+}

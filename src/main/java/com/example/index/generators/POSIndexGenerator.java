@@ -1,23 +1,21 @@
 package com.example.index.generators;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import com.example.logging.ProgressTracker;
-import com.example.core.Position;
+
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
-import java.util.Set;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming POS (Part-of-Speech) index from annotation entries.
@@ -61,14 +59,14 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
                     "FROM annotations WHERE annotation_id > ? AND pos IS NOT NULL AND pos != ''" + notInClause + " ORDER BY annotation_id LIMIT ?";
         }
-        
+
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
             int paramIdx = 1;
             if (!isFirstBatch) {
                 stmt.setLong(paramIdx++, lastProcessedEntry.getAnnotationId());
             }
             stmt.setInt(paramIdx, this.batchSize);
-            
+
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     AnnotationEntry entry = new AnnotationEntry(
@@ -87,7 +85,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 }
             }
         }
-        
+
         return batch;
     }
 
@@ -95,12 +93,12 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
-        
+
         for (AnnotationEntry entry : batch) {
             if (entry.getPos() == null || entry.getPos().isEmpty() || entry.getToken() == null || entry.getToken().isEmpty()) {
                 continue;
             }
-            
+
             String posTag = entry.getPos().toUpperCase(); // Consistent casing with NER types
             String token = entry.getToken().toLowerCase();
             String compositeKey = posTag + com.example.core.IndexAccessInterface.DELIMITER + token;
@@ -108,7 +106,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
             PositionListSoA pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionListSoA());
             pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
         }
-        
+
         for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
             index.put(mapEntry.getKey(), mapEntry.getValue());
         }
@@ -128,4 +126,4 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         // Return 0 to indicate an indeterminate progress bar, as MAX(annotation_id) is not representative.
         return 0;
     }
-} 
+}

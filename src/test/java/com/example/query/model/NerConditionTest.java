@@ -49,7 +49,7 @@ class NerConditionTest {
     @Test
     @DisplayName("Constructor should not accept null type")
     void constructorShouldNotAcceptNullType() {
-        assertThrows(NullPointerException.class, 
+        assertThrows(NullPointerException.class,
             () -> new Ner(null, "varName", true));
     }
 
@@ -72,7 +72,7 @@ class NerConditionTest {
         assertNull(condition.variableName());
         assertFalse(condition.isVariable());
     }
-    
+
     @Test
     @DisplayName("Constructor with target should set target correctly")
     void constructorWithTargetShouldSetTargetCorrectly() {
@@ -105,14 +105,14 @@ class NerConditionTest {
         Ner condition = new Ner("PERSON", "John Doe");
         assertEquals("NER(PERSON, John Doe)", condition.toString());
     }
-    
+
     @Test
     @DisplayName("toString should format with variable correctly (BIND-based style)")
     void testToStringWithVariable() {
         Ner condition = new Ner("PERSON", null, "scientist", true);
         assertEquals("NER(PERSON) BIND scientist", condition.toString());
     }
-    
+
     @Test
     @DisplayName("getProducedVariables should return variable when isVariable is true")
     void getProducedVariablesShouldReturnVariableWhenIsVariableIsTrue() {
@@ -120,11 +120,11 @@ class NerConditionTest {
         assertEquals(1, condition.getProducedVariables().size());
         assertTrue(condition.getProducedVariables().contains("scientist"));
     }
-    
+
     @Test
     @DisplayName("getProducedVariables should return empty set when isVariable is false")
     void getProducedVariablesShouldReturnEmptySetWhenIsVariableIsFalse() {
         Ner condition = new Ner("PERSON");
         assertTrue(condition.getProducedVariables().isEmpty());
     }
-} 
+}

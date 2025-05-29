@@ -1,39 +1,44 @@
 package com.example;
 
+import java.io.BufferedInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TimeZone;
+import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+import org.apache.commons.io.input.CloseShieldInputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.example.nyt.NYTCorpusDocument;
 import com.example.nyt.NYTCorpusDocumentParser;
-import me.tongfei.progressbar.ProgressBar;
-import me.tongfei.progressbar.ProgressBarBuilder;
+
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
-import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.apache.commons.io.input.CloseShieldInputStream;
-
-import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.sql.*;
-import java.text.SimpleDateFormat;
-import java.util.TimeZone;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Stream;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.Set;
-import java.util.TreeSet;
-import java.util.Comparator;
-import java.util.stream.Collectors;
 
 /**
  * Standalone tool to convert New York Times Corpus XML dumps (within .tar.gz archives)
@@ -165,7 +170,7 @@ public class NytXmlToSqlite {
                 for (Path archivePath : allArchivePathsInOrder) {
                     if (globalLimitReachedSignal.get()) {
                         logger.info("Global limit reached signal received, skipping remaining archives.");
-                        break; 
+                        break;
                     }
 
                     // Check global limit before processing a new archive
@@ -210,7 +215,7 @@ public class NytXmlToSqlite {
                                     long yearTarget = limitPerYearMap.get(currentArchiveYear);
                                     long yearProcessed = processedCountPerYearMap.getOrDefault(currentArchiveYear, 0L);
                                     if (yearProcessed >= yearTarget) {
-                                        logger.debug("Year {} target of {} met for archive {}. Skipping further XMLs from this specific archive.", 
+                                        logger.debug("Year {} target of {} met for archive {}. Skipping further XMLs from this specific archive.",
                                                    currentArchiveYear, yearTarget, archivePath.getFileName());
                                         break; // Stop processing XML entries from *this archive* for this year.
                                     }
@@ -223,10 +228,10 @@ public class NytXmlToSqlite {
                                 }
 
                                 String entryName = entry.getName(); // Get name once
-                                if (actualFilesProcessedCounter.get() <= 50) { 
+                                if (actualFilesProcessedCounter.get() <= 50) {
                                      logger.debug("Processing entry: Name='{}'", entryName);
                                 }
-                                
+
                                 try (InputStream shieldedTis = CloseShieldInputStream.wrap(tis)) { // Shield TIS for this entry
                                     NYTCorpusDocument doc = parser.parseNYTCorpusDocumentFromInputStream(shieldedTis, false);
 
@@ -288,8 +293,8 @@ public class NytXmlToSqlite {
 
                 if (!processedCountPerYearMap.isEmpty()) {
                     logger.info("--- Per-Year Processing Summary ---");
-                    processedCountPerYearMap.forEach((year, count) -> 
-                        logger.info("Year {}: {} articles processed (target: {}).", 
+                    processedCountPerYearMap.forEach((year, count) ->
+                        logger.info("Year {}: {} articles processed (target: {}).",
                                     year, count, limitPerYearMap.getOrDefault(year, -1L) == -1L ? "N/A (no global limit or year not targeted)" : limitPerYearMap.get(year).toString())
                     );
                     logger.info("-----------------------------------");
@@ -400,4 +405,4 @@ public class NytXmlToSqlite {
             System.exit(1);
         }
     }
-} 
+}

@@ -1,14 +1,13 @@
 package com.example.core;
 
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.ReadOptions;
-import org.iq80.leveldb.WriteBatch;
-
 import java.util.Optional;
+
+import org.iq80.leveldb.DBIterator;
+import org.iq80.leveldb.WriteBatch;
 
 /**
  * Interface defining the core access methods for indexes.
- * Implemented by both the real LevelDB-backed IndexAccess 
+ * Implemented by both the real LevelDB-backed IndexAccess
  * and test mocks like MockIndexAccess.
  */
 public interface IndexAccessInterface extends AutoCloseable {
@@ -28,20 +27,31 @@ public interface IndexAccessInterface extends AutoCloseable {
     Optional<byte[]> getRaw(byte[] key) throws IndexAccessException;
 
     /**
-     * Creates a new iterator over the database.
+     * Creates a new iterator positioned at or after the specified key.
+     * If the key is null or empty, or if seeking before the first key,
+     * the behavior might depend on the underlying implementation (e.g., start from first).
+     * If the key is past the end of the data, the returned iterator's {@code hasNext()}
+     * method should return {@code false}.
      * The caller is responsible for closing the iterator.
+     *
+     * @param key The key to seek to.
+     * @return A DBIterator positioned at or after the key.
+     * @throws IndexAccessException if an error occurs accessing the index.
      */
-    DBIterator iterator() throws IndexAccessException;
+    DBIterator seek(byte[] key) throws IndexAccessException;
 
     /**
-     * Creates a new iterator over the database with specific read options.
+     * Creates a new iterator positioned at the first key in the database.
      * The caller is responsible for closing the iterator.
+     *
+     * @return A DBIterator positioned at the first key.
+     * @throws IndexAccessException if an error occurs accessing the index.
      */
-    DBIterator iterator(ReadOptions options) throws IndexAccessException;
+    DBIterator iterateFromFirst() throws IndexAccessException;
 
     /**
      * Stores or updates a key-value pair.
-     * Note: Behavior for existing keys might differ between implementations 
+     * Note: Behavior for existing keys might differ between implementations
      * (e.g., overwrite vs. merge for PositionLists).
      */
     void put(byte[] key, byte[] value) throws IndexAccessException;
@@ -76,5 +86,5 @@ public interface IndexAccessInterface extends AutoCloseable {
      * Overrides AutoCloseable.close().
      */
     @Override
-    void close() throws Exception; // Allow Exception from AutoCloseable
-} 
+    void close() throws IndexAccessException; // Allow Exception from AutoCloseable
+}

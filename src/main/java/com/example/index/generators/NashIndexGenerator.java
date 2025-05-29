@@ -1,16 +1,5 @@
 package com.example.index.generators;
 
-import com.example.core.IndexAccessException;
-import com.example.core.Position;
-import com.example.index.AnnotationEntry;
-import com.example.index.NashDateEntryWithId;
-import com.example.index.util.NashSerializationUtils;
-import com.example.logging.ProgressTracker;
-import no.ntnu.sandbox.Nash;
-import org.apache.pig.impl.util.MultiMap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -20,7 +9,25 @@ import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import org.apache.pig.impl.util.MultiMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.core.IndexAccessException;
+import com.example.core.Position;
+import com.example.index.AnnotationEntry;
+import com.example.index.NashDateEntryWithId;
+import com.example.index.util.NashSerializationUtils;
+import com.example.logging.ProgressTracker;
+
+import no.ntnu.sandbox.Nash;
 
 /**
  * Generates a persistent LevelDB index for Nash time hashes.
@@ -107,7 +114,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 if (docId == currentDocId && sentId == currentSentId && Objects.equals(normalizedNer, currentNormalizedNer)) {
                     currentEndChar = endChar;
                 } else {
-                    if (currentDocId != -1 && currentDateId != -1) { 
+                    if (currentDocId != -1 && currentDateId != -1) {
                         Position finalizedPosition = new Position(
                                 currentDocId,
                                 currentSentId,
@@ -141,7 +148,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                     }
                 }
             }
-            if (currentDocId != -1 && currentDateId != -1) { 
+            if (currentDocId != -1 && currentDateId != -1) {
                 Position finalizedPosition = new Position(
                         currentDocId,
                         currentSentId,
@@ -245,4 +252,4 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
         }
         return 0;
     }
-} 
+}

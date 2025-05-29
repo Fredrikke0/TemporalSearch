@@ -70,4 +70,4 @@ public class SnippetNodeTest {
         SnippetNode node = new SnippetNode("main.var", 2);
         assertEquals("SNIPPET(main.var, window=2)", node.toString());
     }
-} 
+}

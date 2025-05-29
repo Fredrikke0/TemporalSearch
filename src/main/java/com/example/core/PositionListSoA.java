@@ -1,26 +1,25 @@
 package com.example.core;
 
-import com.example.index.AnnotationType;
-import com.example.index.StitchPosition;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-
-import java.util.Iterator;
-import java.util.NoSuchElementException;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.io.ByteArrayInputStream;
-import java.io.DataInputStream;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.Set;
+import java.util.TreeSet;
 
+import com.example.index.StitchPosition;
+
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.ints.IntArrays;
+import it.unimi.dsi.fastutil.ints.IntComparator;
 import me.lemire.integercompression.FastPFOR128;
 import me.lemire.integercompression.IntWrapper;
 import me.lemire.integercompression.IntegerCODEC;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.TreeSet;
-import java.util.Set;
-import it.unimi.dsi.fastutil.ints.IntArrays;
-import it.unimi.dsi.fastutil.ints.IntComparator;
 import me.lemire.integercompression.differential.Delta;
 
 /**
@@ -173,7 +172,7 @@ public class PositionListSoA {
     }
 
     /**
-     * Returns a view or copy of the document IDs list. 
+     * Returns a view or copy of the document IDs list.
      * For now, returning a direct reference. Consider read-only views or copies if mutations are a concern.
      * @return The list of document IDs.
      */
@@ -335,22 +334,22 @@ public class PositionListSoA {
                 }
                 Delta.delta(dataToCompress);
             }
-            
+
             // FastPFOR requires input buffer to be padded if its length is not a multiple of its block size (128 for FastPFOR128)
             int blockSize = FastPFOR128.BLOCK_SIZE;
             int remainder = dataToCompress.length % blockSize; // numElementsInArray is the effective length
             int[] inputForCompression = dataToCompress;
             if (remainder != 0) {
                 int paddedLength = dataToCompress.length + (blockSize - remainder);
-                inputForCompression = Arrays.copyOf(dataToCompress, paddedLength); 
+                inputForCompression = Arrays.copyOf(dataToCompress, paddedLength);
             }
 
             // Sufficiently large buffer: original size + 50% + fixed overhead
-            int[] compressedData = new int[inputForCompression.length + (inputForCompression.length / 2) + 1024]; 
+            int[] compressedData = new int[inputForCompression.length + (inputForCompression.length / 2) + 1024];
             IntWrapper inPos = new IntWrapper(0);
             IntWrapper outPos = new IntWrapper(0);
             CODEC.compress(inputForCompression, inPos, inputForCompression.length - inPos.get(), compressedData, outPos);
-            
+
             out.writeInt(outPos.get()); // Number of integers in the compressed data
             for (int i = 0; i < outPos.get(); i++) {
                 out.writeInt(compressedData[i]);
@@ -380,7 +379,7 @@ public class PositionListSoA {
 
             PositionListSoA soaList = new PositionListSoA(); // Simplified constructor call
             if (numPositions == 0) {
-                return soaList; 
+                return soaList;
             }
 
             // Read attribute arrays (always all 5)
@@ -390,7 +389,7 @@ public class PositionListSoA {
             soaList.endChars = readCompressedIntArray(dis, numPositions, true);
             soaList.synonymIds = readCompressedIntArray(dis, numPositions, false);
 
-            soaList.numPositions = numPositions; 
+            soaList.numPositions = numPositions;
 
             // Check if all data was consumed (optional, for strictness)
             if (dis.available() > 0) {
@@ -444,17 +443,17 @@ public class PositionListSoA {
                 paddedOutputLength = originalLength + (blockSize - remainder);
             }
 
-            int[] decompressed = new int[paddedOutputLength]; 
+            int[] decompressed = new int[paddedOutputLength];
             IntWrapper inPos = new IntWrapper(0);
-            IntWrapper outPos = new IntWrapper(0); 
-            
+            IntWrapper outPos = new IntWrapper(0);
+
             CODEC.uncompress(compressedData, inPos, compressedLengthOrMarker - inPos.get(), decompressed, outPos);
 
             if (outPos.get() < originalLength) {
                  throw new IOException("Decompression output size mismatch. Expected to decompress " + originalLength + " ints, but got " + outPos.get() + " ints.");
             }
 
-            if (applyInverseDelta && originalLength > 0) { 
+            if (applyInverseDelta && originalLength > 0) {
                 // Apply inverse delta only to the 'originalLength' part of the decompressed array
                 // Delta.inverseDelta operates in-place. If 'decompressed' is larger due to padding,
                 // we need to be careful. However, inverseDelta should correctly handle operating
@@ -465,7 +464,7 @@ public class PositionListSoA {
                 // might misbehave with padding.
                 // Given Delta.inverseDelta(int[] arr) modifies arr in place, we should be fine as long
                 // as we only use the first originalLength elements later.
-                
+
                 // Create an exact-sized array for inverse delta if needed, or ensure inverseDelta handles it.
                 // Let's assume inverseDelta works correctly on the 'decompressed' array up to 'originalLength'.
                 // We'll copy the relevant part to 'finalData' before inverseDelta if 'decompressed' is padded.
@@ -541,13 +540,13 @@ public class PositionListSoA {
             int numPositions = dis.readInt();
 
             // Skip DocIDs array
-            skipCompressedIntArray(dis, numPositions); 
-            
+            skipCompressedIntArray(dis, numPositions);
+
             if (numPositions == 0) return new IntArrayList(0); // Should have been caught by skip or read logic if numPos=0 led to lengthMarker=0
             return readCompressedIntArray(dis, numPositions, true); // applyInverseDelta = true
         }
     }
-    
+
     /**
      * Helper method to skip over a single compressed/uncompressed attribute array in the stream.
      * Reads the length marker and skips the appropriate number of bytes for the data.
@@ -570,7 +569,7 @@ public class PositionListSoA {
         } else { // Compressed
             bytesToSkip = compressedLengthOrMarker * 4; // 4 bytes per int
         }
-        
+
         long skipped = dis.skipBytes(bytesToSkip);
         if (skipped != bytesToSkip) {
             throw new IOException("Failed to skip the full " + bytesToSkip + " bytes for an attribute array. Skipped only " + skipped);
@@ -585,7 +584,7 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs or the blob is malformed.
      */
     public static IntArrayList decompressBeginChars(byte[] compositeBlob) throws IOException {
-        if (compositeBlob == null || compositeBlob.length < 4) { 
+        if (compositeBlob == null || compositeBlob.length < 4) {
             throw new IOException("Composite blob is too short to decompress begin characters.");
         }
         try (ByteArrayInputStream bais = new ByteArrayInputStream(compositeBlob);
@@ -595,7 +594,7 @@ public class PositionListSoA {
 
             skipCompressedIntArray(dis, numPositions); // Skip DocIDs
             skipCompressedIntArray(dis, numPositions); // Skip SentenceIDs
-            
+
             if (numPositions == 0) return new IntArrayList(0);
             return readCompressedIntArray(dis, numPositions, true); // applyInverseDelta = true
         }
@@ -609,7 +608,7 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs or the blob is malformed.
      */
     public static IntArrayList decompressEndChars(byte[] compositeBlob) throws IOException {
-        if (compositeBlob == null || compositeBlob.length < 4) { 
+        if (compositeBlob == null || compositeBlob.length < 4) {
             throw new IOException("Composite blob is too short to decompress end characters.");
         }
         try (ByteArrayInputStream bais = new ByteArrayInputStream(compositeBlob);
@@ -620,7 +619,7 @@ public class PositionListSoA {
             skipCompressedIntArray(dis, numPositions); // Skip DocIDs
             skipCompressedIntArray(dis, numPositions); // Skip SentenceIDs
             skipCompressedIntArray(dis, numPositions); // Skip BeginChars
-            
+
             if (numPositions == 0) return new IntArrayList(0);
             return readCompressedIntArray(dis, numPositions, true); // applyInverseDelta = true
         }
@@ -649,7 +648,7 @@ public class PositionListSoA {
             skipCompressedIntArray(dis, numPositions); // Skip SentenceIDs
             skipCompressedIntArray(dis, numPositions); // Skip BeginChars
             skipCompressedIntArray(dis, numPositions); // Skip EndChars
-            
+
             if (numPositions == 0) return new IntArrayList(0);
             return readCompressedIntArray(dis, numPositions, false); // applyInverseDelta = false for synonymIds
         }
@@ -743,10 +742,10 @@ public class PositionListSoA {
 
             int synonymIdCompare = Integer.compare(synonymIds.getInt(i1), synonymIds.getInt(i2));
             if (synonymIdCompare != 0) return synonymIdCompare;
-            return 0; 
+            return 0;
         };
 
-        IntArrays.quickSort(p, comparator); 
+        IntArrays.quickSort(p, comparator);
 
         IntArrayList sortedDocIds = new IntArrayList(numPositions);
         IntArrayList sortedSentenceIds = new IntArrayList(numPositions);
@@ -782,7 +781,7 @@ public class PositionListSoA {
      */
     public void merge(PositionListSoA other) {
         if (other == null || other.isEmpty()) {
-            return; 
+            return;
         }
 
         Set<PositionTuple> uniquePositionTuples = new TreeSet<>(Comparator
@@ -811,8 +810,8 @@ public class PositionListSoA {
             ));
         }
 
-        this.clear(); 
-        
+        this.clear();
+
         // The TreeSet is already sorted by the comparator. Add them back in order.
         for (PositionTuple pt : uniquePositionTuples) {
             this.add(pt.docId(), pt.sentId(), pt.begin(), pt.end(), pt.synId());
@@ -820,7 +819,7 @@ public class PositionListSoA {
         // numPositions is updated by the add calls.
         // The list is already sorted due to TreeSet iteration order and how items were added.
         // If an explicit re-sort to exactly match the sort() method behavior is needed (e.g. for stability guarantees not provided by this TreeSet approach)
-        // then uncomment: this.sort(); 
+        // then uncomment: this.sort();
         // However, for just unique sorted positions, this is sufficient.
     }
 
@@ -836,4 +835,4 @@ public class PositionListSoA {
         writeCompressedIntArray(dos, list.elements(), list.size(), applyDelta);
     }
 
-} 
+}

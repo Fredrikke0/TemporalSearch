@@ -1,6 +1,8 @@
 package com.example.index;
 
-import org.iq80.leveldb.*;
+import org.iq80.leveldb.CompressionType;
+import org.iq80.leveldb.DB;
+import org.iq80.leveldb.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,7 +18,7 @@ public class LevelDBConfig {
     public static final int BLOCK_CACHE_SIZE = 1024 * 1024 * 1024; // 1GB
     public static final int BLOOM_FILTER_BITS = 10; // Bits per key for Bloom filter
     public static final int BATCH_SIZE = 1_000; // Reduced from 10_000 to prevent NegativeArraySizeException
-    
+
     /**
      * Creates an optimized Options instance for LevelDB configuration.
      * Settings are tuned for high-throughput index generation with reduced write amplification.
@@ -29,7 +31,7 @@ public class LevelDBConfig {
         options.writeBufferSize(WRITE_BUFFER_SIZE);
         options.cacheSize(BLOCK_CACHE_SIZE);
         options.compressionType(CompressionType.SNAPPY);
-        
+
         // Enhanced logging configuration for debugging
         logger.info("LevelDB configuration:" +
                    "\n- Write buffer: {}MB" +
@@ -38,7 +40,7 @@ public class LevelDBConfig {
                    WRITE_BUFFER_SIZE / (1024 * 1024),
                    BLOCK_CACHE_SIZE / (1024 * 1024 * 1024),
                    options.compressionType());
-        
+
         return options;
     }
 
@@ -71,4 +73,4 @@ public class LevelDBConfig {
             logger.debug("Approximate memory usage: {} bytes", memTableSize);
         }
     }
-} 
+}

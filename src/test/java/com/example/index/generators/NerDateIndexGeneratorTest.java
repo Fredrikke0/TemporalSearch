@@ -20,7 +20,7 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        
+
         // Create test stopwords file
         try (PrintWriter writer = new PrintWriter(TEST_STOPWORDS_PATH)) {
             writer.println("the");
@@ -94,20 +94,20 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
     public void testBasicDateIndexing() throws Exception {
         // Fetch first batch of entries
         var entries = generator.fetchBatch(null);
-        
+
         // Process batch and verify results
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
-        
+
         // Verify January date
         String key1 = "20240115";
         assertTrue(result.containsKey(key1), "Should contain January date");
-        assertEquals(1, result.get(key1).get(0).getNumPositions(), 
+        assertEquals(1, result.get(key1).get(0).getNumPositions(),
             "Should have one position for January date");
-        
+
         // Verify February date
         String key2 = "20240201";
         assertTrue(result.containsKey(key2), "Should contain February date");
-        assertEquals(1, result.get(key2).get(0).getNumPositions(), 
+        assertEquals(1, result.get(key2).get(0).getNumPositions(),
             "Should have one position for February date");
     }
 
@@ -151,16 +151,16 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
 
         // Verify date normalization
         String key3 = "20240115"; // Corresponds to "2024-01-15"
-        assertTrue(result.containsKey(key3), 
+        assertTrue(result.containsKey(key3),
             "Should contain normalized January date key '20240115'. Actual keys: " + result.keySet());
-        
+
         // processBatch should produce one PositionList for this key within this batch
-        assertEquals(1, result.get(key3).size(), 
+        assertEquals(1, result.get(key3).size(),
             "Should be one PositionList for the key '" + key3 + "' in the batch result.");
 
         // That one PositionListSoA should contain all 4 occurrences from doc1 and doc2
         PositionListSoA positionsForDate = result.get(key3).get(0);
-        assertEquals(4, positionsForDate.getNumPositions(), 
+        assertEquals(4, positionsForDate.getNumPositions(),
             "Should have collected 4 positions for date '2024-01-15' (1 from doc1, 3 from doc2) in the batch.");
     }
-} 
+}

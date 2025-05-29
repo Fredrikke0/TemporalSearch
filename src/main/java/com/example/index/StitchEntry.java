@@ -1,7 +1,5 @@
 package com.example.index;
 
-import java.time.LocalDate;
-
 /**
  * Represents an entry in the stitch index, containing a unigram and its associated annotation.
  * The annotation type (DATE, NER, POS, DEPENDENCY) determines how this entry is processed.
@@ -36,4 +34,4 @@ public record StitchEntry(
     public int getEndChar() {
         return endChar;
     }
-} 
+}

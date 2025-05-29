@@ -1,7 +1,5 @@
 package com.example.index;
 
-import java.time.LocalDate;
-
 /**
  * Represents an annotation entry from the SQLite database.
  * Contains information about a token and its linguistic features.
@@ -85,4 +83,4 @@ public final class AnnotationEntry implements IndexEntry {
     public String getLemma() {
         return lemma;
     }
-} 
+}

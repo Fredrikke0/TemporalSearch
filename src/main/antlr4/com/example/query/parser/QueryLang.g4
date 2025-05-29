@@ -1,14 +1,14 @@
 grammar QueryLang;
 
 /*
- * This grammar supports variable binding using the AS keyword pattern.
- * Example: NER(PERSON) AS person
- * The AS keyword followed by a variable name binds the result of a condition to a variable.
+ * This grammar supports variable binding using the BIND keyword pattern.
+ * Example: NER(PERSON) BIND person
+ * The BIND keyword followed by a variable name binds the result of a condition to a variable.
  * Variables are plain identifiers.
  * Variables can be used in SELECT clause and subsequent WHERE conditions.
  * 
  * Variable binding flow:
- * 1. Variables are produced by conditions using the AS var syntax
+ * 1. Variables are produced by conditions using the BIND var syntax
  * 2. Variables can be consumed by other conditions that reference them
  * 3. Variables can be used in the SELECT clause to display results
  * 4. Type safety is enforced through the VariableRegistry

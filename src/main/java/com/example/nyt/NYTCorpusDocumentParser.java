@@ -10,7 +10,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
-import java.net.URL;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -480,8 +481,8 @@ public class NYTCorpusDocumentParser {
 			Node exrefAttribute = attributes.getNamedItem(EX_REF_ATTRIBUTE);
 			if (exrefAttribute != null) {
 				try {
-					ldcDocument.setUrl(new URL(exrefAttribute.getNodeValue()));
-				} catch (MalformedURLException e) {
+					ldcDocument.setUrl(new URI(exrefAttribute.getNodeValue()).toURL());
+				} catch (MalformedURLException | URISyntaxException e) {
 					e.printStackTrace();
 				}
 			}
@@ -644,8 +645,8 @@ public class NYTCorpusDocumentParser {
 					ldcDocument.setNewsDesk(content);
 				} else if (name.equals(ALTERNATE_URL_ATTRIBUTE)) {
 					try {
-						ldcDocument.setAlternateURL(new URL(content));
-					} catch (MalformedURLException e) {
+						ldcDocument.setAlternateURL(new URI(content).toURL());
+					} catch (MalformedURLException | URISyntaxException e) {
 						e.printStackTrace();
 					}
 				} else if (name.equals(ONLINE_SECTIONS_ATTRIBUTE)) {
@@ -937,4 +938,4 @@ public class NYTCorpusDocumentParser {
 			recursiveGetNodesByTagName(children.item(i), tagName, matches);
 		}
 	}
-} 
+}

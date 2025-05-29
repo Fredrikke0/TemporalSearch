@@ -63,7 +63,7 @@ class QueryParserTest {
 
         Condition condition = query.conditions().get(0);
         assertTrue(condition instanceof Contains);
-        
+
         // Check the terms list instead of the 'value' field
         List<String> expectedTerms = List.of("artificial", "intelligence");
         assertEquals(expectedTerms, ((Contains) condition).terms());
@@ -77,7 +77,7 @@ class QueryParserTest {
 
         assertEquals(1, query.conditions().size());
         assertTrue(query.conditions().get(0) instanceof Ner);
-        
+
         Ner condition = (Ner) query.conditions().get(0);
         assertEquals("PERSON", condition.entityType());
         assertNull(condition.variableName());
@@ -106,7 +106,7 @@ class QueryParserTest {
         assertEquals("PERSON", condition.entityType());
         assertEquals("t1.scientist", condition.variableName());
         assertTrue(condition.isVariable());
-        
+
         // Check select column
         assertEquals(1, query.selectColumns().size());
         assertTrue(query.selectColumns().get(0) instanceof VariableColumn);
@@ -121,16 +121,16 @@ class QueryParserTest {
 
         assertTrue(query.conditions().get(0) instanceof Temporal);
         Temporal condition = (Temporal) query.conditions().get(0);
-        
+
         // Updated Assertions for BEFORE predicate
         assertEquals(TemporalPredicate.BEFORE, condition.temporalType());
         assertTrue(condition.startDate().isPresent(), "Start date should be present for literal comparison");
         assertEquals(LocalDateTime.of(2000, 1, 1, 0, 0), condition.startDate().get());
         assertFalse(condition.endDate().isPresent(), "End date should not be present for comparison predicate");
-        
+
         assertNotNull(condition.variableName());
         assertEquals("t1.date", condition.variableName());
-        
+
         // Check select column
         assertEquals(1, query.selectColumns().size());
         assertTrue(query.selectColumns().get(0) instanceof VariableColumn);
@@ -144,16 +144,16 @@ class QueryParserTest {
         Query query = parser.parse(queryStr);
 
         Temporal condition = (Temporal) query.conditions().get(0);
-        
+
         // Updated Assertions for AFTER predicate
         assertEquals(TemporalPredicate.AFTER, condition.temporalType());
         assertTrue(condition.startDate().isPresent(), "Start date should be present for literal comparison");
         assertEquals(LocalDateTime.of(1980, 1, 1, 0, 0), condition.startDate().get()); // Literal date is 1980
         assertFalse(condition.endDate().isPresent(), "End date should not be present for comparison predicate");
-        
+
         assertNotNull(condition.variableName());
         assertEquals("t1.founding", condition.variableName());
-        
+
         // Check select column
         assertEquals(1, query.selectColumns().size());
         assertTrue(query.selectColumns().get(0) instanceof VariableColumn);
@@ -168,7 +168,7 @@ class QueryParserTest {
 
         assertTrue(query.conditions().get(0) instanceof Dependency);
         Dependency condition = (Dependency) query.conditions().get(0);
-        
+
         assertEquals("cat", condition.governor());
         assertEquals("nsubj", condition.relation());
         assertEquals("eats", condition.dependent());
@@ -184,7 +184,7 @@ class QueryParserTest {
 
         assertEquals(1, query.conditions().size());
         assertTrue(query.conditions().get(0) instanceof Logical);
-        
+
         Logical condition = (Logical) query.conditions().get(0);
         assertEquals(Logical.LogicalOperator.AND, condition.operator());
         assertEquals(2, condition.conditions().size());
@@ -229,31 +229,31 @@ class QueryParserTest {
         assertEquals(1, query.orderBy().size());
         assertEquals("t1.TITLE", query.orderBy().get(0));
         assertEquals(5, query.limit().get());
-        
+
         // Verify the conditions in detail
         assertTrue(query.conditions().get(0) instanceof Logical);
         Logical condition = (Logical) query.conditions().get(0);
         assertEquals(Logical.LogicalOperator.AND, condition.operator());
         assertEquals(2, condition.conditions().size());
-        
+
         // First condition should be a nested logical condition with CONTAINS and NER
         assertTrue(condition.conditions().get(0) instanceof Logical);
         // Second condition should be the temporal condition
         assertTrue(condition.conditions().get(1) instanceof Temporal);
-        
+
         // Check the nested logical condition
         Logical nestedCondition = (Logical) condition.conditions().get(0);
         assertEquals(Logical.LogicalOperator.AND, nestedCondition.operator());
         assertEquals(2, nestedCondition.conditions().size());
         assertTrue(nestedCondition.conditions().get(0) instanceof Contains);
         assertTrue(nestedCondition.conditions().get(1) instanceof Ner);
-        
+
         // Extract and check the NER condition from the nested AND
         Ner nerCondition = (Ner) nestedCondition.conditions().get(1);
         assertEquals("PERSON", nerCondition.entityType());
         assertEquals("t1.scientist", nerCondition.variableName()); // Expect qualified name
         assertTrue(nerCondition.isVariable());
-        
+
         // Extract and check the Temporal condition from the outer AND
         Temporal temporalCondition = (Temporal) condition.conditions().get(1);
         assertEquals(TemporalPredicate.BEFORE, temporalCondition.temporalType());
@@ -273,7 +273,7 @@ class QueryParserTest {
 
         assertEquals(1, query.conditions().size());
         assertTrue(query.conditions().get(0) instanceof Logical);
-        
+
         Logical condition = (Logical) query.conditions().get(0);
         assertEquals(Logical.LogicalOperator.AND, condition.operator());
         assertEquals(2, condition.conditions().size());
@@ -285,7 +285,7 @@ class QueryParserTest {
         String queryStr = "SELECT t1.TITLE FROM wikipedia AS t1 " +
                          "JOIN (SELECT docId FROM corpus WHERE NER(\"DATE\") BIND date) ALIAS t2 " +
                          "ON t1.docId CONTAINS t2.docId";
-        
+
         // Expecting QueryParseException because the grammar doesn't support FROM alias or JOIN column comparison yet
         // This test might need adjustment after Stage 3 (variable qualification)
         assertThrows(QueryParseException.class, () -> {
@@ -304,7 +304,7 @@ class QueryParserTest {
         assertEquals("t2", subquery.alias());
         assertEquals("corpus", subquery.subquery().source());
         assertTrue(subquery.subquery().conditions().get(0) instanceof Ner);
-        
+
         JoinCondition join = query.joinCondition().get();
         assertEquals("t1.DOCID", join.leftColumn()); // Assuming qualified names are handled
         assertEquals("t2.DOCID", join.rightColumn());
@@ -320,23 +320,23 @@ class QueryParserTest {
 
         assertEquals(1, query.conditions().size());
         assertTrue(query.conditions().get(0) instanceof Logical);
-        
+
         Logical condition = (Logical) query.conditions().get(0);
         assertEquals(Logical.LogicalOperator.OR, condition.operator());
         assertEquals(2, condition.conditions().size());
-        
+
         assertTrue(condition.conditions().get(0) instanceof Contains);
         assertTrue(condition.conditions().get(1) instanceof Ner);
-        
+
         Contains containsCondition = (Contains) condition.conditions().get(0);
         assertEquals(List.of("physics"), containsCondition.terms());
-        
+
         Ner nerCondition = (Ner) condition.conditions().get(1);
         assertEquals("PERSON", nerCondition.entityType());
         assertNull(nerCondition.variableName());
         assertFalse(nerCondition.isVariable());
     }
-    
+
     @Test
     @DisplayName("Parse query with NOT condition")
     void parseNotCondition() throws QueryParseException {
@@ -345,14 +345,14 @@ class QueryParserTest {
 
         assertEquals(1, query.conditions().size());
         assertTrue(query.conditions().get(0) instanceof Not);
-        
+
         Not condition = (Not) query.conditions().get(0);
         assertTrue(condition.condition() instanceof Contains);
-        
+
         Contains containsCondition = (Contains) condition.condition();
         assertEquals(List.of("irrelevant"), containsCondition.terms());
     }
-    
+
     @Test
     @DisplayName("Parse query with mixed logical operators")
     void parseMixedLogicalOperators() throws QueryParseException {
@@ -363,20 +363,20 @@ class QueryParserTest {
 
         assertEquals(1, query.conditions().size());
         assertTrue(query.conditions().get(0) instanceof Logical);
-        
+
         Logical andCondition = (Logical) query.conditions().get(0);
         assertEquals(Logical.LogicalOperator.AND, andCondition.operator());
         assertEquals(2, andCondition.conditions().size());
-        
+
         // Corrected assertions: First operand of AND is the OR, second is NER
-        assertTrue(andCondition.conditions().get(0) instanceof Logical, "First part of AND should be the OR condition"); 
+        assertTrue(andCondition.conditions().get(0) instanceof Logical, "First part of AND should be the OR condition");
         assertTrue(andCondition.conditions().get(1) instanceof Ner, "Second part of AND should be the NER condition");
-        
+
         // Check the nested OR condition (which is the first operand of AND)
         Logical orCondition = (Logical) andCondition.conditions().get(0);
         assertEquals(Logical.LogicalOperator.OR, orCondition.operator());
         assertEquals(2, orCondition.conditions().size());
-        
+
         assertTrue(orCondition.conditions().get(0) instanceof Contains);
         assertTrue(orCondition.conditions().get(1) instanceof Contains);
     }
@@ -385,7 +385,7 @@ class QueryParserTest {
     @DisplayName("Query with invalid column name should parse (validation happens later)")
     void invalidColumnNameShouldFail() {
         String queryStr = "SELECT not_real_column FROM wikipedia";
-        
+
         // Parser should now accept this, as 'not_real_column' is a valid IDENTIFIER.
         // Semantic validation will catch that it's not bound.
         assertDoesNotThrow(() -> parser.parse(queryStr));
@@ -412,15 +412,15 @@ class QueryParserTest {
         String queryStr = "SELECT t1.TITLE FROM wikipedia ALIAS t1 " +
                          "JOIN (SELECT DOCUMENT_ID FROM archive WHERE CONTAINS(\"report\")) ALIAS sub " +
                          "ON t1.DOCUMENT_ID CONTAINS sub.DOCUMENT_ID";
-                         
+
         // Assuming Stage 3 fully implemented JOIN ON qualified.qualified
         // If JOIN ON still expects variable names, this needs adjustment.
-        Query query = assertDoesNotThrow(() -> parser.parse(queryStr), 
+        Query query = assertDoesNotThrow(() -> parser.parse(queryStr),
             "Parsing should succeed if JOIN ON supports qualified columns");
-        
+
         // Basic checks after parsing
         assertEquals("wikipedia", query.source());
-        assertEquals("t1", query.mainAlias().orElse(null)); 
+        assertEquals("t1", query.mainAlias().orElse(null));
         assertEquals(1, query.subqueries().size());
         assertTrue(query.joinCondition().isPresent());
 
@@ -439,13 +439,13 @@ class QueryParserTest {
     @DisplayName("Parse query selecting qualified identifier - Requires FROM alias")
     void parseSelectQualifiedIdentifier() throws QueryParseException {
         String queryStr = "SELECT t1.scientist FROM wikipedia ALIAS t1 WHERE NER(\"PERSON\") BIND scientist";
-        
+
         // Grammar now supports FROM...ALIAS, so parsing should succeed.
         // Remove assertThrows. Full validation of qualified identifiers is in Stage 3.
         Query query = assertDoesNotThrow(() -> parser.parse(queryStr),
             "Parsing should succeed now that FROM...ALIAS is supported grammatically");
 
-        // Optional: Add basic checks that reflect successful parsing, 
+        // Optional: Add basic checks that reflect successful parsing,
         // keeping in mind Stage 3 will handle deeper validation.
         assertEquals("wikipedia", query.source());
         assertTrue(query.mainAlias().isPresent(), "Main alias should be present");
@@ -455,7 +455,7 @@ class QueryParserTest {
         assertEquals("t1.scientist", ((com.example.query.model.VariableColumn) query.selectColumns().get(0)).getColumnName(), "Select column name should be 'scientist'");
         assertEquals(1, query.conditions().size());
         assertTrue(query.conditions().get(0) instanceof Ner);
-        
+
         // Commented out checks that rely on Stage 3 implementation details
         /*
         assertEquals("t1", query.mainAlias().orElse(null)); // Check alias
@@ -536,4 +536,4 @@ class QueryParserTest {
                    "Error message should indicate 'DOCUMENT_ID' needs qualification as 'alias.DOCUMENT_ID'. Actual: " + exception.getMessage());
     }
     // --- END GROUP BY Parsing Tests ---
-} 
+}

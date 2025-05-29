@@ -5,10 +5,11 @@ import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 
-import com.example.query.binding.VariableRegistry;
-import com.example.query.binding.VariableType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.example.query.binding.VariableRegistry;
+import com.example.query.binding.VariableType;
 
 /**
  * Represents a dependency condition in the query language.
@@ -21,9 +22,9 @@ public record Dependency(
     String qualifiedVariableName,
     boolean isVariable
 ) implements Condition {
-    
+
     private static final Logger logger = LoggerFactory.getLogger(Dependency.class);
-    
+
     /**
      * Creates a new dependency condition with validation.
      */
@@ -31,7 +32,7 @@ public record Dependency(
         Objects.requireNonNull(governor, "governor cannot be null");
         Objects.requireNonNull(relation, "relation cannot be null");
         Objects.requireNonNull(dependent, "dependent cannot be null");
-        
+
         if (isVariable) {
             Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
         }
@@ -46,7 +47,7 @@ public record Dependency(
 
     /**
      * Creates a new dependency condition with variable binding.
-     * 
+     *
      * @param governor The governor term
      * @param relation The dependency relation
      * @param dependent The dependent term
@@ -69,33 +70,33 @@ public record Dependency(
     public String getVariableName() {
         return qualifiedVariableName;
     }
-    
+
     /**
      * Returns the variable name if this is a variable binding condition.
-     * 
+     *
      * @return The qualified variable name, or null if not bound
      */
     public String variableName() {
         return qualifiedVariableName;
     }
-    
+
     /**
      * Determines if a string is a variable reference.
      */
     private boolean isVariableReference(String s) {
         return s != null && s.startsWith("?");
     }
-    
+
     @Override
     public String getType() {
         return "DEPENDENCY";
     }
-    
+
     @Override
     public Set<String> getProducedVariables() {
         return isVariable ? Set.of(qualifiedVariableName) : Collections.emptySet();
     }
-    
+
     @Override
     public Set<String> getConsumedVariables() {
         Set<String> consumed = new HashSet<>();
@@ -110,25 +111,25 @@ public record Dependency(
         logger.debug("Reporting consumed variables: {}", consumed);
         return consumed;
     }
-    
+
     @Override
     public VariableType getProducedVariableType() {
         return VariableType.DEPENDENCY;
     }
-    
+
     @Override
     public void registerVariables(VariableRegistry registry) {
         logger.debug("Registering variables for DEPENDS({}, {}, {})", governor, relation, dependent);
-        
+
         // Produced and Consumed variables are now registered directly in QueryModelBuilder
         // using qualified names for registry lookup.
-        
+
         /*
         if (isVariable) {
             logger.debug("Registering {} as producer variable", variableName);
             registry.registerProducer(variableName, getProducedVariableType(), getType());
         }
-        
+
         // Register consumed variables
         if (isVariableReference(governor)) {
             logger.debug("Registering {} as consumer variable (governor)", governor);
@@ -136,7 +137,7 @@ public record Dependency(
         } else {
             logger.debug("Governor '{}' is not a variable reference", governor);
         }
-        
+
         if (isVariableReference(dependent)) {
             logger.debug("Registering {} as consumer variable (dependent)", dependent);
             registry.registerConsumer(dependent, VariableType.ANY, getType());
@@ -145,7 +146,7 @@ public record Dependency(
         }
         */
     }
-    
+
     @Override
     public String toString() {
         if (isVariable) {
@@ -154,4 +155,4 @@ public record Dependency(
             return String.format("DEPENDS(%s, %s, %s)", governor, relation, dependent);
         }
     }
-} 
+}

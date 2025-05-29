@@ -1,28 +1,28 @@
 package com.example.index;
 
-import no.ntnu.sandbox.Nash;
-import org.apache.pig.impl.util.MultiMap;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
-import org.junit.jupiter.api.TestMethodOrder;
-
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.apache.pig.impl.util.MultiMap;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import no.ntnu.sandbox.Nash;
 
 @DisplayName("Nash Predicate Granularity Tests (Observation Only)")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class) // Run tests in defined order for clearer logs
 class NashPredicateTest {
+    private static final Logger logger = LoggerFactory.getLogger(NashPredicateTest.class);
 
     private static List<String> indexedIntervals; // Renamed for clarity
     private static MultiMap<String, Integer> invertedIndex; // Prefix -> List<Original Interval Index>
@@ -42,18 +42,18 @@ class NashPredicateTest {
 
         // Build the inverted index using Nash.invert (mimics current indexing)
         invertedIndex = Nash.invert(indexedIntervals);
-        System.out.println("--- Test Inverted Index built (Granularity Test) ---");
-        System.out.println("Indexed Intervals:");
+        logger.info("--- Test Inverted Index built (Granularity Test) ---");
+        logger.info("Indexed Intervals:");
         for (int i = 0; i < indexedIntervals.size(); i++) {
-            System.out.println("  Index " + i + ": " + indexedIntervals.get(i));
+            logger.info("  Index {}: {}", i, indexedIntervals.get(i));
         }
-        System.out.println("Total Prefixes in Index Map: " + invertedIndex.size());
-        System.out.println("------------------------------------------------");
+        logger.info("Total Prefixes in Index Map: {}", invertedIndex.size());
+        logger.info("------------------------------------------------");
     }
 
     // Helper method to simulate prefix lookup and log results
     private void runQueryForAllPredicates(String queryLabel, String queryInterval) {
-        System.out.println("\n--- Testing Query Scenario: " + queryLabel + " (" + queryInterval + ") ---");
+        logger.info("\n--- Testing Query Scenario: {} ({}) ---", queryLabel, queryInterval);
         boolean foundAnyMatch = false;
         for (Nash.RangePredicate predicate : Nash.RangePredicate.values()) {
             String[] queryPrefixes = Nash.generateTimeHash(queryInterval, predicate);
@@ -68,17 +68,17 @@ class NashPredicateTest {
                     matchedIndices.addAll(invertedIndex.get(prefix));
                 }
             }
-            System.out.println("  Predicate: " + String.format("%-12s", predicate) + 
-                               " | Prefixes: (Generated:" + queryPrefixes.length + 
-                               " Checked:" + prefixesChecked + 
-                               " Found:" + prefixesFound + ")" + 
-                               " | Matched Indices: " + 
+            logger.info("  Predicate: {} | Prefixes: (Generated:{} Checked:{} Found:{}) | Matched Indices: {}",
+                               String.format("%-12s", predicate),
+                               queryPrefixes.length,
+                               prefixesChecked,
+                               prefixesFound,
                                (matchedIndices.isEmpty() ? "[]" : matchedIndices.stream().sorted().map(Object::toString).collect(Collectors.joining(", ", "[", "]"))));
             if (!matchedIndices.isEmpty()) {
                 foundAnyMatch = true;
             }
         }
-         System.out.println("-------------------------------------------------------------");
+         logger.info("-------------------------------------------------------------");
 
     }
 
@@ -132,4 +132,10 @@ class NashPredicateTest {
         runQueryForAllPredicates("Contains Range (Index 2, 4, 5)", "[2004-11-01 , 2006-02-01]");
     }
 
-} 
+    @Test @Order(9)
+    @DisplayName("Query Year 2005 (Exact Match to Index 2, Should find Index 1)")
+    void testQueryYear2005() {
+        runQueryForAllPredicates("Year 2005 (Matches Index 2)", "[2005-01-01 , 2005-12-31]");
+    }
+
+}

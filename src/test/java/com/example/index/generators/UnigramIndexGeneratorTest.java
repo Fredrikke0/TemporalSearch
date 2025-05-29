@@ -57,7 +57,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
     @Override
     protected void setUp() throws Exception {
         super.setUp();
-        
+
         // Create stopwords file for this test class
         stopwordsPath = tempDir.resolve(TEST_STOPWORDS_PATH);
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(stopwordsPath))) {
@@ -67,16 +67,16 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         }
 
         // Set up index directory is NOT needed here, IndexGenerator handles it.
-        // Path unigramIndexDir = indexBaseDir.resolve("unigram"); 
+        // Path unigramIndexDir = indexBaseDir.resolve("unigram");
 
         // Create generator
         generator = new UnigramIndexGenerator(
                 indexBaseDir.toString(), // Pass the actual base directory for all indexes
-                stopwordsPath.toString(), 
-                sqliteConn, 
-                mockProgressTracker, 
-                1000, 
-                null 
+                stopwordsPath.toString(),
+                sqliteConn,
+                mockProgressTracker,
+                1000,
+                null
         );
         setupTestData();
     }
@@ -88,7 +88,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         if (indexAccess != null) {
             indexAccess.close();
         }
-        new File(TEST_STOPWORDS_PATH).delete(); //This might be redundant if super.tearDown deletes tempDir which contains this file. 
+        new File(TEST_STOPWORDS_PATH).delete(); //This might be redundant if super.tearDown deletes tempDir which contains this file.
                                                 //However, specific test stopwords file path is used in this class.
     }
 
@@ -112,7 +112,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
 
         // Verify results
         assertEquals(2, entries.size());
-        
+
         AnnotationEntry first = entries.get(0);
         assertEquals(1, first.getDocumentId());
         assertEquals(1, first.getSentenceId());
@@ -262,4 +262,4 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
     private void setupTestData() throws SQLException {
         // ... existing code ...
     }
-} 
+}

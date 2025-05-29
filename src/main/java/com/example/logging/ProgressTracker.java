@@ -1,7 +1,10 @@
 package com.example.logging;
 
-import me.tongfei.progressbar.*;
 import java.util.concurrent.atomic.AtomicLong;
+
+import me.tongfei.progressbar.ProgressBar;
+import me.tongfei.progressbar.ProgressBarBuilder;
+import me.tongfei.progressbar.ProgressBarStyle;
 
 /**
  * Manages nested progress bars for index generation processes.
@@ -26,8 +29,8 @@ public class ProgressTracker implements AutoCloseable {
     private boolean isTestEnvironment() {
         for (StackTraceElement element : Thread.currentThread().getStackTrace()) {
             String className = element.getClassName().toLowerCase();
-            if (className.contains("junit") || 
-                className.contains("test") || 
+            if (className.contains("junit") ||
+                className.contains("test") ||
                 className.contains("mock")) {
                 return true;
             }
@@ -77,7 +80,7 @@ public class ProgressTracker implements AutoCloseable {
             currentIndexProgress.close();
         }
         indexCount.set(0);
-        
+
         ProgressBarBuilder pbb = new ProgressBarBuilder()
             .setTaskName(indexType)
             .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
@@ -146,7 +149,7 @@ public class ProgressTracker implements AutoCloseable {
         if (!isEnabled) return;
         if (currentIndexProgress != null) {
             // Only step to max if a max was set (i.e., total > 0 during start)
-            if (currentIndexProgress.getMax() > 0) { 
+            if (currentIndexProgress.getMax() > 0) {
                 currentIndexProgress.stepTo(currentIndexProgress.getMax());
             }
             currentIndexProgress.close();
@@ -201,4 +204,4 @@ public class ProgressTracker implements AutoCloseable {
         completeLevelDBWrite();
         completeOverall();
     }
-} 
+}

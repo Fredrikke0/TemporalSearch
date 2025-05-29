@@ -5,6 +5,7 @@ package com.example.core;
  * Provides detailed error information and wraps underlying exceptions.
  */
 public class IndexAccessException extends Exception {
+    private static final long serialVersionUID = 1L;
     private final String indexType;
     private final ErrorType errorType;
 
@@ -36,4 +37,4 @@ public class IndexAccessException extends Exception {
     public ErrorType getErrorType() {
         return errorType;
     }
-} 
+}

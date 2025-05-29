@@ -1,43 +1,32 @@
 package com.example.index.generators;
 
-import com.example.core.IndexAccess;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.index.AnnotationEntry;
-import com.example.index.AnnotationType;
-import com.example.index.TypedAnnotationSynonymStore;
-import com.example.index.StitchEntry;
-import com.example.index.StitchPosition;
-import com.example.logging.IndexingMetrics;
-import com.example.logging.ProgressTracker;
-import com.google.common.base.CharMatcher;
-import com.google.common.base.Splitter;
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
-import org.iq80.leveldb.DB;
-import org.iq80.leveldb.Options;
+import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 import org.iq80.leveldb.WriteBatch;
-import org.iq80.leveldb.impl.Iq80DBFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.sql.*;
-import java.util.*;
-import java.util.stream.Collectors;
-
-import org.iq80.leveldb.DBException;
-import com.example.index.LevelDBConfig;
-
-import java.io.File;
-import java.io.BufferedReader;
-import java.io.FileReader;
-import java.util.Base64;
-import com.google.common.collect.Ordering;
+import com.example.core.IndexAccess;
+import com.example.core.PositionListSoA;
+import com.example.index.AnnotationType;
+import com.example.index.StitchEntry;
+import com.example.index.TypedAnnotationSynonymStore;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 
 public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<StitchEntry> {
     private static final Logger logger = LoggerFactory.getLogger(AbstractUnigramStitchGenerator.class);
@@ -56,6 +45,9 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         return indexDBPath;
     }
 
+    @SuppressWarnings("this-escape") // Suppress warning: populateSpecificAnnotationSynonyms is an abstract method
+                                     // called from constructor. Implementations are verified to only use
+                                     // superclass fields initialized prior to this call, or their own parameters.
     protected AbstractUnigramStitchGenerator(String indexBaseDir, String indexNameParam,
                                            String stopwordsPathString, Connection sqliteConnParam,
                                            ProgressTracker progressTrackerParam, int batchSizeParam, Path customSortTempParam,
@@ -63,10 +55,10 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         // Call the full constructor of IndexGenerator which initializes indexAccess
         // and also passes the correct index name for indexAccess to use for its subdirectory.
         super(indexBaseDir, stopwordsPathString, sqliteConnParam, progressTrackerParam, batchSizeParam, customSortTempParam);
-        
+
         this.resolvedIndexName = indexNameParam; // Keep this for clarity and synonym store path
         // this.batchSize = batchSizeParam; // Handled by parent
-        
+
         // The indexDBPath for a stitch index is indexBaseDir/resolvedIndexName (e.g., projects/nyt/indexes/stitch-date)
         // This path is used by TypedAnnotationSynonymStore for its own files.
         this.indexDBPath = Path.of(indexBaseDir, this.resolvedIndexName);
@@ -90,7 +82,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
             // If indexAccess failed to initialize in super, it would have thrown from there.
             throw new UncheckedIOException("Failed to populate " + managedAnnotationType + " annotation synonyms for " + this.resolvedIndexName, e instanceof IOException ? (IOException)e : new IOException(e));
         }
-        
+
         // Progress starting is handled by the parent IndexGenerator constructor if indexAccess is successfully created.
         // We just need to make sure getIndexName() in this class returns what the parent expects for its progress bar.
         // The parent constructor already calls: this.progress.startIndex(getIndexName(), totalDocs);
@@ -114,7 +106,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
     @Override
     protected List<StitchEntry> fetchBatch(StitchEntry lastStitchEntryFromPreviousOverallBatch) throws SQLException {
         List<StitchEntry> currentStitchEntriesForBatch = new ArrayList<>();
-       
+
         while (currentStitchEntriesForBatch.size() < this.batchSize) {
             Integer currentDocumentId = getNextDocumentId();
             if (currentDocumentId == null) {
@@ -155,7 +147,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
             }
         }
     }
-    
+
     private boolean hasMoreDocuments(int currentDocId) throws SQLException {
         String sql = "SELECT 1 FROM documents WHERE document_id > ? LIMIT 1";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
@@ -177,7 +169,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         if (annotations.isEmpty()) {
             return; // No relevant annotations to process for this document
         }
-        
+
         AnnotationType currentType = getManagedAnnotationType();
 
         for (AnnotationData annotation : annotations) {
@@ -277,7 +269,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
                 filteredCount++;
                 continue;
             }
-            
+
             logger.trace("Processing unigram: '{}' from entry: {}", unigram, entry);
 
             // Key for LevelDB will just be the unigram.
@@ -298,9 +290,9 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
             indexData.put(mapEntry.getKey(), mapEntry.getValue());
         }
-        
+
         if (!batch.isEmpty()) {
-            logger.debug("ProcessBatch for {} input {} entries, produced {} unique unigram keys, filtered out {} entries.", 
+            logger.debug("ProcessBatch for {} input {} entries, produced {} unique unigram keys, filtered out {} entries.",
                 getManagedAnnotationType(), batch.size(), indexData.keySet().size(), filteredCount);
         }
 
@@ -311,13 +303,13 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         }
         return indexData;
     }
-    
+
     @Override
     protected String getTableName() {
         // This is somewhat misleading now as we query 'documents' for IDs
         // and 'annotations' for actual content.
         // The individual generators might need more specific table names if we optimize queries.
-        return "annotations"; 
+        return "annotations";
     }
 
     @Override
@@ -326,7 +318,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         // just return -1 to indicate indeterminate progress
         return -1;
     }
-    
+
     /**
      * Provides the SQL condition specific to the annotation type this generator handles.
      * Example: "ner = 'DATE' AND normalized_ner IS NOT NULL"
@@ -457,7 +449,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
                 logger.error("Error closing annotation synonyms for {}: {}", this.resolvedIndexName, e.getMessage(), e);
             }
         }
-        super.close(); 
+        super.close();
         logger.info("AbstractUnigramStitchGenerator {} closed.", this.resolvedIndexName);
     }
 
@@ -474,7 +466,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
      */
     @Override
     public String getIndexName() {
-        return this.resolvedIndexName; 
+        return this.resolvedIndexName;
     }
 
     // Method to allow tests to access the DB instance via IndexAccess
@@ -487,4 +479,4 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         return this.annotationSynonyms;
     }
 
-} 
+}

@@ -1,16 +1,15 @@
 package com.example.query.executor;
 
+import java.util.Map;
+
 import com.example.core.IndexAccessInterface;
-import com.example.query.binding.MatchDetail;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Temporal;
-import java.util.List;
-import java.util.Map;
 
 /**
  * Interface for different strategies to execute temporal conditions.
  */
-interface TemporalExecutionStrategy {
+public interface TemporalExecutionStrategy {
 
     /**
      * Gets the unique name of this strategy (e.g., "nash", "naive").
@@ -35,15 +34,17 @@ interface TemporalExecutionStrategy {
      * @param granularitySize The window size for sentence granularity.
      * @param corpusName The name of the corpus being queried.
      * @param temporalExecutor The parent TemporalExecutor (for context).
-     * @return A list of MatchDetail objects representing the matches.
+     * @param requirements The attribute requirements for the query result.
+     * @return A QueryResultSoA containing the matches.
      * @throws QueryExecutionException If an error occurs during execution.
      */
-    List<MatchDetail> execute(
+    QueryResultSoA execute(
         Temporal condition,
         Map<String, IndexAccessInterface> indexes,
         Query.Granularity granularity,
         int granularitySize,
         String corpusName,
-        TemporalExecutor temporalExecutor)
+        TemporalExecutor temporalExecutor,
+        AttributeRequirements requirements)
         throws QueryExecutionException;
 }

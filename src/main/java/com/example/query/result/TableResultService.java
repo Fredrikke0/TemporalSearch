@@ -1,46 +1,47 @@
 package com.example.query.result;
 
-import com.example.query.executor.QueryResult;
-import com.example.query.executor.SubqueryContext;
-import com.example.query.model.Query;
-import com.example.query.model.SelectColumn;
-import com.example.query.model.CountColumn;
-import com.example.query.model.VariableColumn;
-import com.example.query.model.StructuralColumn;
-import com.example.query.model.SnippetColumn;
-import com.example.core.IndexAccessInterface;
-import com.example.query.binding.MatchDetail;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import tech.tablesaw.api.*;
-import tech.tablesaw.columns.Column;
-import tech.tablesaw.io.csv.CsvWriteOptions;
-import tech.tablesaw.selection.Selection;
+// Static import for aggregate functions
+import static tech.tablesaw.aggregate.AggregateFunctions.count;
+import static tech.tablesaw.aggregate.AggregateFunctions.countNonMissing;
+import static tech.tablesaw.aggregate.AggregateFunctions.first;
 
 import java.io.IOException;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.function.Function;
+import java.util.stream.IntStream;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.core.IndexAccessInterface;
+import com.example.query.executor.AttributeRequirements;
+import com.example.query.executor.QueryResultSoA;
+import com.example.query.executor.SubqueryContext;
+import com.example.query.model.CountColumn;
+import com.example.query.model.Query;
+import com.example.query.model.SelectColumn;
+import com.example.query.model.StructuralColumn;
+import com.example.query.model.VariableColumn;
+
+import tech.tablesaw.aggregate.AggregateFunction;
+import tech.tablesaw.api.Table;
+import tech.tablesaw.columns.Column;
+import tech.tablesaw.io.csv.CsvWriteOptions;
 
 /**
  * Service for converting query results to Tablesaw Tables.
- * Replaces the previous ResultGenerator with a simpler implementation
- * that leverages Tablesaw for data representation and formatting.
- * 
- * Now supports joining results from subqueries based on temporal relationships.
+ * Leverages QueryResultSoA and its conceptualRowIds for table construction.
  */
 public class TableResultService {
     private static final Logger logger = LoggerFactory.getLogger(TableResultService.class);
-
     private static final String DEFAULT_DOC_ID_COL = "document_id";
-    private static final String LEFT_DOC_ID_COL = "left_document_id";
-    private static final String RIGHT_DOC_ID_COL = "right_document_id";
     private static final String DEFAULT_SENT_ID_COL = "sentence_id";
-    private static final String LEFT_SENT_ID_COL = "left_sentence_id";
-    private static final String RIGHT_SENT_ID_COL = "right_sentence_id";
 
     /**
      * Creates a new TableResultService with default configuration.
@@ -60,24 +61,24 @@ public class TableResultService {
      * Converts query results to a Tablesaw Table.
      *
      * @param query The original query
-     * @param result The QueryResult object containing match details.
+     * @param result The QueryResultSoA object containing match details.
      * @param indexes Map of indexes (using interface) to retrieve additional document information
      * @return A Tablesaw Table containing the query results
      * @throws ResultGenerationException if an error occurs
      */
     public Table generateTable(
             Query query,
-            QueryResult result,
+            QueryResultSoA result,
             Map<String, IndexAccessInterface> indexes
     ) throws ResultGenerationException {
         return generateTable(query, result, indexes, new SubqueryContext());
     }
-    
+
     /**
      * Converts query results to a Tablesaw Table, including subquery handling.
      *
      * @param query The original query
-     * @param result The QueryResult object containing match details.
+     * @param result The QueryResultSoA object containing match details.
      * @param indexes Map of indexes (using interface) to retrieve additional document information
      * @param subqueryContext Context containing subquery results
      * @return A Tablesaw Table containing the query results
@@ -85,261 +86,191 @@ public class TableResultService {
      */
     public Table generateTable(
             Query query,
-            QueryResult result,
+            QueryResultSoA result,
             Map<String, IndexAccessInterface> indexes,
             SubqueryContext subqueryContext
     ) throws ResultGenerationException {
-        Query.Granularity granularity = query.granularity();
-        int initialDetailCount = (result != null && result.getAllDetails() != null) ? result.getAllDetails().size() : 0;
-        logger.info("Processing {} initial matching details at {} granularity",
-                initialDetailCount, granularity);
+        int initialBindingCount = (result != null) ? result.size() : 0;
+        logger.info("Generating table from QueryResultSoA with {} bindings. Query: {}",
+                initialBindingCount, query.toString());
 
-        if (result == null || result.getAllDetails() == null || result.getAllDetails().isEmpty()) {
-             logger.warn("Input QueryResult is null or empty, returning empty table.");
-             return Table.create("EmptyQueryResults"); // Return an empty table
+        // Determine select columns first, even if result is empty, to create the table structure.
+        List<SelectColumn> selectColumns = query.selectColumns();
+        boolean createdDefaultColumns = false;
+        if (selectColumns == null || selectColumns.isEmpty() || selectColumns.stream().anyMatch(sc -> "*".equals(sc.getColumnName()))) {
+            logger.debug("No specific columns selected or * found, attempting to create default columns.");
+            // If result is null/empty, createDefaultSelectColumns might return empty or minimal columns.
+            selectColumns = createDefaultSelectColumns(query, result);
+            createdDefaultColumns = true;
+        }
+
+        Table table = Table.create(query.mainAlias().orElse("QueryResults"));
+        Map<String, Column<?>> columnMap = new HashMap<>();
+
+        // Initialize table structure based on (potentially default) select columns
+        if (selectColumns != null && !selectColumns.isEmpty()) {
+            for (SelectColumn selectColumn : selectColumns) {
+                if (!table.columnNames().contains(selectColumn.getColumnName())) {
+                    Column<?> newColumn = selectColumn.createColumn();
+                    logger.debug("Creating table column '{}' of type {}.", newColumn.name(), newColumn.type());
+                    table.addColumns(newColumn);
+                    columnMap.put(newColumn.name(), newColumn);
+                }
+            }
+        } else {
+            // If even after attempting to create default columns, selectColumns is empty,
+            // and the result is also empty, this means an empty table with no columns is appropriate.
+            // If result wasn't empty, this case is handled further down.
+            if (result == null || result.isEmpty()){
+                 logger.warn("No columns to select and QueryResultSoA is empty. Returning table with no columns.");
+                 return table; // table is currently empty (no columns)
+            }
+        }
+
+        if (result == null || result.isEmpty()) {
+             logger.warn("Input QueryResultSoA is null or empty, but table structure created. Returning table with {} columns and 0 rows.", table.columnCount());
+             return table; // table has columns but no rows
+        }
+
+        // This case is now only reachable if result is NOT empty, but we failed to determine selectColumns.
+        if (createdDefaultColumns && selectColumns.isEmpty()) {
+            logger.warn("QueryResultSoA has data, but no columns were selected (explicitly or by default after attempting). Returning table with no columns.");
+            return Table.create(query.mainAlias().orElse("QueryResults_NoColumns")); // Fallback to table with no columns
         }
 
         try {
-            boolean isJoinQuery = query.joinCondition().isPresent(); // Check if it's a JOIN query
-            
-            if (isJoinQuery) {
-                throw new ResultGenerationException(
-                    "generateTable(QueryResult) does not support join queries. Use generateTableForJoin(List<JoinedMatch>) instead.",
-                    "table_result_service",
-                    ResultGenerationException.ErrorType.INTERNAL_ERROR
-                );
-            }
-
-            // Proceed directly to generating table from the QueryResult
-            List<Column<?>> columns = new ArrayList<>();
-            List<SelectColumn> selectColumns = query.selectColumns();
-            
-             // Ensure default columns if SELECT * or no SELECT clause
-            if (selectColumns == null || selectColumns.isEmpty() || selectColumns.stream().anyMatch(sc -> "*".equals(sc.getColumnName()))) {
-                logger.debug("No specific columns selected or * found, using default columns.");
-                selectColumns = createDefaultSelectColumns(query, result); 
-            }
-
-            // If, after default generation, there are still no columns to select, return an empty table.
-            if (selectColumns.isEmpty()) {
-                logger.warn("Query resulted in matches, but no columns were selected (explicitly or by default). Returning empty table.");
-                return Table.create("EmptyQueryResults_NoColumns");
-            }
-
-            // Create the table
-            Table table = Table.create("QueryResults");
-            Map<String, Column<?>> columnMap = new HashMap<>();
-            Map<String, Object> contextCache = new HashMap<>(); // Initialize context cache
-            
-            // Determine all columns that need to be present in the table for data population
-            // This includes explicitly selected columns and arguments to functions like COUNT(UNIQUE var) or SNIPPET(var)
-            Set<SelectColumn> effectiveDataColumns = new LinkedHashSet<>();
-            for (SelectColumn sc : selectColumns) {
-                if (sc instanceof VariableColumn || sc instanceof StructuralColumn) {
-                    effectiveDataColumns.add(sc);
-                } else if (sc instanceof SnippetColumn snippetCol) {
-                    // Add the snippet variable itself as a data column if not already effectively selected
-                    // This assumes SnippetColumn's populate might need it or it's good for intermediate table
-                    effectiveDataColumns.add(new VariableColumn(snippetCol.getVariableName()));
-                     // Also add the SnippetColumn itself for later (it creates its own display column)
-                } else if (sc instanceof CountColumn countCol && countCol.getVariableNameForValidation() != null) {
-                    // For COUNT(UNIQUE var), ensure 'var' is available as a data column
-                    effectiveDataColumns.add(new VariableColumn(countCol.getVariableNameForValidation()));
-                }
-                // Note: The original SelectColumn (like CountColumn or SnippetColumn) will also be processed
-                // later to create its specific output column structure if different from the data column.
-            }
-            
-            // Add all selectColumns to ensure their final structure is also prepared,
-            // especially for aggregates that will be populated by applyGroupBy or special formatting.
-            // effectiveDataColumns ensures the underlying data is present.
-            // selectColumns ensures the final output shape is prepared.
-            Set<SelectColumn> allColumnsToConsiderForStructure = new LinkedHashSet<>(selectColumns);
-            allColumnsToConsiderForStructure.addAll(effectiveDataColumns); // ensure data columns are also structured if not directly selected
-
-            // Create and add columns to the table structure
-            for (SelectColumn selectColumn : allColumnsToConsiderForStructure) {
-                 if (!table.columnNames().contains(selectColumn.getColumnName())) {
-                      Column<?> newColumn = selectColumn.createColumn();
-                      logger.debug("Creating structural column '{}' of type {}. Adding to table.", newColumn.name(), newColumn.type());
-                      table.addColumns(newColumn); 
-                      columnMap.put(newColumn.name(), newColumn); 
-                 } else {
-                     // If it's an effectiveDataColumn that happens to have the same name as a primary selectColumn,
-                     // it's fine, it means the data source and the final column are the same.
-                     // If two primary selectColumns had the same name, that's a different issue (parser/validator should catch).
-                     logger.trace("Column already exists or added: {}", selectColumn.getColumnName());
-                 }
-             }
-             
-             // Validate order by columns
-            for (String orderColumn : query.orderBy()) {
-                String columnName = orderColumn.startsWith("-") ? orderColumn.substring(1) : orderColumn;
-                if (!table.columnNames().contains(columnName)) {
+            // Validate ORDER BY columns exist (moved here as table structure is now set)
+            for (String orderColumnName : query.orderBy()) {
+                String actualColumnName = orderColumnName.startsWith("-") ? orderColumnName.substring(1) : orderColumnName;
+                if (!table.columnNames().contains(actualColumnName)) {
                     throw new ResultGenerationException(
-                        String.format("Cannot order by column '%s' - not found in table columns: %s", columnName, table.columnNames()),
-                        "table_result_service",
+                        String.format("Cannot order by column '%s' - not found in table columns: %s", actualColumnName, table.columnNames()),
+                        "table_result_service.orderByValidation",
                         ResultGenerationException.ErrorType.INTERNAL_ERROR
                     );
                 }
             }
-            
-            // Populate the table with data
-            // 1. Group MatchDetails by the result unit (document or sentence ID)
-            Map<?, List<MatchDetail>> groupedDetails; // Use wildcard for key type
-            
-            Function<MatchDetail, Object> groupingKeyExtractor;
-            if (granularity == Query.Granularity.SENTENCE) {
-                // Group by composite key for sentence granularity
-                groupingKeyExtractor = detail -> new Pair<>(detail.getDocumentId(), detail.getSentenceId()); // Use getters
-            } else { // Default to DOCUMENT granularity
-                groupingKeyExtractor = MatchDetail::getDocumentId; // Use getter method reference
-            }
-            groupedDetails = result.getAllDetails().stream()
-                                 .filter(Objects::nonNull) // Add null check for safety
-                                 .collect(Collectors.groupingBy(groupingKeyExtractor));
-            
-            int finalRowCount = groupedDetails.size(); // Rows after grouping
-            logger.info("Grouped into {} final result units (granularity: {})", 
-                     finalRowCount, granularity);
-            
-            // Get the source name once
+
+            Map<String, Object> contextCache = new HashMap<>();
+
+            // Main loop: Iterate over unique conceptualRowIds
+            // Collect all unique conceptualRowIds first to define the number of rows.
+            // Ensure they are processed in a defined order if possible (e.g., sorted).
+            IntStream conceptualRowIdStream = IntStream.range(0, result.size()).map(result::getConceptualRowIdAt);
+            List<Integer> uniqueConceptualRowIds = conceptualRowIdStream.distinct().sorted().boxed().collect(Collectors.toList());
+
+            logger.info("QueryResultSoA contains {} unique conceptualRowIds, which will form the table rows.", uniqueConceptualRowIds.size());
+
             String source = query.source();
-            
-            // 2. Iterate through each group (representing one row in the output)
-            for (List<MatchDetail> detailsForUnit : groupedDetails.values()) {
-                if (detailsForUnit.isEmpty()) continue; 
-                
-                int rowIndex = table.rowCount();
-                table.appendRow(); 
-                
-                // 3. Populate columns for this row using the list of details
-                // Populate ONLY the effectiveDataColumns. Aggregates and complex types (like Snippet output)
-                // will be handled later or by their own non-data-populating populateColumn method.
-                for (SelectColumn dataColumnToPopulate : effectiveDataColumns) {
-                    Column<?> tableCol = columnMap.get(dataColumnToPopulate.getColumnName());
-                    if (tableCol != null) {
-                        // Ensure this dataColumnToPopulate is of a type that actually populates data here.
-                        // CountColumn's populateColumn does nothing, which is fine.
-                        // VariableColumn and StructuralColumn will populate.
-                        logger.trace("Populating data for column: {} at row {}", dataColumnToPopulate.getColumnName(), rowIndex);
-                        dataColumnToPopulate.populateColumn(table, rowIndex, detailsForUnit, source, indexes, query, contextCache);
-                    } else {
-                        logger.warn("Data column '{}' for population not found in table structure? Available: {}", 
-                                    dataColumnToPopulate.getColumnName(), table.columnNames());
+
+            for (int conceptualRowId : uniqueConceptualRowIds) {
+                table.appendRow(); // Add a new row to the Tablesaw table
+                int currentRowIndex = table.rowCount() - 1; // Get the index of the row just added
+                contextCache.clear(); // Clear context for each new conceptual row
+
+                // Find all raw indices in QueryResultSoA that match the current conceptualRowId
+                List<Integer> indicesInSoA = new ArrayList<>();
+                if (result.getRequirements().needsConceptualRowIds) {
+                    for (int i = 0; i < result.size(); i++) {
+                        if (result.getConceptualRowIdAt(i) == conceptualRowId) {
+                            indicesInSoA.add(i);
+                        }
+                    }
+                } else {
+                    // If no conceptualRowIds, assume each raw entry is its own "conceptual row"
+                    // This case might be problematic if TableResultService is always called with results that *should* have them.
+                    // For now, to prevent errors, we'll assume the conceptualRowId *is* the raw index if conceptualRowIds are not present.
+                    // This is a fallback and might need review based on how QueryResultSoA is constructed without conceptualRowIds.
+                    if (conceptualRowId < result.size()) { // conceptualRowId here would be a direct index
+                         indicesInSoA.add(conceptualRowId);
                     }
                 }
 
-                // After data columns are populated, handle specific population for selected columns
-                // that might rely on already populated data or have special formatting (e.g. SnippetColumn)
-                // This loop is over the original selectColumns from the query.
-                for (SelectColumn originalSelectColumn : selectColumns) {
-                    if (effectiveDataColumns.contains(originalSelectColumn) && 
-                        (originalSelectColumn instanceof VariableColumn || originalSelectColumn instanceof StructuralColumn)) {
-                        // Already populated by the effectiveDataColumns loop if it's a simple data column.
-                        continue;
-                    }
+                if (indicesInSoA.isEmpty() && result.getRequirements().needsConceptualRowIds) {
+                    // This could happen if a conceptualRowId was in uniqueConceptualRowIds but no raw rows actually match it.
+                    // Should be rare if uniqueConceptualRowIds is derived from result.getConceptualRowIdAt(i).
+                    logger.warn("No raw SoA entries found for conceptualRowId {}. Row {} will be empty or partially populated.", conceptualRowId, currentRowIndex);
+                    // Continue to allow population of columns that don't depend on SoA indices (e.g. constants, if any)
+                }
 
-                    Column<?> tableCol = columnMap.get(originalSelectColumn.getColumnName());
+                for (SelectColumn selectColumn : selectColumns) {
+                    Column<?> tableCol = columnMap.get(selectColumn.getColumnName());
                     if (tableCol != null) {
-                         // For types like SnippetColumn, their populateColumn might format data or use contextCache.
-                         // For CountColumn, its populateColumn does nothing here, which is correct.
-                        if (!(originalSelectColumn instanceof CountColumn)) { // CountColumn is populated by applyGroupBy
-                             logger.trace("Performing secondary population/formatting for selected column: {} at row {}", originalSelectColumn.getColumnName(), rowIndex);
-                             originalSelectColumn.populateColumn(table, rowIndex, detailsForUnit, source, indexes, query, contextCache);
-                        }
+                        logger.trace("Populating column '{}' for conceptualRowId {} (raw indices: {}) at table_row {}.",
+                                     selectColumn.getColumnName(), conceptualRowId, indicesInSoA, currentRowIndex);
+                        selectColumn.populateColumn(table, currentRowIndex, result, indicesInSoA, source, indexes, query, contextCache);
                     } else {
-                         // This case should ideally not happen if allColumnsToConsiderForStructure was set up correctly.
-                         logger.warn("Original selected column '{}' not found in table structure during secondary population pass. Available: {}",
-                                     originalSelectColumn.getColumnName(), table.columnNames());
+                        // This should not happen if columns were created correctly from selectColumns
+                        logger.warn("Column '{}' defined in select clause not found in created table structure. This is unexpected.",
+                                    selectColumn.getColumnName());
                     }
                 }
             }
-            
-            // New: Apply GROUP BY if specified
+
+            // GROUP BY, ORDER BY, LIMIT are applied to the materialized Tablesaw table
             if (!query.groupByColumns().isEmpty()) {
                 logger.info("Applying GROUP BY clause with columns: {}", query.groupByColumns());
                 table = applyGroupBy(table, query);
             }
-            // Original CountColumn aggregation logic might need to be revisited or removed
-            // if GROUP BY handles all necessary count aggregations.
-            // For now, let it run if no GROUP BY, or if GROUP BY doesn't produce a count column that this would.
-            else if (selectColumns.stream().anyMatch(col -> col instanceof CountColumn)) { // Only run if no GROUP BY and CountColumn exists
+            else if (selectColumns.stream().anyMatch(col -> col instanceof CountColumn)) {
                 logger.debug("No GROUP BY clause, but CountColumn found. Applying legacy CountColumn aggregation.");
                 table = CountColumn.applyCountAggregations(table);
             }
-            
-            // Apply ordering if specified
+
             if (!query.orderBy().isEmpty()) {
-                logger.debug("Ordering results by {} criteria", query.orderBy().size());
+                logger.debug("Ordering results by {} criteria: {}", query.orderBy().size(), query.orderBy());
                 table = applyOrdering(table, query.orderBy());
             }
-            
-            // Apply limit if specified - Apply AFTER grouping and ordering
+
             if (query.limit().isPresent()) {
                 int limit = query.limit().get();
-                // Check limit against final row count
-                if (limit > 0 && limit < table.rowCount()) { 
-                    // Use INFO level for limit application
+                if (limit > 0 && limit < table.rowCount()) {
                     logger.info("Limiting final {} rows to {}", table.rowCount(), limit);
                     table = table.first(limit);
                 } else {
-                     // Use DEBUG level for non-application
-                     logger.debug("Limit {} is not less than or equal to 0, or not less than final row count {}, no limit applied.", limit, table.rowCount());
+                     logger.debug("Limit {} is not applicable (<=0 or >= row count {}), no limit applied.", limit, table.rowCount());
                 }
             }
-            
-            // Use INFO level for final table stats
-            logger.info("Generated final table with {} columns and {} rows", 
-                    table.columnCount(), table.rowCount());
-            
+
+            logger.info("Generated final table '{}' with {} columns and {} rows.",
+                    table.name(), table.columnCount(), table.rowCount());
             return table;
+
         } catch (Exception e) {
-            // Log the specific detail causing the issue if possible (though harder now)
-            logger.error("Error during table generation: {}", e.getMessage(), e);
-            throw new ResultGenerationException(
-                    "Failed to generate table: " + e.getMessage(),
-                    e,
-                    "table_result_service",
-                    ResultGenerationException.ErrorType.INTERNAL_ERROR
-            );
+            logger.error("Error generating table from QueryResultSoA: {}", e.getMessage(), e);
+            throw new ResultGenerationException("Failed to generate table: " + e.getMessage(), e,
+                                                query.mainAlias().orElse("table_generation"),
+                                                ResultGenerationException.ErrorType.INTERNAL_ERROR);
         }
     }
 
-    /**
-     * Applies ordering to a Tablesaw table based on order specifications.
-     *
-     * @param table The table to order
-     * @param orderColumns The order columns (prefix with "-" for descending order)
-     * @return The ordered table
-     */
     private Table applyOrdering(Table table, List<String> orderColumns) {
-        if (orderColumns.isEmpty()) {
+        if (orderColumns == null || orderColumns.isEmpty()) {
             return table;
         }
-        
-        // Use Tablesaw's sortOn method with the column names
-        logger.debug("Sorting table on columns: {}", orderColumns);
-        return table.sortOn(orderColumns.toArray(new String[0]));
-    }
+        logger.debug("Applying ordering to table. Columns: {}", orderColumns);
 
-    /**
-     * Sorts a table by the given columns.
-     * 
-     * This method provides a direct way to sort tables using Tablesaw's column syntax.
-     * Columns can be prefixed with "-" to indicate descending order.
-     * 
-     * @param table The table to sort
-     * @param columns The columns to sort by
-     * @return The sorted table
-     */
-    public Table sortTable(Table table, String... columns) {
-        if (columns == null || columns.length == 0) {
-            return table;
+        // Ensure all columns exist before trying to sort and prepare for sortOn
+        String[] sortOnArgs = new String[orderColumns.size()];
+        for (int i = 0; i < orderColumns.size(); i++) {
+            String orderSpec = orderColumns.get(i);
+            String colName = orderSpec.startsWith("-") || orderSpec.startsWith("+") ? orderSpec.substring(1) : orderSpec;
+            if (!table.columnNames().contains(colName)) {
+                throw new IllegalArgumentException(
+                    String.format("Cannot sort by column '%s': column not found in table. Available columns: %s",
+                                  colName, table.columnNames()));
+            }
+            sortOnArgs[i] = orderSpec; // Use the original spec (e.g., "-colName" or "+colName" or "colName")
         }
-        
-        logger.debug("Sorting table on columns: {}", Arrays.toString(columns));
-        return table.sortOn(columns);
+
+        try {
+            // Table.sortOn directly accepts column names with optional '-' or '+' prefix
+            return table.sortOn(sortOnArgs);
+        } catch (Exception e) {
+            logger.error("Failed to sort table on {}. Error: {}", Arrays.toString(sortOnArgs), e.getMessage(), e);
+            // Consider rethrowing as ResultGenerationException for consistency
+            throw new RuntimeException("Table sorting failed: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -378,329 +309,178 @@ public class TableResultService {
     public String formatTable(Table table) {
         int totalRows = table.rowCount();
         int displayedRows = Math.min(totalRows, 20); // Tablesaw typically shows ~20 rows by default
-        
+
         StringBuilder sb = new StringBuilder();
         sb.append(table.print());
-        
+
         // Add a note about the preview if there are more rows than displayed
         if (totalRows > displayedRows) {
             sb.append("\n\nNote: This is a preview showing ").append(displayedRows)
               .append(" of ").append(totalRows).append(" total rows. Use export options to view all data.");
             sb.append("\nTo export all results, use: --export=csv:results.csv");
         }
-        
+
         return sb.toString();
     }
 
-    // Helper class for Pair grouping key when granularity is SENTENCE
-    private static record Pair<K, V>(K key, V value) {}
-
-    /**
-     * Creates default SelectColumn list based on QueryResult content.
-     * Includes document_id, sentence_id (if applicable), and any variables found.
-     */
-     private List<SelectColumn> createDefaultSelectColumns(Query query, QueryResult result) {
+     private List<SelectColumn> createDefaultSelectColumns(Query query, QueryResultSoA result) {
+        logger.debug("Creating default select columns for query based on QueryResultSoA content.");
          List<SelectColumn> defaultColumns = new ArrayList<>();
+        Set<String> addedColumns = new HashSet<>();
 
-         // Add variable columns based on the query's variable registry
-         Set<String> variableNames = query.variableRegistry().getAllVariableNames(); // Get all defined vars
+        // If the result QueryResultSoA has specific requirements, use them.
+        AttributeRequirements requirements = result.getRequirements();
 
-         for (String varName : variableNames) {
-              // Only add variables from the main scope ($main) that are actually produced
-              if (varName.startsWith(query.mainAlias().orElse("$main") + ".") && query.variableRegistry().isProduced(varName)) {
-                  defaultColumns.add(new VariableColumn(varName));
-              }
-         }
-         logger.debug("Created default select columns: {}", defaultColumns.stream().map(SelectColumn::getColumnName).toList());
+        if (requirements.needsDocumentId) {
+            defaultColumns.add(new StructuralColumn(DEFAULT_DOC_ID_COL, "DOCUMENT_ID"));
+            addedColumns.add(DEFAULT_DOC_ID_COL);
+        }
+        if (requirements.needsSentenceId && query.granularity() == Query.Granularity.SENTENCE) {
+             defaultColumns.add(new StructuralColumn(DEFAULT_SENT_ID_COL, "SENTENCE_ID"));
+             addedColumns.add(DEFAULT_SENT_ID_COL);
+        }
+
+        // Add columns for all unique variable names present in the QueryResultSoA
+        // Assumes QueryResultSoA.getUniqueVariableNames() is implemented as per QueryResultSoA.md
+        List<String> variableNames = result.getUniqueVariableNames();
+        if(variableNames != null){
+            for (String varName : variableNames) {
+                if (varName != null && !varName.isEmpty() && !addedColumns.contains(varName)) {
+                    defaultColumns.add(new VariableColumn(varName));
+                    addedColumns.add(varName);
+                    logger.debug("Adding default VariableColumn for variable: {}", varName);
+                }
+            }
+        }
+
+        if (defaultColumns.isEmpty() && !result.isEmpty()) {
+            logger.warn("Result is not empty, but no default columns could be determined (no doc/sent id required, no variables found). Consider query select clause.");
+            // Fallback: if there's data, at least show document ID if available, even if not strictly "required" by an empty select.
+            if (result.getRequirements().needsDocumentId) {
+                 if (!addedColumns.contains(DEFAULT_DOC_ID_COL)) {
+                    defaultColumns.add(new StructuralColumn(DEFAULT_DOC_ID_COL, "DOCUMENT_ID"));
+                 }
+            }
+        }
+
+        logger.debug("Created default columns: {}", defaultColumns.stream().map(SelectColumn::getColumnName).collect(Collectors.toList()));
          return defaultColumns;
      }
 
-    // New: Helper method to apply GROUP BY clause using Tablesaw
     private Table applyGroupBy(Table table, Query query) throws ResultGenerationException {
-        List<String> groupByColumnNames = query.groupByColumns();
-        if (groupByColumnNames.isEmpty()) {
-            return table; // Should not happen if called from generateTable's check
+        List<String> groupByColumns = query.groupByColumns();
+        if (groupByColumns.isEmpty()) {
+            return table;
         }
 
-        // Identify aggregate functions and their target columns from the SELECT clause
-        List<tech.tablesaw.aggregate.AggregateFunction<?, ?>> aggregateFunctionsList = new ArrayList<>();
-        List<String> columnsToAggregateList = new ArrayList<>();
-        Map<String, String> finalColumnNamesMap = new HashMap<>(); // Map from temp agg name to final name
+        List<SelectColumn> selectColumns = query.selectColumns();
 
-        for (SelectColumn sc : query.selectColumns()) {
-            if (sc instanceof CountColumn countColumn) {
-                String targetColForCount; // The actual column name in the table to perform count/countUnique on
-                String originalAggColName = countColumn.getColumnName(); // e.g., "count", "count_unique_var" (final desired name)
-                String tempTablesawColName; // Default name Tablesaw generates, e.g., "Count [column]", "Count Unique [column]"
-                tech.tablesaw.aggregate.AggregateFunction<?, ?> aggFuncToAdd = null;
+        // Check if we have any COUNT columns (explicit aggregation)
+        List<SelectColumn> countColumns = selectColumns.stream()
+            .filter(sc -> sc instanceof CountColumn)
+            .collect(Collectors.toList());
 
-                if (countColumn.toString().startsWith("COUNT(UNIQUE")) {
-                    String varToCount = countColumn.getVariableNameForValidation();
-                    if (varToCount == null || !table.columnNames().contains(varToCount)) {
-                        throw new ResultGenerationException(
-                            String.format("Cannot apply COUNT(UNIQUE %s): column '%s' not found in table for aggregation.", varToCount, varToCount),
-                            "table_result_service", ResultGenerationException.ErrorType.INTERNAL_ERROR);
-                    }
-                    targetColForCount = varToCount;
-                    aggFuncToAdd = tech.tablesaw.aggregate.AggregateFunctions.countUnique;
-                    tempTablesawColName = aggFuncToAdd.functionName() + " [" + targetColForCount + "]";
-                } else if (countColumn.toString().equals("COUNT(*)")) {
-                    if (groupByColumnNames.isEmpty()) { // Should not happen if we are in applyGroupBy
-                         throw new ResultGenerationException("COUNT(*) requires GROUP BY columns to determine a target for Tablesaw's count.", "table_result_service", ResultGenerationException.ErrorType.INTERNAL_ERROR);
-                    }
-                    targetColForCount = groupByColumnNames.get(0); // Use first group-by column as placeholder for COUNT(*)
-                    aggFuncToAdd = tech.tablesaw.aggregate.AggregateFunctions.count;
-                    tempTablesawColName = aggFuncToAdd.functionName() + " [" + targetColForCount + "]";
-                } else if (countColumn.toString().equals("COUNT(DOCUMENTS)")) {
-                    logger.warn("COUNT(DOCUMENTS) with GROUP BY is complex. Using COUNT(*) on first group-by column ('{}') as placeholder for '{}'. True unique document count per group needs dedicated logic.", groupByColumnNames.get(0), originalAggColName);
-                    targetColForCount = groupByColumnNames.get(0); // Placeholder
-                    aggFuncToAdd = tech.tablesaw.aggregate.AggregateFunctions.count; // Or a custom one if implemented
-                    tempTablesawColName = aggFuncToAdd.functionName() + " [" + targetColForCount + "]";
-                } else {
-                     logger.warn("Unhandled CountColumn type for GROUP BY: {} for column '{}'. Skipping.", countColumn.toString(), originalAggColName);
-                     continue; // Skip this aggregate
-                }
-                
-                if (aggFuncToAdd != null) {
-                    columnsToAggregateList.add(targetColForCount);
-                    aggregateFunctionsList.add(aggFuncToAdd);
-                    // Map default Tablesaw name to the name expected by tests (toString() representation)
-                    finalColumnNamesMap.put(tempTablesawColName, countColumn.toString()); 
-                }
-            }
-            // Other aggregate functions (SUM, AVG, etc.) would be handled here if added in the future
+        // Check if we have any non-grouping columns that need implicit aggregation
+        List<SelectColumn> nonGroupingColumns = selectColumns.stream()
+            .filter(sc -> !(sc instanceof CountColumn) && !groupByColumns.contains(sc.getColumnName()))
+            .collect(Collectors.toList());
+
+        if (countColumns.isEmpty() && nonGroupingColumns.isEmpty()) {
+            // Only grouping columns selected - return distinct group keys
+            logger.info("GROUP BY with only grouping columns selected. Returning distinct group keys.");
+            return table.selectColumns(groupByColumns.toArray(new String[0])).dropDuplicateRows();
         }
 
-        if (aggregateFunctionsList.isEmpty()) {
-            // If only grouping without aggregation, Tablesaw's `by` can be used,
-            // but it typically expects an aggregation.
-            // A simple `table.groupBy(groupByColumnNames).reduce(...)` or just selecting distinct rows might be needed.
-            // For now, if there are no *explicit* aggregates like COUNT, we assume the user wants distinct combinations of grouped columns.
-            // The validator ensures all selected non-aggregate columns are in GROUP BY.
-            // So, we can take the first row of each group after grouping.
-            logger.debug("GROUP BY without explicit aggregates. Selecting first row of each group for columns: {}", query.selectColumns().stream().map(SelectColumn::getColumnName).toList());
-            Table groupedTable = table.emptyCopy();
-            Table tempGrouped = table.sortOn(groupByColumnNames.toArray(new String[0]));
+        // Build list of columns to summarize and functions to apply
+        List<String> columnsToSummarize = new ArrayList<>();
+        List<AggregateFunction<?, ?>> functionsToApply = new ArrayList<>();
 
-            if (tempGrouped.isEmpty()) return groupedTable;
+        // Handle COUNT columns - these summarize the entire table/groups
+        for (SelectColumn sc : countColumns) {
+            CountColumn cc = (CountColumn) sc;
+            String targetCol = cc.getVariableNameForValidation();
 
-            Set<List<Object>> distinctGroupValues = new HashSet<>();
-            for (Row row : tempGrouped) {
-                List<Object> currentGroupKey = new ArrayList<>();
-                for (String groupColName : groupByColumnNames) {
-                    currentGroupKey.add(row.getObject(groupColName));
-                }
-                if (distinctGroupValues.add(currentGroupKey)) {
-                    groupedTable.append(row);
-                }
-            }
-            return groupedTable;
-        }
-
-        // Perform aggregation using all collected functions and source columns
-        Set<String> uniqueSourceColNames = new LinkedHashSet<>(columnsToAggregateList);
-        Set<tech.tablesaw.aggregate.AggregateFunction<?, ?>> uniqueAggFunctions = new LinkedHashSet<>(aggregateFunctionsList);
-
-        if (uniqueSourceColNames.isEmpty() || uniqueAggFunctions.isEmpty()) {
-            logger.error("Internal error: Aggregates were specified, but no unique source columns or functions were derived for summarization. GroupBy columns: {}", groupByColumnNames);
-            // Fallback or throw: For now, let's return distinct groups as if no aggregates.
-            // This path indicates a logic error in preparing aggregateFunctionsList/columnsToAggregateList
-             Table distinctTable = table.selectColumns(groupByColumnNames.toArray(new String[0])).dropDuplicateRows();
-             logger.warn("Falling back to returning distinct group-by columns due to missing aggregation details.");
-             return distinctTable;
-        }
-        
-        logger.debug("Performing aggregation with unique source columns: {} and unique functions: {}", 
-            uniqueSourceColNames, uniqueAggFunctions.stream().map(f -> f.functionName()).toList());
-
-        Table tempFullAggTable = table.summarize(
-                new ArrayList<>(uniqueSourceColNames), // Convert Set to List explicitly
-                uniqueAggFunctions.toArray(new tech.tablesaw.aggregate.AggregateFunction[0])
-        ).by(groupByColumnNames.toArray(new String[0]));
-        
-        logger.debug("Temporary aggregated table columns: {}", tempFullAggTable.columnNames());
-
-        // Select and rename the columns we actually want for the final result
-        Table summarizedTable;
-        // Start with the group-by columns from the temp table
-        List<Column<?>> finalColumns = new ArrayList<>();
-        for (String groupColName : groupByColumnNames) {
-            if (tempFullAggTable.columnNames().contains(groupColName)) {
-                finalColumns.add(tempFullAggTable.column(groupColName).copy());
+            if (targetCol == null) {
+                // COUNT(*) - count all rows in each group
+                columnsToSummarize.add(table.columnNames().get(0)); // Use any column for counting rows
+                functionsToApply.add(count); // Static import from AggregateFunctions
             } else {
-                // This is highly unlikely as .by() should ensure these columns are present
-                logger.error("CRITICAL: Group-by column '{}' missing from temp aggregation result. Check Tablesaw behavior.", groupColName);
-                // Potentially add a placeholder or throw, for now, skip, which might lead to an empty table or errors later.
-            }
-        }
-        summarizedTable = Table.create(table.name() + "_grouped", finalColumns);
-
-
-        for (Map.Entry<String, String> entry : finalColumnNamesMap.entrySet()) {
-            String tempNameKey = entry.getKey();    // Default Tablesaw name, e.g., "Count Unique [varToCount]"
-            String finalNameValue = entry.getValue(); // Final desired name, e.g., "COUNT(UNIQUE varToCount)" or user alias
-
-            if (tempFullAggTable.columnNames().contains(tempNameKey)) {
-                Column<?> aggCol = tempFullAggTable.column(tempNameKey).copy();
-                aggCol.setName(finalNameValue);
-
-                if (finalNameValue.startsWith("COUNT(") && aggCol.type() == ColumnType.DOUBLE) {
-                    logger.debug("Count aggregate column '{}' was DoubleColumn, converting to IntColumn.", finalNameValue);
-                    try {
-                        DoubleColumn doubleAggCol = (DoubleColumn) aggCol;
-                        IntColumn intValues = doubleAggCol.asIntColumn();
-                        intValues.setName(finalNameValue); // Ensure name is preserved after conversion
-                        summarizedTable.addColumns(intValues);
-                    } catch (ClassCastException cce) {
-                        logger.error("Failed to cast aggregate column '{}' to DoubleColumn for conversion: {}. Adding as Double.", finalNameValue, cce.getMessage(), cce);
-                        summarizedTable.addColumns(aggCol); // Add original (renamed) double column
-                    } catch (Exception e) {
-                        logger.error("Could not convert DoubleColumn '{}' to IntColumn: {}. Adding as Double.", finalNameValue, e.getMessage(), e);
-                        summarizedTable.addColumns(aggCol); // Add original (renamed) double column
-                    }
+                // COUNT(variable) - count non-missing values in target column
+                if (table.columnNames().contains(targetCol)) {
+                    columnsToSummarize.add(targetCol);
+                    functionsToApply.add(countNonMissing); // Static import from AggregateFunctions
                 } else {
-                    summarizedTable.addColumns(aggCol);
+                    logger.warn("COUNT target column '{}' not found in table. Falling back to COUNT(*).", targetCol);
+                    columnsToSummarize.add(table.columnNames().get(0));
+                    functionsToApply.add(count);
                 }
-            } else {
-                logger.warn("Expected aggregated column temp name '{}' (for final name '{}') not found in temp aggregation result. Available: {}. This aggregate will be missing.",
-                            tempNameKey, finalNameValue, tempFullAggTable.columnNames());
             }
         }
-        
-        logger.debug("Final summarized table columns: {}", summarizedTable.columnNames());
-        return summarizedTable;
-    }
 
-    /**
-     * Converts join results (List<JoinedMatch>) to a Tablesaw Table.
-     *
-     * @param query The original query
-     * @param joinedResults The list of JoinedMatch objects from join logic
-     * @param indexes Map of indexes (using interface) to retrieve additional document information
-     * @return A Tablesaw Table containing the join results
-     * @throws ResultGenerationException if an error occurs
-     */
-    public Table generateTableForJoin(
-            Query query,
-            List<com.example.query.binding.JoinedMatch> joinedResults,
-            Map<String, IndexAccessInterface> indexes
-    ) throws ResultGenerationException {
-        logger.debug("Generating result table from List<JoinedMatch>");
+        // Handle non-grouping columns - apply FIRST() aggregation
+        for (SelectColumn sc : nonGroupingColumns) {
+            String colName = sc.getColumnName();
+            if (table.columnNames().contains(colName)) {
+                columnsToSummarize.add(colName);
+                functionsToApply.add(first); // Static import from AggregateFunctions
+            } else {
+                logger.warn("Selected column '{}' not found in table for FIRST() aggregation.", colName);
+            }
+        }
 
-        if (joinedResults == null || joinedResults.isEmpty()) {
-            logger.warn("Input joinedResults list is null or empty, returning empty table.");
-            return Table.create("EmptyJoinResults");
+        if (functionsToApply.isEmpty()) {
+            logger.info("No aggregation functions to apply. Returning distinct group keys.");
+            return table.selectColumns(groupByColumns.toArray(new String[0])).dropDuplicateRows();
         }
 
         try {
-            List<SelectColumn> selectColumns = query.selectColumns();
-            boolean isSelectStarOrEmpty = selectColumns == null || selectColumns.isEmpty() || selectColumns.stream().anyMatch(sc -> "*".equals(sc.getColumnName()));
+            logger.debug("Applying GROUP BY with {} functions on {} columns", functionsToApply.size(), columnsToSummarize.size());
 
-            // Check if we should use default columns (SELECT * or empty)
-            if (isSelectStarOrEmpty) {
-                logger.debug("No specific columns selected or * found for JOIN. Defaulting to all variables and structural columns.");
-                // Create default columns for JOIN
-                selectColumns = createDefaultJoinSelectColumns(query); 
-            }
+            // Use first column for summarization with all functions
+            String firstColumn = columnsToSummarize.get(0);
+            Table groupedTable = table.summarize(firstColumn, functionsToApply.toArray(new AggregateFunction<?, ?>[0]))
+                                      .by(groupByColumns.toArray(new String[0]));
 
-            Table table = Table.create("JoinQueryResults");
-            Map<String, Column<?>> columnMap = new HashMap<>();
-            Map<String, Object> contextCache = new HashMap<>(); // Initialize context cache
+            // Select columns based on the original SELECT list
+            List<String> finalColumnNames = new ArrayList<>();
+            Set<String> availableColumns = new HashSet<>(groupedTable.columnNames());
 
-            // Create and add columns based on the *effective* SELECT clause (explicit or default)
-            for (SelectColumn selectColumn : selectColumns) {
-                // Avoid re-adding columns if somehow duplicated (shouldn't happen with proper defaults)
-                if (!table.columnNames().contains(selectColumn.getColumnName())) {
-                    Column<?> tableCol = selectColumn.createColumn();
-                    table.addColumns(tableCol);
-                    columnMap.put(tableCol.name(), tableCol);
+            // Add group by columns first (they should be present)
+            for (String gbCol : groupByColumns) {
+                if (availableColumns.contains(gbCol)) {
+                    finalColumnNames.add(gbCol);
                 }
             }
 
-            String source = query.source();
-            logger.info("Processing {} joined match pairs at {} granularity", joinedResults.size(), query.granularity());
-
-            // Populate the table row by row
-            for (com.example.query.binding.JoinedMatch joinedMatch : joinedResults) {
-                int rowIndex = table.rowCount();
-                table.appendRow(); // Append empty row first
-
-                // Populate columns based ONLY on the *effective* SELECT clause (explicit or default)
-                for (SelectColumn selectColumn : selectColumns) {
-                    Column<?> tableCol = columnMap.get(selectColumn.getColumnName());
-                    if (tableCol != null) {
-                        String qualifiedName = selectColumn.getColumnName(); 
-                        String alias = qualifiedName.contains(".") ? qualifiedName.substring(0, qualifiedName.indexOf(".")) : "";
-                        
-                        MatchDetail relevantDetail = null;
-                        if (alias.equals(query.mainAlias().orElse("$main"))) { 
-                            relevantDetail = joinedMatch.left();
-                        } else if (!query.subqueries().isEmpty() && alias.equals(query.subqueries().get(0).alias())) {
-                            relevantDetail = joinedMatch.right();
-                        } else if (query.subqueries().isEmpty() && !qualifiedName.contains(".")) {
-                            relevantDetail = joinedMatch.left(); 
-                        } else {
-                            logger.warn("Could not determine alias match for column: {}", qualifiedName);
-                            // relevantDetail remains null
-                        }
-
-                        if (relevantDetail != null) {
-                            // Delegate population to the SelectColumn implementation
-                            List<MatchDetail> detailList = List.of(relevantDetail);
-                            selectColumn.populateColumn(table, rowIndex, detailList, source, indexes, query, contextCache);
-                        } else {
-                            // Handle cases where the alias didn't match / no relevant detail
-                            logger.trace("No relevant detail found for column {} at row {}. Setting missing.", qualifiedName, rowIndex);
-                            tableCol.setMissing(rowIndex);
-                        }
+            // Add aggregated columns - Tablesaw generates names like "Count [column_name]", "First [column_name]"
+            for (SelectColumn sc : selectColumns) {
+                if (sc instanceof CountColumn) {
+                    // Look for count column result
+                    String expectedCountColName = "Count [" + firstColumn + "]";
+                    if (availableColumns.contains(expectedCountColName)) {
+                        finalColumnNames.add(expectedCountColName);
+                    }
+                } else if (!groupByColumns.contains(sc.getColumnName())) {
+                    // Look for first() result
+                    String expectedFirstColName = "First [" + sc.getColumnName() + "]";
+                    if (availableColumns.contains(expectedFirstColName)) {
+                        finalColumnNames.add(expectedFirstColName);
                     }
                 }
             }
 
-            logger.info("Generated join table with {} columns and {} rows", table.columnCount(), table.rowCount());
-            return table;
+            if (finalColumnNames.isEmpty()) {
+                logger.warn("No expected columns found in grouped result. Available: {}. Returning raw grouped table.", availableColumns);
+                return groupedTable;
+            }
+
+            return groupedTable.selectColumns(finalColumnNames.toArray(new String[0]));
 
         } catch (Exception e) {
-            logger.error("Error generating table for join results", e);
-            throw new ResultGenerationException("Failed to generate table for join results: " + e.getMessage(), e, "table_result_service", ResultGenerationException.ErrorType.INTERNAL_ERROR);
+            logger.error("Failed to apply GROUP BY: {}", e.getMessage(), e);
+            throw new ResultGenerationException("Failed to apply GROUP BY: " + e.getMessage(), e,
+                                                query.mainAlias().orElse("groupBy_err"),
+                                                ResultGenerationException.ErrorType.INTERNAL_ERROR);
         }
     }
-
-    // --- Helper method to create default select columns for JOIN ---
-    private List<SelectColumn> createDefaultJoinSelectColumns(Query query) {
-        List<SelectColumn> defaultColumns = new ArrayList<>();
-        String mainAlias = query.mainAlias().orElse("$main");
-        
-        // 1. Add all produced variables from the main query registry
-        query.variableRegistry().getAllVariableNames().stream() // Get all defined vars
-            .filter(varName -> varName.startsWith(mainAlias + ".")) // Ensure it belongs to main scope
-            .filter(varName -> query.variableRegistry().isProduced(varName)) // Ensure it is produced
-            .map(VariableColumn::new)
-            .forEach(defaultColumns::add);
-
-        // 2. Add default structural columns for the main query
-        defaultColumns.add(new com.example.query.model.StructuralColumn(mainAlias, "DOCUMENT_ID"));
-        defaultColumns.add(new com.example.query.model.StructuralColumn(mainAlias, "SENTENCE_ID")); // Add even if doc granularity, populate handles it
-        defaultColumns.add(new com.example.query.model.StructuralColumn(mainAlias, "TIMESTAMP"));
-        // Add BEGIN/END if needed by default? Probably not.
-
-        // 3. Add variables and structural columns for each subquery
-        for (com.example.query.model.SubquerySpec subquerySpec : query.subqueries()) {
-            String subAlias = subquerySpec.alias();
-            // Add produced variables from subquery registry
-            subquerySpec.subquery().variableRegistry().getAllVariableNames().stream() // Get all defined vars
-                 // No need to filter by alias here, subquery registry already contains qualified names like 'subAlias.var'
-                 .filter(varName -> subquerySpec.subquery().variableRegistry().isProduced(varName)) // Ensure it is produced
-                 .map(VariableColumn::new)
-                 .forEach(defaultColumns::add);
-
-            // Add default structural columns for the subquery
-            defaultColumns.add(new com.example.query.model.StructuralColumn(subAlias, "DOCUMENT_ID"));
-            defaultColumns.add(new com.example.query.model.StructuralColumn(subAlias, "SENTENCE_ID"));
-            defaultColumns.add(new com.example.query.model.StructuralColumn(subAlias, "TIMESTAMP"));
-        }
-
-        logger.debug("Created default JOIN select columns: {}", defaultColumns.stream().map(SelectColumn::getColumnName).toList());
-        return defaultColumns;
-    }
-} 
+}

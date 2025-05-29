@@ -1,18 +1,19 @@
 package com.example.query.model;
 
-import com.example.core.IndexAccessInterface;
-import com.example.query.binding.MatchDetail;
-import com.example.query.binding.ValueType;
-import tech.tablesaw.api.*;
-import tech.tablesaw.columns.Column;
-
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.time.LocalDate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.example.core.IndexAccessInterface;
+import com.example.query.executor.QueryResultSoA;
+
+import tech.tablesaw.api.ColumnType;
+import tech.tablesaw.api.StringColumn;
+import tech.tablesaw.api.Table;
+import tech.tablesaw.columns.Column;
 
 /**
  * Represents a variable column in the SELECT clause of a query.
@@ -21,16 +22,16 @@ import org.slf4j.LoggerFactory;
  */
 public class VariableColumn implements SelectColumn {
     private static final Logger logger = LoggerFactory.getLogger(VariableColumn.class);
-    
+
     // Stores the fully qualified name (e.g., "var" qualified to "$main.var" or "alias.var")
-    private final String qualifiedVariableName; 
-    
+    private final String qualifiedVariableName;
+
     // TODO: Infer ColumnType based on VariableRegistry? Currently defaults to String.
-    private final ColumnType columnType = ColumnType.STRING; 
+    private final ColumnType columnType = ColumnType.STRING;
 
     /**
      * Creates a new variable column, storing the fully qualified name.
-     * 
+     *
      * @param qualifiedName The fully qualified variable name (e.g., "$main.var" or "alias.var")
      */
     public VariableColumn(String qualifiedName) {
@@ -41,7 +42,7 @@ public class VariableColumn implements SelectColumn {
         this.qualifiedVariableName = qualifiedName;
         logger.trace("Created VariableColumn with qualifiedVariableName='{}'", this.qualifiedVariableName);
     }
-    
+
     /**
      * Gets the qualified variable name used by this column.
      *
@@ -52,7 +53,7 @@ public class VariableColumn implements SelectColumn {
         // Return the qualified name as the unique identifier for this column's data source
         return qualifiedVariableName;
     }
-    
+
     @Override
     public Column<?> createColumn() {
         // Use the qualified name for the Tablesaw column name to ensure uniqueness
@@ -60,60 +61,54 @@ public class VariableColumn implements SelectColumn {
         logger.debug("VariableColumn creating column named '{}' of type {}", qualifiedVariableName, col.type());
         return col;
     }
-    
-    @SuppressWarnings("unchecked")
+
     @Override
-    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
+    public void populateColumn(Table table, int rowIndex,
+                               QueryResultSoA resultSoA, List<Integer> indicesInSoA,
                                String source,
-                               Map<String, IndexAccessInterface> indexes) {
-        logger.trace("Populating row {} for VariableColumn '{}'. Details count: {}", 
-                      rowIndex, qualifiedVariableName, detailsForUnit.size());
+                               Map<String, IndexAccessInterface> indexes,
+                               Query query,
+                               Map<String, Object> contextCache) {
+        logger.trace("Populating row {} for VariableColumn '{}'. SoA indices count: {}",
+                      rowIndex, qualifiedVariableName, indicesInSoA.size());
 
         Optional<Object> valueOpt = Optional.empty();
 
-        for (Object obj : detailsForUnit) {
-            if (obj instanceof com.example.query.binding.JoinedMatch joined) {
-                // Handle join result: check left and right sides using QUALIFIED names
-                // Assumes JoinedMatch provides access to the qualified name associated with left/right MatchDetail
-                // TODO: Update JoinedMatch structure or access logic if needed.
-                // For now, compare against the qualified name stored in the MatchDetail.
-                if (qualifiedVariableName.equals(joined.left().variableName().orElse(null))) {
-                    valueOpt = Optional.ofNullable(joined.left().value());
-                    break;
-                } else if (qualifiedVariableName.equals(joined.right().variableName().orElse(null))) {
-                    valueOpt = Optional.ofNullable(joined.right().value());
-                    break;
-                }
+        for (int soaIndex : indicesInSoA) {
+            String varNameInSoA = resultSoA.getVariableNameAt(soaIndex); // Expected to be e.g., "$main.var" or "alias.var"
 
-            } else if (obj instanceof MatchDetail detail) {
-                 // Non-join result: Check if the detail's qualified variable name matches.
-                 // MatchDetail.variableName() now stores the qualified name.
-                if (qualifiedVariableName.equals(detail.variableName().orElse(null))) {
-                    valueOpt = Optional.ofNullable(detail.value());
-                    break;
-                }
+            // Directly compare the VariableColumn's qualified name with the SoA's variable name.
+            if (qualifiedVariableName.equals(varNameInSoA)) {
+                valueOpt = Optional.ofNullable(resultSoA.getValueAt(soaIndex));
+                logger.trace("Found match for variable '{}' in SoA index {}. Value: '{}'",
+                             qualifiedVariableName, soaIndex, valueOpt.orElse("null"));
+                break; // Found the first match for this variable in the current conceptual row's entries
             }
         }
 
-        Column<?> column = table.column(qualifiedVariableName); // Use qualified name to get column
+        Column<?> column = table.column(qualifiedVariableName);
         if (!(column instanceof StringColumn strCol)) {
-            logger.error("VariableColumn '{}' requires a StringColumn, but found {}", qualifiedVariableName, (column != null ? column.type() : "null"));
+            logger.error("VariableColumn '{}' expects a StringColumn in the table, but found {}. Setting missing.",
+                         qualifiedVariableName, (column != null ? column.type() : "null column object"));
+            if (column != null) {
+                column.setMissing(rowIndex);
+            }
             return;
         }
 
         if (valueOpt.isPresent()) {
             Object value = valueOpt.get();
-            strCol.set(rowIndex, value != null ? value.toString() : "");
-            logger.trace("Set value '{}' for column '{}' at row {}", value, qualifiedVariableName, rowIndex);
+            strCol.set(rowIndex, value != null ? value.toString() : null);
+            logger.trace("Set value '{}' for column '{}' at row {}", valueOpt.orElse("null"), qualifiedVariableName, rowIndex);
         } else {
             strCol.setMissing(rowIndex);
-            logger.trace("No matching detail found for column '{}' at row {}, setting missing.", qualifiedVariableName, rowIndex);
+            logger.trace("No matching value found for column '{}' in SoA indices for row {}, setting missing.", qualifiedVariableName, rowIndex);
         }
     }
-    
+
     @Override
     public String toString() {
         // Return the qualified variable name for representation
-        return qualifiedVariableName; 
+        return qualifiedVariableName;
     }
-} 
+}

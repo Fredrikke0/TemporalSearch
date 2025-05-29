@@ -4,6 +4,7 @@ package com.example.query.result;
  * Exception thrown when an error occurs during result generation.
  */
 public class ResultGenerationException extends Exception {
+    private static final long serialVersionUID = 1L;
     private final String component;
     private final ErrorType errorType;
 
@@ -62,4 +63,4 @@ public class ResultGenerationException extends Exception {
     public ErrorType getErrorType() {
         return errorType;
     }
-} 
+}

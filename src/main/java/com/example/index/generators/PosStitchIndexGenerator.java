@@ -1,10 +1,5 @@
 package com.example.index.generators;
 
-import com.example.index.AnnotationType;
-import com.example.logging.ProgressTracker;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -13,9 +8,13 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.index.AnnotationType;
+import com.example.logging.ProgressTracker;
 
 public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(PosStitchIndexGenerator.class);
@@ -91,7 +90,7 @@ public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
                     String posTag = rs.getString("pos");
                     String token = rs.getString("token");
 
-                    if (posTag != null && !posTag.isEmpty() && token != null && !token.isEmpty() 
+                    if (posTag != null && !posTag.isEmpty() && token != null && !token.isEmpty()
                             && !isPosTagExcluded(posTag)) {
                         String compositeValue = posTag.toUpperCase() + com.example.core.IndexAccessInterface.DELIMITER + token.toLowerCase();
                         annotations.add(new AnnotationData(
@@ -108,9 +107,9 @@ public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     }
 
     private boolean isPosTagExcluded(String posTag) {
-        return posTag.equals(",") || posTag.equals(".") || posTag.equals(":") || posTag.equals("``") || 
-               posTag.equals("''") || posTag.equals("$") || posTag.equals("SYM") || posTag.equals("HYPH") || 
-               posTag.equals("NFP") || posTag.equals("AFX") || posTag.equals("LS") || posTag.equals("X") || 
+        return posTag.equals(",") || posTag.equals(".") || posTag.equals(":") || posTag.equals("``") ||
+               posTag.equals("''") || posTag.equals("$") || posTag.equals("SYM") || posTag.equals("HYPH") ||
+               posTag.equals("NFP") || posTag.equals("AFX") || posTag.equals("LS") || posTag.equals("X") ||
                posTag.equals("-LRB-") || posTag.equals("-RRB-") || posTag.equals("PUNCT");
     }
 

@@ -106,4 +106,4 @@ public final class DependencyEntry implements IndexEntry {
     public int hashCode() {
         return Objects.hash(dependencyId, documentId, sentenceId, beginChar, endChar, headToken, dependentToken, relation);
     }
-} 
+}

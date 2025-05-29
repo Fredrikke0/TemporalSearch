@@ -1,10 +1,5 @@
 package com.example.index.generators;
 
-import com.example.index.AnnotationType;
-import com.example.logging.ProgressTracker;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -15,9 +10,14 @@ import java.sql.Statement;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.index.AnnotationType;
+import com.example.logging.ProgressTracker;
 
 public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(DateStitchIndexGenerator.class);
@@ -165,4 +165,4 @@ public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     protected String getSpecificAnnotationTypeDBCondition() {
         return "ner = 'DATE' AND normalized_ner IS NOT NULL AND normalized_ner LIKE '____-__-__'";
     }
-} 
+}

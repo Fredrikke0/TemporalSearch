@@ -1,9 +1,8 @@
 package com.example.index;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.*;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -14,6 +13,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Manages synonym mappings for a single, specific annotation type.
@@ -37,7 +39,7 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
     private final Map<String, Integer> valueToId = new ConcurrentHashMap<>();
     private final Map<Integer, String> idToValue = new ConcurrentHashMap<>();
     private final AtomicInteger nextId = new AtomicInteger(1);
-    
+
     private final Path storageFile;
     private final AnnotationType managedType;
     private boolean modified = false;
@@ -65,7 +67,7 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
             throw new IllegalStateException(managedType + " AnnotationSynonyms is closed");
         }
         validateValue(value);
-        
+
         Integer existingId = valueToId.get(value);
         if (existingId != null) {
             return existingId;
@@ -84,7 +86,7 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
             valueToId.put(value, id);
             idToValue.put(id, value);
             modified = true;
-            
+
             //logger.debug("Created new {} synonym: {} -> {}", managedType, value, id);
             return id;
         }
@@ -105,7 +107,7 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
         if (value == null || value.isEmpty()) {
             throw new IllegalArgumentException("Value cannot be null or empty for " + managedType);
         }
-        
+
         switch (managedType) {
             case DATE:
                 if (!DATE_PATTERN.matcher(value).matches()) {
@@ -129,34 +131,34 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
 
     @SuppressWarnings("unchecked")
     private void loadMappings() throws IOException {
-        logger.info("SYNONYM_STORE_DEBUG: loadMappings() called for type '{}'. Checking path: '{}'", 
+        logger.info("SYNONYM_STORE_DEBUG: loadMappings() called for type '{}'. Checking path: '{}'",
             this.managedType, this.storageFile.toAbsolutePath());
         if (Files.exists(storageFile)) {
-            logger.info("SYNONYM_STORE_DEBUG: File FOUND at path: '{}' for type '{}'. Attempting to load.", 
+            logger.info("SYNONYM_STORE_DEBUG: File FOUND at path: '{}' for type '{}'. Attempting to load.",
                 this.storageFile.toAbsolutePath(), this.managedType);
             try (ObjectInputStream ois = new ObjectInputStream(Files.newInputStream(storageFile))) {
                 Map<String, Integer> loadedValueToId = (Map<String, Integer>) ois.readObject();
-                int maxId = 0; 
-                
+                int maxId = 0;
+
                 for (Map.Entry<String, Integer> entry : loadedValueToId.entrySet()) {
                     valueToId.put(entry.getKey(), entry.getValue());
                     idToValue.put(entry.getValue(), entry.getKey());
                     maxId = Math.max(maxId, entry.getValue());
                 }
                 nextId.set(maxId + 1);
-                logger.info("Loaded {} {} synonyms with next ID {}", 
+                logger.info("Loaded {} {} synonyms with next ID {}",
                            valueToId.size(), managedType, nextId.get());
             } catch (ClassNotFoundException | ClassCastException e) {
                 throw new IOException("Failed to load " + managedType + " synonyms from " + storageFile, e);
             }
         } else {
-            logger.info("SYNONYM_STORE_DEBUG: File NOT FOUND at path: '{}' for type '{}'. Will create new store.", 
+            logger.info("SYNONYM_STORE_DEBUG: File NOT FOUND at path: '{}' for type '{}'. Will create new store.",
                 this.storageFile.toAbsolutePath(), this.managedType);
         }
     }
 
     private void saveMappings() throws IOException {
-        logger.info("SYNONYM_STORE_DEBUG: saveMappings() called for type '{}'. File: '{}'. Modified: {}", 
+        logger.info("SYNONYM_STORE_DEBUG: saveMappings() called for type '{}'. File: '{}'. Modified: {}",
             this.managedType, this.storageFile.toAbsolutePath(), this.modified);
         if (!modified) {
             logger.info("SYNONYM_STORE_DEBUG: Not saving, modified is false for type '{}'.", this.managedType);
@@ -176,7 +178,7 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
             int id = entry.getKey();
             String value = entry.getValue();
             Integer mappedId = valueToId.get(value);
-            
+
             if (mappedId == null || mappedId.intValue() != id) {
                 logger.error("Inconsistent {} synonym mappings detected: ID {} -> Value '{}', but Value '{}' -> ID {}",
                     managedType, id, value, value, mappedId);
@@ -201,4 +203,4 @@ public class TypedAnnotationSynonymStore implements AutoCloseable {
             }
         }
     }
-} 
+}

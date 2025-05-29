@@ -42,4 +42,4 @@ public final class ByteArrayWrapper implements Comparable<ByteArrayWrapper> {
         // For simplicity, just show length or use Arrays.toString
         return "ByteArrayWrapper[" + Arrays.toString(data) + "]";
     }
-} 
+}

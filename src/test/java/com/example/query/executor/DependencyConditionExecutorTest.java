@@ -1,126 +1,160 @@
 package com.example.query.executor;
 
-import com.example.core.IndexAccess;
-import com.example.core.IndexAccessException;
-import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.query.binding.MatchDetail;
-import com.example.query.binding.ValueType;
-import com.example.query.executor.QueryResult;
-import com.example.query.model.Query;
-import com.example.query.model.condition.Dependency;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
+
+import java.util.Collections;
+import java.util.Map;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.LocalDate;
-import java.util.*;
-import java.util.stream.Collectors;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.verify;
+import com.example.core.IndexAccessException;
+import com.example.core.IndexAccessInterface;
+import com.example.core.Position;
+import com.example.core.PositionListSoA;
+import com.example.query.binding.ValueType;
+import com.example.query.model.Query;
+import com.example.query.model.condition.Dependency;
 
 @ExtendWith(MockitoExtension.class)
-class DependencyConditionExecutorTest {
+public class DependencyConditionExecutorTest {
 
-    @Mock private IndexAccess dependencyIndex;
-    @InjectMocks private DependencyExecutor executor;
+    @Mock
+    private IndexAccessInterface mockIndex;
 
+    private DependencyExecutor executor;
     private Map<String, IndexAccessInterface> indexes;
+    private AttributeRequirements defaultTestRequirements;
+    private static final String DELIMITER_STR = String.valueOf(IndexAccessInterface.DELIMITER);
 
     @BeforeEach
     void setUp() {
-        indexes = Map.of("dependency", dependencyIndex);
+        executor = new DependencyExecutor();
+        indexes = Map.of("dependency", mockIndex);
+        defaultTestRequirements = new AttributeRequirements(); // Default, all true
+        defaultTestRequirements.needsSentenceId = true; // Ensure sentence IDs are required
     }
 
     @Test
-    void testExecuteDocumentGranularity() throws QueryExecutionException, IndexAccessException {
-        Dependency condition = new Dependency("nsubj", "VB", "NN");
-        String expectedKey = "nsubj" + IndexAccessInterface.DELIMITER +
-                             "vb" + IndexAccessInterface.DELIMITER +
-                             "nn";
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(new Position(1, 1, 10, 15));
-        positions.add(new Position(2, 1, 5, 10));
-        when(dependencyIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
+    void testExecuteSpecificSearch_allLiterals_matchFound() throws QueryExecutionException, IndexAccessException, java.io.IOException {
+        Dependency condition = new Dependency("governor", "relation", "dependent");
+        String expectedKey = "governor" + DELIMITER_STR + "relation" + DELIMITER_STR + "dependent";
 
-        QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(new Position(1, 1, 10, 18)); // docId, sentId, begin, end
+        positions.add(new Position(1, 2, 5, 12));
+        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(2, result.getAllDetails().size()); 
-        String expectedValue = "nsubj:vb:nn";
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=1");
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 2 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=2");
-        verify(dependencyIndex).get(eq(expectedKey.getBytes()));
+        assertEquals(2, result.size());
+
+        // Example: Check details of the first match entry
+        assertEquals("governor:relation:dependent", result.getValueAt(0));
+        assertEquals(ValueType.DEPENDENCY, result.getValueTypeAt(0));
+        assertEquals(1, result.getDocumentIdAt(0));
+        assertEquals(1, result.getSentenceIdAt(0));
+        assertNull(result.getVariableNameAt(0));
+
+        // Check details of the second match entry
+        assertEquals("governor:relation:dependent", result.getValueAt(1));
+        assertEquals(1, result.getDocumentIdAt(1));
+        assertEquals(2, result.getSentenceIdAt(1));
+        assertNull(result.getVariableNameAt(1));
+
+        // Verify conceptual rows if it was grouped. Here we expect 1 conceptual row for this specific match.
+        // This requires a way to count unique conceptualRowIds if QueryResultSoA.size() means total bindings.
+        // Assuming QueryResultSoA.size() returns total bindings, and conceptual grouping happens elsewhere or is implicit.
+        // For now, we focus on the content of the bindings.
     }
 
     @Test
-    void testExecuteSentenceGranularity() throws QueryExecutionException, IndexAccessException {
-        Dependency condition = new Dependency("dobj", "VB", "JJ");
-        String expectedKey = "dobj" + IndexAccessInterface.DELIMITER +
-                             "vb" + IndexAccessInterface.DELIMITER +
-                             "jj";
-        
+    void testExecuteSpecificSearch_sentenceGranularity() throws QueryExecutionException, IndexAccessException, java.io.IOException {
+        Dependency condition = new Dependency("subject", "nsubj", "dependent");
+        String expectedKey = "subject" + DELIMITER_STR + "nsubj" + DELIMITER_STR + "dependent";
+
         PositionListSoA positions = new PositionListSoA();
-        positions.add(new Position(1, 1, 10, 15)); 
-        positions.add(new Position(1, 2, 5, 10));   
-        positions.add(new Position(2, 1, 20, 25)); 
-        when(dependencyIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
+        positions.add(new Position(10, 1, 0, 7));
+        positions.add(new Position(10, 1, 15, 20)); // Same sentence, different position
+        positions.add(new Position(10, 2, 3, 9));   // Different sentence
+        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
 
-        QueryResult result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus");
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
-        assertEquals(3, result.getAllDetails().size());
-        String expectedValue = "dobj:vb:jj";
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 1 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=1, sentenceId=1");
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 2 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=1, sentenceId=2");
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 2 && m.getSentenceId() == 1 && m.value().equals(expectedValue) && m.valueType() == ValueType.DEPENDENCY), "Assertion failed for docId=2, sentenceId=1");
-        verify(dependencyIndex).get(eq(expectedKey.getBytes()));
+        assertEquals(3, result.size()); // Should get 3 binding entries
+
+        // Verify sentence-level details (example for the first one)
+        assertEquals(10, result.getDocumentIdAt(0));
+        assertEquals(1, result.getSentenceIdAt(0));
+        assertEquals("subject:nsubj:dependent", result.getValueAt(0));
+    }
+
+
+    @Test
+    void testExecuteSpecificSearch_variableBinding() throws QueryExecutionException, IndexAccessException, java.io.IOException {
+        Dependency condition = new Dependency("city", "located_in", "country", "?where");
+        String expectedKey = "city" + DELIMITER_STR + "located_in" + DELIMITER_STR + "country";
+
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(new Position(5, 3, 2, 8));
+        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals("city:located_in:country", result.getValueAt(0)); // Value is the full relation
+        assertEquals(ValueType.DEPENDENCY, result.getValueTypeAt(0));
+        assertEquals("?where", result.getVariableNameAt(0));
+        assertEquals(5, result.getDocumentIdAt(0));
     }
 
      @Test
-    void testExecuteWithWildcard() throws QueryExecutionException, IndexAccessException {
-        Dependency condition = new Dependency("amod", "*", "NN");
-        // String expectedKey = "amod" + IndexAccessInterface.DELIMITER +
-        //                      "*" + IndexAccessInterface.DELIMITER +
-        //                      "nn";
-        // PositionList positions = new PositionList();
-        // positions.add(new Position(1, 1, 10, 15, LocalDate.now()));
-        // Wildcard search is not implemented, so no call to index.get should be made for this specific key.
-        // when(dependencyIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
-        
-        QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
+    void testExecuteSpecificSearch_noMatchFound() throws QueryExecutionException, IndexAccessException, java.io.IOException {
+        Dependency condition = new Dependency("unknown", "rel", "target");
+        String expectedKey = "unknown" + DELIMITER_STR + "rel" + DELIMITER_STR + "target";
+        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.empty());
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        // Expect empty results as wildcard search isn't implemented
-        assertTrue(result.getAllDetails().isEmpty(), "Expected empty result for unimplemented wildcard search"); 
-        // Do not verify index.get because the executor won't call it for this pattern
-        // verify(dependencyIndex).get(eq(expectedKey.getBytes()));
+        assertTrue(result.isEmpty());
     }
-    
+
      @Test
-    void testNoMatch() throws QueryExecutionException, IndexAccessException {
-         Dependency condition = new Dependency("xcomp", "VB", "JJ");
-        String expectedKey = "xcomp" + IndexAccessInterface.DELIMITER +
-                             "vb" + IndexAccessInterface.DELIMITER +
-                             "jj";
-        when(dependencyIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.empty());
-        
-        QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
-        
-        assertNotNull(result);
-        assertTrue(result.getAllDetails().isEmpty());
-        verify(dependencyIndex).get(eq(expectedKey.getBytes()));
+    void testExecute_missingIndex() {
+        Dependency condition = new Dependency("governor", "relation", "dependent");
+        Map<String, IndexAccessInterface> emptyIndexes = Collections.emptyMap();
+
+        QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
+            executor.execute(condition, emptyIndexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        });
+
+        assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
     }
-    
-     // Helper method not needed if not creating details manually for assertions
-} 
+
+    @Test
+    void testExecute_indexAccessError() throws IndexAccessException {
+        Dependency condition = new Dependency("governor", "relation", "dependent");
+        String expectedKey = "governor" + DELIMITER_STR + "relation" + DELIMITER_STR + "dependent";
+        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenThrow(new IndexAccessException("Test error accessing index", "dependency", IndexAccessException.ErrorType.READ_ERROR));
+
+        QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
+            executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        });
+
+        assertEquals(QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR, exception.getErrorType());
+    }
+}

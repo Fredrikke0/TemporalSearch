@@ -40,4 +40,4 @@ public class LogSampler {
     public double getSampleRate() {
         return sampleRate;
     }
-} 
+}

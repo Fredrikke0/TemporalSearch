@@ -6,12 +6,17 @@
     <!-- Console appender with simple pattern -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <!-- Suppress most application logging during tests -->
+    <!-- Keep other com.example logging at WARN to reduce noise, unless overridden -->
     <logger name="com.example" level="WARN" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+
+    <!-- Set QueryModelBuilder to ERROR level for tests to hide WARN messages -->
+    <logger name="com.example.query.parser.QueryModelBuilder" level="ERROR" additivity="false">
         <appender-ref ref="CONSOLE"/>
     </logger>
 
@@ -34,4 +39,4 @@
     <root level="WARN">
         <appender-ref ref="CONSOLE"/>
     </root>
-</configuration> 
+</configuration>

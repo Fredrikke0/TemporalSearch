@@ -1,22 +1,18 @@
 package com.example.query.model;
 
-import com.example.core.IndexAccessInterface;
-import com.example.query.binding.MatchDetail;
-import com.example.query.executor.NerExecutor;
-import com.example.query.sqlite.SqliteAccessor;
-import tech.tablesaw.api.StringColumn;
-import tech.tablesaw.api.Table;
-import tech.tablesaw.columns.Column;
-
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.time.LocalDate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.core.Position;
+import com.example.core.IndexAccessInterface;
+import com.example.query.executor.QueryResultSoA;
+import com.example.query.sqlite.SqliteAccessor;
+
+import tech.tablesaw.api.StringColumn;
+import tech.tablesaw.api.Table;
+import tech.tablesaw.columns.Column;
 
 /**
  * Represents a snippet column in the SELECT clause.
@@ -24,7 +20,7 @@ import com.example.core.Position;
  */
 public class SnippetColumn implements SelectColumn {
     private static final Logger logger = LoggerFactory.getLogger(SnippetColumn.class);
-    
+
     private static final int DEFAULT_SNIPPET_WINDOW = 5; // Default words before/after
 
     private final String columnName;
@@ -35,129 +31,159 @@ public class SnippetColumn implements SelectColumn {
         if (qualifiedVariableName == null || qualifiedVariableName.isEmpty() || !qualifiedVariableName.contains(".")) {
             throw new IllegalArgumentException("SnippetColumn requires a qualified variable name (e.g., alias.var), got: " + qualifiedVariableName);
         }
-        this.qualifiedVariableName = qualifiedVariableName; 
+        this.qualifiedVariableName = qualifiedVariableName;
         this.windowSize = windowSize >= 0 ? windowSize : DEFAULT_SNIPPET_WINDOW; // Allow window 0
-        // Generate a unique column name based on the qualified name
         this.columnName = "snippet_" + this.qualifiedVariableName.replace('.', '_');
     }
 
     public int getWindowSize() {
         return windowSize;
     }
-    
+
     /**
      * Gets the qualified variable name this snippet is based on.
      */
     public String getVariableName() {
         return qualifiedVariableName;
     }
-    
+
     @Override
     public String getColumnName() {
         return columnName;
     }
-    
+
     @Override
     public Column<?> createColumn() {
         return StringColumn.create(columnName);
     }
-    
+
     @Override
-    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, 
+    public void populateColumn(Table table, int rowIndex,
+                               QueryResultSoA resultSoA, List<Integer> indicesInSoA,
                                String source,
-                               Map<String, IndexAccessInterface> indexes) {
+                               Map<String, IndexAccessInterface> indexes,
+                               Query query,
+                               Map<String, Object> contextCache) {
         StringColumn snippetColumn = table.stringColumn(this.columnName);
-        
-        // 1. Find the first MatchDetail in the list that matches our QUALIFIED variable name
-        Optional<MatchDetail> relevantDetailOpt = detailsForUnit.stream()
-            .filter(MatchDetail.class::isInstance)
-            .map(MatchDetail.class::cast)
-            // Compare qualifiedVariableName with the qualified name stored in MatchDetail
-            .filter(d -> qualifiedVariableName.equals(d.variableName().orElse(null)))
-            .findFirst();
-            
-        if (relevantDetailOpt.isEmpty()) {
-             snippetColumn.setMissing(rowIndex);
-             return;
-        }
-        
-        MatchDetail relevantDetail = relevantDetailOpt.get();
-        
-        // 2. Check if the found detail has a valid position
-        if (relevantDetail.position() == null || relevantDetail.position().getBeginPosition() == -1) {
-            logger.debug("Relevant MatchDetail for variable '{}' lacks valid position. Cannot generate snippet.", qualifiedVariableName);
-            snippetColumn.set(rowIndex, "[Snippet N/A: Match lacks position. Use DATE(?d) etc. for context.]");
+
+        if (indicesInSoA == null || indicesInSoA.isEmpty()) {
+            logger.trace("No SoA indices for snippet column '{}' at row {}. Setting missing.", columnName, rowIndex);
+            snippetColumn.setMissing(rowIndex);
             return;
         }
 
-        // 3. Get document text
-        String docText = SqliteAccessor.getInstance().getDocumentText(source, relevantDetail.getDocumentId());
-        
-        if (docText == null) {
-            logger.warn("Document text not found for docId {} in source {}. Cannot generate snippet.", relevantDetail.getDocumentId(), source);
-            snippetColumn.set(rowIndex, "[Error: Document text not available]");
-            return;
+        Integer targetSoAIndex = null;
+        for (int soaIndex : indicesInSoA) {
+            if (qualifiedVariableName.equals(resultSoA.getVariableNameAt(soaIndex))) {
+                if (resultSoA.getRequirements().needsPositions && resultSoA.getBeginCharAt(soaIndex) != -1) {
+                    targetSoAIndex = soaIndex;
+                    break;
+                }
+            }
         }
-        
-        // 4. Generate snippet
-        String snippet = generateSnippet(docText, relevantDetail.position());
+
+        if (targetSoAIndex == null) {
+             logger.debug("No relevant SoA entry with position found for variable '{}' in this conceptual row. Snippet N/A.", qualifiedVariableName);
+             // Provide more context why snippet is N/A if it's due to missing position for the variable.
+             boolean varExistsWithoutPos = false;
+             for (int soaIndex : indicesInSoA) {
+                 if (qualifiedVariableName.equals(resultSoA.getVariableNameAt(soaIndex))) {
+                     varExistsWithoutPos = true;
+                     break;
+                 }
+             }
+             if (varExistsWithoutPos) {
+                snippetColumn.set(rowIndex, "[Snippet N/A: Variable '" + qualifiedVariableName + "' lacks position data in this context.]");
+             } else {
+                snippetColumn.set(rowIndex, "[Snippet N/A: Variable '" + qualifiedVariableName + "' not found or lacks position data.]");
+             }
+             return;
+        }
+
+        int docId = resultSoA.getDocumentIdAt(targetSoAIndex);
+        int beginChar = resultSoA.getBeginCharAt(targetSoAIndex);
+        int endChar = resultSoA.getEndCharAt(targetSoAIndex);
+
+        // Get document text using contextCache if possible
+        String docTextCacheKey = "docText_" + source + "_" + docId;
+        String docText = (String) contextCache.get(docTextCacheKey);
+        if (docText == null) {
+            docText = SqliteAccessor.getInstance().getDocumentText(source, docId);
+            if (docText != null) {
+                contextCache.put(docTextCacheKey, docText);
+            } else {
+                 logger.warn("Document text not found for docId {} in source {}. Cannot generate snippet.", docId, source);
+                 snippetColumn.set(rowIndex, "[Error: Document text not available for snippet]");
+                 return;
+            }
+        }
+
+        String snippet = generateSnippet(docText, beginChar, endChar);
         snippetColumn.set(rowIndex, snippet);
     }
 
-    private String generateSnippet(String fullText, Position matchPosition) {
-        // Simplified snippet generation - find words around the match
-        // A real implementation would be more robust (handle boundaries, punctuation, etc.)
-        int start = matchPosition.getBeginPosition();
-        int end = matchPosition.getEndPosition();
-        
-        // Find word boundaries around the start/end offsets based on windowSize
-        int snippetStart = findWordBoundary(fullText, start, -windowSize);
-        int snippetEnd = findWordBoundary(fullText, end, windowSize);
-        
-        String snippet = fullText.substring(snippetStart, snippetEnd);
-        
-        // Maybe add emphasis? e.g., ...word [*match*] word...
-        // String matchedText = fullText.substring(start, end);
-        // snippet = snippet.replace(matchedText, "[*" + matchedText + "*]"); 
+    private String generateSnippet(String fullText, int matchStart, int matchEnd) {
+        int snippetStart = findWordBoundary(fullText, matchStart, -windowSize);
+        int snippetEnd = findWordBoundary(fullText, matchEnd, windowSize);
 
-        return "..." + snippet.trim() + "..."; // Add ellipsis
+        // Ensure snippetStart and snippetEnd are within fullText bounds and in correct order
+        snippetStart = Math.max(0, snippetStart);
+        snippetEnd = Math.min(fullText.length(), snippetEnd);
+        if (snippetStart >= snippetEnd) { // Should not happen if findWordBoundary is correct
+             logger.warn("Calculated snippet boundaries are invalid: start={}, end={}. Using match boundaries.", snippetStart, snippetEnd);
+             snippetStart = Math.max(0, matchStart);
+             snippetEnd = Math.min(fullText.length(), matchEnd);
+        }
+
+        String snippet = fullText.substring(snippetStart, snippetEnd);
+
+        return "..." + snippet.trim() + "...";
     }
 
-    // Helper to find approximate word boundary
     private int findWordBoundary(String text, int center, int wordOffset) {
         int currentPos = center;
         int wordsFound = 0;
         int direction = wordOffset > 0 ? 1 : -1;
 
-        while (wordsFound < Math.abs(wordOffset)) {
-            int nextPos = currentPos + direction;
-            if (nextPos < 0 || nextPos >= text.length()) {
-                break; // Reached text boundary
+        // Handle edge case: if center is already at the beginning/end and we want to go further out.
+        if (direction == -1 && center == 0 && wordOffset < 0) return 0;
+        if (direction == 1 && center == text.length() && wordOffset > 0) return text.length();
+
+        while (wordsFound < Math.abs(wordOffset) && currentPos >= 0 && currentPos < text.length()) {
+            int prevCharPos = currentPos - direction; // Look at the character on the "other side" of currentPos for transition
+
+            if (prevCharPos >= 0 && prevCharPos < text.length()) {
+                boolean currentIsSpace = Character.isWhitespace(text.charAt(currentPos));
+                boolean prevIsSpace = Character.isWhitespace(text.charAt(prevCharPos));
+                if (direction == 1) { // Moving right (finding end of snippet)
+                    if (prevIsSpace && !currentIsSpace) wordsFound++; // Space to Non-space transition marks start of a new word
+                } else { // Moving left (finding start of snippet)
+                    if (!prevIsSpace && currentIsSpace) wordsFound++; // Non-space to Space transition marks end of a word going left
+                }
             }
-            
-            // Check for space -> non-space transition (start/end of word)
-            if (Character.isWhitespace(text.charAt(currentPos)) && !Character.isWhitespace(text.charAt(nextPos)) && direction > 0) {
-                 wordsFound++;
-            } else if (!Character.isWhitespace(text.charAt(currentPos)) && Character.isWhitespace(text.charAt(nextPos)) && direction < 0) {
-                 wordsFound++;
-            }
-            
-            currentPos = nextPos;
-            // Safety break for very long non-whitespace sequences
-            if (Math.abs(currentPos - center) > 200) break; 
-        }
-        
-        // Adjust to be just after/before the space boundary
-        while (currentPos > 0 && currentPos < text.length() -1 && Character.isWhitespace(text.charAt(currentPos))) {
+
+            if (wordsFound >= Math.abs(wordOffset)) break;
+
             currentPos += direction;
+            if (currentPos < 0 || currentPos >= text.length()) break;
         }
-        
+
+        // Adjust to be just after/before the space boundary, or at text ends
+        if (direction == 1) { // Moving right, ensure we are at the start of the word or text end
+            while (currentPos < text.length() && Character.isWhitespace(text.charAt(currentPos))) {
+                currentPos++;
+            }
+        } else { // Moving left, ensure we are at the end of the word or text start
+             while (currentPos > 0 && Character.isWhitespace(text.charAt(currentPos -1))) {
+                currentPos--;
+            }
+        }
+
         return Math.max(0, Math.min(text.length(), currentPos));
     }
-    
+
     @Override
     public String toString() {
-        // Represent with qualified variable name
-        return "SNIPPET(" + qualifiedVariableName + ")";
+        return "SNIPPET(" + qualifiedVariableName + ", WINDOW=" + windowSize + ")";
     }
-} 
+}

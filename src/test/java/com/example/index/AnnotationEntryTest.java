@@ -26,7 +26,7 @@ class AnnotationEntryTest extends BaseIndexTest {
         String token = "cat";
         String pos = "NOUN";
         AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, token, pos, null, null, "cat");
-        
+
         assertEquals(annotationId, entry.getAnnotationId());
         assertEquals(1, entry.getDocumentId());
         assertEquals(1, entry.getSentenceId());
@@ -56,7 +56,7 @@ class AnnotationEntryTest extends BaseIndexTest {
     void testTimestampHandling() {
         // This test is no longer relevant as AnnotationEntry does not handle timestamps directly.
     }
-    
+
     @Test
     void testAnnotationId() {
         // Test annotation ID getter
@@ -64,4 +64,4 @@ class AnnotationEntryTest extends BaseIndexTest {
         AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, "test", "NOUN", null, null, "test");
         assertEquals(annotationId, entry.getAnnotationId());
     }
-} 
+}

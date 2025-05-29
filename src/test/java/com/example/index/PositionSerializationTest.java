@@ -90,7 +90,7 @@ public class PositionSerializationTest {
     public void testLargeListSerialization() throws IOException {
         PositionList list = new PositionList();
         int numPositions = 10000;
-        
+
         // Create positions with realistic document IDs
         for (int i = 0; i < numPositions; i++) {
             // Use document ID pattern: 1000 + (i / 100) to simulate realistic docs

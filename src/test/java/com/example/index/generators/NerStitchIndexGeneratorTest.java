@@ -44,7 +44,7 @@ public class NerStitchIndexGeneratorTest extends BaseIndexTest {
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(tempDir.resolve(NER_TEST_STOPWORDS_FILENAME)))) {
             writer.println("is");
         }
-        
+
         try (Statement stmt = sqliteConn.createStatement()) {
             stmt.execute("DELETE FROM annotations;");
             stmt.execute("DELETE FROM documents;");
@@ -56,8 +56,8 @@ public class NerStitchIndexGeneratorTest extends BaseIndexTest {
             insertAnnotation(1, 0, 20, 24, "word", "word", "NN", "O", null);
             insertAnnotation(2, 0, 0, 3, "Bob", "Bob", "NNP", "PERSON", "Bob");
             insertAnnotation(2, 0, 10, 15, "Apple", "apple", "NNP", "ORGANIZATION", "Apple Inc.");
-            insertAnnotation(2, 0, 20, 30, "2024-01-01", "2024-01-01", "CD", "DATE", "2024-01-01"); 
-            insertAnnotation(2, 0, 35, 39, "text", "text", "NN", "O", null); 
+            insertAnnotation(2, 0, 20, 30, "2024-01-01", "2024-01-01", "CD", "DATE", "2024-01-01");
+            insertAnnotation(2, 0, 35, 39, "text", "text", "NN", "O", null);
         }
     }
 
@@ -78,7 +78,7 @@ public class NerStitchIndexGeneratorTest extends BaseIndexTest {
                 tempDir.resolve(NER_TEST_STOPWORDS_FILENAME).toString(),
                 sqliteConn,
                 progress,
-                10, 
+                10,
                 customSortTempPathNer
         );
 
@@ -111,28 +111,28 @@ public class NerStitchIndexGeneratorTest extends BaseIndexTest {
             byte[] aliceBytes = dbForVerification.get(Iq80DBFactory.bytes("alice"), readOpts);
             assertNotNull(aliceBytes, "Entry for unigram 'alice' should exist.");
             PositionListSoA plAlice = PositionListSoA.deserializeFromCompositeBlob(aliceBytes);
-            
+
             boolean aliceFoundWithGoogle = false;
             for (int i = 0; i < plAlice.getNumPositions(); i++) {
                 Position p = plAlice.getPositionAt(i);
                 // int synonymId = plAlice.getSynonymIdAt(i); // Not strictly needed for this check if we only care about co-occurrence in doc
-                if (p.getDocumentId() == 1 && 
+                if (p.getDocumentId() == 1 &&
                     p.getBeginPosition() == 0 && p.getEndPosition() == 5) { // alice coordinates
                     aliceFoundWithGoogle = true;
                     break;
                 }
             }
             assertTrue(aliceFoundWithGoogle, "'alice' should be stitched with Google (ORGANIZATION).");
-            
+
             byte[] bobBytes = dbForVerification.get(Iq80DBFactory.bytes("bob"), readOpts);
             assertNotNull(bobBytes, "Entry for unigram 'bob' should exist.");
             PositionListSoA plBob = PositionListSoA.deserializeFromCompositeBlob(bobBytes);
-            
+
             boolean bobFoundWithApple = false;
             for (int i = 0; i < plBob.getNumPositions(); i++) {
                 Position p = plBob.getPositionAt(i);
                 // int synonymId = plBob.getSynonymIdAt(i);
-                if (p.getDocumentId() == 2 && 
+                if (p.getDocumentId() == 2 &&
                     p.getBeginPosition() == 0 && p.getEndPosition() == 3) { // bob coordinates
                     bobFoundWithApple = true;
                     break;
@@ -143,12 +143,12 @@ public class NerStitchIndexGeneratorTest extends BaseIndexTest {
             byte[] textBytes = dbForVerification.get(Iq80DBFactory.bytes("text"), readOpts);
             assertNotNull(textBytes, "Entry for unigram 'text' should exist since it co-occurs with valid NER entities.");
             PositionListSoA plText = PositionListSoA.deserializeFromCompositeBlob(textBytes);
-            
+
             boolean foundValidNerStitch = false;
             for (int i = 0; i < plText.getNumPositions(); i++) {
                 Position p = plText.getPositionAt(i);
                 // int synonymId = plText.getSynonymIdAt(i);
-                if (p.getDocumentId() == 2 && 
+                if (p.getDocumentId() == 2 &&
                     p.getBeginPosition() == 35 && p.getEndPosition() == 39) { // text coordinates
                     foundValidNerStitch = true;
                     break;
@@ -162,4 +162,4 @@ public class NerStitchIndexGeneratorTest extends BaseIndexTest {
         }
         // Old verification block (reopening DB) is removed.
     }
-} 
+}

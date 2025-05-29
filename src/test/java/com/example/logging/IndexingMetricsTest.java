@@ -23,12 +23,12 @@ class IndexingMetricsTest {
     @BeforeEach
     void setUp() {
         metrics = new IndexingMetrics();
-        
+
         Logger logger = (Logger) LoggerFactory.getLogger(IndexingMetrics.class);
         // Ensure logger level is low enough to capture INFO/WARN from IndexingMetrics
         // If IndexingMetrics logs batch details at DEBUG, this might need to be DEBUG
         // Based on current IndexingMetrics, sampled batches are INFO, summary is INFO.
-        logger.setLevel(ch.qos.logback.classic.Level.DEBUG); 
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
         listAppender = new ListAppender<>();
         listAppender.start();
         logger.detachAndStopAllAppenders(); // Remove other appenders to avoid duplicate logs in test output
@@ -106,7 +106,7 @@ class IndexingMetricsTest {
         // If we want to test it, we'd need to call metrics.recordBatchSuccess(uniqueDocs) or adapt recordBatchStageDurations
         // For now, we can assert it's 0 if not explicitly set by other means.
         // metrics.recordBatchSuccess(50); // e.g. if unigram generator explicitly tracks this
-        // assertEquals(50, metrics.getUniqueDocuments()); 
+        // assertEquals(50, metrics.getUniqueDocuments());
     }
 
 
@@ -121,7 +121,7 @@ class IndexingMetricsTest {
             metrics.startBatch(100, "test-unigram");
             metrics.recordBatchStageDurations(FETCH_NANOS, PROCESS_NANOS, WRITE_TEMP_NANOS, 80, 100);
         }
-        
+
         for (int i = 0; i < bigramIterations; i++) {
             metrics.startBatch(120, "test-bigram");
             metrics.recordBatchStageDurations(FETCH_NANOS + 1000, PROCESS_NANOS + 1000, WRITE_TEMP_NANOS + 1000, 90, 120);
@@ -160,7 +160,7 @@ class IndexingMetricsTest {
                 }
             }
         }
-        
+
         assertNotNull(summary, "No indexing_summary event found");
         assertEquals(unigramIterations * 100 + bigramIterations * 120, summary.get("total_raw_entries_processed").asInt());
         assertEquals(unigramIterations * 80 + bigramIterations * 90, summary.get("total_output_items_generated").asInt());
@@ -191,7 +191,7 @@ class IndexingMetricsTest {
 
         assertNotNull(loggedFailedBatch, "Failed batch 'test-failed' not logged");
         if (loggedFailedBatch != null) {
-            assertEquals(50, loggedFailedBatch.get("batch_input_size").asInt()); 
+            assertEquals(50, loggedFailedBatch.get("batch_input_size").asInt());
             assertFalse(loggedFailedBatch.get("success").asBoolean());
             assertFalse(loggedFailedBatch.has("fetch_stage_ms")); // Stage timings are not present for this failure path
         }
@@ -200,12 +200,12 @@ class IndexingMetricsTest {
     @Test
     void testPerformanceOverheadWithStages() {
         long startTime = System.nanoTime();
-        
+
         for (int i = 0; i < 1000; i++) {
             metrics.startBatch(100, "test-perf");
             metrics.recordBatchStageDurations(1_000_000, 1_000_000, 500_000, 80, 100);
         }
-        
+
         long duration = System.nanoTime() - startTime;
         double durationMs = duration / 1_000_000.0;
         double overheadPerBatchMs = durationMs / 1000.0;
@@ -228,4 +228,4 @@ class IndexingMetricsTest {
         // listAppender.list.clear(); // Clear after use if needed, or per test
         return result;
     }
-} 
+}

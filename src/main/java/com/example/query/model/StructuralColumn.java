@@ -1,18 +1,24 @@
 package com.example.query.model;
 
-import com.example.core.IndexAccessInterface;
-import com.example.query.binding.MatchDetail;
-import com.example.query.sqlite.SqliteAccessor; // Needed for title fetching
-import tech.tablesaw.api.*;
-import tech.tablesaw.columns.Column;
-
+// import java.util.Optional; // No longer needed
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.util.Optional;
-import java.time.LocalDate;
+
+import com.example.core.IndexAccessInterface;
+// import com.example.query.binding.MatchDetail; // No longer needed
+import com.example.query.executor.QueryResultSoA;
+import com.example.query.sqlite.SqliteAccessor; // Needed for title fetching
+
+import tech.tablesaw.api.DateColumn;
+import tech.tablesaw.api.IntColumn;
+import tech.tablesaw.api.StringColumn;
+import tech.tablesaw.api.Table;
+import tech.tablesaw.columns.Column;
 
 /**
  * Represents a structural column like alias.TITLE or alias.TIMESTAMP.
@@ -35,7 +41,7 @@ public class StructuralColumn implements SelectColumn {
         return alias + "." + fieldName;
     }
 
-    // --- Add Getters --- 
+    // --- Add Getters ---
     public String getAlias() {
         return alias;
     }
@@ -43,7 +49,7 @@ public class StructuralColumn implements SelectColumn {
     public String getFieldName() {
         return fieldName;
     }
-    // --- End Getters --- 
+    // --- End Getters ---
 
     @Override
     public Column<?> createColumn() {
@@ -73,39 +79,38 @@ public class StructuralColumn implements SelectColumn {
     }
 
     @Override
-    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, String source, Map<String, IndexAccessInterface> indexes) {
-        throw new UnsupportedOperationException("StructuralColumn requires Query context. Use populateColumn with Query parameter.");
-    }
-
-    @Override
-    public void populateColumn(Table table, int rowIndex, List<?> detailsForUnit, String source, Map<String, IndexAccessInterface> indexes, Query query, Map<String, Object> contextCache) {
-        if (detailsForUnit == null || detailsForUnit.isEmpty() || !(detailsForUnit.get(0) instanceof MatchDetail)) {
-            logger.warn("StructuralColumn populateColumn received null, empty, or non-MatchDetail list for alias {}. Row: {}. Setting missing.", alias, rowIndex);
+    public void populateColumn(Table table, int rowIndex,
+                               QueryResultSoA resultSoA, List<Integer> indicesInSoA,
+                               String source,
+                               Map<String, IndexAccessInterface> indexes,
+                               Query query,
+                               Map<String, Object> contextCache) {
+        if (indicesInSoA == null || indicesInSoA.isEmpty()) {
+            logger.warn("StructuralColumn populateColumn received null or empty SoA indices for alias {}. Row: {}. Setting missing.", alias, rowIndex);
             table.column(getColumnName()).setMissing(rowIndex);
             return;
         }
 
-        // Assume the single detail passed IS the relevant one.
-        // The caller (TableResultService) is responsible for selecting the correct detail (left/right).
-        MatchDetail relevantDetail = (MatchDetail) detailsForUnit.get(0);
-        logger.trace("Populating StructuralColumn {}.{} at row {} using provided detail", alias, fieldName, rowIndex);
+        int firstSoAIndex = indicesInSoA.get(0); // Use the first match in the unit as reference
+        int docIdForMetadata = resultSoA.getDocumentIdAt(firstSoAIndex);
 
-        // --- Populate based on relevantDetail --- 
+        logger.trace("Populating StructuralColumn {}.{} at row {} using SoA index {}", alias, fieldName, rowIndex, firstSoAIndex);
+
         Column<?> column = table.column(getColumnName());
 
         try {
             switch (fieldName.toUpperCase()) {
                 case "TITLE":
                     if (column instanceof StringColumn strCol) {
-                        String cacheKey = "title_" + relevantDetail.getDocumentId();
+                        String cacheKey = "title_" + docIdForMetadata;
                         String title = (String) contextCache.get(cacheKey);
                         if (title == null) {
-                            title = SqliteAccessor.getInstance().getMetadata(source, relevantDetail.getDocumentId(), "title");
+                            title = SqliteAccessor.getInstance().getMetadata(source, docIdForMetadata, "title");
                             title = (title != null) ? title : ""; // Ensure title is not null before caching
                             contextCache.put(cacheKey, title);
-                            logger.trace("Fetched and cached TITLE '{}' for docId {}", title, relevantDetail.getDocumentId());
+                            logger.trace("Fetched and cached TITLE '{}' for docId {}", title, docIdForMetadata);
                         } else {
-                            logger.trace("Retrieved TITLE '{}' from cache for docId {}", title, relevantDetail.getDocumentId());
+                            logger.trace("Retrieved TITLE '{}' from cache for docId {}", title, docIdForMetadata);
                         }
                         strCol.set(rowIndex, title);
                         logger.trace("Set TITLE '{}' for {}.{} at row {}", title, alias, fieldName, rowIndex);
@@ -116,26 +121,26 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "TIMESTAMP":
                      if (column instanceof DateColumn dateCol) {
-                         String cacheKey = "timestamp_" + relevantDetail.getDocumentId();
+                         String cacheKey = "timestamp_" + docIdForMetadata;
                          LocalDate docTimestamp = (LocalDate) contextCache.get(cacheKey);
                          if (docTimestamp == null) {
-                             String timestampStr = SqliteAccessor.getInstance().getMetadata(source, relevantDetail.getDocumentId(), "timestamp");
+                             String timestampStr = SqliteAccessor.getInstance().getMetadata(source, docIdForMetadata, "timestamp");
                              if (timestampStr != null && !timestampStr.isEmpty()) {
                                  try {
                                      docTimestamp = LocalDate.parse(timestampStr); // Assuming ISO_LOCAL_DATE format
                                  } catch (java.time.format.DateTimeParseException e) {
-                                     logger.warn("Failed to parse timestamp string '{}' for docId {}. Setting missing.", timestampStr, relevantDetail.getDocumentId(), e);
+                                     logger.warn("Failed to parse timestamp string '{}' for docId {}. Setting missing.", timestampStr, docIdForMetadata, e);
                                      docTimestamp = null; // Explicitly set to null if parsing fails
                                  }
                              }
                              if (docTimestamp != null) { // Only cache if successfully parsed
                                 contextCache.put(cacheKey, docTimestamp);
-                                logger.trace("Fetched and cached TIMESTAMP '{}' for docId {}", docTimestamp, relevantDetail.getDocumentId());
+                                logger.trace("Fetched and cached TIMESTAMP '{}' for docId {}", docTimestamp, docIdForMetadata);
                              } else {
-                                logger.trace("Timestamp was null or unparseable for docId {}. Not caching.", relevantDetail.getDocumentId());
+                                logger.trace("Timestamp was null or unparseable for docId {}. Not caching.", docIdForMetadata);
                              }
                          } else {
-                             logger.trace("Retrieved TIMESTAMP '{}' from cache for docId {}", docTimestamp, relevantDetail.getDocumentId());
+                             logger.trace("Retrieved TIMESTAMP '{}' from cache for docId {}", docTimestamp, docIdForMetadata);
                          }
 
                          if (docTimestamp != null) {
@@ -152,8 +157,8 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "DOCUMENT_ID":
                      if (column instanceof IntColumn intCol) {
-                         intCol.set(rowIndex, relevantDetail.getDocumentId());
-                          logger.trace("Set DOCUMENT_ID '{}' for {}.{} at row {}", relevantDetail.getDocumentId(), alias, fieldName, rowIndex);
+                         intCol.set(rowIndex, docIdForMetadata); // Already have this from resultSoA
+                          logger.trace("Set DOCUMENT_ID '{}' for {}.{} at row {}", docIdForMetadata, alias, fieldName, rowIndex);
                      } else {
                          logger.error("Expected IntColumn for DOCUMENT_ID but got {} for column {}", column.type(), getColumnName());
                          column.setMissing(rowIndex);
@@ -161,8 +166,15 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "SENTENCE_ID":
                     if (column instanceof IntColumn intCol) {
-                         intCol.set(rowIndex, relevantDetail.getSentenceId());
-                         logger.trace("Set SENTENCE_ID '{}' for {}.{} at row {}", relevantDetail.getSentenceId(), alias, fieldName, rowIndex);
+                         // Ensure sentenceId is actually available and needed by requirements for this SoA entry
+                         int sentenceId = resultSoA.getRequirements().needsSentenceId ? resultSoA.getSentenceIdAt(firstSoAIndex) : -1;
+                         if (sentenceId != -1 || !resultSoA.getRequirements().needsSentenceId) { // if -1 but not needed, that's fine (means doc granularity)
+                            intCol.set(rowIndex, sentenceId);
+                            logger.trace("Set SENTENCE_ID '{}' for {}.{} at row {}", sentenceId, alias, fieldName, rowIndex);
+                         } else {
+                            logger.trace("Sentence ID requested but not available or not applicable for SoA index {}, setting missing for {}.{}", firstSoAIndex, alias, fieldName);
+                            intCol.setMissing(rowIndex);
+                         }
                      } else {
                          logger.error("Expected IntColumn for SENTENCE_ID but got {} for column {}", column.type(), getColumnName());
                          column.setMissing(rowIndex);
@@ -170,8 +182,14 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "BEGIN":
                     if (column instanceof IntColumn intCol) {
-                        intCol.set(rowIndex, relevantDetail.position().getBeginPosition());
-                        logger.trace("Set BEGIN '{}' for {}.{} at row {}", relevantDetail.position().getBeginPosition(), alias, fieldName, rowIndex);
+                        int beginChar = resultSoA.getRequirements().needsPositions ? resultSoA.getBeginCharAt(firstSoAIndex) : -1;
+                        if (beginChar != -1 || !resultSoA.getRequirements().needsPositions) {
+                            intCol.set(rowIndex, beginChar);
+                            logger.trace("Set BEGIN '{}' for {}.{} at row {}", beginChar, alias, fieldName, rowIndex);
+                        } else {
+                            logger.trace("Begin char requested but not available for SoA index {}, setting missing for {}.{}", firstSoAIndex, alias, fieldName);
+                            intCol.setMissing(rowIndex);
+                        }
                     } else {
                          logger.error("Expected IntColumn for BEGIN but got {} for column {}", column.type(), getColumnName());
                          column.setMissing(rowIndex);
@@ -179,8 +197,14 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "END":
                     if (column instanceof IntColumn intCol) {
-                        intCol.set(rowIndex, relevantDetail.position().getEndPosition());
-                        logger.trace("Set END '{}' for {}.{} at row {}", relevantDetail.position().getEndPosition(), alias, fieldName, rowIndex);
+                        int endChar = resultSoA.getRequirements().needsPositions ? resultSoA.getEndCharAt(firstSoAIndex) : -1;
+                         if (endChar != -1 || !resultSoA.getRequirements().needsPositions) {
+                            intCol.set(rowIndex, endChar);
+                            logger.trace("Set END '{}' for {}.{} at row {}", endChar, alias, fieldName, rowIndex);
+                        } else {
+                            logger.trace("End char requested but not available for SoA index {}, setting missing for {}.{}", firstSoAIndex, alias, fieldName);
+                            intCol.setMissing(rowIndex);
+                        }
                     } else {
                          logger.error("Expected IntColumn for END but got {} for column {}", column.type(), getColumnName());
                          column.setMissing(rowIndex);
@@ -193,7 +217,7 @@ public class StructuralColumn implements SelectColumn {
             }
         } catch (Exception e) {
              logger.error("Error populating StructuralColumn {}.{} at row {}: {}", alias, fieldName, rowIndex, e.getMessage(), e);
-             column.setMissing(rowIndex);
+             if (column != null) column.setMissing(rowIndex); // Ensure missing on error
         }
     }
 
@@ -201,4 +225,4 @@ public class StructuralColumn implements SelectColumn {
     public String toString() {
         return alias + "." + fieldName;
     }
-} 
+}

@@ -72,7 +72,7 @@ public class BindingTest {
         VariableRegistry registry = query.variableRegistry();
         assertEquals(VariableType.TEMPORAL, registry.getInferredType("t1.date"));
     }
-    
+
     @Test
     @DisplayName("Test variable type check: Entity via OR")
     public void testVariableTypeEntityOr() {
@@ -92,7 +92,7 @@ public class BindingTest {
         VariableRegistry registry = query.variableRegistry();
         assertEquals(VariableType.TEXT_SPAN, registry.getInferredType("t1.text"));
     }
-    
+
     @Test
     @DisplayName("Test complex query with multiple bindings and types")
     public void testComplexQuery() {
@@ -103,21 +103,21 @@ public class BindingTest {
                         "DATE(> 2018) BIND date";
         Query query = assertDoesNotThrow(() -> parseQuery(queryStr));
         VariableRegistry registry = query.variableRegistry();
-        
+
         // Check production
         assertTrue(registry.isProduced("t1.person"));
         assertTrue(registry.isProduced("t1.org"));
         assertTrue(registry.isProduced("t1.foundedRel"));
         assertTrue(registry.isProduced("t1.date"));
-        
+
         // Check consumption
         assertFalse(registry.getConsumers("t1.person").isEmpty(), "t1.person should be consumed by DEPENDENCY");
         assertFalse(registry.getConsumers("t1.org").isEmpty(), "t1.org should be consumed by DEPENDENCY");
-        
+
         // Check types
         assertEquals(VariableType.ENTITY, registry.getInferredType("t1.person"));
         assertEquals(VariableType.ENTITY, registry.getInferredType("t1.org"));
         assertEquals(VariableType.DEPENDENCY, registry.getInferredType("t1.foundedRel"));
         assertEquals(VariableType.TEMPORAL, registry.getInferredType("t1.date"));
     }
-} 
+}

@@ -1,36 +1,39 @@
 package com.example.index.generators;
 
-import com.google.common.collect.ListMultimap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import com.example.logging.ProgressTracker;
-import com.example.logging.IndexingMetrics;
-import com.google.code.externalsorting.ExternalSort;
-import com.example.core.PositionList;
-import com.example.core.IndexAccess;
-import com.example.core.IndexAccessException;
-import org.iq80.leveldb.Options;
-
-import com.example.index.IndexEntry;
-import com.example.index.LevelDBConfig;
-import org.iq80.leveldb.WriteBatch;
-
 import java.io.*;
-import java.nio.file.*;
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.sql.ResultSet;
-import java.util.*;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.io.IOException;
+import java.nio.file.FileStore;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
+import org.iq80.leveldb.Options;
+import org.iq80.leveldb.WriteBatch;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.core.IndexAccess;
+import com.example.core.IndexAccessException;
 import com.example.core.PositionListSoA;
+import com.example.index.IndexEntry;
+import com.example.index.LevelDBConfig;
+import com.example.logging.IndexingMetrics;
+import com.example.logging.ProgressTracker;
+import com.google.code.externalsorting.ExternalSort;
+import com.google.common.collect.ListMultimap;
+
 import it.unimi.dsi.fastutil.ints.IntArrayList;
-import me.lemire.integercompression.FastPFOR128;
-import me.lemire.integercompression.IntegerCODEC;
-import me.lemire.integercompression.IntWrapper;
 
 /**
  * Abstract base class for streaming index generation that processes large datasets efficiently
@@ -41,7 +44,6 @@ import me.lemire.integercompression.IntWrapper;
 public abstract class IndexGenerator<T extends IndexEntry> implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(IndexGenerator.class);
     public static final String DELIMITER = "\0";
-    public static final String TEMP_SUBDIR_NAME = "temp-sort-files";
     public static final char ESCAPE_CHAR = '\u001F';
 
     protected final IndexAccess indexAccess;
@@ -95,7 +97,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         this.batchSize = batchSize;
         this.stopwords = loadStopwordsInternal(stopwordsPath);
         this.tempDir = initializeTempDir(indexNameForLogging, customTempPath);
-        this.indexAccess = null; 
+        this.indexAccess = null;
         logger.debug("IndexGenerator (slim constructor for [{}]) initialized. Temp dir: {}, Batch size: {}", indexNameForLogging, this.tempDir.toAbsolutePath(), this.batchSize);
         registerShutdownHook();
     }
@@ -107,6 +109,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     }
 
     // Original full constructor with customTempPath
+    @SuppressWarnings("this-escape") // Suppress warning: getIndexName() and getDocumentCountForIndex() are abstract methods
+                                     // called from constructor. Implementations are verified to only use
+                                     // superclass fields initialized prior to this call, or their own static/final fields.
     protected IndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
         Options options = LevelDBConfig.createOptimizedOptions();
@@ -120,7 +125,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         this.batchSize = batchSize;
         this.stopwords = loadStopwordsInternal(stopwordsPath);
         this.tempDir = initializeTempDir(getIndexName(), customTempPath); // Use getIndexName() here
-        
+
         try {
             long totalDocs = getDocumentCountForIndex();
             this.progress.startIndex(getIndexName(), totalDocs);
@@ -136,7 +141,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         if (customTempPath != null) {
             try {
                 if (!Files.exists(customTempPath)) Files.createDirectories(customTempPath);
-                if (!Files.isDirectory(customTempPath) || !Files.isWritable(customTempPath)) 
+                if (!Files.isDirectory(customTempPath) || !Files.isWritable(customTempPath))
                     throw new IOException("Custom temporary path is not a writable directory: " + customTempPath);
                 resolvedTempDir = Files.createTempDirectory(customTempPath, indexNameForTempDir + "-index-temp-");
                 logger.info("IndexGenerator for [{}] using custom temp directory: {}", indexNameForTempDir, resolvedTempDir.toAbsolutePath());
@@ -152,7 +157,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         return resolvedTempDir;
     }
 
-    private Set<String> loadStopwordsInternal(String path) throws IOException { 
+    private Set<String> loadStopwordsInternal(String path) throws IOException {
         if (path == null || path.trim().isEmpty()) {
             logger.warn("Stopwords path is null or empty. Proceeding without stopwords.");
             return Collections.emptySet();
@@ -170,7 +175,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             logger.error("Error loading stopwords from {}. Proceeding without stopwords.", filePath.toAbsolutePath(), e);
             // Still return empty set on error after logging, or rethrow. Current behavior is to proceed without.
             // Rethrowing to make failure explicit, consistent with original throw for this method.
-            throw e; 
+            throw e;
         }
     }
 
@@ -238,9 +243,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 for (PositionListSoA list : entry.getValue()) {
                     mergedListSoA.addAll(list);
                 }
-                
-                String line = String.format("%s\t%s\n", 
-                    entry.getKey(), 
+
+                String line = String.format("%s\t%s\n",
+                    entry.getKey(),
                     Base64.getEncoder().encodeToString(mergedListSoA.serializeToCompositeBlob()));
                 if (line.length() > 10 * 1024 * 1024) { // Log if a single line is very large (e.g. >10MB)
                     logger.warn("Very large line being written to temp file {} for key '{}'. Line length: {} bytes",
@@ -274,7 +279,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         long totalTermsWritten = 0;
         long entriesSinceLastReport = 0;
         long lastReportTime = System.currentTimeMillis();
-        final long reportIntervalMillis = 30000; 
+        final long reportIntervalMillis = 30000;
         final long TARGET_BATCH_BYTES = 8 * 1024 * 1024; // 8MB target batch size
         long currentBatchSizeBytes = 0;
         int termsInCurrentBatch = 0;
@@ -292,10 +297,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         DataOutputStream dosBeginChars = new DataOutputStream(baosBeginChars);
         DataOutputStream dosEndChars = new DataOutputStream(baosEndChars);
         DataOutputStream dosSynonymIds = new DataOutputStream(baosSynonymIds);
-        
+
         int numPositionsForCurrentTerm = 0;
 
-        WriteBatch batch = null; 
+        WriteBatch batch = null;
         try {
             batch = indexAccess.createWriteBatch();
             try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
@@ -331,34 +336,34 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                                 // Convert accumulated raw bytes back to int arrays and compress properly
                                 int[] termDocIdInts = convertByteArrayToIntArray(baosDocIds.toByteArray());
                                 PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length, true);
-                                
+
                                 int[] termSentIdInts = convertByteArrayToIntArray(baosSentIds.toByteArray());
                                 PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length, true);
-                                
+
                                 int[] termBeginCharInts = convertByteArrayToIntArray(baosBeginChars.toByteArray());
                                 PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length, true);
-                                
+
                                 int[] termEndCharInts = convertByteArrayToIntArray(baosEndChars.toByteArray());
                                 PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length, true);
-                                
+
                                 int[] termSynonymIdInts = convertByteArrayToIntArray(baosSynonymIds.toByteArray());
                                 PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length, false); // No delta coding for synonym IDs
                             }
-                            
+
                             byte[] termKeyBytes = bytes(currentTerm);
                             byte[] termValueBytes = finalCompositeBlobStream.toByteArray();
 
                             // If the current batch + this new term exceeds target, write current batch first.
                             if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES)) {
                                 writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
-                                batch.close(); 
-                                batch = indexAccess.createWriteBatch(); 
-                                // logger.debug("\n Written batch of {} terms (approx {} MB) to LevelDB due to size limit. Total terms written: {}.\n", 
+                                batch.close();
+                                batch = indexAccess.createWriteBatch();
+                                // logger.debug("\n Written batch of {} terms (approx {} MB) to LevelDB due to size limit. Total terms written: {}.\n",
                                 //     termsInCurrentBatch, currentBatchSizeBytes / (1024 * 1024), totalTermsWritten);
                                 termsInCurrentBatch = 0;
                                 currentBatchSizeBytes = 0;
                             }
-                            
+
                             batch.put(termKeyBytes, termValueBytes);
                             termsInCurrentBatch++;
                             currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length;
@@ -393,35 +398,35 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     try (DataInputStream disChunk = new DataInputStream(new ByteArrayInputStream(lineCompositeBlob))) {
                         int chunkNumPositions = disChunk.readInt();
                         if (chunkNumPositions > 0) {
-                            
+
                             // Process docIds: decompress, stream to accumulator, discard
                             IntArrayList tempChunkDocIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkDocIds.size(); i++) {
                                 dosDocIds.writeInt(tempChunkDocIds.getInt(i));
                             }
                             // tempChunkDocIds goes out of scope and becomes eligible for GC
-                            
+
                             // Process sentIds: decompress, stream to accumulator, discard
                             IntArrayList tempChunkSentIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkSentIds.size(); i++) {
                                 dosSentIds.writeInt(tempChunkSentIds.getInt(i));
                             }
                             // tempChunkSentIds goes out of scope and becomes eligible for GC
-                            
+
                             // Process beginChars: decompress, stream to accumulator, discard
                             IntArrayList tempChunkBeginChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkBeginChars.size(); i++) {
                                 dosBeginChars.writeInt(tempChunkBeginChars.getInt(i));
                             }
                             // tempChunkBeginChars goes out of scope and becomes eligible for GC
-                            
+
                             // Process endChars: decompress, stream to accumulator, discard
                             IntArrayList tempChunkEndChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             for (int i = 0; i < tempChunkEndChars.size(); i++) {
                                 dosEndChars.writeInt(tempChunkEndChars.getInt(i));
                             }
                             // tempChunkEndChars goes out of scope and becomes eligible for GC
-                            
+
                             // Process synonymIds: decompress, stream to accumulator, discard
                             IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, false); // No delta coding for synonym IDs
                             for (int i = 0; i < tempChunkSynonymIds.size(); i++) {
@@ -458,16 +463,16 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     // Convert accumulated raw bytes back to int arrays and compress properly
                     int[] termDocIdInts = convertByteArrayToIntArray(baosDocIds.toByteArray());
                     PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length, true);
-                    
+
                     int[] termSentIdInts = convertByteArrayToIntArray(baosSentIds.toByteArray());
                     PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length, true);
-                    
+
                     int[] termBeginCharInts = convertByteArrayToIntArray(baosBeginChars.toByteArray());
                     PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length, true);
-                    
+
                     int[] termEndCharInts = convertByteArrayToIntArray(baosEndChars.toByteArray());
                     PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length, true);
-                    
+
                     int[] termSynonymIdInts = convertByteArrayToIntArray(baosSynonymIds.toByteArray());
                     PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length, false); // No delta coding for synonym IDs
                 }
@@ -608,11 +613,11 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         T lastProcessedEntry = null; // Keyset pagination: track last processed entry
         IndexingMetrics metrics = new IndexingMetrics();
         long totalRawEntriesFetched = 0;
-        totalNGramsGenerated = 0; 
+        totalNGramsGenerated = 0;
         long initialTotalProgress = 0;
 
         try {
-            long totalCountForProgressBar = getDocumentCountForIndex(); 
+            long totalCountForProgressBar = getDocumentCountForIndex();
             progress.startIndex(getIndexName(), totalCountForProgressBar);
             initialTotalProgress = totalCountForProgressBar; // Store for later use if needed
 
@@ -633,7 +638,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 long startTimeProcess = System.nanoTime();
                 ListMultimap<String, PositionListSoA> positions = processBatch(batch);
                 long durationProcessNanos = System.nanoTime() - startTimeProcess;
-                int itemsInBatchOutput = positions.asMap().size(); 
+                int itemsInBatchOutput = positions.asMap().size();
 
                 long durationWriteTempNanos = 0;
                 if (!positions.isEmpty()) {
@@ -648,7 +653,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 if (!batch.isEmpty()) {
                     lastProcessedEntry = batch.get(batch.size() - 1);
                 }
-                
+
                 progress.updateIndex(rawEntriesInBatch);
             }
 
@@ -674,7 +679,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), false);
 
             logger.info("Writing merged entries to LevelDB index...");
-            // --- Start Progress for writeToLevelDB --- 
+            // --- Start Progress for writeToLevelDB ---
             progress.startIndex(getIndexName() + " - Writing to DB", 0); // 0 or -1 for indeterminate
             long totalTermsWrittenToDb = writeToLevelDB(outputFile);
             progress.updateIndex(totalTermsWrittenToDb); // Update with total terms written in this stage
@@ -726,4 +731,4 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             }
         }
     }
-} 
+}

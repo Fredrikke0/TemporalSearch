@@ -5,7 +5,7 @@ package com.example.query.binding;
  * Tracks the variable name (plain identifier) and its inferred type.
  * 
  * Producer variables are created by conditions using `AS` syntax:
- * For example, `NER(PERSON) AS person` produces person entities.
+ * For example, `NER(PERSON) BIND person` produces person entities.
  * 
  * Consumer variables reference existing variables, potentially for filtering or joining.
  */

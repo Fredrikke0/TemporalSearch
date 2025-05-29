@@ -1,18 +1,28 @@
 package com.example.query;
 
-import com.example.query.model.*;
-import com.example.query.binding.VariableRegistry;
-import com.example.query.binding.Variable;
-import com.example.query.binding.VariableType;
-import com.example.query.model.condition.Condition;
-import com.example.query.model.condition.Contains;
-import com.example.query.model.condition.Ner;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import com.example.query.binding.VariableRegistry;
+import com.example.query.model.CountColumn;
+import com.example.query.model.JoinCondition;
+import com.example.query.model.Query;
+import com.example.query.model.SelectColumn;
+import com.example.query.model.SnippetColumn;
+import com.example.query.model.StructuralColumn;
+import com.example.query.model.SubquerySpec;
+import com.example.query.model.TemporalPredicate;
+import com.example.query.model.VariableColumn;
+import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Contains;
+import com.example.query.model.condition.Ner;
 
 /**
  * Validates the semantic correctness of a query using the new VariableRegistry system.
@@ -21,18 +31,31 @@ import java.util.stream.Collectors;
  */
 public class QuerySemanticValidator {
     private static final Logger logger = LoggerFactory.getLogger(QuerySemanticValidator.class);
-    
+
     // Maximum allowed snippet window size (sentences)
     private static final int MAX_SNIPPET_WINDOW_SIZE = 5;
-    
+
     // Maximum proximity window for temporal joins
     private static final int MAX_TEMPORAL_PROXIMITY_WINDOW = 365;
 
     // Define the set of valid NER entity types (uppercase)
     private static final Set<String> VALID_NER_TYPES = Set.of(
-        "PERSON", "ORGANIZATION", "LOCATION", "DATE", "TIME", 
+        "PERSON", "ORGANIZATION", "LOCATION", "DATE", "TIME",
         "DURATION", "MONEY", "NUMBER", "ORDINAL", "PERCENT", "SET", "*"
     );
+
+    // Helper method to validate individual terms for disallowed wildcard usage
+    private void validateTerm(String term, String conditionType, String fieldName) throws QueryParseException {
+        if (term.startsWith("*") && term.length() > 1) {
+            throw new QueryParseException(String.format(
+                "Invalid wildcard usage in %s condition for field '%s': Term '%s' starts with '*' but is not solely '*'. " +
+                "Searches starting with a wildcard (e.g., \"*term\") are not supported, except for the standalone wildcard \"*\".",
+                conditionType, fieldName, term
+            ));
+        }
+        // New check: if term is "*", it implies other parts of a multi-part field should be effectively absent or also wildcards
+        // This logic will be handled in validateConditionConstraints where the context of multiple terms/fields is available.
+    }
 
     /**
      * Validates a query for semantic correctness.
@@ -42,25 +65,25 @@ public class QuerySemanticValidator {
      */
     public void validate(Query query) throws QueryParseException {
         logger.debug("Starting semantic validation for query: {}", query);
-        
+
         // Get the variable registry from the query
         VariableRegistry registry = query.variableRegistry();
         if (registry == null) {
             throw new QueryParseException("Query does not have a variable registry");
         }
-        
+
         // Validate condition structures and constraints
         validateConditionConstraints(query.conditions());
-        
+
         // Validate NER types in conditions *before* validating variable usage
         validateNerTypes(query.conditions());
-        
+
         // Validate variable dependencies and types
         validateVariableDependencies(registry);
-        
+
         // Validate select columns
         validateSelectColumns(query, registry);
-        
+
         // Validate limit value
         query.limit().ifPresent(limit -> {
             try {
@@ -69,10 +92,10 @@ public class QuerySemanticValidator {
                 throw new RuntimeException(e);
             }
         });
-        
+
         // Validate snippet window sizes
         validateSnippetWindowSizes(query);
-        
+
         // Validate subqueries and join conditions if present
         if (query.hasSubqueries()) {
             validateSubqueries(query);
@@ -83,18 +106,18 @@ public class QuerySemanticValidator {
         if (!query.groupByColumns().isEmpty()) {
             validateGroupByClause(query);
         }
-        
+
         // Validate ORDER BY clause if present
         if (!query.orderBy().isEmpty()) {
             validateOrderByClause(query);
         }
-        
+
         logger.debug("Semantic validation completed successfully");
     }
-    
+
     /**
      * Validates that any NER conditions use a recognized entity type.
-     * 
+     *
      * @param conditions The list of conditions to check.
      * @throws QueryParseException If an invalid NER type is found.
      */
@@ -103,8 +126,8 @@ public class QuerySemanticValidator {
             if (condition instanceof Ner nerCondition) {
                 String entityType = nerCondition.entityType();
                 // Use uppercase for case-insensitive comparison, except for wildcard '*'
-                String comparisonType = "*".equals(entityType) ? "*" : entityType.toUpperCase(); 
-                
+                String comparisonType = "*".equals(entityType) ? "*" : entityType.toUpperCase();
+
                 if (!VALID_NER_TYPES.contains(comparisonType)) {
                     String validTypesString = String.join(", ", VALID_NER_TYPES);
                     throw new QueryParseException(String.format(
@@ -116,21 +139,20 @@ public class QuerySemanticValidator {
             // Recursively check nested conditions (e.g., inside NOT or logical operators)
             // This part might need adjustment based on how complex condition structures are handled.
             // For now, assuming a flat list or structure handled by the Query object itself.
-            // If conditions can be nested (e.g., AND(NER(...), NOT(POS(...)))), 
+            // If conditions can be nested (e.g., AND(NER(...), NOT(POS(...)))),
             // a recursive traversal might be needed here.
         }
     }
-    
+
     /**
      * Validates structural constraints on conditions.
-     * 
+     *
      * @param conditions The list of conditions to validate.
      * @throws QueryParseException If a condition violates structural constraints.
      */
     private void validateConditionConstraints(List<Condition> conditions) throws QueryParseException {
         for (Condition condition : conditions) {
             if (condition instanceof Contains containsCondition) {
-                // CONTAINS condition can have at most 3 terms (unigram, bigram, trigram)
                 List<String> terms = containsCondition.terms();
                 if (terms.size() > 3) {
                     throw new QueryParseException(String.format(
@@ -138,18 +160,73 @@ public class QuerySemanticValidator {
                         terms.size(), String.join(", ", terms)
                     ));
                 }
-                
-                // Empty terms are also invalid
                 if (terms.isEmpty()) {
                     throw new QueryParseException("CONTAINS condition must have at least one term");
                 }
+
+                // Stricter wildcard validation for CONTAINS:
+                // If any term is "*", it must be the ONLY term.
+                boolean hasStandaloneWildcard = terms.stream().anyMatch(t -> "*".equals(t));
+                if (hasStandaloneWildcard && terms.size() > 1) {
+                    throw new QueryParseException(String.format(
+                        "Invalid wildcard usage in CONTAINS: If '*' is used as a term, it must be the only term. Found: %s", terms
+                    ));
+                }
+
+                // Validate each term for general wildcard rules (e.g., not like "*abc")
+                for (int i = 0; i < terms.size(); i++) {
+                    validateTerm(terms.get(i), "CONTAINS", "term[" + i + "]");
+                }
+
+            } else if (condition instanceof com.example.query.model.condition.Dependency dependencyCondition) {
+                // Stricter wildcard validation for DEPENDS:
+                // For governor, relation, dependent: if one is "*", others should not be specific literals.
+                // This means a query like DEP(*, 'nsubj', 'cat') is disallowed.
+                // It should be DEP(*, ?, ?) or DEP(?, 'nsubj', ?) or DEP(?, ?, 'cat').
+                // Or, if using '*', it's more like a general placeholder, e.g. DEP(*, ?, ?).
+
+                String gov = dependencyCondition.governor();
+                String rel = dependencyCondition.relation();
+                String dep = dependencyCondition.dependent();
+
+                boolean govIsWildcard = "*".equals(gov);
+                boolean relIsWildcard = "*".equals(rel); // Relation usually isn't a variable, but can be '*'
+                boolean depIsWildcard = "*".equals(dep);
+
+                boolean govIsVariable = gov != null && gov.startsWith("?");
+                boolean relIsVariable = rel != null && rel.startsWith("?");
+                boolean depIsVariable = dep != null && dep.startsWith("?");
+
+                // Check: if a component is "*", are other non-variable components also effectively wildcards (or variables)?
+                // Simplified: if one component is "*", and another is a specific literal (not a variable, not null, not "*"), it's an error.
+                if (govIsWildcard) {
+                    if ((rel != null && !relIsVariable && !relIsWildcard) || (dep != null && !depIsVariable && !depIsWildcard)) {
+                        throw new QueryParseException("Invalid DEPENDS: If governor is '*', other specific non-variable relation/dependent parts are not allowed. Use variables (e.g., DEP(*, ?, ?)) or ensure other parts are also '*'.");
+                    }
+                }
+                if (relIsWildcard) { // Though relation typically isn't '*', this ensures consistency
+                    if ((gov != null && !govIsVariable && !govIsWildcard) || (dep != null && !depIsVariable && !depIsWildcard)) {
+                        throw new QueryParseException("Invalid DEPENDS: If relation is '*', other specific non-variable governor/dependent parts are not allowed. Use variables or ensure other parts are also '*'.");
+                    }
+                }
+                if (depIsWildcard) {
+                    if ((gov != null && !govIsVariable && !govIsWildcard) || (rel != null && !relIsVariable && !relIsWildcard)) {
+                        throw new QueryParseException("Invalid DEPENDS: If dependent is '*', other specific non-variable governor/relation parts are not allowed. Use variables or ensure other parts are also '*'.");
+                    }
+                }
+
+
+                // General term validation (e.g. not "*abc")
+                if (gov != null && !govIsVariable) validateTerm(gov, "DEPENDS", "governor");
+                if (rel != null && !relIsVariable) validateTerm(rel, "DEPENDS", "relation");
+                if (dep != null && !depIsVariable) validateTerm(dep, "DEPENDS", "dependent");
             }
-            
+
             // Add other condition constraint validations here as needed
             // For example: POS conditions, temporal conditions, etc.
         }
     }
-    
+
     /**
      * Validates variable dependencies ensuring all consumed variables are produced.
      * Also performs type checking on variable usage.
@@ -160,11 +237,11 @@ public class QuerySemanticValidator {
         if (!registryErrors.isEmpty()) {
             throw new QueryParseException("Variable validation errors: " + String.join(", ", registryErrors));
         }
-        
+
         // Additional dependency checks could be added here if needed
         // For now, we rely on the registry's validate method
     }
-    
+
     /**
      * Validates the select columns, ensuring all column references are valid.
      * Handles both unqualified variables (from the main query) and qualified variables
@@ -178,10 +255,10 @@ public class QuerySemanticValidator {
         // Create a map for quick lookup of subqueries by alias
         Map<String, SubquerySpec> subqueryMap = query.subqueries().stream()
                 .collect(Collectors.toMap(SubquerySpec::alias, sq -> sq));
-        
+
         logger.debug("Subquery aliases available: {}", subqueryMap.keySet());
         logger.debug("SELECT columns: {}", query.selectColumns().stream().map(SelectColumn::getColumnName).toList());
-        
+
         String mainAlias = query.mainAlias().orElse("$main"); // Use $main if no explicit alias
 
         for (SelectColumn column : query.selectColumns()) {
@@ -189,12 +266,12 @@ public class QuerySemanticValidator {
             String context; // For error messages
 
             // Explicitly handle different column types
-            if (column instanceof VariableColumn variableColumn) { 
+            if (column instanceof VariableColumn variableColumn) {
                 fullColumnName = variableColumn.getColumnName(); // e.g., q1.date or $main.date
                 context = "SELECT (Variable)";
                  logger.trace("Validating VariableColumn: {}", fullColumnName);
                  // Proceed to validation logic below...
-            } else if (column instanceof SnippetColumn snippetColumn) { 
+            } else if (column instanceof SnippetColumn snippetColumn) {
                 fullColumnName = snippetColumn.getVariableName(); // e.g., q1.person or $main.person
                 context = "SNIPPET";
                 logger.trace("Validating SnippetColumn for variable: {}", fullColumnName);
@@ -239,7 +316,7 @@ public class QuerySemanticValidator {
                     targetRegistry = mainRegistry;
                     registryKey = fullColumnName; // Use the full qualified name as the key
                     validateVariableInRegistry(registryKey, targetRegistry, String.format("subquery '%s' internal validation for %s", alias, context));
-                } else if (alias.equals(mainAlias) || (alias.equals("$main") && !query.mainAlias().isPresent())) { 
+                } else if (alias.equals(mainAlias) || (alias.equals("$main") && !query.mainAlias().isPresent())) {
                     // Belongs to main query (explicitly or implicitly via $main)
                     targetRegistry = mainRegistry;
                     registryKey = mainAlias + "." + plainVariableName; // Key uses main alias ($main or explicit)
@@ -266,7 +343,7 @@ public class QuerySemanticValidator {
             }
         }
     }
-    
+
     /**
      * Validates that a specific internally qualified variable name is produced within the given registry.
      *
@@ -292,10 +369,10 @@ public class QuerySemanticValidator {
                 ));
             }
         }
-        
+
         logger.debug("Variable '{}' validated successfully in context: {}", internalQualifiedName, contextDescription);
     }
-    
+
     /**
      * Validates that all snippet window sizes are within acceptable limits.
      */
@@ -303,7 +380,7 @@ public class QuerySemanticValidator {
         for (SelectColumn column : query.selectColumns()) {
             if (column instanceof SnippetColumn snippetColumn) {
                 int windowSize = snippetColumn.getWindowSize();
-                
+
                 if (windowSize > MAX_SNIPPET_WINDOW_SIZE) {
                     throw new QueryParseException(String.format(
                         "Snippet window size %d exceeds maximum allowed size of %d sentences",
@@ -313,7 +390,7 @@ public class QuerySemanticValidator {
             }
         }
     }
-    
+
     /**
      * Validates the limit value.
      */
@@ -322,7 +399,7 @@ public class QuerySemanticValidator {
             throw new QueryParseException("LIMIT value must be greater than 0");
         }
     }
-    
+
     /**
      * Validates all subqueries in a query.
      * Each subquery is validated independently.
@@ -331,25 +408,25 @@ public class QuerySemanticValidator {
         for (SubquerySpec subquery : query.subqueries()) {
             // Validate the subquery itself
             validate(subquery.subquery());
-            
+
             // Validate the alias (should be non-empty, but this is already checked in the constructor)
             if (subquery.alias().isEmpty()) {
                 throw new QueryParseException("Subquery alias cannot be empty");
             }
-            
+
             // Validate projected columns if specified
             subquery.projectedColumns().ifPresent(columns -> {
                 if (columns.isEmpty()) {
                     throw new RuntimeException(new QueryParseException("Subquery projected columns list cannot be empty"));
                 }
-                
+
                 // Verify that all projected columns exist in the subquery
                 // This would require more context about column availability in subqueries
                 // For now, we'll defer this validation until execution time
             });
         }
     }
-    
+
     /**
      * Validates join conditions between the main query and subqueries.
      */
@@ -358,7 +435,7 @@ public class QuerySemanticValidator {
         if (!query.subqueries().isEmpty() && query.joinCondition().isEmpty()) {
             throw new QueryParseException("Query with subqueries must have a join condition");
         }
-        
+
         // Create a map for quick lookup of subqueries by alias
         Map<String, SubquerySpec> subqueryMap = query.subqueries().stream()
                 .collect(Collectors.toMap(SubquerySpec::alias, sq -> sq));
@@ -415,7 +492,7 @@ public class QuerySemanticValidator {
                         }
                         if (window > MAX_TEMPORAL_PROXIMITY_WINDOW) {
                             throw new RuntimeException(new QueryParseException(
-                                String.format("Proximity window %d exceeds maximum allowed size of %d days", 
+                                String.format("Proximity window %d exceeds maximum allowed size of %d days",
                                              window, MAX_TEMPORAL_PROXIMITY_WINDOW)));
                         }
                     });
@@ -528,9 +605,9 @@ public class QuerySemanticValidator {
 
         for (String orderSpecifier : query.orderBy()) {
             String rawColumnName = orderSpecifier.startsWith("-") ? orderSpecifier.substring(1) : orderSpecifier;
-            
+
             // crude check for aggregate, expand if more aggregates are supported.
-            boolean isAggregate = rawColumnName.startsWith("COUNT("); 
+            boolean isAggregate = rawColumnName.startsWith("COUNT(");
 
             if (isAggregate) {
                 if (groupByColumnNames.isEmpty()) {
@@ -538,7 +615,7 @@ public class QuerySemanticValidator {
                     // This is a common SQL rule to prevent ambiguity.
                     boolean allSelectAlsoAggregates = query.selectColumns().stream()
                         .allMatch(sc -> sc instanceof CountColumn /* || other aggregate types like SumColumn, AvgColumn */);
-                    
+
                     // More precise: if there's any non-aggregate in SELECT, it's an error.
                     boolean hasNonAggregateInSelect = query.selectColumns().stream()
                         .anyMatch(sc -> !(sc instanceof CountColumn /* || other aggregate types */));
@@ -550,12 +627,12 @@ public class QuerySemanticValidator {
                     }
                 }
                 // If GROUP BY is present, or if no GROUP BY but SELECT list is all aggregates, then it's fine.
-                continue; 
+                continue;
             }
 
             // If not an aggregate, it's a column/variable name.
             // The name `rawColumnName` from `orderColumns` list should be fully qualified by QueryModelBuilder.
-            
+
             boolean isKnownVar = registry.isProduced(rawColumnName);
             boolean isStructCol = isStructuralColumn(rawColumnName, query.mainAlias(), query.subqueries());
 
@@ -603,4 +680,4 @@ public class QuerySemanticValidator {
 
         return subqueries.stream().anyMatch(sq -> sq.alias().equals(alias));
     }
-} 
+}

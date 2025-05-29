@@ -1,36 +1,39 @@
 package com.example.query.executor;
 
-import com.example.core.IndexAccess;
-import com.example.core.IndexAccessException;
-import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.query.binding.MatchDetail;
-import com.example.query.binding.ValueType;
-import com.example.query.executor.QueryResult;
-import com.example.query.model.Query;
-import com.example.query.model.condition.Pos;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 import org.iq80.leveldb.DBIterator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.Disabled;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.LocalDate;
-import java.util.*;
-import java.util.stream.Collectors;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.times;
+import com.example.core.IndexAccess;
+import com.example.core.IndexAccessException;
+import com.example.core.IndexAccessInterface;
+import com.example.core.Position;
+import com.example.core.PositionListSoA;
+import com.example.query.binding.ValueType;
+import com.example.query.model.Query;
+import com.example.query.model.condition.Pos;
 
 @ExtendWith(MockitoExtension.class)
 class PosConditionExecutorTest {
@@ -41,133 +44,163 @@ class PosConditionExecutorTest {
     @InjectMocks private PosExecutor executor;
 
     private Map<String, IndexAccessInterface> indexes;
+    private AttributeRequirements defaultTestRequirements;
+    private static final String DELIMITER_STR = String.valueOf(IndexAccessInterface.DELIMITER);
 
     @BeforeEach
     void setUp() throws IndexAccessException {
         indexes = Map.of("pos", posIndex);
-        lenient().when(posIndex.iterator()).thenReturn(posIterator);
+        defaultTestRequirements = new AttributeRequirements();
+        defaultTestRequirements.needsSentenceId = true;
+        defaultTestRequirements.needsPositions = true;
+
         lenient().when(posIterator.hasNext()).thenReturn(false);
-        lenient().when(posIndex.get(any(byte[].class))).thenReturn(Optional.empty());
+        lenient().when(posIndex.getRaw(any(byte[].class))).thenReturn(Optional.empty());
+        lenient().when(posIndex.seek(any(byte[].class))).thenReturn(posIterator);
+        lenient().when(posIndex.iterateFromFirst()).thenReturn(posIterator);
     }
 
     @Test
-    @Disabled("Basic POS index doesn't support term specification (POS(tag, 'term')). Requires stitch index.")
     void testExecuteSpecificTermDocumentGranularity() throws Exception {
-        Pos condition = new Pos("NN", "test"); 
-        String expectedKey = "nn" + IndexAccessInterface.DELIMITER + "test";
+        Pos condition = new Pos("NN", "test");
+        String expectedKey = "NN" + DELIMITER_STR + "test";
 
         PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 0, 5, 10));
         positions.add(new Position(2, 1, 15, 20));
         positions.add(new Position(1, 1, 25, 30));
-        when(posIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
+        when(posIndex.getRaw(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
 
-        QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(3, result.getAllDetails().size());
-        Set<Integer> docIds = result.getAllDetails().stream().map(MatchDetail::getDocumentId).collect(Collectors.toSet());
+        assertEquals(3, result.size());
+        Set<Integer> docIds = new HashSet<>();
+        for(int i=0; i < result.size(); i++) docIds.add(result.getDocumentIdAt(i));
         assertTrue(docIds.containsAll(Set.of(1, 2)));
-        assertTrue(result.getAllDetails().stream().allMatch(d -> "test/NN".equals(d.value()) && d.valueType() == ValueType.POS_TERM)); 
-        assertNull(result.getAllDetails().get(0).variableName()); 
-        verify(posIndex).get(eq(expectedKey.getBytes())); 
+        for(int i=0; i < result.size(); i++) {
+            assertEquals("test", result.getValueAt(i));
+            assertEquals(ValueType.POS_TERM, result.getValueTypeAt(i));
+            assertNull(result.getVariableNameAt(i));
+        }
+        verify(posIndex).getRaw(eq(expectedKey.getBytes()));
     }
-    
+
     @Test
-    @Disabled("Basic POS index doesn't support term specification (POS(tag, 'term')). Requires stitch index.")
     void testExecuteSpecificTermSentenceGranularity() throws Exception {
         Pos condition = new Pos("VB", "run");
-        String expectedKey = "vb" + IndexAccessInterface.DELIMITER + "run";
+        String expectedKey = "VB" + DELIMITER_STR + "run";
 
         PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 1, 1, 2));
         positions.add(new Position(1, 2, 3, 4));
         positions.add(new Position(2, 1, 5, 6));
         positions.add(new Position(1, 1, 10, 15));
-        
-        when(posIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
 
-        QueryResult result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus");
-        
+        when(posIndex.getRaw(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements);
+
         assertNotNull(result);
         assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
-        assertEquals(4, result.getAllDetails().size());
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 1 && "run/VB".equals(m.value())));
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 2 && "run/VB".equals(m.value())));
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 2 && m.getSentenceId() == 1 && "run/VB".equals(m.value())));
-        assertTrue(result.getAllDetails().stream().allMatch(d -> d.valueType() == ValueType.POS_TERM));
-        
-        verify(posIndex).get(eq(expectedKey.getBytes()));
+        assertEquals(4, result.size());
+
+        boolean match1_1 = false, match1_2 = false, match2_1 = false;
+        for(int i=0; i < result.size(); i++) {
+            assertEquals(ValueType.POS_TERM, result.getValueTypeAt(i));
+            assertEquals("run", result.getValueAt(i));
+            if(result.getDocumentIdAt(i) == 1 && result.getSentenceIdAt(i) == 1) match1_1 = true;
+            if(result.getDocumentIdAt(i) == 1 && result.getSentenceIdAt(i) == 2) match1_2 = true;
+            if(result.getDocumentIdAt(i) == 2 && result.getSentenceIdAt(i) == 1) match2_1 = true;
+        }
+        assertTrue(match1_1);
+        assertTrue(match1_2);
+        assertTrue(match2_1);
+
+        verify(posIndex).getRaw(eq(expectedKey.getBytes()));
     }
 
     @Test
-    @Disabled("Basic POS index doesn't support term specification (POS(tag, 'term')). Requires stitch index.")
     void testSentenceGranularityWithWindow() throws Exception {
         Pos condition = new Pos("NN", "noun");
-        String expectedKey = "nn" + IndexAccessInterface.DELIMITER + "noun";
+        String expectedKey = "NN" + DELIMITER_STR + "noun";
 
         PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 0, 1, 2));
         positions.add(new Position(1, 2, 3, 4));
         positions.add(new Position(1, 3, 5, 6));
         positions.add(new Position(2, 1, 7, 8));
-        
-        when(posIndex.get(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions));
 
-        QueryResult result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 1, "test_corpus"); 
+        when(posIndex.getRaw(eq(expectedKey.getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
         assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
-        assertEquals(4, result.getAllDetails().size()); 
-        
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 0 && "noun/NN".equals(m.value())));
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 1 && m.getSentenceId() == 2 && "noun/NN".equals(m.value())));
-        assertTrue(result.getAllDetails().stream().anyMatch(m -> m.getDocumentId() == 2 && m.getSentenceId() == 1 && "noun/NN".equals(m.value())));
+        assertEquals(4, result.size());
 
-        assertTrue(result.getAllDetails().stream().allMatch(d -> d.valueType() == ValueType.POS_TERM));
-        verify(posIndex).get(eq(expectedKey.getBytes()));
+        boolean match1_0 = false, match1_2 = false, match2_1 = false;
+        for(int i=0; i < result.size(); i++) {
+            assertEquals(ValueType.POS_TERM, result.getValueTypeAt(i));
+            assertEquals("noun", result.getValueAt(i));
+            if(result.getDocumentIdAt(i) == 1 && result.getSentenceIdAt(i) == 0) match1_0 = true;
+            if(result.getDocumentIdAt(i) == 1 && result.getSentenceIdAt(i) == 2) match1_2 = true;
+            if(result.getDocumentIdAt(i) == 2 && result.getSentenceIdAt(i) == 1) match2_1 = true;
+        }
+        assertTrue(match1_0);
+        assertTrue(match1_2);
+        assertTrue(match2_1);
+
+        verify(posIndex).getRaw(eq(expectedKey.getBytes()));
     }
 
     @Test
-    void testVariableBindingDocumentGranularity() throws Exception {
-        Pos condition = new Pos("JJ", null, "?adjVar"); 
-        // Executor now uses direct get() with the normalized tag
-        String expectedKey = "jj"; 
-        byte[] expectedKeyBytes = expectedKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    void testVariableBindingDocumentGranularityNoSpecificTerm() throws Exception {
+        Pos condition = new Pos("JJ", null, "?adjVar");
+        String expectedKeyPrefix = "JJ" + DELIMITER_STR;
+        byte[] expectedKeyPrefixBytes = expectedKeyPrefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
-        // Define the expected positions combined into one list for the 'jj' tag
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(new Position(1, 1, 5, 10)); // From original posList1
-        positions.add(new Position(2, 1, 15, 20)); // From original posList2
-        positions.add(new Position(1, 2, 25, 30)); // From original posList3
-        
-        // Mock the direct get() call
-        when(posIndex.get(eq(expectedKeyBytes))).thenReturn(Optional.of(positions));
-        
-        QueryResult result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus");
+        PositionListSoA positions1 = new PositionListSoA();
+        positions1.add(new Position(1, 1, 5, 10));
+        PositionListSoA positions2 = new PositionListSoA();
+        positions2.add(new Position(2, 1, 15, 20));
+        PositionListSoA positions3 = new PositionListSoA();
+        positions3.add(new Position(1, 2, 25, 30));
+
+        List<Map.Entry<byte[], byte[]>> mockEntries = new ArrayList<>();
+        mockEntries.add(Map.entry((expectedKeyPrefix + "good").getBytes(), positions1.serializeToCompositeBlob()));
+        mockEntries.add(Map.entry((expectedKeyPrefix + "bad").getBytes(), positions2.serializeToCompositeBlob()));
+        mockEntries.add(Map.entry((expectedKeyPrefix + "ugly").getBytes(), positions3.serializeToCompositeBlob()));
+
+        when(posIndex.seek(eq(expectedKeyPrefixBytes))).thenReturn(posIterator);
+
+        when(posIterator.hasNext()).thenReturn(true, true, true, false);
+        when(posIterator.next())
+            .thenReturn(mockEntries.get(0))
+            .thenReturn(mockEntries.get(1))
+            .thenReturn(mockEntries.get(2));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        // We expect 3 details because the combined list has 3 positions
-        assertEquals(3, result.getAllDetails().size()); 
-        
-        Set<Integer> docIds = result.getAllDetails().stream().map(MatchDetail::getDocumentId).collect(Collectors.toSet());
-        assertTrue(docIds.containsAll(Set.of(1, 2)), "Docs 1 and 2 should be present");
-        
-        assertTrue(result.getAllDetails().stream().allMatch(d -> d.variableName().isPresent() && d.variableName().get().equals("?adjVar")), "Variable name mismatch");
-        // Assert the correct ValueType based on the modified executor
-        assertTrue(result.getAllDetails().stream().allMatch(d -> d.valueType() == ValueType.POS_TERM), "ValueType mismatch");
+        assertEquals(3, result.size());
 
-        // Check captured values (should be the original tag "JJ")
-        Set<String> capturedValues = result.getAllDetails().stream().map(d -> (String) d.value()).collect(Collectors.toSet());
-        assertEquals(Set.of("JJ"), capturedValues, "Captured value should be the tag itself");
+        Set<Integer> docIds = new HashSet<>();
+        Set<String> capturedValues = new HashSet<>();
+        for(int i=0; i < result.size(); i++) {
+            docIds.add(result.getDocumentIdAt(i));
+            assertEquals("?adjVar", result.getVariableNameAt(i));
+            assertEquals(ValueType.POS_TERM, result.getValueTypeAt(i));
+            capturedValues.add((String) result.getValueAt(i));
+        }
+        assertTrue(docIds.containsAll(Set.of(1, 2)), "Docs 1 and 2 should be present. Found: " + docIds);
+        assertEquals(Set.of("good", "bad", "ugly"), capturedValues, "Captured values should be the specific terms.");
 
-        // Verify interactions: Should call get(), not iterator methods
-        verify(posIndex).get(eq(expectedKeyBytes)); 
-        verify(posIndex, times(0)).iterator(); 
-        verify(posIterator, times(0)).seek(any());
-        verify(posIterator, times(0)).hasNext(); 
-        verify(posIterator, times(0)).next(); 
+        verify(posIndex, times(0)).getRaw(any());
+        verify(posIndex).seek(eq(expectedKeyPrefixBytes));
+        verify(posIterator, times(4)).hasNext();
+        verify(posIterator, times(3)).next();
     }
-} 
+}

@@ -1,40 +1,32 @@
 package com.example.query.executor;
 
-import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.query.model.Query;
-import com.example.query.model.condition.Ner;
-import com.example.query.binding.MatchDetail;
-import com.example.query.binding.ValueType;
-import com.example.query.executor.QueryResult;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.io.IOException;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
+import org.iq80.leveldb.DBIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.example.core.IndexAccessException;
+import com.example.core.IndexAccessInterface;
+import com.example.core.PositionListSoA;
+import com.example.query.binding.ValueType;
+import com.example.query.model.Query;
+import com.example.query.model.condition.Ner;
+
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 /**
  * Executor for NER (Named Entity Recognition) conditions.
  * Handles entity type matching and variable binding for named entities.
- * Returns QueryResult containing MatchDetail objects
+ * Returns QueryResultSoA directly.
  */
 public final class NerExecutor implements ConditionExecutor<Ner> {
     private static final Logger logger = LoggerFactory.getLogger(NerExecutor.class);
-    
+
     private static final String NER_INDEX_NAME = "ner";
     private static final String NER_DATE_INDEX_NAME = "ner_date";
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
 
     /**
      * Creates a new NER executor.
@@ -44,24 +36,24 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
     }
 
     @Override
-    public QueryResult execute(Ner condition, Map<String, IndexAccessInterface> indexes,
+    public QueryResultSoA execute(Ner condition, Map<String, IndexAccessInterface> indexes,
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
                                AttributeRequirements requirements)
         throws QueryExecutionException {
-        
+
         logger.debug("Executing NER condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
-        
+
         String entityType = condition.entityType();
         String normalizedEntityType = entityType.toUpperCase();
         boolean isVariable = condition.isVariable();
         String variableName = condition.variableName();
-        
-        logger.debug("NER condition details: entityType='{}', isVariable={}, variableName='{}' (selective deserialization)",
-                     normalizedEntityType, isVariable, variableName != null ? variableName : "(none)");
-        
-        // --- Added: Explicitly disallow wildcard execution for now ---
+        String targetValue = condition.target(); // Can be null
+
+        logger.debug("NER condition details: entityType='{}', target='{}', isVariable={}, variableName='{}'",
+                     normalizedEntityType, targetValue, isVariable, variableName != null ? variableName : "(none)");
+
         if ("*".equals(normalizedEntityType)) {
             throw new QueryExecutionException(
                 "Wildcard entity type (*) is not currently supported for execution.",
@@ -69,11 +61,9 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION
             );
         }
-        // --- End Added ---
-        
-        // Determine which index to use based on entity type
+
         String indexName = "DATE".equals(normalizedEntityType) ? NER_DATE_INDEX_NAME : NER_INDEX_NAME;
-        
+
         if (!indexes.containsKey(indexName)) {
             throw new QueryExecutionException(
                 "Missing required NER index: " + indexName,
@@ -81,26 +71,35 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 QueryExecutionException.ErrorType.MISSING_INDEX
             );
         }
-        
+
         IndexAccessInterface index = indexes.get(indexName);
         if (index == null) {
             throw new QueryExecutionException("Required index not found: " + indexName, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
         }
-        
-        List<MatchDetail> details = new ArrayList<>();
-        
+
+        QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
+        int conceptualRowsAdded = 0;
+
         try {
             if (isVariable) {
-                // Variable binding mode - extract entities of the given type
-                details = executeVariableExtractionOptimized(normalizedEntityType, variableName, index, condition, requirements);
+                // Handles NER(type, ?var) and NER(type, 'target', ?var)
+                // Value stored is the specific entity instance text.
+                conceptualRowsAdded = executeVariableExtractionOptimized(normalizedEntityType, targetValue, variableName, index, condition, requirements, resultSoA);
             } else {
-                // Search mode - find documents/sentences with specific entity type
-                details = executeEntitySearchOptimized(normalizedEntityType, index, condition, requirements);
+                if (targetValue != null) {
+                    // Handles NER(type, 'target')
+                    // Value stored is targetValue.
+                    conceptualRowsAdded = executeSpecificEntitySearchOptimized(normalizedEntityType, targetValue, index, condition, requirements, resultSoA);
+                } else {
+                    // Handles NER(type)
+                    // Value stored is normalizedEntityType.
+                    conceptualRowsAdded = executeEntityTypeSearchOptimized(normalizedEntityType, index, condition, requirements, resultSoA);
+                }
             }
-            
-            logger.debug("NER condition with selective deserialization produced {} MatchDetail objects", details.size());
-            return new QueryResult(granularity, granularitySize, details);
-            
+
+            logger.debug("NER condition execution produced {} conceptual rows in QueryResultSoA", conceptualRowsAdded);
+            return resultSoA;
+
         } catch (Exception e) {
             if (e instanceof QueryExecutionException qee) {
                 throw qee;
@@ -113,305 +112,234 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             );
         }
     }
-    
-    /**
-     * Executes variable extraction for a specific entity type using selective deserialization.
-     * Finds all entities of the given type and creates MatchDetail objects.
-     *
-     * @param entityType The normalized entity type to extract (uppercase or *)
-     * @param variableName The variable name to associate with the MatchDetail
-     * @param index The index to search in (either ner or ner_date)
-     * @param condition The original condition object (for ID and target)
-     * @param requirements The AttributeRequirements for selective deserialization
-     * @return List of MatchDetail objects
-     */
-    private List<MatchDetail> executeVariableExtractionOptimized(String entityType, String variableName, IndexAccessInterface index,
-                                                  Ner condition, AttributeRequirements requirements)
-        throws Exception {
-        
-        String targetValue = condition.target();
-        String targetValueLower = (targetValue != null) ? targetValue.toLowerCase() : null;
-        
-        logger.debug("Extracting entities of type '{}'{}{} for variable '{}' (selective deserialization)", 
-            entityType, 
-            (targetValueLower != null ? " matching '" + targetValueLower + "'" : ""),
-            variableName);
-            
-        List<MatchDetail> details = new ArrayList<>();
+
+    // For NER(type, 'targetText') -- non-variable
+    private int executeSpecificEntitySearchOptimized(String entityType, String targetValue, IndexAccessInterface index,
+                                                     Ner condition, AttributeRequirements requirements, QueryResultSoA resultSoA)
+        throws IOException, IndexAccessException {
+
+        logger.debug("Searching for specific entity type '{}' with target '{}' into QueryResultSoA", entityType, targetValue);
         ValueType valueType = "DATE".equals(entityType) ? ValueType.DATE : ValueType.ENTITY;
+        String keyString = entityType.toUpperCase() + IndexAccessInterface.DELIMITER + targetValue;
+        byte[] keyBytes = keyString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
-        // Iterate through the index for the given type prefix
-        String prefix = entityType.toUpperCase() + IndexAccessInterface.DELIMITER;
-        byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        
-        logger.debug("Executing variable search on index '{}' with prefix: {}", index.getIndexType(), prefix);
-        
-        try (var iterator = index.iterator()) {
-            iterator.seek(prefixBytes);
-            while (iterator.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = iterator.next();
-                String key = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8);
+        int bindingsAdded = 0;
+        Optional<byte[]> rawBlobOptional = index.getRaw(keyBytes);
 
-                if (!key.startsWith(prefix)) {
-                    break; // Moved past relevant keys
-                }
-                
-                // Extract value (entity text) from the key
-                String value = key.substring(prefix.length());
-                
-                // Filter by target value if provided (case-insensitive substring match)
-                if (targetValueLower != null && !value.toLowerCase().contains(targetValueLower)) {
-                    continue; // Skip if value doesn't contain the target substring
-                }
-                
-                // Use selective deserialization
-                byte[] rawBlob = entry.getValue();
-                try {
-                    int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-                    
-                    if (numPositions == 0) {
-                        continue;
-                    }
-                    
-                    // Selective deserialization based on requirements
+        if (rawBlobOptional.isPresent()) {
+            byte[] rawBlob = rawBlobOptional.get();
+            try {
+                int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
+                if (numPositions > 0) {
                     IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
-                    
-                    IntArrayList sentIds = requirements.needsSentenceId ? 
-                        PositionListSoA.decompressSentenceIds(rawBlob) : null;
-                    
-                    IntArrayList beginChars = requirements.needsPositions ? 
-                        PositionListSoA.decompressBeginChars(rawBlob) : null;
-                    
-                    IntArrayList endChars = requirements.needsPositions ? 
-                        PositionListSoA.decompressEndChars(rawBlob) : null;
-                    
-                    IntArrayList synonymIds = requirements.needsSynonymIds ? 
-                        PositionListSoA.decompressSynonymIds(rawBlob) : null;
-                    
-                    // Create MatchDetail objects directly from SoA arrays
+                    IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
+                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
+                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
+                    IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(rawBlob) : null;
+
                     for (int i = 0; i < numPositions; i++) {
-                        details.add(new MatchDetail(
-                            value, 
-                            valueType, 
-                            variableName,
+                        resultSoA.add(
+                            targetValue, // Value is the specific target
+                            valueType,
+                            null, // No variable name
                             docIds.getInt(i),
                             sentIds != null ? sentIds.getInt(i) : -1,
                             beginChars != null ? beginChars.getInt(i) : -1,
                             endChars != null ? endChars.getInt(i) : -1,
-                            synonymIds != null ? synonymIds.getInt(i) : -1
-                        ));
-                    }
-                } catch (Exception e) {
-                    logger.warn("Error during selective deserialization for NER key '{}', falling back to full deserialization: {}", 
-                               key, e.getMessage());
-                    // Fall back to full deserialization for this entry
-                    PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
-                    for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
-                        details.add(new MatchDetail(
-                            value, 
-                            valueType, 
-                            variableName,
-                            positionListSoA.getDocIdAt(i),
-                            positionListSoA.getSentenceIdAt(i),
-                            positionListSoA.getBeginCharAt(i),
-                            positionListSoA.getEndCharAt(i),
-                            positionListSoA.getSynonymIdAt(i)
-                        ));
+                            synonymIds != null ? synonymIds.getInt(i) : -1,
+                            bindingsAdded // This is conceptualRowId
+                        );
+                        bindingsAdded++;
                     }
                 }
+            } catch (IOException e) {
+                logger.warn("IOException during selective deserialization for specific NER key '{}', falling back to full deserialization: {}",
+                           keyString, e.getMessage());
+                PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
+                for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                     resultSoA.add(
+                        targetValue,
+                        valueType,
+                        null,
+                        positionListSoA.getDocIdAt(i),
+                        positionListSoA.getSentenceIdAt(i),
+                        positionListSoA.getBeginCharAt(i),
+                        positionListSoA.getEndCharAt(i),
+                        positionListSoA.getSynonymIdAt(i),
+                        bindingsAdded
+                    );
+                    bindingsAdded++;
+                }
+            } catch (Exception e) {
+                 logger.error("Error processing specific NER entry with key '{}': {}", keyString, e.getMessage(), e);
             }
         }
-        logger.debug("Extracted {} details for entity type '{}' using selective deserialization", details.size(), entityType);
-        return details;
+        logger.debug("Specific entity search for type '{}' target '{}' added {} bindings to QueryResultSoA", entityType, targetValue, bindingsAdded);
+        return bindingsAdded;
     }
-    
-    /**
-     * Executes an entity search for a specific entity type using selective deserialization.
-     * This mode finds documents/sentences containing entities of the given type.
-     * If a target value is specified, it only finds occurrences of that specific entity text.
-     *
-     * @param entityType The entity type to search for
-     * @param index The index to search in
-     * @param condition The original condition object (for ID and target)
-     * @param requirements The AttributeRequirements for selective deserialization
-     * @return List of MatchDetail objects
-     */
-    private List<MatchDetail> executeEntitySearchOptimized(String entityType, IndexAccessInterface index,
-                                                     Ner condition, AttributeRequirements requirements)
-        throws Exception {
-        
-        String targetValue = condition.target();
-        String targetValueLower = (targetValue != null) ? targetValue.toLowerCase() : null;
 
-        logger.debug("Searching for entities of type '{}'{} (selective deserialization)", 
+    // For NER(type) BIND ?var  OR NER(type, 'target', ?var)
+    private int executeVariableExtractionOptimized(String entityType, String filterTargetValue, String variableName, IndexAccessInterface index,
+                                                  Ner condition, AttributeRequirements requirements, QueryResultSoA resultSoA)
+        throws IOException, IndexAccessException {
+
+        String filterTargetValueLower = (filterTargetValue != null) ? filterTargetValue.toLowerCase() : null;
+
+        logger.debug("Extracting entities of type '{}'{}{} for variable '{}' into QueryResultSoA",
             entityType,
-            (targetValueLower != null ? " matching '" + targetValueLower + "'" : ""));
-            
-        List<MatchDetail> details = new ArrayList<>();
-        ValueType valueType = "DATE".equals(entityType) ? ValueType.DATE : ValueType.ENTITY;
+            (filterTargetValueLower != null ? " matching filter '" + filterTargetValueLower + "'" : ""),
+            variableName);
 
-        // Use prefix iteration to find all entities of the given type
+        ValueType valueType = "DATE".equals(entityType) ? ValueType.DATE : ValueType.ENTITY;
         String prefix = entityType.toUpperCase() + IndexAccessInterface.DELIMITER;
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        
-        logger.debug("Executing entity search on index '{}' with prefix: {}", index.getIndexType(), prefix);
 
-        try (var iterator = index.iterator()) {
-            iterator.seek(prefixBytes);
+        logger.debug("Executing variable search on index '{}' with prefix: {}", index.getIndexType(), prefix);
+
+        int bindingsAdded = 0;
+
+        try (DBIterator iterator = index.seek(prefixBytes)) {
             while (iterator.hasNext()) {
                 Map.Entry<byte[], byte[]> entry = iterator.next();
                 String key = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8);
 
                 if (!key.startsWith(prefix)) {
-                    break; // Moved past relevant keys
-                }
-                
-                // Extract value (entity text) from the key
-                String value = key.substring(prefix.length());
-                
-                // Filter by target value if provided (case-insensitive substring match)
-                if (targetValueLower != null && !value.toLowerCase().contains(targetValueLower)) {
-                    continue; // Skip if value doesn't contain the target substring
+                    break;
                 }
 
-                // When searching for a type without binding, the specific value doesn't matter as much,
-                // but we still need the positions. We use the actual matched value if target is specified,
-                // otherwise use the entity type itself.
-                String detailValue = (targetValueLower != null) ? value : entityType; 
-                
-                // Use selective deserialization
+                String value = key.substring(prefix.length());
+
+                if (filterTargetValueLower != null && !value.toLowerCase().contains(filterTargetValueLower)) {
+                    continue;
+                }
+
                 byte[] rawBlob = entry.getValue();
                 try {
                     int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-                    
-                    if (numPositions == 0) {
-                        continue;
-                    }
-                    
-                    // Selective deserialization based on requirements
+                    if (numPositions == 0) continue;
+
                     IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
-                    
-                    IntArrayList sentIds = requirements.needsSentenceId ? 
-                        PositionListSoA.decompressSentenceIds(rawBlob) : null;
-                    
-                    IntArrayList beginChars = requirements.needsPositions ? 
-                        PositionListSoA.decompressBeginChars(rawBlob) : null;
-                    
-                    IntArrayList endChars = requirements.needsPositions ? 
-                        PositionListSoA.decompressEndChars(rawBlob) : null;
-                    
-                    IntArrayList synonymIds = requirements.needsSynonymIds ? 
-                        PositionListSoA.decompressSynonymIds(rawBlob) : null;
-                    
-                    // Create MatchDetail objects directly from SoA arrays
+                    IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
+                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
+                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
+                    IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(rawBlob) : null;
+
                     for (int i = 0; i < numPositions; i++) {
-                        details.add(new MatchDetail(
-                            detailValue, 
-                            valueType, 
-                            (String) null,
+                        resultSoA.add(
+                            value,
+                            valueType,
+                            variableName,
                             docIds.getInt(i),
                             sentIds != null ? sentIds.getInt(i) : -1,
                             beginChars != null ? beginChars.getInt(i) : -1,
                             endChars != null ? endChars.getInt(i) : -1,
-                            synonymIds != null ? synonymIds.getInt(i) : -1
-                        ));
+                            synonymIds != null ? synonymIds.getInt(i) : -1,
+                            bindingsAdded
+                        );
+                        bindingsAdded++;
                     }
-                } catch (Exception e) {
-                    logger.warn("Error during selective deserialization for NER key '{}', falling back to full deserialization: {}", 
+                } catch (IOException e) {
+                    logger.warn("IOException during selective deserialization for NER key '{}', falling back to full deserialization: {}",
                                key, e.getMessage());
-                    // Fall back to full deserialization for this entry
                     PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
                     for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
-                        details.add(new MatchDetail(
-                            detailValue, 
-                            valueType, 
-                            (String) null,
+                        resultSoA.add(
+                            value,
+                            valueType,
+                            variableName,
                             positionListSoA.getDocIdAt(i),
                             positionListSoA.getSentenceIdAt(i),
                             positionListSoA.getBeginCharAt(i),
                             positionListSoA.getEndCharAt(i),
-                            positionListSoA.getSynonymIdAt(i)
-                        ));
+                            positionListSoA.getSynonymIdAt(i),
+                            bindingsAdded
+                        );
+                        bindingsAdded++;
                     }
+                } catch (Exception e) {
+                     logger.error("Error processing NER entry with key '{}': {}", key, e.getMessage(), e);
                 }
             }
         }
-        
-        logger.debug("Found {} details matching entity type '{}' using selective deserialization", details.size(), entityType);
-        return details;
+        logger.debug("Extracted {} bindings for entity type '{}' into QueryResultSoA", bindingsAdded, entityType);
+        return bindingsAdded;
     }
 
-    @Override
-    public QueryResult execute(Ner condition, Map<String, IndexAccessInterface> indexes,
-                               Query.Granularity granularity,
-                               int granularitySize,
-                               String corpusName)
-        throws QueryExecutionException {
-        
-        logger.debug("Executing NER condition for type {} at {} granularity with size {} (corpus: {})", 
-                condition.entityType(), granularity, granularitySize, corpusName);
-        
-        String entityType = condition.entityType();
-        String variableName = condition.variableName();
-        boolean isVariable = condition.isVariable();
-        String targetValue = condition.target();
-        
-        // Normalize entity type (usually uppercase, except wildcard)
-        String normalizedEntityType = "*".equals(entityType) ? "*" : entityType.toUpperCase();
-        String indexName = "DATE".equals(normalizedEntityType) ? NER_DATE_INDEX_NAME : NER_INDEX_NAME;
-        
-        // --- Added: Explicitly disallow wildcard execution for now ---
-        if ("*".equals(normalizedEntityType)) {
-            throw new QueryExecutionException(
-                "Wildcard entity type (*) is not currently supported for execution.",
-                condition.toString(),
-                QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION
-            );
-        }
-        // --- End Added ---
-        
-        // Validate required indexes
-        if (!indexes.containsKey(indexName)) {
-            throw new QueryExecutionException(
-                String.format("Missing required index: %s for entity type %s", indexName, normalizedEntityType),
-                condition.toString(),
-                QueryExecutionException.ErrorType.MISSING_INDEX
-            );
-        }
-        
-        IndexAccessInterface index = indexes.get(indexName);
-        if (index == null) { // Should be caught above, but double-check
-            throw new QueryExecutionException("Required index not found: " + indexName, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
-        }
-        
-        List<MatchDetail> details = new ArrayList<>();
-        
-        try {
-            if (isVariable) {
-                // Variable binding mode - extract entities of the given type
-                details = executeVariableExtractionOptimized(normalizedEntityType, variableName, index, condition, new AttributeRequirements());
-            } else {
-                // Search mode - find documents/sentences with specific entity type
-                details = executeEntitySearchOptimized(normalizedEntityType, index, condition, new AttributeRequirements());
-            }
-            
-            logger.debug("NER condition produced {} MatchDetail objects. Returning QueryResult.", details.size());
-            
-            // Create QueryResult directly
-            QueryResult finalResult = new QueryResult(granularity, granularitySize, details);
+    // For NER(type) -- non-variable, no specific target. Value stored is entityType.
+    private int executeEntityTypeSearchOptimized(String entityType, IndexAccessInterface index,
+                                             Ner condition, AttributeRequirements requirements, QueryResultSoA resultSoA)
+        throws IOException, IndexAccessException {
 
-            logger.debug("NER execution complete with {} MatchDetail objects.", finalResult.getAllDetails().size());
-            return finalResult;
-        } catch (Exception e) {
-            if (e instanceof QueryExecutionException qee) {
-                throw qee;
+        logger.debug("Searching for all entities of type '{}' into QueryResultSoA, storing type as value.", entityType);
+
+        ValueType valueType = "DATE".equals(entityType) ? ValueType.DATE : ValueType.ENTITY;
+        String prefix = entityType.toUpperCase() + IndexAccessInterface.DELIMITER;
+        byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        logger.debug("Executing entity type search on index '{}' with prefix: {}", index.getIndexType(), prefix);
+        int bindingsAdded = 0;
+
+        try (DBIterator iterator = index.seek(prefixBytes)) {
+            while (iterator.hasNext()) {
+                Map.Entry<byte[], byte[]> entry = iterator.next();
+                String key = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8);
+
+                if (!key.startsWith(prefix)) {
+                    break;
+                }
+
+                String specificEntityInstanceValue = key.substring(prefix.length()); // Value to store
+
+                byte[] rawBlob = entry.getValue();
+                try {
+                    int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
+                    if (numPositions == 0) continue;
+
+                    IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
+                    IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
+                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
+                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
+                    IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(rawBlob) : null;
+
+                    for (int i = 0; i < numPositions; i++) {
+                        resultSoA.add(
+                            specificEntityInstanceValue, // Value is the specific entity instance text
+                            valueType,
+                            null, // No variable name
+                            docIds.getInt(i),
+                            sentIds != null ? sentIds.getInt(i) : -1,
+                            beginChars != null ? beginChars.getInt(i) : -1,
+                            endChars != null ? endChars.getInt(i) : -1,
+                            synonymIds != null ? synonymIds.getInt(i) : -1,
+                            bindingsAdded // This is conceptualRowId
+                        );
+                        bindingsAdded++;
+                    }
+                } catch (IOException e) {
+                    logger.warn("IOException during selective deserialization for NER key '{}' (entity type search), falling back to full deserialization: {}",
+                               key, e.getMessage());
+                    PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
+                    for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                        resultSoA.add(
+                            specificEntityInstanceValue, // Value is the specific entity instance text
+                            valueType,
+                            null,
+                            positionListSoA.getDocIdAt(i),
+                            positionListSoA.getSentenceIdAt(i),
+                            positionListSoA.getBeginCharAt(i),
+                            positionListSoA.getEndCharAt(i),
+                            positionListSoA.getSynonymIdAt(i),
+                            bindingsAdded
+                        );
+                        bindingsAdded++;
+                    }
+                } catch (Exception e) {
+                    logger.error("Error processing NER entry with key '{}': {}", key, e.getMessage(), e);
+                }
             }
-            throw new QueryExecutionException(
-                "Error executing NER condition: " + e.getMessage(),
-                e,
-                condition.toString(),
-                QueryExecutionException.ErrorType.INTERNAL_ERROR
-            );
         }
+
+        logger.debug("Found {} bindings matching entity type '{}' into QueryResultSoA", bindingsAdded, entityType);
+        return bindingsAdded;
     }
-} 
+}

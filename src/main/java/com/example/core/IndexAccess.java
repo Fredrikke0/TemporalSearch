@@ -1,14 +1,21 @@
 package com.example.core;
 
-import org.iq80.leveldb.*;
-import static org.iq80.leveldb.impl.Iq80DBFactory.*;
+import static org.iq80.leveldb.impl.Iq80DBFactory.factory;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.iq80.leveldb.DB;
+import org.iq80.leveldb.DBException;
+import org.iq80.leveldb.DBIterator;
+import org.iq80.leveldb.Options;
+import org.iq80.leveldb.WriteBatch;
+import org.iq80.leveldb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.io.*;
-import java.nio.file.Path;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Core class for accessing LevelDB-based indexes.
@@ -18,7 +25,7 @@ public class IndexAccess implements IndexAccessInterface {
     private static final Logger logger = LoggerFactory.getLogger(IndexAccess.class);
 
     // Delimiter constant inherited from IndexAccessInterface
-   
+
     private final DB db;
     private final String indexPath;
     private final String indexType;
@@ -53,7 +60,7 @@ public class IndexAccess implements IndexAccessInterface {
             // Initialize LevelDB
             this.db = factory.open(indexDir, options);
             logger.info("Initialized IndexAccess for type {} at {}", indexType, indexPath);
-            
+
         } catch (IOException e) {
             throw new IndexAccessException(
                 "Failed to initialize index: " + e.getMessage(),
@@ -117,13 +124,21 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     /**
-     * Creates a new iterator over the database.
+     * Creates a new iterator positioned at or after the specified key.
      * The caller is responsible for closing the iterator.
      */
     @Override
-    public DBIterator iterator() throws IndexAccessException {
+    public DBIterator seek(byte[] key) throws IndexAccessException {
         checkOpen();
-        return db.iterator();
+        DBIterator iterator = db.iterator();
+        if (key != null) { // LevelDB iterator might not like null keys for seek
+            iterator.seek(key);
+        }
+
+        else {
+            iterator.seekToFirst(); // Explicitly seek to first if key is null
+        }
+        return iterator;
     }
 
     /**
@@ -145,12 +160,15 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     /**
-     * Creates a new iterator over the database with specific read options.
+     * Creates a new iterator positioned at the first key in the database.
+     * The caller is responsible for closing the iterator.
      */
     @Override
-    public DBIterator iterator(ReadOptions options) throws IndexAccessException {
+    public DBIterator iterateFromFirst() throws IndexAccessException {
         checkOpen();
-        return db.iterator(options);
+        DBIterator iterator = db.iterator();
+        iterator.seekToFirst();
+        return iterator;
     }
 
     /**
@@ -247,7 +265,7 @@ public class IndexAccess implements IndexAccessInterface {
 
     /**
      * Gets the document text for a given document ID.
-     * 
+     *
      * @param documentId The document ID
      * @return The document text, or null if not found
      */
@@ -262,15 +280,15 @@ public class IndexAccess implements IndexAccessInterface {
             return null;
         }
     }
-    
+
     /**
      * Gets the sentences for a given document ID.
-     * 
+     *
      * @param documentId The document ID
      * @return Array of sentences, or null if not found
      */
     public String[] getDocumentSentences(int documentId) {
         // Placeholder implementation
-        return new String[0]; 
+        return new String[0];
     }
-} 
+}
