@@ -29,7 +29,8 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
 
     //Blacklist common, less informative relations
     private static final Set<String> BLACKLISTED_RELATIONS = Set.of(
-        "punct"
+        "punct",
+        "dep"
     );
 
     public DependencyIndexGenerator(String indexBaseDir, String stopwordsPath,
