@@ -67,7 +67,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     batch.add(new AnnotationEntry(
-                        rs.getInt("annotation_id"),
+                        rs.getLong("annotation_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),

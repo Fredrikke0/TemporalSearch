@@ -85,7 +85,7 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
                     }
 
                     batch.add(new DependencyEntry(
-                        rs.getInt("dependency_id"),
+                        rs.getLong("dependency_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),

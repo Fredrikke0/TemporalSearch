@@ -66,7 +66,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                     String rawToken = rs.getString("token");
                     String token = (rawToken != null) ? rawToken.trim() : null;
                     AnnotationEntry entry = new AnnotationEntry(
-                        rs.getInt("annotation_id"),
+                        rs.getLong("annotation_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),

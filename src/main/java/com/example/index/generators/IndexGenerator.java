@@ -353,8 +353,8 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                                 writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
                                 batch.close(); 
                                 batch = indexAccess.createWriteBatch(); 
-                                logger.debug("\n Written batch of {} terms (approx {} MB) to LevelDB due to size limit. Total terms written: {}.\n", 
-                                    termsInCurrentBatch, currentBatchSizeBytes / (1024 * 1024), totalTermsWritten);
+                                // logger.debug("\n Written batch of {} terms (approx {} MB) to LevelDB due to size limit. Total terms written: {}.\n", 
+                                //     termsInCurrentBatch, currentBatchSizeBytes / (1024 * 1024), totalTermsWritten);
                                 termsInCurrentBatch = 0;
                                 currentBatchSizeBytes = 0;
                             }

@@ -53,18 +53,18 @@ public class Annotations {
                 return new AnnotationStatus(true, 1);
             }
             // Find max_annotated_id (where at least one annotation exists)
-            int maxAnnotatedId = 0;
+            int maxAnnotatedDocumentId = 0;
             try (ResultSet rs = conn.createStatement().executeQuery(
                     "SELECT MAX(document_id) FROM annotations")) {
-                if (rs.next()) maxAnnotatedId = rs.getInt(1);
+                if (rs.next()) maxAnnotatedDocumentId = rs.getInt(1);
             }
             // Find max_doc_id
             int maxDocId = 0;
             try (ResultSet rs = conn.createStatement().executeQuery("SELECT MAX(document_id) FROM documents")) {
                 if (rs.next()) maxDocId = rs.getInt(1);
             }
-            boolean needsProcessing = maxAnnotatedId < maxDocId;
-            int startDocumentId = (needsProcessing && maxAnnotatedId > 0) ? maxAnnotatedId : 1;
+            boolean needsProcessing = maxAnnotatedDocumentId < maxDocId;
+            int startDocumentId = (needsProcessing && maxAnnotatedDocumentId > 0) ? maxAnnotatedDocumentId : 1;
             return new AnnotationStatus(needsProcessing, startDocumentId);
         }
     }

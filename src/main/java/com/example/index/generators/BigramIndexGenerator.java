@@ -63,7 +63,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                     String token = (rawToken != null) ? rawToken.trim() : null;
 
                     AnnotationEntry entry = new AnnotationEntry(
-                        rs.getInt("annotation_id"),
+                        rs.getLong("annotation_id"),
                         rs.getInt("document_id"),
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),

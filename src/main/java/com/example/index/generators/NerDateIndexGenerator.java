@@ -104,7 +104,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                         try {
                             LocalDate.parse(normalizedNer); // Strict parse check
                             batch.add(new AnnotationEntry(
-                                rs.getInt("annotation_id"),
+                                rs.getLong("annotation_id"),
                                 rs.getInt("document_id"),
                                 rs.getInt("sentence_id"),
                                 rs.getInt("begin_char"),
