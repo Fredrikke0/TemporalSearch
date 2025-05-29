@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -23,9 +22,6 @@ public class Pipeline {
     public static void main(String[] args) {
         try {
             runPipeline(args);
-        } catch (ArgumentParserException e) {
-            System.err.println("Argument Error: " + e.getMessage());
-            System.exit(1);
         } catch (InvalidPathException e) {
             logger.error("Invalid path provided: {}", e.getMessage(), e);
             System.err.println("Error: Invalid path specified - " + e.getMessage());
@@ -45,33 +41,33 @@ public class Pipeline {
         // Create argument parser
         ArgumentParser parser = ArgumentParsers.newFor("Pipeline").build()
                 .defaultHelp(true)
-                .description("Process and index text data through annotation and indexing stages using a project-based workflow.")
-                .usage("${prog} -p <project_path> -s <stage> [-d <source_db>] [--force] [--limit N] [stage-specific-options]\n\n" +
+                .description("Process and index text data through annotation and indexing stages.")
+                .usage("${prog} --db-file <database_file_path> --index-dir <index_directory_path> -s <stage> [--force] [--limit N] [stage-specific-options]\n\n" +
                        "Example usage:\n" +
-                       "  Create Project & Run All: ${prog} -p path/to/my_project -d source.db -s all\n" +
-                       "  Annotate Existing Project: ${prog} -p path/to/my_project -s annotate -b 1000 -t 8\n" +
-                       "  Index Existing Project (force): ${prog} -p path/to/my_project -s index -y bigram --force");
+                       "  Create Project & Run All: ${prog} --db-file path/to/source.db --index-dir path/to/my_project_outputs -s all\n" +
+                       "  Annotate Existing Project: ${prog} --db-file path/to/source.db --index-dir path/to/my_project_outputs -s annotate -b 1000 -t 8\n" +
+                       "  Index Existing Project (force): ${prog} --db-file path/to/source.db --index-dir path/to/my_project_outputs -s index -y bigram --force");
 
         // Stage argument (moved higher as it dictates required args)
         parser.addArgument("-s", "--stage")
                 .choices("all", "annotate", "index")
                 .required(true) // Stage is now mandatory
-                .help("Pipeline stage(s) to run:" +
-                      "  all      - Run annotation and indexing" +
-                      "  annotate - Annotate documents" +
-                      "  index    - Generate indexes from annotationsp");
+                .help("Pipeline stage(s) to run:\\n" +
+                      "  all      - Run annotation and indexing\\n" +
+                      "  annotate - Annotate documents\\n" +
+                      "  index    - Generate indexes from annotations");
 
-        // Project arguments group
-        var projectGroup = parser.addArgumentGroup("Project arguments");
-        projectGroup.addArgument("-p", "--project")
-                .dest("project_path") // Store in 'project_path'
+        // Project arguments group -> Paths group
+        var pathsGroup = parser.addArgumentGroup("Path arguments");
+        pathsGroup.addArgument("--db-file")
+                .dest("db_file_path")
                 .required(true)
-                .help("Path to the project directory. Will be created if it doesn't exist.");
+                .help("Path to the project's SQLite database file. This database will be used directly (not copied).");
 
-        projectGroup.addArgument("-d", "--database")
-                .dest("source_db_path") // Store in 'source_db_path'
-                .required(false) // Required only if project dir doesn't exist (validated later)
-                .help("Path to the pre-converted source SQLite database. Required only if the project directory needs to be created. Will be copied into the project directory.");
+        pathsGroup.addArgument("--index-dir")
+                .dest("index_dir_path")
+                .required(true)
+                .help("Path to the directory where indexes and temporary processing files will be stored. Will be created if it doesn't exist.");
 
         // Common optional arguments
         var commonOptsGroup = parser.addArgumentGroup("Common optional arguments");
@@ -94,104 +90,97 @@ public class Pipeline {
         annotateGroup.addArgument("-b", "--batch-size")
                 .setDefault(300)
                 .type(Integer.class)
-                .help("Number of documents to commit per transaction during annotation (default: 300)");
+                .help("Number of documents to commit per transaction during annotation");
 
         annotateGroup.addArgument("-t", "--threads")
                 .setDefault(Runtime.getRuntime().availableProcessors()) // Default to available processors
                 .type(Integer.class)
-                .help("Number of parallel threads for CoreNLP processing (default: available processors)");
+                .help("Number of parallel threads for CoreNLP processing");
 
         // Index stage group
         var indexGroup = parser.addArgumentGroup("Index stage arguments (used in 'index' or 'all' stage)");
         indexGroup.addArgument("-w", "--stopwords")
                 .setDefault("stopwords.txt")
-                .help("Path to file containing stopwords to exclude (default: stopwords.txt)");
+                .help("Path to file containing stopwords to exclude");
 
         indexGroup.addArgument("--idx-batch-size")
                 .setDefault(200000)
                 .type(Integer.class)
-                .help("Number of documents to fetch from DB at a time by an index generator (default: 200000). Critical for memory usage of complex indexes like 'stitch'.");
+                .help("Number of documents to fetch from DB at a time by an index generator. Critical for memory usage of complex indexes like 'stitch'.");
 
         indexGroup.addArgument("-y", "--index-type")
                 .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch", "nash", "all") // Added 'nash'
                 .setDefault("all")
-                .help("Type of index to generate:" +
-                      "  unigram    - Single word index" +
-                      "  bigram     - Two word phrases" +
-                      "  trigram    - Three word phrases" +
-                      "  dependency - Grammatical dependencies" +
-                      "  ner_date   - Named entity dates" +
-                      "  ner        - Named entity recognition" +
-                      "  pos        - Part-of-speech tagging" +
-                      "  hypernym   - Word hypernyms" +
-                      "  stitch     - Connects unigrams with their associated dates" +
-                      "  nash       - Efficient index for searching for dates" +
-                      "  all        - Generate all available index types (default)");
+                .help("Type of index to generate:\\n" +
+                      "  unigram    - Single word index\\n" +
+                      "  bigram     - Two word phrases\\n" +
+                      "  trigram    - Three word phrases\\n" +
+                      "  dependency - Grammatical dependencies\\n" +
+                      "  ner_date   - Named entity dates\\n" +
+                      "  ner        - Named entity recognition\\n" +
+                      "  pos        - Part-of-speech tagging\\n" +
+                      "  hypernym   - Word hypernyms\\n" +
+                      "  stitch     - Connects unigrams with their associated dates\\n" +
+                      "  nash       - Efficient index for searching for dates\\n" +
+                      "  all        - Generate all available index types");
 
         indexGroup.addArgument("--custom-temp-dir")
                 .dest("custom_temp_dir")
                 .type(String.class)
                 .required(false)
-                .help("Path to a custom base directory for temporary files during index generation. If not specified, defaults to 'PROJECT_PATH/indexes/temp/'.");
+                .help("Path to a custom base directory for temporary files during index generation. If not specified, defaults to '<index_dir_path>/indexes/temp/'.");
 
         // Parse arguments
-        Namespace ns = parser.parseArgs(args);
+        Namespace ns;
+        try {
+            ns = parser.parseArgs(args);
+        } catch (ArgumentParserException e) {
+            parser.handleError(e); // argparse4j handles printing help/error and exiting
+            return; // Exit runPipeline if handleError doesn't exit (though it typically does)
+        }
 
         // --- Argument Processing and Validation ---
         String stage = ns.getString("stage");
-        Path projectPath = Path.of(ns.getString("project_path")).toAbsolutePath(); // Ensure absolute path
-        String projectName = projectPath.getFileName().toString(); // Derive project name from path
-        Path projectDbPath = projectPath.resolve(projectName + ".db");
-        Path indexBasePath = projectPath.resolve("indexes");
-        String sourceDbPathStr = ns.getString("source_db_path");
+        Path dbFilePath = Path.of(ns.getString("db_file_path")).toAbsolutePath();
+        Path indexDirPath = Path.of(ns.getString("index_dir_path")).toAbsolutePath();
+        String projectName = indexDirPath.getFileName().toString(); // Derive project name from index dir path
+        Path projectDbPath = dbFilePath; // Use the DB path directly
+        Path indexBasePath = indexDirPath.resolve("indexes"); // Indexes will be stored in a subdir of index_dir_path
+
         boolean force = ns.getBoolean("force");
         Integer limit = ns.getInt("limit");
         Integer cliStartDocId = ns.get("cli_start_doc_id");
 
-        logger.info("Starting Pipeline for project '{}' at '{}' (Stage: {})", projectName, projectPath, stage);
+        logger.info("Starting Pipeline for project '{}' (DB: '{}', Index Dir: '{}', Stage: {})",
+                    projectName, projectDbPath, indexDirPath, stage);
 
-        // --- Project Initialization ---
-        boolean projectExists = Files.exists(projectPath);
-        if (!projectExists) {
-            logger.info("Project directory '{}' does not exist. Creating...", projectPath.toAbsolutePath());
-            if (sourceDbPathStr == null) {
-                throw new ArgumentParserException("Source database path (--database / -d) is required when creating a new project.", parser);
-            }
-            Path sourceDbPath = Path.of(sourceDbPathStr);
-            logger.info("Source DB to copy: {}", sourceDbPath.toAbsolutePath());
-            if (!Files.exists(sourceDbPath)) {
-                throw new IOException("Source database file not found: " + sourceDbPath);
-            }
+        // --- Project Initialization & Validation ---
 
-            // Create project directory and indexes subdirectory
-            Files.createDirectories(projectPath);
-            Files.createDirectories(indexBasePath);
+        // Validate database file existence
+        if (!Files.exists(projectDbPath)) {
+            logger.error("Database file not found: {}", projectDbPath.toAbsolutePath());
+            throw new IOException("Database file not found: " + projectDbPath.toAbsolutePath());
+        }
+        logger.info("Using database file: {}", projectDbPath.toAbsolutePath());
 
-            // Copy source database to project database path
-            logger.info("Copying source database from '{}' to '{}'", sourceDbPath.toAbsolutePath(), projectDbPath.toAbsolutePath());
-            Files.copy(sourceDbPath, projectDbPath, StandardCopyOption.REPLACE_EXISTING);
-            logger.info("Project '{}' created successfully. Project DB at: {}", projectName, projectDbPath.toAbsolutePath());
+        // Create index directory and its 'indexes' subdirectory if they don't exist
+        if (!Files.exists(indexDirPath)) {
+            logger.info("Index directory '{}' does not exist. Creating...", indexDirPath.toAbsolutePath());
+            Files.createDirectories(indexDirPath);
         } else {
-            logger.info("Using existing project directory '{}'", projectPath.toAbsolutePath());
-            if (sourceDbPathStr != null) {
-                logger.warn("Source database path (--database / -d) provided but project directory already exists. Ignoring source database argument. Project dir: {}", projectPath.toAbsolutePath());
-            }
-            if (!Files.exists(projectDbPath)) {
-                 // If project dir exists but DB is missing (and not creating), it's an error
-                 logger.error("Project directory exists, but the project database file is missing: {}", projectDbPath.toAbsolutePath());
-                 throw new IOException("Project directory exists, but the project database file is missing: " + projectDbPath.toAbsolutePath());
-            }
-             // Ensure indexes directory exists even for existing projects
-            if (!Files.exists(indexBasePath)) {
-                 logger.warn("Indexes directory missing in existing project. Creating '{}'", indexBasePath.toAbsolutePath());
-                 Files.createDirectories(indexBasePath);
-            }
+            logger.info("Using existing index directory '{}'", indexDirPath.toAbsolutePath());
+        }
+
+        if (!Files.exists(indexBasePath)) {
+            logger.info("Base indexes directory '{}' does not exist within index directory. Creating...", indexBasePath.toAbsolutePath());
+            Files.createDirectories(indexBasePath);
+        } else {
+            logger.info("Using existing base indexes directory '{}'", indexBasePath.toAbsolutePath());
         }
 
         // Log final paths being used
         logger.debug("Using Project Database: {}", projectDbPath.toAbsolutePath());
         logger.debug("Using Index Base Directory: {}", indexBasePath.toAbsolutePath());
-
 
         // --- Stage Execution ---
 
@@ -244,10 +233,16 @@ public class Pipeline {
                 effectiveCustomTempDirStr = customTempDirArg;
                 logger.info("Using user-provided custom temporary directory: {}", effectiveCustomTempDirStr);
             } else {
-                Path defaultTempPath = indexBasePath.resolve("temp");
+                Path defaultTempPath = indexBasePath.resolve("temp"); // temp dir inside 'indexes' directory
                 effectiveCustomTempDirStr = defaultTempPath.toString();
                 logger.info("Using default temporary directory for indexing: {}", effectiveCustomTempDirStr);
-                // IndexRunner will create this path if it doesn't exist.
+                // IndexRunner (or other components) will need to create this path if it doesn't exist if they manage temp dirs.
+                // Or, create it here:
+                Path defaultTempDir = Path.of(effectiveCustomTempDirStr);
+                if (!Files.exists(defaultTempDir)) {
+                    Files.createDirectories(defaultTempDir);
+                    logger.info("Created default temporary directory: {}", defaultTempDir.toAbsolutePath());
+                }
             }
 
             // Determine the specific index directory path
