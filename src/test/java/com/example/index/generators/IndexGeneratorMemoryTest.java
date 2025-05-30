@@ -5,7 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryUsage;
@@ -87,18 +94,12 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
             String currentTerm = null;
             long totalTermsWritten = 0;
 
-            // Use ByteArrayOutputStream to accumulate raw integers for each attribute
-            ByteArrayOutputStream baosDocIds = new ByteArrayOutputStream();
-            ByteArrayOutputStream baosSentIds = new ByteArrayOutputStream();
-            ByteArrayOutputStream baosBeginChars = new ByteArrayOutputStream();
-            ByteArrayOutputStream baosEndChars = new ByteArrayOutputStream();
-            ByteArrayOutputStream baosSynonymIds = new ByteArrayOutputStream();
-
-            DataOutputStream dosDocIds = new DataOutputStream(baosDocIds);
-            DataOutputStream dosSentIds = new DataOutputStream(baosSentIds);
-            DataOutputStream dosBeginChars = new DataOutputStream(baosBeginChars);
-            DataOutputStream dosEndChars = new DataOutputStream(baosEndChars);
-            DataOutputStream dosSynonymIds = new DataOutputStream(baosSynonymIds);
+            // Use IntArrayLists to accumulate integers for each attribute for the current term
+            it.unimi.dsi.fastutil.ints.IntArrayList termDocIdsList = new it.unimi.dsi.fastutil.ints.IntArrayList();
+            it.unimi.dsi.fastutil.ints.IntArrayList termSentIdsList = new it.unimi.dsi.fastutil.ints.IntArrayList();
+            it.unimi.dsi.fastutil.ints.IntArrayList termBeginCharsList = new it.unimi.dsi.fastutil.ints.IntArrayList();
+            it.unimi.dsi.fastutil.ints.IntArrayList termEndCharsList = new it.unimi.dsi.fastutil.ints.IntArrayList();
+            it.unimi.dsi.fastutil.ints.IntArrayList termSynonymIdsList = new it.unimi.dsi.fastutil.ints.IntArrayList();
 
             int numPositionsForCurrentTerm = 0;
 
@@ -125,18 +126,13 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                         }
 
                         currentTerm = termFromFile;
-                        // Reset streams for the new term
-                        baosDocIds.reset();
-                        baosSentIds.reset();
-                        baosBeginChars.reset();
-                        baosEndChars.reset();
-                        baosSynonymIds.reset();
+                        // Reset lists for the new term
+                        termDocIdsList.clear();
+                        termSentIdsList.clear();
+                        termBeginCharsList.clear();
+                        termEndCharsList.clear();
+                        termSynonymIdsList.clear();
 
-                        dosDocIds = new DataOutputStream(baosDocIds);
-                        dosSentIds = new DataOutputStream(baosSentIds);
-                        dosBeginChars = new DataOutputStream(baosBeginChars);
-                        dosEndChars = new DataOutputStream(baosEndChars);
-                        dosSynonymIds = new DataOutputStream(baosSynonymIds);
                         numPositionsForCurrentTerm = 0;
                     }
 
@@ -148,45 +144,35 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                             // Process docIds: decompress, stream to accumulator, discard
                             recordArrayStart("docIds");
                             it.unimi.dsi.fastutil.ints.IntArrayList tempChunkDocIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            for (int i = 0; i < tempChunkDocIds.size(); i++) {
-                                dosDocIds.writeInt(tempChunkDocIds.getInt(i));
-                            }
+                            termDocIdsList.addAll(tempChunkDocIds);
                             recordArrayEnd("docIds");
                             tempChunkDocIds = null; // Explicit nulling to help GC
 
                             // Process sentIds: decompress, stream to accumulator, discard
                             recordArrayStart("sentIds");
                             it.unimi.dsi.fastutil.ints.IntArrayList tempChunkSentIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            for (int i = 0; i < tempChunkSentIds.size(); i++) {
-                                dosSentIds.writeInt(tempChunkSentIds.getInt(i));
-                            }
+                            termSentIdsList.addAll(tempChunkSentIds);
                             recordArrayEnd("sentIds");
                             tempChunkSentIds = null;
 
                             // Process beginChars: decompress, stream to accumulator, discard
                             recordArrayStart("beginChars");
                             it.unimi.dsi.fastutil.ints.IntArrayList tempChunkBeginChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            for (int i = 0; i < tempChunkBeginChars.size(); i++) {
-                                dosBeginChars.writeInt(tempChunkBeginChars.getInt(i));
-                            }
+                            termBeginCharsList.addAll(tempChunkBeginChars);
                             recordArrayEnd("beginChars");
                             tempChunkBeginChars = null;
 
                             // Process endChars: decompress, stream to accumulator, discard
                             recordArrayStart("endChars");
                             it.unimi.dsi.fastutil.ints.IntArrayList tempChunkEndChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            for (int i = 0; i < tempChunkEndChars.size(); i++) {
-                                dosEndChars.writeInt(tempChunkEndChars.getInt(i));
-                            }
+                            termEndCharsList.addAll(tempChunkEndChars);
                             recordArrayEnd("endChars");
                             tempChunkEndChars = null;
 
                             // Process synonymIds: decompress, stream to accumulator, discard
                             recordArrayStart("synonymIds");
                             it.unimi.dsi.fastutil.ints.IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, false); // No delta coding for synonym IDs
-                            for (int i = 0; i < tempChunkSynonymIds.size(); i++) {
-                                dosSynonymIds.writeInt(tempChunkSynonymIds.getInt(i));
-                            }
+                            termSynonymIdsList.addAll(tempChunkSynonymIds);
                             recordArrayEnd("synonymIds");
                             tempChunkSynonymIds = null;
                         }

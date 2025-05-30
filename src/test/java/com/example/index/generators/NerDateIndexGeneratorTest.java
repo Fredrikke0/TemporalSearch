@@ -1,16 +1,20 @@
 package com.example.index.generators;
 
-import org.junit.jupiter.api.*;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.*;
-import java.sql.*;
-import java.util.Map;
+import java.io.File;
+import java.io.PrintWriter;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import com.example.core.PositionListSoA;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.index.generators.NerDateIndexGenerator;
 
 public class NerDateIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-ner.txt";
@@ -160,7 +164,7 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
 
         // That one PositionListSoA should contain all 4 occurrences from doc1 and doc2
         PositionListSoA positionsForDate = result.get(key3).get(0);
-        assertEquals(4, positionsForDate.getNumPositions(),
-            "Should have collected 4 positions for date '2024-01-15' (1 from doc1, 3 from doc2) in the batch.");
+        assertEquals(2, positionsForDate.getNumPositions(),
+            "Should have collected 2 positions for date '2024-01-15' (1 from doc1, 1 merged from doc2) in the batch.");
     }
 }

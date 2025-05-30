@@ -636,7 +636,9 @@ public class QuerySemanticValidator {
             boolean isKnownVar = registry.isProduced(rawColumnName);
             boolean isStructCol = isStructuralColumn(rawColumnName, query.mainAlias(), query.subqueries());
 
-            if (!isKnownVar && !isStructCol) {
+            // If it's a structural column, it's always valid for ORDER BY.
+            // Otherwise, it must be a known (produced) variable.
+            if (!isStructCol && !isKnownVar) {
                 // Before throwing, check if it matches a SELECT column alias (if we support that).
                 // For now, assuming rawColumnName must be a direct resolvable item or aggregate.
                 throw new QueryParseException(String.format(
@@ -659,11 +661,11 @@ public class QuerySemanticValidator {
     // New helper method: isStructuralColumn
     private boolean isStructuralColumn(String qualifiedName, Optional<String> mainAliasOpt, List<SubquerySpec> subqueries) {
         if (qualifiedName == null) return false;
-        String[] parts = qualifiedName.split("\\\\.", 2); // Use \\. for literal dot in regex
+        String[] parts = qualifiedName.split("\\.", 2); // Use \\. for literal dot in regex
         if (parts.length != 2) {
             return false; // Not in alias.FIELD format
         }
-        String alias = parts[0];
+        String aliasFromColumn = parts[0];
         String field = parts[1].toUpperCase(); // Structural fields are typically case-insensitive or stored uppercase
 
         // Define known structural fields
@@ -672,12 +674,22 @@ public class QuerySemanticValidator {
             return false;
         }
 
-        // Check if the alias matches the main query's alias or any subquery's alias
-        String mainAlias = mainAliasOpt.orElse("$main");
-        if (alias.equals(mainAlias)) {
-            return true;
+        // Check if the aliasFromColumn refers to the main query
+        if (mainAliasOpt.isPresent()) {
+            // Main query has an explicit alias (e.g., "q1" from "FROM source ALIAS q1").
+            // The column's alias must match this explicit alias.
+            if (aliasFromColumn.equals(mainAliasOpt.get())) {
+                return true;
+            }
+        } else {
+            // Main query has no explicit alias. Its implicit/default alias is "$main".
+            // The column's alias must be "$main". (Assuming QueryModelBuilder uses "$main" for implicit qualification)
+            if (aliasFromColumn.equals("$main")) {
+                return true;
+            }
         }
 
-        return subqueries.stream().anyMatch(sq -> sq.alias().equals(alias));
+        // If not matched with main query, check if it's an alias of a subquery.
+        return subqueries.stream().anyMatch(sq -> sq.alias().equals(aliasFromColumn));
     }
 }

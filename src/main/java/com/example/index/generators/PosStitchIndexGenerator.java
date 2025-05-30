@@ -90,8 +90,7 @@ public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
                     String posTag = rs.getString("pos");
                     String token = rs.getString("token");
 
-                    if (posTag != null && !posTag.isEmpty() && token != null && !token.isEmpty()
-                            && !isPosTagExcluded(posTag)) {
+                    if (posTag != null && !posTag.isEmpty() && token != null && !token.isEmpty()) {
                         String compositeValue = posTag.toUpperCase() + com.example.core.IndexAccessInterface.DELIMITER + token.toLowerCase();
                         annotations.add(new AnnotationData(
                                 rs.getInt("sentence_id"),
@@ -104,13 +103,6 @@ public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
             }
         }
         return annotations;
-    }
-
-    private boolean isPosTagExcluded(String posTag) {
-        return posTag.equals(",") || posTag.equals(".") || posTag.equals(":") || posTag.equals("``") ||
-               posTag.equals("''") || posTag.equals("$") || posTag.equals("SYM") || posTag.equals("HYPH") ||
-               posTag.equals("NFP") || posTag.equals("AFX") || posTag.equals("LS") || posTag.equals("X") ||
-               posTag.equals("-LRB-") || posTag.equals("-RRB-") || posTag.equals("PUNCT");
     }
 
     @Override

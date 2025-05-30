@@ -41,6 +41,7 @@ public class PositionListSoA {
 
     private static final IntegerCODEC CODEC = new FastPFOR128();
     private static final int UNCOMPRESSED_THRESHOLD = 128; // Small arrays might not benefit from compression.
+    private static final int RLE_ENCODED_MARKER = Integer.MIN_VALUE + 2024; // Marker for Run-Length Encoded constant arrays
 
     /**
      * Convenience constructor, defaults to a non-stitch list (isStitchList = false).
@@ -316,8 +317,32 @@ public class PositionListSoA {
     public static void writeCompressedIntArray(DataOutputStream out, int[] data, int numElementsInArray, boolean applyDelta) throws IOException {
         out.writeInt(numElementsInArray); // Store the original number of elements
 
-        if (numElementsInArray <= UNCOMPRESSED_THRESHOLD || numElementsInArray == 0) {
-            out.writeInt(-numElementsInArray); // Negative marker for uncompressed (or zero for empty)
+        if (numElementsInArray == 0) {
+            out.writeInt(0); // Negative marker for uncompressed (or zero for empty), or special RLE marker
+            return;
+        }
+
+        // Attempt RLE for non-delta coded arrays if they are constant
+        if (!applyDelta) { // RLE only considered if not applying delta and array is not empty
+            boolean allSame = true;
+            int firstVal = data[0];
+            for (int i = 1; i < numElementsInArray; i++) {
+                if (data[i] != firstVal) {
+                    allSame = false;
+                    break;
+                }
+            }
+            if (allSame) {
+                out.writeInt(RLE_ENCODED_MARKER);
+                out.writeInt(firstVal); // The repeated value
+                return; // RLE data written
+            }
+        }
+
+        // If not RLE'd (either because applyDelta was true, or not allSame, or numElementsInArray was 0)
+        // Proceed with existing logic: uncompressed threshold or FastPFOR
+        if (numElementsInArray <= UNCOMPRESSED_THRESHOLD) {
+            out.writeInt(-numElementsInArray); // Negative marker for uncompressed
             // For uncompressed, write original data regardless of applyDelta
             for (int i = 0; i < numElementsInArray; i++) {
                 out.writeInt(data[i]);
@@ -419,10 +444,21 @@ public class PositionListSoA {
             return new IntArrayList(0); // Handle empty array case
         }
 
-        int compressedLengthOrMarker = in.readInt(); // Length of compressed data or negative marker
+        int compressedLengthOrMarker = in.readInt(); // Length of compressed data or negative marker or RLE marker
         IntArrayList list = new IntArrayList(originalLength); // Pre-size with actual original length
 
-        if (compressedLengthOrMarker < 0) { // Uncompressed data
+        if (compressedLengthOrMarker == RLE_ENCODED_MARKER) {
+            if (applyInverseDelta) {
+                // This should not happen if RLE is written only for !applyDelta arrays
+                // and read with matching applyInverseDelta.
+                System.err.println("Warning: RLE_ENCODED_MARKER encountered for an array where applyInverseDelta is true. This is unexpected.");
+                // Proceeding, but inverse delta will not be applied to RLE data.
+            }
+            int repeatedValue = in.readInt();
+            for (int i = 0; i < originalLength; i++) {
+                list.add(repeatedValue);
+            }
+        } else if (compressedLengthOrMarker < 0) { // Uncompressed data
             if (-compressedLengthOrMarker != originalLength && originalLength !=0) { // Check marker consistency for non-empty
                  throw new IOException("Uncompressed length marker mismatch. Expected: " + originalLength + ", Got from marker: " + (-compressedLengthOrMarker));
             }
@@ -454,29 +490,15 @@ public class PositionListSoA {
             }
 
             if (applyInverseDelta && originalLength > 0) {
-                // Apply inverse delta only to the 'originalLength' part of the decompressed array
-                // Delta.inverseDelta operates in-place. If 'decompressed' is larger due to padding,
-                // we need to be careful. However, inverseDelta should correctly handle operating
-                // on the prefix if its length is passed or implied by the array structure.
-                // For simplicity, let's assume Delta.inverseDelta works on the whole array
-                // and the extra padded values (if any) won't affect the first 'originalLength' values.
-                // Or, more robustly, copy to an exact-size array first if Delta.inverseDelta
-                // might misbehave with padding.
-                // Given Delta.inverseDelta(int[] arr) modifies arr in place, we should be fine as long
-                // as we only use the first originalLength elements later.
-
-                // Create an exact-sized array for inverse delta if needed, or ensure inverseDelta handles it.
-                // Let's assume inverseDelta works correctly on the 'decompressed' array up to 'originalLength'.
-                // We'll copy the relevant part to 'finalData' before inverseDelta if 'decompressed' is padded.
-                int[] dataForInverseDelta;
-                if (paddedOutputLength > originalLength) {
-                    dataForInverseDelta = Arrays.copyOf(decompressed, originalLength);
-                    Delta.inverseDelta(dataForInverseDelta);
-                     list.addElements(0, dataForInverseDelta, 0, originalLength);
-                } else { // originalLength == paddedOutputLength, no padding was applied
-                    Delta.inverseDelta(decompressed); // Apply in-place
-                    list.addElements(0, decompressed, 0, originalLength);
-                }
+                // Apply inverse delta only to the 'originalLength' part of the decompressed array.
+                // Delta.inverseDelta operates in-place on the array it receives.
+                // If the 'decompressed' array is larger than 'originalLength' due to padding,
+                // applying inverseDelta directly to it would correctly compute the prefix sum
+                // for the first 'originalLength' elements. The values in the padded portion
+                // will also be affected but are ignored when we later copy only 'originalLength'
+                // elements to the list.
+                Delta.inverseDelta(decompressed); // Apply in-place to the potentially padded array
+                list.addElements(0, decompressed, 0, originalLength);
             } else {
                 list.addElements(0, decompressed, 0, originalLength);
             }

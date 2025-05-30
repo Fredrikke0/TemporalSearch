@@ -73,6 +73,7 @@ public class QueryCLI {
      * @param exportFilename Optional export filename
      */
     public void executeQuery(String queryStr, Optional<String> exportFormat, Optional<String> exportFilename) {
+        long startTimeNs = System.nanoTime(); // Start timing
         try {
             // 1. Parse query string into Query object
             logger.debug("Parsing query: {}", queryStr);
@@ -206,6 +207,10 @@ public class QueryCLI {
         } catch (Exception e) {
             logger.error("Error executing query: {}", e.getMessage(), e);
             System.err.println("Error: " + e.getMessage());
+        } finally {
+            long endTimeNs = System.nanoTime();
+            double executionTimeMs = (endTimeNs - startTimeNs) / 1_000_000.0;
+            System.out.printf("BENCHMARK_EXECUTION_TIME_MS: %.3f%n", executionTimeMs);
         }
     }
 

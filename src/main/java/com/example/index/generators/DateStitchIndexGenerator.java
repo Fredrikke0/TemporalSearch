@@ -10,6 +10,7 @@ import java.sql.Statement;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -69,7 +70,7 @@ public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
                         skipped++;
                     }
                 } else if (dateValue != null) {
-                    logger.debug("Filtered out invalid date string: {} (does not match YYYY-MM-DD pattern)", dateValue);
+                    //logger.debug("Filtered out invalid date string: {} (does not match YYYY-MM-DD pattern)", dateValue);
                     skipped++;
                 }
             }
@@ -84,7 +85,7 @@ public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
-        List<AnnotationData> annotations = new ArrayList<>();
+        List<AnnotationData> rawAnnotations = new ArrayList<>();
         String sql = """
             SELECT sentence_id, begin_char, end_char, normalized_ner
             FROM annotations
@@ -92,13 +93,8 @@ public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
                 AND ner = 'DATE'
                 AND normalized_ner IS NOT NULL
                 AND normalized_ner LIKE '____-__-__'
-        """;
-
-        // High-verbosity logging for specific document diagnosis
-        boolean detailedLogging = (documentId == 1); // Log for doc 1 in date-stitch
-        if (detailedLogging) {
-            logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: Starting fetch for docId: {}", getIndexName(), documentId);
-        }
+            ORDER BY sentence_id, begin_char
+        """; // Ensure sorting for correct merging
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
             stmt.setInt(1, documentId);
@@ -109,46 +105,77 @@ public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
                     int beginChar = rs.getInt("begin_char");
                     int endChar = rs.getInt("end_char");
 
-                    if (detailedLogging) {
-                        logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: DocId: {}, Found potential DATE: value='{}', sentId={}, begin={}, end={}",
-                                    getIndexName(), documentId, dateValue, sentenceId, beginChar, endChar);
-                    }
-
                     if (dateValue != null && DATE_PATTERN.matcher(dateValue).matches()) {
                         try {
                             LocalDate.parse(dateValue); // Final check
-                            AnnotationData ad = new AnnotationData(
+                            // Temporarily add as individual tokens; merging will happen next.
+                            rawAnnotations.add(new AnnotationData(
                                     sentenceId,
                                     beginChar,
                                     endChar,
                                     dateValue
-                            );
-                            annotations.add(ad);
-                            if (detailedLogging) {
-                                logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: DocId: {}, ADDED AnnotationData: {}", getIndexName(), documentId, ad);
-                            }
+                            ));
                         } catch (DateTimeParseException e) {
-                            if (detailedLogging) {
-                                logger.warn("AUDIT_FETCH_ANNOTATIONS [{}]: DocId: {}, SKIPPING invalid date value (parse failed): '{}' for doc {}",
-                                            getIndexName(), documentId, dateValue, documentId, e);
-                            } else {
-                                logger.debug("Skipping invalid date value during fetch: {} for doc {} - {}", dateValue, documentId, e.getMessage());
-                            }
+                            logger.debug("Skipping invalid date token during raw fetch: {} for doc {} - {}", dateValue, documentId, e.getMessage());
                         }
                     } else {
-                        if (detailedLogging) {
-                            logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: DocId: {}, SKIPPING date value (null or pattern mismatch): '{}' for doc {}",
-                                        getIndexName(), documentId, dateValue, documentId);
-                        }
+                        // logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: DocId: {}, SKIPPING date token (null or pattern mismatch): '{}' for doc {}",
+                        // getIndexName(), documentId, dateValue, documentId);
                     }
                 }
             }
         }
-        if (detailedLogging) {
-            logger.info("AUDIT_FETCH_ANNOTATIONS [{}]: Finished fetch for docId: {}. Annotations found: {}",
-                        getIndexName(), documentId, annotations.size());
+
+        if (rawAnnotations.isEmpty()) {
+            return Collections.emptyList();
         }
-        return annotations;
+
+        // Now, merge consecutive annotations
+        List<AnnotationData> mergedAnnotations = new ArrayList<>();
+        List<AnnotationData> currentMergeCandidates = new ArrayList<>();
+
+        for (AnnotationData currentAnnotation : rawAnnotations) {
+            if (currentMergeCandidates.isEmpty()) {
+                currentMergeCandidates.add(currentAnnotation);
+            } else {
+                AnnotationData prevAnnotation = currentMergeCandidates.get(currentMergeCandidates.size() - 1);
+
+                // Check for break in entity
+                if (!currentAnnotation.normalizedValue().equals(prevAnnotation.normalizedValue()) ||
+                    currentAnnotation.sentenceId() != prevAnnotation.sentenceId() ||
+                    currentAnnotation.beginChar() > prevAnnotation.endChar() + 2) { // Allow small gap, e.g., space
+
+                    // Process the completed entity
+                    if (!currentMergeCandidates.isEmpty()) {
+                        AnnotationData firstToken = currentMergeCandidates.get(0);
+                        AnnotationData lastToken = currentMergeCandidates.get(currentMergeCandidates.size() - 1);
+                        mergedAnnotations.add(new AnnotationData(
+                                firstToken.sentenceId(),
+                                firstToken.beginChar(),
+                                lastToken.endChar(),
+                                firstToken.normalizedValue()));
+                    }
+                    currentMergeCandidates.clear();
+                    currentMergeCandidates.add(currentAnnotation); // Start new entity
+                } else {
+                    // Continue current entity
+                    currentMergeCandidates.add(currentAnnotation);
+                }
+            }
+        }
+
+        // Process any remaining entity
+        if (!currentMergeCandidates.isEmpty()) {
+            AnnotationData firstToken = currentMergeCandidates.get(0);
+            AnnotationData lastToken = currentMergeCandidates.get(currentMergeCandidates.size() - 1);
+            mergedAnnotations.add(new AnnotationData(
+                    firstToken.sentenceId(),
+                    firstToken.beginChar(),
+                    lastToken.endChar(),
+                    firstToken.normalizedValue()));
+        }
+
+        return mergedAnnotations;
     }
 
     @Override

@@ -294,8 +294,8 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         }
 
         if (!batch.isEmpty()) {
-            logger.debug("ProcessBatch for {} input {} entries, produced {} unique unigram keys, filtered out {} entries.",
-                getManagedAnnotationType(), batch.size(), indexData.keySet().size(), filteredCount);
+            // logger.debug("ProcessBatch for {} input {} entries, produced {} unique unigram keys, filtered out {} entries.",
+            //     getManagedAnnotationType(), batch.size(), indexData.keySet().size(), filteredCount);
         }
 
         if (indexData.isEmpty() && !batch.isEmpty()){

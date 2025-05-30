@@ -10,6 +10,8 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -20,7 +22,6 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.core.Position;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.logging.ProgressTracker;
@@ -129,33 +130,89 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
     @Override
     protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
-        Map<String, PositionListSoA> tempAggregator = new HashMap<>();
+        if (batch.isEmpty()) {
+            return index;
+        }
 
-        for (AnnotationEntry entry : batch) {
-            String rawNormalizedDate = entry.getNormalizedNer(); // This is YYYY-MM-DD
+        // Sort by document, sentence, and then start position to correctly group consecutive entities.
+        Collections.sort(batch, Comparator
+            .comparingInt(AnnotationEntry::getDocumentId)
+            .thenComparingInt(AnnotationEntry::getSentenceId)
+            .thenComparingInt(AnnotationEntry::getBeginChar));
+
+        Map<String, PositionListSoA> tempAggregator = new HashMap<>();
+        List<AnnotationEntry> currentMergedEntityTokens = new ArrayList<>();
+
+        for (int i = 0; i < batch.size(); i++) {
+            AnnotationEntry currentEntry = batch.get(i);
+            String rawNormalizedDate = currentEntry.getNormalizedNer(); // This is YYYY-MM-DD
+
             if (rawNormalizedDate == null || rawNormalizedDate.isEmpty()) {
+                processAndClearCurrentDateEntity(tempAggregator, currentMergedEntityTokens);
                 continue;
             }
 
             String normalizedDateKey = normalizeDate(rawNormalizedDate); // Convert to YYYYMMDD
             if (normalizedDateKey == null) {
-                logger.debug("Could not normalize date for key: {}", rawNormalizedDate);
+                //logger.debug("Could not normalize date for key: {}", rawNormalizedDate);
+                processAndClearCurrentDateEntity(tempAggregator, currentMergedEntityTokens);
                 continue;
             }
 
-            this.uniqueDatesProcessed.add(normalizedDateKey); // Populate for logging
+            if (currentMergedEntityTokens.isEmpty()) {
+                currentMergedEntityTokens.add(currentEntry);
+            } else {
+                AnnotationEntry prevEntry = currentMergedEntityTokens.get(currentMergedEntityTokens.size() - 1);
+                String prevNormalizedDateKey = normalizeDate(prevEntry.getNormalizedNer());
 
-            // Use standard Position class
-            Position pos = new Position(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
-
-            PositionListSoA pl = tempAggregator.computeIfAbsent(normalizedDateKey, k -> new PositionListSoA());
-            pl.add(pos);
+                // Check for entity break
+                if (!normalizedDateKey.equals(prevNormalizedDateKey) ||
+                    currentEntry.getDocumentId() != prevEntry.getDocumentId() ||
+                    currentEntry.getSentenceId() != prevEntry.getSentenceId() ||
+                    currentEntry.getBeginChar() > prevEntry.getEndChar() + 2) { // Allow a small gap (e.g., space, hyphen)
+                    processAndClearCurrentDateEntity(tempAggregator, currentMergedEntityTokens);
+                    currentMergedEntityTokens.add(currentEntry);
+                } else {
+                    // Continue current entity
+                    currentMergedEntityTokens.add(currentEntry);
+                }
+            }
         }
+
+        // Process any remaining entity
+        processAndClearCurrentDateEntity(tempAggregator, currentMergedEntityTokens);
 
         for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
             index.put(mapEntry.getKey(), mapEntry.getValue());
         }
         return index;
+    }
+
+    private void processAndClearCurrentDateEntity(Map<String, PositionListSoA> tempAggregator, List<AnnotationEntry> currentEntityTokens) {
+        if (currentEntityTokens.isEmpty()) {
+            return;
+        }
+
+        AnnotationEntry firstToken = currentEntityTokens.get(0);
+        AnnotationEntry lastToken = currentEntityTokens.get(currentEntityTokens.size() - 1);
+
+        String rawNormalizedDate = firstToken.getNormalizedNer(); // All tokens in the list should have the same normalized date
+        String normalizedDateKey = normalizeDate(rawNormalizedDate);
+
+        if (normalizedDateKey == null) {
+            logger.warn("Skipping entity due to normalization failure for date '{}' at doc/sent/char: {}/{}/{}",
+                rawNormalizedDate, firstToken.getDocumentId(), firstToken.getSentenceId(), firstToken.getBeginChar());
+            currentEntityTokens.clear();
+            return;
+        }
+
+        this.uniqueDatesProcessed.add(normalizedDateKey); // Populate for logging
+
+        PositionListSoA pl = tempAggregator.computeIfAbsent(normalizedDateKey, k -> new PositionListSoA());
+        // Use beginChar of the first token and endChar of the last token
+        pl.add(firstToken.getDocumentId(), firstToken.getSentenceId(), firstToken.getBeginChar(), lastToken.getEndChar());
+
+        currentEntityTokens.clear();
     }
 
     @Override

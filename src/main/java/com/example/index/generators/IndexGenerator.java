@@ -277,26 +277,16 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         logger.info("Starting to write to LevelDB from sorted file: {}", sortedFile.getAbsolutePath());
         String currentTerm = null;
         long totalTermsWritten = 0;
-        long entriesSinceLastReport = 0;
-        long lastReportTime = System.currentTimeMillis();
-        final long reportIntervalMillis = 30000;
         final long TARGET_BATCH_BYTES = 8 * 1024 * 1024; // 8MB target batch size
         long currentBatchSizeBytes = 0;
         int termsInCurrentBatch = 0;
 
-        // Use ByteArrayOutputStream to accumulate raw integers for each attribute
-        // Only one chunk's worth of uncompressed data per attribute is in memory at any time
-        ByteArrayOutputStream baosDocIds = new ByteArrayOutputStream();
-        ByteArrayOutputStream baosSentIds = new ByteArrayOutputStream();
-        ByteArrayOutputStream baosBeginChars = new ByteArrayOutputStream();
-        ByteArrayOutputStream baosEndChars = new ByteArrayOutputStream();
-        ByteArrayOutputStream baosSynonymIds = new ByteArrayOutputStream();
-
-        DataOutputStream dosDocIds = new DataOutputStream(baosDocIds);
-        DataOutputStream dosSentIds = new DataOutputStream(baosSentIds);
-        DataOutputStream dosBeginChars = new DataOutputStream(baosBeginChars);
-        DataOutputStream dosEndChars = new DataOutputStream(baosEndChars);
-        DataOutputStream dosSynonymIds = new DataOutputStream(baosSynonymIds);
+        // Use IntArrayLists to accumulate integers for each attribute for the current term
+        IntArrayList termDocIdsList = new IntArrayList();
+        IntArrayList termSentIdsList = new IntArrayList();
+        IntArrayList termBeginCharsList = new IntArrayList();
+        IntArrayList termEndCharsList = new IntArrayList();
+        IntArrayList termSynonymIdsList = new IntArrayList();
 
         int numPositionsForCurrentTerm = 0;
 
@@ -321,45 +311,24 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                     if (!termFromFile.equals(currentTerm)) {
                         if (numPositionsForCurrentTerm > 0) {
-                            // Create final composite blob using proper compression format
                             ByteArrayOutputStream finalCompositeBlobStream = new ByteArrayOutputStream();
                             try (DataOutputStream dosFinal = new DataOutputStream(finalCompositeBlobStream)) {
                                 dosFinal.writeInt(numPositionsForCurrentTerm);
 
-                                // Close streams to ensure all data is written
-                                dosDocIds.close();
-                                dosSentIds.close();
-                                dosBeginChars.close();
-                                dosEndChars.close();
-                                dosSynonymIds.close();
-
-                                // Convert accumulated raw bytes back to int arrays and compress properly
-                                int[] termDocIdInts = convertByteArrayToIntArray(baosDocIds.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length, true);
-
-                                int[] termSentIdInts = convertByteArrayToIntArray(baosSentIds.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length, true);
-
-                                int[] termBeginCharInts = convertByteArrayToIntArray(baosBeginChars.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length, true);
-
-                                int[] termEndCharInts = convertByteArrayToIntArray(baosEndChars.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length, true);
-
-                                int[] termSynonymIdInts = convertByteArrayToIntArray(baosSynonymIds.toByteArray());
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length, false); // No delta coding for synonym IDs
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdsList.elements(), termDocIdsList.size(), true);
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdsList.elements(), termSentIdsList.size(), true);
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharsList.elements(), termBeginCharsList.size(), true);
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharsList.elements(), termEndCharsList.size(), true);
+                                PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdsList.elements(), termSynonymIdsList.size(), false); // No delta coding for synonym IDs
                             }
 
                             byte[] termKeyBytes = bytes(currentTerm);
                             byte[] termValueBytes = finalCompositeBlobStream.toByteArray();
 
-                            // If the current batch + this new term exceeds target, write current batch first.
                             if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES)) {
                                 writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
                                 batch.close();
                                 batch = indexAccess.createWriteBatch();
-                                // logger.debug("\n Written batch of {} terms (approx {} MB) to LevelDB due to size limit. Total terms written: {}.\n",
-                                //     termsInCurrentBatch, currentBatchSizeBytes / (1024 * 1024), totalTermsWritten);
                                 termsInCurrentBatch = 0;
                                 currentBatchSizeBytes = 0;
                             }
@@ -368,81 +337,37 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                             termsInCurrentBatch++;
                             currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length;
                             totalTermsWritten++;
-                            entriesSinceLastReport++;
-
-                            // Update Progress periodically
-                            if (entriesSinceLastReport % 10000 == 0) {
-                                progress.updateIndex(entriesSinceLastReport);
-                                entriesSinceLastReport = 0;
-                            }
                         }
 
                         currentTerm = termFromFile;
-                        // Reset streams for the new term
-                        baosDocIds.reset();
-                        baosSentIds.reset();
-                        baosBeginChars.reset();
-                        baosEndChars.reset();
-                        baosSynonymIds.reset();
-
-                        dosDocIds = new DataOutputStream(baosDocIds);
-                        dosSentIds = new DataOutputStream(baosSentIds);
-                        dosBeginChars = new DataOutputStream(baosBeginChars);
-                        dosEndChars = new DataOutputStream(baosEndChars);
-                        dosSynonymIds = new DataOutputStream(baosSynonymIds);
+                        // Reset lists for the new term
+                        termDocIdsList.clear();
+                        termSentIdsList.clear();
+                        termBeginCharsList.clear();
+                        termEndCharsList.clear();
+                        termSynonymIdsList.clear();
                         numPositionsForCurrentTerm = 0;
                     }
 
-                    // TRUE STREAMING: Process chunk data one attribute at a time
-                    // Only one uncompressed attribute array is in memory at any moment
                     try (DataInputStream disChunk = new DataInputStream(new ByteArrayInputStream(lineCompositeBlob))) {
                         int chunkNumPositions = disChunk.readInt();
                         if (chunkNumPositions > 0) {
-
-                            // Process docIds: decompress, stream to accumulator, discard
                             IntArrayList tempChunkDocIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            for (int i = 0; i < tempChunkDocIds.size(); i++) {
-                                dosDocIds.writeInt(tempChunkDocIds.getInt(i));
-                            }
-                            // tempChunkDocIds goes out of scope and becomes eligible for GC
+                            termDocIdsList.addAll(tempChunkDocIds);
 
-                            // Process sentIds: decompress, stream to accumulator, discard
                             IntArrayList tempChunkSentIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            for (int i = 0; i < tempChunkSentIds.size(); i++) {
-                                dosSentIds.writeInt(tempChunkSentIds.getInt(i));
-                            }
-                            // tempChunkSentIds goes out of scope and becomes eligible for GC
+                            termSentIdsList.addAll(tempChunkSentIds);
 
-                            // Process beginChars: decompress, stream to accumulator, discard
                             IntArrayList tempChunkBeginChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            for (int i = 0; i < tempChunkBeginChars.size(); i++) {
-                                dosBeginChars.writeInt(tempChunkBeginChars.getInt(i));
-                            }
-                            // tempChunkBeginChars goes out of scope and becomes eligible for GC
+                            termBeginCharsList.addAll(tempChunkBeginChars);
 
-                            // Process endChars: decompress, stream to accumulator, discard
                             IntArrayList tempChunkEndChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            for (int i = 0; i < tempChunkEndChars.size(); i++) {
-                                dosEndChars.writeInt(tempChunkEndChars.getInt(i));
-                            }
-                            // tempChunkEndChars goes out of scope and becomes eligible for GC
+                            termEndCharsList.addAll(tempChunkEndChars);
 
-                            // Process synonymIds: decompress, stream to accumulator, discard
-                            IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, false); // No delta coding for synonym IDs
-                            for (int i = 0; i < tempChunkSynonymIds.size(); i++) {
-                                dosSynonymIds.writeInt(tempChunkSynonymIds.getInt(i));
-                            }
-                            // tempChunkSynonymIds goes out of scope and becomes eligible for GC
+                            IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, false);
+                            termSynonymIdsList.addAll(tempChunkSynonymIds);
                         }
                         numPositionsForCurrentTerm += chunkNumPositions;
-                    }
-
-                    long currentTime = System.currentTimeMillis();
-                    if (currentTime - lastReportTime > reportIntervalMillis) {
-                        logger.info("writeToLevelDB progress: {} terms processed in last {} ms. Total terms written: {}. Current term: {}",
-                                entriesSinceLastReport, currentTime - lastReportTime, totalTermsWritten, currentTerm);
-                        lastReportTime = currentTime;
-                        entriesSinceLastReport = 0;
                     }
                 }
             } // End of try-with-resources for BufferedReader
@@ -453,34 +378,16 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 try (DataOutputStream dosFinal = new DataOutputStream(finalCompositeBlobStream)) {
                     dosFinal.writeInt(numPositionsForCurrentTerm);
 
-                    // Close streams to ensure all data is written
-                    dosDocIds.close();
-                    dosSentIds.close();
-                    dosBeginChars.close();
-                    dosEndChars.close();
-                    dosSynonymIds.close();
-
-                    // Convert accumulated raw bytes back to int arrays and compress properly
-                    int[] termDocIdInts = convertByteArrayToIntArray(baosDocIds.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdInts, termDocIdInts.length, true);
-
-                    int[] termSentIdInts = convertByteArrayToIntArray(baosSentIds.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdInts, termSentIdInts.length, true);
-
-                    int[] termBeginCharInts = convertByteArrayToIntArray(baosBeginChars.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharInts, termBeginCharInts.length, true);
-
-                    int[] termEndCharInts = convertByteArrayToIntArray(baosEndChars.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharInts, termEndCharInts.length, true);
-
-                    int[] termSynonymIdInts = convertByteArrayToIntArray(baosSynonymIds.toByteArray());
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdInts, termSynonymIdInts.length, false); // No delta coding for synonym IDs
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdsList.elements(), termDocIdsList.size(), true);
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdsList.elements(), termSentIdsList.size(), true);
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharsList.elements(), termBeginCharsList.size(), true);
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharsList.elements(), termEndCharsList.size(), true);
+                    PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdsList.elements(), termSynonymIdsList.size(), false);
                 }
 
                 byte[] termKeyBytes = bytes(currentTerm);
                 byte[] termValueBytes = finalCompositeBlobStream.toByteArray();
 
-                // Check if we need to write current batch before adding final term
                 if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES) && termsInCurrentBatch > 0) {
                     writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
                     batch.close();
@@ -494,11 +401,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 batch.put(termKeyBytes, termValueBytes);
                 termsInCurrentBatch++;
                 totalTermsWritten++;
-
-                // Final progress update for any remaining terms
-                if (entriesSinceLastReport > 0) {
-                    progress.updateIndex(entriesSinceLastReport);
-                }
             }
 
             if (termsInCurrentBatch > 0) {
@@ -518,51 +420,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     logger.warn("Error closing final write batch: {}", e.getMessage());
                 }
             }
-            // Clean up streams
-            closeQuietly(dosDocIds);
-            closeQuietly(dosSentIds);
-            closeQuietly(dosBeginChars);
-            closeQuietly(dosEndChars);
-            closeQuietly(dosSynonymIds);
+            // No longer need to close individual dos streams for attributes
             logger.info("Finished writing to LevelDB. Total terms written: {}. Total n-grams generated: {}", totalTermsWritten, getTotalNGramsGenerated());
         }
         return totalTermsWritten;
-    }
-
-    /**
-     * Converts a byte array (assumed to be a sequence of 4-byte integers in big-endian order)
-     * back to an int array.
-     * @param bytes The byte array to convert.
-     * @return The corresponding int array.
-     * @throws IOException If the byte array length is not a multiple of 4.
-     */
-    private int[] convertByteArrayToIntArray(byte[] bytes) throws IOException {
-        if (bytes == null) return new int[0];
-        if (bytes.length % 4 != 0) {
-            throw new IOException("Byte array length (" + bytes.length + ") is not a multiple of 4, cannot convert to int array.");
-        }
-        if (bytes.length == 0) {
-            return new int[0];
-        }
-        int[] ints = new int[bytes.length / 4];
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
-             DataInputStream dis = new DataInputStream(bais)) {
-            for (int i = 0; i < ints.length; i++) {
-                ints[i] = dis.readInt();
-            }
-        }
-        return ints;
-    }
-
-    // Helper method to close streams quietly
-    private void closeQuietly(Closeable closeable) {
-        if (closeable != null) {
-            try {
-                closeable.close();
-            } catch (IOException e) {
-                logger.debug("Error closing stream quietly: {}", e.getMessage());
-            }
-        }
     }
 
     /**

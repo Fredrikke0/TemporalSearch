@@ -1,18 +1,22 @@
 package com.example.core;
 
-import com.example.index.AnnotationType;
-import com.example.index.StitchPosition;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.function.Executable;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.Iterator;
-import java.util.List;
 import java.util.NoSuchElementException;
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+
+import com.example.index.AnnotationType;
+import com.example.index.StitchPosition;
+
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 class PositionListSoATest {
 
@@ -404,4 +408,56 @@ class PositionListSoATest {
         assertEquals(2, pl.getNumPositions()); // Ensure list is still valid
     }
 
+    @Test
+    void testSerializationUsesRLEForConstantSynonymIds() throws IOException {
+        final int NUM_POSITIONS = 200; // Ensure this is > UNCOMPRESSED_THRESHOLD (128)
+
+        // Scenario 1: All synonym IDs are -1 (typical for non-stitch list due to 4-arg add)
+        // RLE should be applied to the synonymIds array.
+        PositionListSoA listWithRLE_NegativeOne = new PositionListSoA();
+        for (int i = 0; i < NUM_POSITIONS; i++) {
+            listWithRLE_NegativeOne.add(i, i % 10, i * 10, i * 10 + 5); // synonymId will be -1
+        }
+
+        byte[] rleBlob_NegativeOne = listWithRLE_NegativeOne.serializeToCompositeBlob();
+        PositionListSoA deserializedListWithRLE_NegativeOne = PositionListSoA.deserializeFromCompositeBlob(rleBlob_NegativeOne);
+        assertSoaListsEqual(listWithRLE_NegativeOne, deserializedListWithRLE_NegativeOne);
+
+        // Scenario 2: Synonym IDs vary.
+        // RLE should NOT be applied to synonymIds array; it will go through FastPFOR (since applyDelta=false and not constant).
+        PositionListSoA listWithoutRLEForSynonyms = new PositionListSoA();
+        for (int i = 0; i < NUM_POSITIONS; i++) {
+            // Use same doc/sent/begin/end as above to isolate synonymId's impact
+            listWithoutRLEForSynonyms.add(i, i % 10, i * 10, i * 10 + 5, 1000 + i); // Varying synonymId
+        }
+
+        byte[] nonRleSynonymBlob = listWithoutRLEForSynonyms.serializeToCompositeBlob();
+        PositionListSoA deserializedListWithoutRLE = PositionListSoA.deserializeFromCompositeBlob(nonRleSynonymBlob);
+        assertSoaListsEqual(listWithoutRLEForSynonyms, deserializedListWithoutRLE);
+
+        // Assert that the RLE blob is smaller.
+        // The synonymIds array in rleBlob_NegativeOne (all -1s) should be RLE'd (approx 12 bytes data part + overhead).
+        // The synonymIds array in nonRleSynonymBlob (varying) should be FastPFOR'd (much larger for 200 ints).
+        assertTrue(rleBlob_NegativeOne.length < nonRleSynonymBlob.length,
+                "Blob with RLE for constant synonymIds (-1) should be smaller than blob with FastPFOR for varying synonymIds. " +
+                "RLE (-1) size: " + rleBlob_NegativeOne.length + ", Non-RLE (varying) size: " + nonRleSynonymBlob.length);
+
+        // Scenario 3: All synonym IDs are a constant positive value (e.g., 777)
+        // RLE should also be applied here.
+        PositionListSoA listWithRLE_ConstantPositive = new PositionListSoA();
+        for (int i = 0; i < NUM_POSITIONS; i++) {
+             listWithRLE_ConstantPositive.add(i, i % 10, i * 10, i * 10 + 5, 777); // Constant positive synonymId
+        }
+        byte[] rleBlob_ConstantPositive = listWithRLE_ConstantPositive.serializeToCompositeBlob();
+        PositionListSoA deserializedListWithRLE_ConstantPositive = PositionListSoA.deserializeFromCompositeBlob(rleBlob_ConstantPositive);
+        assertSoaListsEqual(listWithRLE_ConstantPositive, deserializedListWithRLE_ConstantPositive);
+
+        // Its length should be very similar to rleBlob_NegativeOne (all -1s).
+        // Since other attributes (docId, sentId, begin, end) are identical to listWithRLE_NegativeOne,
+        // their compressed sizes should be identical. The RLE part for synonymIds should also be identical in size
+        // (originalLength + RLE_MARKER_int + value_int).
+        assertEquals(rleBlob_NegativeOne.length, rleBlob_ConstantPositive.length,
+                "Blobs for RLE with different constant synonym values (-1 vs 777) should be the same size " +
+                "if other attributes are identical. Size(-1): " + rleBlob_NegativeOne.length + ", Size(777): " + rleBlob_ConstantPositive.length);
+    }
 }
