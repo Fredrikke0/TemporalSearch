@@ -11,9 +11,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.Options;
-import org.iq80.leveldb.WriteBatch;
+import org.rocksdb.Options;
+import org.rocksdb.RocksIterator;
+import org.rocksdb.WriteBatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,8 +22,8 @@ import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationTypeSource;
-import com.example.index.LevelDBConfig;
 import com.example.index.NgramType;
+import com.example.index.RocksDBConfig;
 
 /**
  * Generates a generalized "stitch" index by finding co-occurrences of N-grams (from a pre-built
@@ -105,14 +105,14 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
         this.stitchOutputPath = Paths.get(baseIndexDirectory, outputStitchIndexName);
     }
 
-    private Options getLevelDBOptions() {
-        return LevelDBConfig.createOptimizedOptions();
+    private Options getRocksDBOptions() {
+        return RocksDBConfig.createOptimizedOptions();
     }
 
     // Renamed and adapted: This sets up IAs for annotation source, its temp, and final output.
     // It no longer touches N-gram source or N-gram temp IAs.
     private void setupStitchAccess() throws IndexAccessException {
-        Options defaultOptions = getLevelDBOptions();
+        Options defaultOptions = getRocksDBOptions();
         this.annotationSourceIA = new IndexAccess(annotationSourcePath, sourceAnnotationIndexName + "_source_for_" + outputStitchIndexName, defaultOptions);
 
         cleanupDirectory(stitchOutputPath.toFile()); // Clean final output dir before generation
@@ -156,19 +156,19 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
         long stitchKeysWritten = 0;
         Map<String, PositionListSoA> finalStitchAggregator = new HashMap<>();
 
-        // Iterate through the N-gram temporary index (as it might be larger or the primary driver)
-        try (DBIterator ngramSentenceIterator = temporaryNgramBySentenceIA.iterateFromFirst()) {
-            for (ngramSentenceIterator.seekToFirst(); ngramSentenceIterator.hasNext(); ngramSentenceIterator.next()) {
-                byte[] sentenceKeyBytes = ngramSentenceIterator.peekNext().getKey();
+        RocksIterator ngramSentenceIterator = null;
+        try {
+            ngramSentenceIterator = temporaryNgramBySentenceIA.iterateFromFirst();
+            for (ngramSentenceIterator.seekToFirst(); ngramSentenceIterator.isValid(); ngramSentenceIterator.next()) {
+                byte[] sentenceKeyBytes = ngramSentenceIterator.key();
                 String sentenceKeyString = IndexAccess.asString(sentenceKeyBytes);
                 String[] docSentParts = sentenceKeyString.split("_");
                 int docId = Integer.parseInt(docSentParts[0]);
                 int sentId = Integer.parseInt(docSentParts[1]);
 
-                byte[] ngramOccurrencesBytes = ngramSentenceIterator.peekNext().getValue();
+                byte[] ngramOccurrencesBytes = ngramSentenceIterator.value();
                 List<TermOccurrenceInSentence> ngramsInSentence = TermOccurrenceInSentence.deserializeList(ngramOccurrencesBytes);
 
-                // Look up this sentence in the annotation temporary index
                 java.util.Optional<byte[]> annotationOccurrencesBytesOpt = temporaryAnnotationBySentenceIA.getRaw(sentenceKeyBytes);
 
                 if (annotationOccurrencesBytesOpt.isPresent()) {
@@ -179,7 +179,6 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
                                 String stitchKeyString = ngramOcc.term + IndexAccessInterface.DELIMITER + annotationOcc.term;
                                 PositionListSoA posList = finalStitchAggregator
                                         .computeIfAbsent(stitchKeyString, k -> new PositionListSoA());
-                                // Value in PositionListSoA is the N-gram's position
                                 posList.add(docId, sentId, ngramOcc.beginChar, ngramOcc.endChar);
                                 stitchEntriesGenerated++;
                             }
@@ -203,6 +202,14 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
                 writeStitchBatchToFinalDB(finalStitchAggregator, stitchOutputIA);
                 stitchKeysWritten += finalStitchAggregator.size();
             }
+        } finally {
+            if (ngramSentenceIterator != null) {
+                try {
+                    ngramSentenceIterator.close();
+                } catch (Exception e) {
+                    logger.warn("Error closing RocksIterator in NgramAnnotationStitchGenerator: {}", e.getMessage(), e);
+                }
+            }
         }
         logger.debug("Finished joining for {}. Total sentences processed: {}, total stitch entries generated: {}, total unique stitch keys written: {}",
                      outputStitchIndexName, sentencesProcessed, stitchEntriesGenerated, stitchKeysWritten);
@@ -212,7 +219,12 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
                                          IndexAccess finalDb) throws IOException, IndexAccessException {
         try (WriteBatch batch = finalDb.createWriteBatch()) {
             for (Map.Entry<String, PositionListSoA> entry : stitchBatch.entrySet()) {
-                batch.put(IndexAccess.bytes(entry.getKey()), entry.getValue().serializeToCompositeBlob());
+                try {
+                    batch.put(IndexAccess.bytes(entry.getKey()), entry.getValue().serializeToCompositeBlob());
+                } catch (org.rocksdb.RocksDBException e) {
+                    logger.error("Failed to put entry in WriteBatch for key: {}", entry.getKey(), e);
+                    throw new IOException("Failed to put entry in WriteBatch for key: " + entry.getKey(), e);
+                }
             }
             finalDb.write(batch);
             logger.trace("Wrote stitch batch of {} keys to {}", stitchBatch.size(), finalDb.getIndexType());

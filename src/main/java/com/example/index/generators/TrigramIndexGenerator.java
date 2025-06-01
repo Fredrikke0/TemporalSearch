@@ -22,6 +22,8 @@ import com.google.common.collect.ListMultimap;
  * Generates a streaming trigram index from annotation entries.
  * Each entry maps a sequence of three consecutive lemmatized tokens to their positions in the corpus.
  * Uses streaming processing and external sorting for efficient memory usage.
+ *
+ * This implementation is now RocksDB-based (see IndexGenerator).
  */
 public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
     public TrigramIndexGenerator(String indexBaseDir, String stopwordsPath,

@@ -34,6 +34,8 @@ import com.google.common.collect.ListMultimap;
  * normalizes them to YYYYMMDD format, and stores their positions.
  * Uses streaming processing and external sorting for efficient memory usage.
  *
+ * This implementation is now RocksDB-based (see IndexGenerator).
+ *
  * <h2>Date Extraction and Indexing Process</h2>
  * <ol>
  *   <li>The NLP pipeline identifies date mentions in the text using Named Entity Recognition (NER)</li>

@@ -18,8 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.iq80.leveldb.Options;
-import org.iq80.leveldb.WriteBatch;
+import org.rocksdb.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,7 +26,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.PositionListSoA;
 import com.example.index.IndexEntry;
-import com.example.index.LevelDBConfig;
+import com.example.index.RocksDBConfig;
 import com.example.logging.IndexingMetrics;
 import com.example.logging.ProgressTracker;
 import com.google.code.externalsorting.ExternalSort;
@@ -117,10 +116,11 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     protected IndexGenerator(String actualIndexDbPath, String indexName, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progressTracker, int batchSizeNum, Path customTempPath) throws IOException {
         this.effectiveIndexName = indexName;
-        Options options = LevelDBConfig.createOptimizedOptions();
+        Options options = RocksDBConfig.createOptimizedOptions();
         try {
             this.indexAccess = new IndexAccess(Path.of(actualIndexDbPath), this.effectiveIndexName, options);
         } catch (IndexAccessException e) {
+            options.close();
             throw new IOException("Failed to initialize IndexAccess for " + this.effectiveIndexName, e);
         }
         this.sqliteConn = sqliteConn;
@@ -278,7 +278,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @return The total number of terms written to the database.
      */
     protected long writeToLevelDB(File sortedFile) throws IOException {
-        logger.info("Starting to write to LevelDB from sorted file: {}", sortedFile.getAbsolutePath());
+        logger.info("Starting to write to RocksDB from sorted file: {}", sortedFile.getAbsolutePath());
         String currentTerm = null;
         long totalTermsWritten = 0;
         final long TARGET_BATCH_BYTES = 8 * 1024 * 1024; // 8MB target batch size
@@ -294,7 +294,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
         int numPositionsForCurrentTerm = 0;
 
-        WriteBatch batch = null;
+        org.rocksdb.WriteBatch batch = null;
         try {
             batch = indexAccess.createWriteBatch();
             try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
@@ -336,8 +336,11 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                                 termsInCurrentBatch = 0;
                                 currentBatchSizeBytes = 0;
                             }
-
-                            batch.put(termKeyBytes, termValueBytes);
+                            try {
+                                batch.put(termKeyBytes, termValueBytes);
+                            } catch (org.rocksdb.RocksDBException e) {
+                                throw new IOException("Failed to put to WriteBatch for term: " + currentTerm, e);
+                            }
                             termsInCurrentBatch++;
                             currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length;
                             totalTermsWritten++;
@@ -396,36 +399,38 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
                     batch.close();
                     batch = indexAccess.createWriteBatch();
-                    logger.info("Written batch of {} terms (approx {:.2f} MB) to LevelDB before adding final term. Total terms written: {}.",
+                    logger.info("Written batch of {} terms (approx {:.2f} MB) to RocksDB before adding final term. Total terms written: {}.",
                                 termsInCurrentBatch, currentBatchSizeBytes / (1024.0 * 1024.0), totalTermsWritten);
                     termsInCurrentBatch = 0;
                     currentBatchSizeBytes = 0;
                 }
-
-                batch.put(termKeyBytes, termValueBytes);
+                try {
+                    batch.put(termKeyBytes, termValueBytes);
+                } catch (org.rocksdb.RocksDBException e) {
+                    throw new IOException("Failed to put to WriteBatch for final term: " + currentTerm, e);
+                }
                 termsInCurrentBatch++;
                 totalTermsWritten++;
             }
 
             if (termsInCurrentBatch > 0) {
                  writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
-                logger.info("Written final batch of {} terms to LevelDB. Total terms written: {}", termsInCurrentBatch, totalTermsWritten);
+                logger.info("Written final batch of {} terms to RocksDB. Total terms written: {}", termsInCurrentBatch, totalTermsWritten);
             }
 
         } catch (IOException e) {
-            logger.error("IOException during writeToLevelDB. Last term processed: {}. Total terms written: {}. Error: {}",
+            logger.error("IOException during writeToRocksDB. Last term processed: {}. Total terms written: {}. Error: {}",
                     currentTerm, totalTermsWritten, e.getMessage(), e);
             throw e;
+        } catch (IndexAccessException e) {
+            logger.error("IndexAccessException during writeToRocksDB. Last term processed: {}. Total terms written: {}. Error: {}",
+                    currentTerm, totalTermsWritten, e.getMessage(), e);
+            throw new IOException("Database access error during writeToRocksDB: " + e.getMessage(), e);
         } finally {
             if (batch != null) {
-                try {
-                    batch.close();
-                } catch (IOException e) {
-                    logger.warn("Error closing final write batch: {}", e.getMessage());
-                }
+                batch.close();
             }
-            // No longer need to close individual dos streams for attributes
-            logger.info("Finished writing to LevelDB. Total terms written: {}. Total n-grams generated: {}", totalTermsWritten, getTotalNGramsGenerated());
+            logger.info("Finished writing to RocksDB. Total terms written: {}. Total n-grams generated: {}", totalTermsWritten, getTotalNGramsGenerated());
         }
         return totalTermsWritten;
     }
@@ -433,7 +438,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     /**
      * Attempts to write a batch to the index, retrying on specific failures.
      */
-    private void writeBatchWithRetry(WriteBatch batch, int maxRetries, long delayMs, int numEntries) throws IOException {
+    private void writeBatchWithRetry(org.rocksdb.WriteBatch batch, int maxRetries, long delayMs, int numEntries) throws IOException {
         int attempt = 0;
         while (true) {
             try {
@@ -448,7 +453,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                             attempt, maxRetries, numEntries, getIndexName(), e.getMessage(), e.getErrorType());
 
                 if (attempt >= maxRetries || e.getErrorType() == IndexAccessException.ErrorType.INITIALIZATION_ERROR) {
-                    // Log the final failure with more detail before throwing
                     logger.error("Failed to write batch of {} entries to index [{}] after {} attempts. Giving up.", numEntries, getIndexName(), attempt, e);
                     throw new IOException("Failed to write batch of " + numEntries + " entries to index [" + getIndexName() + "] after " + attempt + " attempts", e);
                 }
@@ -543,13 +547,13 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
             ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), false);
 
-            logger.info("Writing merged entries to LevelDB index...");
-            // --- Start Progress for writeToLevelDB ---
+            logger.info("Writing merged entries to RocksDB index...");
+            // --- Start Progress for writeToRocksDB ---
             progress.startIndex(getIndexName() + " - Writing to DB", 0); // 0 or -1 for indeterminate
             long totalTermsWrittenToDb = writeToLevelDB(outputFile);
             progress.updateIndex(totalTermsWrittenToDb); // Update with total terms written in this stage
             progress.completeIndex(); // Complete this sub-stage
-            // --- End Progress for writeToLevelDB ---
+            // --- End Progress for writeToRocksDB ---
 
             metrics.logIndexingMetrics();
 

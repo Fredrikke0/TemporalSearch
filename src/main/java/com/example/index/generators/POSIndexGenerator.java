@@ -24,6 +24,8 @@ import com.google.common.collect.ListMultimap;
  * Generates a streaming POS (Part-of-Speech) index from annotation entries.
  * Each entry maps a POS tag to its positions in the corpus.
  * Uses streaming processing and external sorting for efficient memory usage.
+ *
+ * This implementation is now RocksDB-based (see IndexGenerator).
  */
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(POSIndexGenerator.class);
