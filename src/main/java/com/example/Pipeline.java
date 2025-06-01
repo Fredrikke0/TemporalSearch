@@ -38,7 +38,6 @@ public class Pipeline {
     }
 
     public static void runPipeline(String[] args) throws Exception {
-        // Create argument parser
         ArgumentParser parser = ArgumentParsers.newFor("Pipeline").build()
                 .defaultHelp(true)
                 .description("Process and index text data through annotation and indexing stages.")
@@ -48,28 +47,25 @@ public class Pipeline {
                        "  Annotate Existing Project: ${prog} --db-file path/to/source.db --index-dir path/to/my_project_outputs -s annotate -b 1000 -t 8\n" +
                        "  Index Existing Project (force): ${prog} --db-file path/to/source.db --index-dir path/to/my_project_outputs -s index -y bigram --force");
 
-        // Stage argument (moved higher as it dictates required args)
         parser.addArgument("-s", "--stage")
                 .choices("all", "annotate", "index")
-                .required(true) // Stage is now mandatory
+                .required(true)
                 .help("Pipeline stage(s) to run: " +
                       "all - Run annotation and indexing; " +
                       "annotate - Annotate documents; " +
                       "index - Generate indexes from annotations");
 
-        // Project arguments group -> Paths group
         var pathsGroup = parser.addArgumentGroup("Path arguments");
         pathsGroup.addArgument("--db-file")
                 .dest("db_file_path")
                 .required(true)
-                .help("Path to the project's SQLite database file. This database will be used directly (not copied).");
+                .help("Path to the SQLite database file.");
 
         pathsGroup.addArgument("--index-dir")
                 .dest("index_dir_path")
                 .required(true)
-                .help("Path to the directory where indexes and temporary processing files will be stored. Will be created if it doesn't exist.");
+                .help("Path to the directory where indexes and temporary processing files will be stored.");
 
-        // Common optional arguments
         var commonOptsGroup = parser.addArgumentGroup("Common optional arguments");
         commonOptsGroup.addArgument("--force")
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
@@ -93,25 +89,25 @@ public class Pipeline {
                 .help("Number of documents to commit per transaction during annotation");
 
         annotateGroup.addArgument("-t", "--threads")
-                .setDefault(Runtime.getRuntime().availableProcessors()) // Default to available processors
+                .setDefault(Runtime.getRuntime().availableProcessors())
                 .type(Integer.class)
-                .help("Number of parallel threads for CoreNLP processing");
+                .help("Number of parallel threads for CoreNLP processing.");
 
         // Index stage group
         var indexGroup = parser.addArgumentGroup("Index stage arguments (used in 'index' or 'all' stage)");
         indexGroup.addArgument("-w", "--stopwords")
                 .setDefault("stopwords.txt")
-                .help("Path to file containing stopwords to exclude");
+                .help("Path to file containing stopwords to exclude.");
 
         indexGroup.addArgument("--idx-batch-size")
                 .setDefault(200000)
                 .type(Integer.class)
-                .help("Number of documents to fetch from DB at a time by an index generator. Critical for memory usage of complex indexes like 'stitch'.");
+                .help("Number of documents to fetch from DB at a time by an index generator.");
 
         indexGroup.addArgument("-y", "--index-type")
                 .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash", "all", "stitches")
                 .setDefault("all")
-                .nargs("+") // Allow multiple values
+                .nargs("+")
                 .help("Type of index to generate (can specify multiple, space-separated): " +
                       "unigram - Single word index; " +
                       "bigram - Two word phrases; " +
@@ -123,7 +119,7 @@ public class Pipeline {
                       "hypernym - Word hypernyms; " +
                       "nash - Efficient index for searching for dates; " +
                       "stitches - Generates all N-gram/Annotation stitch combinations (e.g., bigram-date, unigram-ner, etc.); " +
-                      "all - Generate all available index types");
+                      "all - Generate all available index types.");
 
         indexGroup.addArgument("--custom-temp-dir")
                 .dest("custom_temp_dir")
@@ -131,22 +127,19 @@ public class Pipeline {
                 .required(false)
                 .help("Path to a custom base directory for temporary files during index generation. If not specified, defaults to '<index_dir_path>/indexes/temp/'.");
 
-        // Parse arguments
         Namespace ns;
         try {
             ns = parser.parseArgs(args);
         } catch (ArgumentParserException e) {
-            parser.handleError(e); // argparse4j handles printing help/error and exiting
-            return; // Exit runPipeline if handleError doesn't exit (though it typically does)
+            parser.handleError(e);
+            return;
         }
 
         // --- Argument Processing and Validation ---
         String stage = ns.getString("stage");
         Path dbFilePath = Path.of(ns.getString("db_file_path")).toAbsolutePath();
         Path indexDirPath = Path.of(ns.getString("index_dir_path")).toAbsolutePath();
-        String projectName = indexDirPath.getFileName().toString(); // Derive project name from index dir path
-        Path projectDbPath = dbFilePath; // Use the DB path directly
-        Path indexBasePath = indexDirPath.resolve("indexes"); // Indexes will be stored in a subdir of index_dir_path
+        Path indexBasePath = indexDirPath.resolve("indexes");
 
         boolean force = ns.getBoolean("force");
         Integer limit = ns.getInt("limit");
@@ -154,47 +147,43 @@ public class Pipeline {
 
         java.util.List<String> indexTypes = ns.getList("index_type"); // Get list of index types
 
-        logger.info("Starting Pipeline for project '{}' (DB: '{}', Index Dir: '{}', Stage: {}, Index Types: {})",
-                    projectName, projectDbPath, indexDirPath, stage, indexTypes);
+        logger.info("Starting Pipeline (DB: '{}', Index Dir: '{}', Stage: {}, Index Types: {})",
+                    dbFilePath, indexDirPath, stage, indexTypes);
 
         // --- Project Initialization & Validation ---
 
         // Validate database file existence
-        if (!Files.exists(projectDbPath)) {
-            logger.error("Database file not found: {}", projectDbPath.toAbsolutePath());
-            throw new IOException("Database file not found: " + projectDbPath.toAbsolutePath());
+        if (!Files.exists(dbFilePath)) {
+            logger.error("Database file not found: {}", dbFilePath.toAbsolutePath());
+            throw new IOException("Database file not found: " + dbFilePath.toAbsolutePath());
         }
-        logger.info("Using database file: {}", projectDbPath.toAbsolutePath());
+        logger.debug("Using database file: {}", dbFilePath.toAbsolutePath());
 
         // Create index directory and its 'indexes' subdirectory if they don't exist
         if (!Files.exists(indexDirPath)) {
             logger.info("Index directory '{}' does not exist. Creating...", indexDirPath.toAbsolutePath());
             Files.createDirectories(indexDirPath);
         } else {
-            logger.info("Using existing index directory '{}'", indexDirPath.toAbsolutePath());
+            logger.debug("Using existing index directory '{}'", indexDirPath.toAbsolutePath());
         }
 
         if (!Files.exists(indexBasePath)) {
             logger.info("Base indexes directory '{}' does not exist within index directory. Creating...", indexBasePath.toAbsolutePath());
             Files.createDirectories(indexBasePath);
         } else {
-            logger.info("Using existing base indexes directory '{}'", indexBasePath.toAbsolutePath());
+            logger.debug("Using existing base indexes directory '{}'", indexBasePath.toAbsolutePath());
         }
-
-        // Log final paths being used
-        logger.debug("Using Project Database: {}", projectDbPath.toAbsolutePath());
-        logger.debug("Using Index Base Directory: {}", indexBasePath.toAbsolutePath());
 
         // --- Stage Execution ---
 
         // Run annotation stage if requested ('all' or 'annotate')
         if (stage.equals("all") || stage.equals("annotate")) {
             logger.info("--- Annotation Stage ---");
-            logger.debug("About to run annotation on DB: {}", projectDbPath.toAbsolutePath());
+            logger.debug("About to run annotation on DB: {}", dbFilePath.toAbsolutePath());
             int threads = ns.getInt("threads");
             int batchSize = ns.getInt("batch_size"); // Used for commit frequency
 
-            Annotations.AnnotationStatus status = Annotations.getAnnotationStatus(projectDbPath);
+            Annotations.AnnotationStatus status = Annotations.getAnnotationStatus(dbFilePath);
 
             if (force || status.needsProcessing) {
                 int startId;
@@ -215,7 +204,7 @@ public class Pipeline {
                 logger.info("Starting annotation (startDocumentId={}, force={}, limit={}, threads={}, batchSize={})",
                             startId, force, limit == null ? "none" : limit, threads, batchSize);
                 // Ensure limit is passed correctly
-                Annotations.runAnnotation(projectDbPath, startId, threads, batchSize, limit, force); // Pass force flag
+                Annotations.runAnnotation(dbFilePath, startId, threads, batchSize, limit, force); // Pass force flag
                 logger.info("Annotation stage completed.");
             } else {
                 logger.info("Annotation already complete according to status check. Skipping. Use --force to re-annotate.");
@@ -225,9 +214,8 @@ public class Pipeline {
         // Run indexing stage if requested ('all' or 'index')
         if (stage.equals("all") || stage.equals("index")) {
             logger.info("--- Indexing Stage ---");
-            logger.debug("About to run indexing on DB: {}", projectDbPath.toAbsolutePath());
             java.util.List<String> requestedIndexTypes = ns.getList("index_type");
-            java.util.Set<String> effectiveIndexTypes = new java.util.HashSet<>();
+            java.util.Set<String> effectiveIndexTypes = new java.util.LinkedHashSet<>();
 
             if (requestedIndexTypes.contains("all")) {
                 effectiveIndexTypes.addAll(java.util.List.of("unigram", "bigram", "trigram", "dependency", "hypernym", "ner_date", "pos", "ner", "nash"));
@@ -239,6 +227,7 @@ public class Pipeline {
                 effectiveIndexTypes.addAll(requestedIndexTypes);
                 if (requestedIndexTypes.contains("stitches")) {
                     effectiveIndexTypes.addAll(java.util.List.of("unigram", "bigram", "trigram", "pos", "ner", "ner_date"));
+                    effectiveIndexTypes.add("stitches");
                 }
             }
 
@@ -294,10 +283,10 @@ public class Pipeline {
                 logger.info("Pipeline called without --force. IndexRunner will check individual index directories for existence and decide whether to generate/skip.");
             }
 
-            logger.info("Calling Indexer (types={}, stopwords='{}', batchSize={}, customTempDir='{}', force={})",
+            logger.info("Calling IndexRunner (types={}, stopwords='{}', batchSize={}, customTempDir='{}', force={})",
                         new java.util.ArrayList<>(effectiveIndexTypes), stopwordsPath, indexBatchSize, effectiveCustomTempDirStr, force);
             IndexRunner.runIndexing(
-                projectDbPath.toString(),
+                dbFilePath.toString(),
                 indexBasePath.toString(),
                 stopwordsPath,
                 indexBatchSize,
@@ -308,7 +297,7 @@ public class Pipeline {
             logger.info("Indexing stage completed.");
         }
 
-        logger.info("Pipeline completed successfully for project '{}'!", projectName);
+        logger.info("Pipeline completed successfully!");
     }
 
     // Helper method to delete directories recursively

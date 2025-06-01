@@ -11,7 +11,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,10 +47,10 @@ import com.example.logging.ProgressTracker;
 import com.google.common.base.Stopwatch;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
+import net.sourceforge.argparse4j.impl.Arguments;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-
 
 public class IndexRunner {
     private static final Logger logger = LoggerFactory.getLogger(IndexRunner.class);
@@ -70,13 +70,9 @@ public class IndexRunner {
                 .help("Type of index to generate (can specify multiple, space-separated)");
         parser.addArgument("--custom-temp-dir").dest("custom_temp_dir").type(String.class).required(false)
                 .help("Path to a custom directory for temporary files during index generation.");
-        parser.addArgument("--debug").action(net.sourceforge.argparse4j.impl.Arguments.storeTrue()).help("Enable debug logging to console");
-        parser.addArgument("--force").action(net.sourceforge.argparse4j.impl.Arguments.storeTrue()).help("Force re-generation of indexes, overwriting existing ones.");
+        parser.addArgument("--force").action(Arguments.storeTrue()).help("Force re-generation of indexes, overwriting existing ones.");
         try {
             Namespace ns = parser.parseArgs(args);
-            if (ns.getBoolean("debug")) {
-                System.setProperty("DEBUG_MODE", "true");
-            }
             runIndexing(
                 ns.getString("db"),
                 ns.getString("index_dir"),
@@ -97,12 +93,6 @@ public class IndexRunner {
 
     public static void runIndexing(String dbPath, String indexDir, String stopwordsPath,
             int batchSize, List<String> requestedIndexTypes, String customTempDirStr, boolean force) throws Exception {
-        logger.info("Starting indexing process (force={}, requestedTypes={})", force, requestedIndexTypes);
-        logger.debug("Database: {}", dbPath);
-        logger.debug("Index directory: {}", indexDir);
-        if (customTempDirStr != null) {
-            logger.debug("Custom temporary directory: {}", customTempDirStr);
-        }
 
         Path customTempPath = (customTempDirStr != null && !customTempDirStr.isBlank()) ? Path.of(customTempDirStr) : null;
         if (customTempPath != null) {
@@ -118,17 +108,17 @@ public class IndexRunner {
             throw new IOException("Database file is empty. Please run the annotation stage first.");
         }
 
-        Set<String> indexTypesToProcess = new HashSet<>();
+        Set<String> indexTypesToProcess = new LinkedHashSet<>();
         if (requestedIndexTypes.contains("all")) {
             indexTypesToProcess.addAll(List.of("unigram", "bigram", "trigram", "dependency", "hypernym", "ner_date", "pos", "ner", "nash"));
             if (requestedIndexTypes.contains("stitches")) {
                  indexTypesToProcess.add("stitches");
             }
         } else {
-            indexTypesToProcess.addAll(requestedIndexTypes.stream().map(String::toLowerCase).collect(Collectors.toSet()));
+            indexTypesToProcess.addAll(requestedIndexTypes.stream().map(String::toLowerCase).collect(Collectors.toCollection(LinkedHashSet::new)));
         }
 
-        logger.info("Effective index types to process by IndexRunner: {}", indexTypesToProcess);
+        logger.debug("Effective index types to process by IndexRunner: {}", indexTypesToProcess);
         setupIndexDirectories(indexDir, new ArrayList<>(indexTypesToProcess), force);
 
         Stopwatch totalTime = Stopwatch.createStarted();
