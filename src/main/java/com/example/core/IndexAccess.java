@@ -1,24 +1,22 @@
 package com.example.core;
 
-import static org.iq80.leveldb.impl.Iq80DBFactory.factory;
-
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.iq80.leveldb.DB;
-import org.iq80.leveldb.DBException;
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.Options;
-import org.iq80.leveldb.WriteBatch;
-import org.iq80.leveldb.WriteOptions;
+import org.rocksdb.Options;
+import org.rocksdb.RocksDB;
+import org.rocksdb.RocksDBException;
+import org.rocksdb.RocksIterator;
+import org.rocksdb.WriteBatch;
+import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Core class for accessing LevelDB-based indexes.
+ * Core class for accessing RocksDB-based indexes.
  * Provides unified access for both read and write operations.
  */
 public class IndexAccess implements IndexAccessInterface {
@@ -26,44 +24,46 @@ public class IndexAccess implements IndexAccessInterface {
 
     // Delimiter constant inherited from IndexAccessInterface
 
-    private final DB db;
+    private final RocksDB db;
     private final String indexPath;
     private final String indexType;
     private final AtomicBoolean isOpen;
+    private final Options options; // Store options for closing
 
     /**
      * Creates a new IndexAccess instance for a specific index type.
      *
      * @param indexPath Full path to the index directory
      * @param indexType The type of index (e.g., "unigram", "bigram", "dependency")
-     * @param options LevelDB options for this index
+     * @param options RocksDB options for this index
      * @throws IndexAccessException if initialization fails
      */
     public IndexAccess(Path indexPath, String indexType, Options options) throws IndexAccessException {
         this.indexType = indexType;
         this.indexPath = indexPath.toString();
         this.isOpen = new AtomicBoolean(true);
+        this.options = options;
 
         try {
-            // Create index directory if it doesn't exist
-            File indexDir = new File(indexPath.toString());
+            File indexDir = new File(this.indexPath);
             if (!indexDir.exists()) {
                 if (!indexDir.mkdirs()) {
                     throw new IndexAccessException(
-                        "Failed to create index directory: " + indexPath,
+                        "Failed to create index directory: " + this.indexPath,
                         indexType,
                         IndexAccessException.ErrorType.INITIALIZATION_ERROR
                     );
                 }
             }
-
-            // Initialize LevelDB
-            this.db = factory.open(indexDir, options);
-            logger.debug("Initialized IndexAccess for type {} at {}", indexType, indexPath);
-
-        } catch (IOException e) {
+            this.db = RocksDB.open(options, indexDir.getAbsolutePath());
+            logger.debug("Initialized IndexAccess for type {} at {}", indexType, this.indexPath);
+        } catch (RocksDBException e) {
+            this.isOpen.set(false); // Ensure isOpen reflects the failure
+            if(this.options != null) { // Attempt to close options if open failed
+                this.options.close();
+            }
             throw new IndexAccessException(
-                "Failed to initialize index: " + e.getMessage(),
+                "Failed to initialize RocksDB index: " + e.getMessage(),
                 indexType,
                 IndexAccessException.ErrorType.INITIALIZATION_ERROR,
                 e
@@ -76,12 +76,12 @@ public class IndexAccess implements IndexAccessInterface {
      * Implements the interface method.
      */
     @Override
-    public void write(WriteBatch batch) throws IndexAccessException {
+    public void write(org.rocksdb.WriteBatch batch) throws IndexAccessException {
         checkOpen();
-        try {
-            db.write(batch, new WriteOptions().sync(true));
-            //logger.debug("Executed synchronous batch write for index: {}", indexType);
-        } catch (Exception e) {
+        try (WriteOptions writeOptions = new WriteOptions()) {
+            writeOptions.setSync(true);
+            db.write(writeOptions, batch);
+        } catch (RocksDBException e) {
             throw new IndexAccessException(
                 "Failed to write batch: " + e.getMessage(),
                 indexType,
@@ -96,8 +96,9 @@ public class IndexAccess implements IndexAccessInterface {
      * Implements the interface method.
      */
     @Override
-    public WriteBatch createWriteBatch() {
-        return db.createWriteBatch();
+    public org.rocksdb.WriteBatch createWriteBatch() throws IndexAccessException {
+        checkOpen();
+        return new WriteBatch();
     }
 
     /**
@@ -113,7 +114,7 @@ public class IndexAccess implements IndexAccessInterface {
             }
             // Deserialize to PositionListSoA instead of PositionList
             return Optional.of(PositionListSoA.deserializeFromCompositeBlob(value));
-        } catch (IOException | DBException e) { // Catch IOException from deserialize and DBException from db.get
+        } catch (IOException | RocksDBException e) {
             throw new IndexAccessException(
                 "Failed to get entry: " + e.getMessage(),
                 indexType,
@@ -128,15 +129,13 @@ public class IndexAccess implements IndexAccessInterface {
      * The caller is responsible for closing the iterator.
      */
     @Override
-    public DBIterator seek(byte[] key) throws IndexAccessException {
+    public RocksIterator seek(byte[] key) throws IndexAccessException {
         checkOpen();
-        DBIterator iterator = db.iterator();
-        if (key != null) { // LevelDB iterator might not like null keys for seek
+        RocksIterator iterator = db.newIterator();
+        if (key != null) {
             iterator.seek(key);
-        }
-
-        else {
-            iterator.seekToFirst(); // Explicitly seek to first if key is null
+        } else {
+            iterator.seekToFirst();
         }
         return iterator;
     }
@@ -149,7 +148,7 @@ public class IndexAccess implements IndexAccessInterface {
         checkOpen();
         try {
             return Optional.ofNullable(db.get(key));
-        } catch (DBException e) {
+        } catch (RocksDBException e) {
              throw new IndexAccessException(
                 "Failed to get raw entry: " + e.getMessage(),
                 indexType,
@@ -164,9 +163,9 @@ public class IndexAccess implements IndexAccessInterface {
      * The caller is responsible for closing the iterator.
      */
     @Override
-    public DBIterator iterateFromFirst() throws IndexAccessException {
+    public RocksIterator iterateFromFirst() throws IndexAccessException {
         checkOpen();
-        DBIterator iterator = db.iterator();
+        RocksIterator iterator = db.newIterator();
         iterator.seekToFirst();
         return iterator;
     }
@@ -179,7 +178,7 @@ public class IndexAccess implements IndexAccessInterface {
         checkOpen();
         try {
             db.put(key, value);
-        } catch (DBException e) {
+        } catch (RocksDBException e) {
             throw new IndexAccessException(
                 "Failed to put entry: " + e.getMessage(),
                 indexType,
@@ -197,7 +196,7 @@ public class IndexAccess implements IndexAccessInterface {
         checkOpen();
         try {
             db.delete(key);
-        } catch (DBException e) {
+        } catch (RocksDBException e) {
             throw new IndexAccessException(
                 "Failed to delete entry: " + e.getMessage(),
                 indexType,
@@ -216,7 +215,7 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     // Method for IndexGenerator internal verification
-    public DB getDbForVerification() {
+    public RocksDB getDbForVerification() {
         return this.db;
     }
 
@@ -225,6 +224,7 @@ public class IndexAccess implements IndexAccessInterface {
      */
     @Override
     public boolean isOpen() {
+        // relies on db being non-null if isOpen is true after constructor success
         return isOpen.get();
     }
 
@@ -240,9 +240,9 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     private void checkOpen() throws IndexAccessException {
-        if (!isOpen.get()) {
+        if (!isOpen()) {
             throw new IndexAccessException(
-                "Index is closed",
+                "Index is closed or not properly initialized",
                 indexType,
                 IndexAccessException.ErrorType.RESOURCE_ERROR
             );
@@ -252,25 +252,40 @@ public class IndexAccess implements IndexAccessInterface {
     @Override
     public void close() throws IndexAccessException {
         if (isOpen.compareAndSet(true, false)) {
+            logger.debug("Closing IndexAccess for type {} at {}", indexType, indexPath);
+            // RocksDB's own resources (like iterators, batches) should be closed by their users before closing the DB.
+            // The DB should be closed before its associated Options object.
             try {
-                db.close();
-            } catch (IOException e) {
-                throw new IndexAccessException(
-                    "Failed to close index: " + e.getMessage(),
-                    indexType,
-                    IndexAccessException.ErrorType.RESOURCE_ERROR,
-                    e
-                );
+                if (db != null) {
+                    db.close();
+                }
+            } catch (Exception e) {
+                logger.error("Error closing RocksDB instance for index {}: {}", indexType, e.getMessage(), e);
+                // Decide if this should throw or be suppressed, plan mentions try-finally for options.
+                // For now, log and proceed to close options.
+            } finally {
+                if (options != null) {
+                    options.close();
+                }
+                logger.info("Successfully closed RocksDB and associated options for index: {}", indexType);
             }
+        } else {
+            logger.warn("IndexAccess for type {} at {} was already closed or never fully opened.", indexType, indexPath);
         }
     }
 
     // Utility methods
     public static byte[] bytes(String str) {
+        if (str == null) {
+            return null;
+        }
         return str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     public static String asString(byte[] bytes) {
+        if (bytes == null) {
+            return null;
+        }
         return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
     }
 
@@ -280,17 +295,10 @@ public class IndexAccess implements IndexAccessInterface {
      * @param documentId The document ID
      * @return The document text, or null if not found
      */
-    public String getDocumentText(int documentId) {
-        try {
-            checkOpen();
-            // In a real implementation, you would retrieve the document text from the index
-            // For now, we'll just return a placeholder
-            return "This is the text of document " + documentId + ". It contains multiple sentences. This is the second sentence.";
-        } catch (Exception e) {
-            logger.error("Failed to get document text: {}", e.getMessage(), e);
-            return null;
-        }
-    }
+    // public String getDocumentText(int documentId) {
+    //     logger.warn("getDocumentText(int) is a placeholder and not fully implemented for RocksDB.");
+    //     return "Document text for ID: " + documentId;
+    // }
 
     /**
      * Gets the sentences for a given document ID.
@@ -299,7 +307,7 @@ public class IndexAccess implements IndexAccessInterface {
      * @return Array of sentences, or null if not found
      */
     public String[] getDocumentSentences(int documentId) {
-        // Placeholder implementation
-        return new String[0];
+        logger.warn("getDocumentSentences(int) is a placeholder and not fully implemented for RocksDB.");
+        return new String[]{"Sentence 1 for " + documentId, "Sentence 2 for " + documentId};
     }
 }

@@ -13,13 +13,14 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
 
-import org.iq80.leveldb.Options;
+import org.rocksdb.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
+import com.example.index.RocksDBConfig;
 import com.example.query.model.Query;
 import com.example.query.model.SubquerySpec;
 import com.example.query.model.condition.Condition;
@@ -32,7 +33,7 @@ import com.example.query.model.condition.Pos;
 import com.example.query.model.condition.Temporal;
 
 /**
- * Manages access to LevelDB indexes for a specific index set.
+ * Manages access to RocksDB indexes for a specific index set.
  * Responsible for lazily initializing only required indexes based on the query.
  */
 public class IndexManager implements AutoCloseable {
@@ -41,29 +42,23 @@ public class IndexManager implements AutoCloseable {
     private final Map<String, IndexAccessInterface> indexes;
     private final Path indexBaseDir;
     private final String indexSetName;
-    private final Options levelDbOptions; // Store options for reuse
     private boolean isClosed = false;
 
     /**
      * Creates a new IndexManager for a specific index set and query.
      * Initializes only the indexes required by the query and temporal strategy.
      *
-     * @param baseDir The base directory for all index sets
+     * @param projectBaseDir The base directory for all index sets (e.g., project root)
      * @param indexSetName The name of the index set to use (from FROM clause)
      * @param query The parsed query object
      * @param temporalStrategy The name of the temporal strategy ("nash" or "naive")
      * @throws IndexAccessException if the base index directory doesn't exist
      */
     public IndexManager(Path projectBaseDir, String indexSetName, Query query, String temporalStrategy) throws IndexAccessException {
-        // Resolve the specific index directory *within* the project directory
         this.indexBaseDir = projectBaseDir.resolve("indexes");
-        this.indexSetName = indexSetName; // Still needed for context/potential future use?
+        this.indexSetName = indexSetName;
         this.indexes = new HashMap<>();
-        this.levelDbOptions = new Options();
-        this.levelDbOptions.createIfMissing(false); // Don't create if missing
-        this.levelDbOptions.cacheSize(64 * 1024 * 1024); // 64MB cache
 
-        // Check existence of the resolved index base directory (e.g., project/indexes)
         if (!Files.exists(this.indexBaseDir)) {
             throw new IndexAccessException(
                 "Base index directory does not exist within the project: " + this.indexBaseDir,
@@ -71,7 +66,6 @@ public class IndexManager implements AutoCloseable {
                 IndexAccessException.ErrorType.INITIALIZATION_ERROR
             );
         }
-
         initializeRequiredIndexes(query, temporalStrategy);
     }
 
@@ -86,48 +80,62 @@ public class IndexManager implements AutoCloseable {
         Set<String> requiredIndexNames = determineRequiredIndexes(query, temporalStrategy);
         logger.info("Query requires the following indexes: {}", requiredIndexNames);
 
+        List<Options> createdOptionsList = new ArrayList<>();
+
         for (String type : requiredIndexNames) {
+            Options specificOptions = null;
             try {
                 Path indexPath = indexBaseDir.resolve(type);
                 if (!Files.exists(indexPath) || !Files.exists(indexPath.resolve("CURRENT"))) {
                     logger.warn("Required index directory {} or its CURRENT file does not exist or is invalid. Skipping.", indexPath);
-                    continue; // Skip this index if not properly formed
+                    continue;
                 }
 
-                // Basic validation: check for MANIFEST file
                 boolean hasManifest = false;
                 try {
                     hasManifest = Files.list(indexPath)
                         .anyMatch(p -> p.getFileName().toString().startsWith("MANIFEST-"));
                 } catch (IOException e) {
                     logger.error("Failed to check for manifest file in {}: {}", indexPath, e.getMessage());
-                } // Continue even if check fails, IndexAccess constructor might handle it
+                }
 
                 if (!hasManifest) {
                      logger.warn("Required index directory {} exists but seems incomplete (missing MANIFEST). Attempting to open anyway.", indexPath);
-                     // Maybe allow opening, LevelDB might recover or throw a clearer error
                 }
 
-                indexes.put(type, new IndexAccess(indexPath, type, levelDbOptions));
+                specificOptions = RocksDBConfig.createOptimizedOptions();
+                createdOptionsList.add(specificOptions);
+                specificOptions.setCreateIfMissing(false);
+
+                IndexAccessInterface indexAccess = new IndexAccess(indexPath, type, specificOptions);
+                indexes.put(type, indexAccess);
+                createdOptionsList.remove(specificOptions);
                 logger.info("Successfully initialized required {} index", type);
 
             } catch (IndexAccessException e) {
-                // Log specific IndexAccess errors but continue trying others
                 logger.error("Failed to initialize required {} index at {}: {} [Type: {}]",
                     type, indexBaseDir.resolve(type), e.getMessage(), e.getErrorType());
-                 // Potentially re-throw if a critical index fails, or collect errors
+                if (specificOptions != null && !indexes.containsValue(specificOptions)) {
+                    specificOptions.close();
+                }
             } catch (Exception e) {
                 logger.error("Unexpected error initializing required {} index at {}: {}",
                     type, indexBaseDir.resolve(type), e.getMessage(), e);
+                if (specificOptions != null && !indexes.containsValue(specificOptions)) {
+                    specificOptions.close();
+                }
             }
         }
 
-        // Check if *any* required index was successfully initialized
+        for(Options opts : createdOptionsList) {
+            opts.close();
+        }
+
         if (indexes.isEmpty() && !requiredIndexNames.isEmpty()) {
              String missing = String.join(", ", requiredIndexNames);
             throw new IndexAccessException(
                 "None of the required indexes could be initialized in index set '" + indexSetName +
-                "'. Required: [" + missing + "]. Please ensure the index directories exist and contain valid LevelDB databases.",
+                "'. Required: [" + missing + "]. Please ensure the index directories exist and contain valid RocksDB databases.",
                 "index_manager",
                 IndexAccessException.ErrorType.INITIALIZATION_ERROR
             );
@@ -410,22 +418,23 @@ public class IndexManager implements AutoCloseable {
             try {
                 entry.getValue().close();
                 logger.debug("Closed index: {}", entry.getKey());
-            } catch (IndexAccessException e) { // Catch specific IndexAccessException
+            } catch (IndexAccessException e) {
                 logger.error("Failed to close index {} for set {}: {} [Type: {}]",
                              entry.getKey(), indexSetName, e.getMessage(), e.getErrorType(), e);
                 failedToClose.add(entry.getKey() + " (Type: " + e.getErrorType() + ")");
-            } catch (Exception e) { // Catch any other unexpected exceptions during close
+            } catch (Exception e) {
                 logger.error("Unexpected error closing index {} for set {}: {}",
                              entry.getKey(), indexSetName, e.getMessage(), e);
                 failedToClose.add(entry.getKey() + " (Unexpected)");
             }
         }
-        indexes.clear(); // Clear the map after attempting to close all
+        indexes.clear();
+
         if (!failedToClose.isEmpty()) {
             throw new IndexAccessException(
                 "Failed to close one or more indexes: " + String.join(", ", failedToClose),
                 indexSetName,
-                IndexAccessException.ErrorType.RESOURCE_ERROR // Changed to RESOURCE_ERROR
+                IndexAccessException.ErrorType.RESOURCE_ERROR
             );
         }
         logger.info("IndexManager closed for index set: {}", indexSetName);

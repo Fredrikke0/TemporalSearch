@@ -78,6 +78,7 @@
         </dependency>
 
         <!-- LevelDB -->
+        <!--
         <dependency>
             <groupId>org.iq80.leveldb</groupId>
             <artifactId>leveldb</artifactId>
@@ -87,6 +88,14 @@
             <groupId>org.iq80.leveldb</groupId>
             <artifactId>leveldb-api</artifactId>
             <version>0.12</version>
+        </dependency>
+        -->
+
+        <!-- RocksDB -->
+        <dependency>
+            <groupId>org.rocksdb</groupId>
+            <artifactId>rocksdbjni</artifactId>
+            <version>10.2.1</version>
         </dependency>
 
         <!-- SQLite JDBC -->
@@ -465,6 +474,7 @@
                                 </configuration>
                             </execution>
                             <!-- LevelDB Browser JAR -->
+                            <!--
                             <execution>
                                 <id>browser-jar</id>
                                 <phase>package</phase>
@@ -480,6 +490,7 @@
                                     </transformers>
                                 </configuration>
                             </execution>
+                            -->
                             <!-- WikiJsonToSqlite JAR -->
                             <execution>
                                 <id>wiki-converter-jar</id>

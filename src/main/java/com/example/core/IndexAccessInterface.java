@@ -3,15 +3,14 @@ package com.example.core;
 import java.util.Map;
 import java.util.Optional;
 
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.WriteBatch;
+import org.rocksdb.RocksIterator;
 
 import com.example.index.AnnotationType;
 import com.example.index.TypedAnnotationSynonymStore;
 
 /**
  * Interface defining the core access methods for indexes.
- * Implemented by both the real LevelDB-backed IndexAccess
+ * Implemented by both the real RocksDB-backed IndexAccess
  * and test mocks like MockIndexAccess.
  */
 public interface IndexAccessInterface extends AutoCloseable {
@@ -34,24 +33,24 @@ public interface IndexAccessInterface extends AutoCloseable {
      * Creates a new iterator positioned at or after the specified key.
      * If the key is null or empty, or if seeking before the first key,
      * the behavior might depend on the underlying implementation (e.g., start from first).
-     * If the key is past the end of the data, the returned iterator's {@code hasNext()}
-     * method should return {@code false}.
+     * If the key is past the end of the data, the returned iterator's {@code isValid()}
+     * method should return {@code false} (RocksIterator uses isValid(), not hasNext() for this check).
      * The caller is responsible for closing the iterator.
      *
      * @param key The key to seek to.
-     * @return A DBIterator positioned at or after the key.
+     * @return A RocksIterator positioned at or after the key.
      * @throws IndexAccessException if an error occurs accessing the index.
      */
-    DBIterator seek(byte[] key) throws IndexAccessException;
+    RocksIterator seek(byte[] key) throws IndexAccessException;
 
     /**
      * Creates a new iterator positioned at the first key in the database.
      * The caller is responsible for closing the iterator.
      *
-     * @return A DBIterator positioned at the first key.
+     * @return A RocksIterator positioned at the first key.
      * @throws IndexAccessException if an error occurs accessing the index.
      */
-    DBIterator iterateFromFirst() throws IndexAccessException;
+    RocksIterator iterateFromFirst() throws IndexAccessException;
 
     /**
      * Stores or updates a key-value pair.
@@ -67,13 +66,15 @@ public interface IndexAccessInterface extends AutoCloseable {
 
     /**
      * Creates a new write batch for atomic operations.
+     * The caller is responsible for closing the WriteBatch.
      */
-    WriteBatch createWriteBatch() throws IndexAccessException;
+    org.rocksdb.WriteBatch createWriteBatch() throws IndexAccessException;
 
     /**
      * Writes a batch of operations atomically.
+     * The WriteBatch itself should be closed by the caller after use.
      */
-    void write(WriteBatch batch) throws IndexAccessException;
+    void write(org.rocksdb.WriteBatch batch) throws IndexAccessException;
 
     /**
      * Gets the type of this index (e.g., "unigram", "pos").

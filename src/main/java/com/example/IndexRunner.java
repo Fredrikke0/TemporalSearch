@@ -19,18 +19,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.Options;
-import org.iq80.leveldb.WriteBatch;
+import org.rocksdb.Options;
+import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
+import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationTypeSource;
-import com.example.index.LevelDBConfig;
 import com.example.index.NgramType;
+import com.example.index.RocksDBConfig;
 import com.example.index.generators.BigramIndexGenerator;
 import com.example.index.generators.DependencyIndexGenerator;
 import com.example.index.generators.HypernymIndexGenerator;
@@ -326,7 +326,13 @@ public class IndexRunner {
                                     temporaryNgramBySentenceIA = generateTemporaryNgramBySentenceIndex(indexDir, currentNgramType, sourceNgramIndexPath, tempNgramBySentenceOutputPath, indexPath);
                                 } else {
                                     logger.debug("Reusing existing temporary N-gram by sentence index for {} from {}", currentNgramType, tempNgramBySentenceOutputPath);
-                                    temporaryNgramBySentenceIA = new IndexAccess(tempNgramBySentenceOutputPath, "temp_" + currentNgramType.name().toLowerCase() + "_by_sentence_reused", LevelDBConfig.createOptimizedOptions());
+                                    Options tempNgramOpts = RocksDBConfig.createOptimizedOptions();
+                                    try {
+                                        temporaryNgramBySentenceIA = new IndexAccess(tempNgramBySentenceOutputPath, "temp_" + currentNgramType.name().toLowerCase() + "_by_sentence_reused", tempNgramOpts);
+                                    } catch (IndexAccessException e) {
+                                        tempNgramOpts.close();
+                                        throw e;
+                                    }
                                 }
 
                                 // Inner loop: AnnotationTypeSource
@@ -356,7 +362,13 @@ public class IndexRunner {
                                             );
                                         } else {
                                             logger.debug("Reusing existing temporary Annotation-by-sentence index for {} from {}", currentAnnotationType.getTypeIdentifier(), tempAnnotationBySentenceOutputPath);
-                                            temporaryAnnotationBySentenceIA = new IndexAccess(tempAnnotationBySentenceOutputPath, "temp_" + currentAnnotationType.getTypeIdentifier() + "_by_sentence_reused", LevelDBConfig.createOptimizedOptions());
+                                            Options tempAnnotOpts = RocksDBConfig.createOptimizedOptions();
+                                            try {
+                                                temporaryAnnotationBySentenceIA = new IndexAccess(tempAnnotationBySentenceOutputPath, "temp_" + currentAnnotationType.getTypeIdentifier() + "_by_sentence_reused", tempAnnotOpts);
+                                            } catch (IndexAccessException e) {
+                                                tempAnnotOpts.close();
+                                                throw e;
+                                            }
                                         }
 
                                         String finalStitchIndexName = "stitch_" + currentNgramType.name().toLowerCase() + "_" + currentAnnotationType.getTypeIdentifier();
@@ -524,78 +536,85 @@ public class IndexRunner {
         logger.info("Populating temporary N-gram-by-sentence index for '{}' from {} into {}.",
                 ngramType, sourceNgramIndexPath, tempNgramBySentenceOutputPath);
 
-        NgramAnnotationStitchGenerator.cleanupDirectory(tempNgramBySentenceOutputPath.toFile());
-        Files.createDirectories(tempNgramBySentenceOutputPath);
-
-        IndexAccess sourceNgramIA = null;
-        IndexAccess tempOutputNgramIA = null;
-        Options defaultOptions = LevelDBConfig.createOptimizedOptions();
-
+        ensureDirectoryExists(tempNgramBySentenceOutputPath, true);
+        Options options = RocksDBConfig.createOptimizedOptions();
+        IndexAccess tempDb = null;
         try {
-            sourceNgramIA = new IndexAccess(sourceNgramIndexPath, ngramType.name().toLowerCase() + "_source_for_tempgen", defaultOptions);
-            tempOutputNgramIA = new IndexAccess(tempNgramBySentenceOutputPath, "temp_" + ngramType.name().toLowerCase() + "_by_sentence", defaultOptions);
-
-            long termsProcessed = 0;
-            long positionsProcessed = 0;
-            long sentencesWrittenToTemp = 0;
-            Map<String, List<TermOccurrenceInSentence>> sentenceAggregator = new HashMap<>();
-            final int TEMP_INDEX_BATCH_WRITE_SIZE = 5000;
-
-            try (DBIterator iterator = sourceNgramIA.iterateFromFirst()) {
-                for (iterator.seekToFirst(); iterator.hasNext(); iterator.next()) {
-                    byte[] termKeyBytes = iterator.peekNext().getKey();
-                    String term = IndexAccess.asString(termKeyBytes);
-                    byte[] positionListBytes = iterator.peekNext().getValue();
-                    PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(positionListBytes);
-
-                    for (int i = 0; i < positions.getNumPositions(); i++) {
-                        int docId = positions.getDocIdAt(i);
-                        int sentId = positions.getSentenceIdAt(i);
-                        int beginChar = positions.getBeginCharAt(i);
-                        int endChar = positions.getEndCharAt(i);
-                        String sentenceKey = docId + "_" + sentId;
-                        List<TermOccurrenceInSentence> occurrences = sentenceAggregator
-                                .computeIfAbsent(sentenceKey, k -> new ArrayList<>());
-                        occurrences.add(new TermOccurrenceInSentence(term, beginChar, endChar));
-                        positionsProcessed++;
-                    }
-                    termsProcessed++;
-                    if (sentenceAggregator.size() >= TEMP_INDEX_BATCH_WRITE_SIZE) {
-                        writeSentenceBatchToTempNgramDB(sentenceAggregator, tempOutputNgramIA, ngramType.name());
-                        sentencesWrittenToTemp += sentenceAggregator.size();
-                        sentenceAggregator.clear();
-                        if (termsProcessed % 10000 == 0) {
-                            logger.trace("Wrote {} sentence entries to temp {} index. Total terms processed: {}, positions: {}",
-                                         sentencesWrittenToTemp, ngramType, termsProcessed, positionsProcessed);
-                        }
-                    }
-                }
-                if (!sentenceAggregator.isEmpty()) {
-                    writeSentenceBatchToTempNgramDB(sentenceAggregator, tempOutputNgramIA, ngramType.name());
-                    sentencesWrittenToTemp += sentenceAggregator.size();
-                }
-            }
-            logger.info("Finished populating temporary index for '{}' N-grams. Total terms: {}, positions: {}, unique sentences written: {}",
-                         ngramType, termsProcessed, positionsProcessed, sentencesWrittenToTemp);
-
-            sourceNgramIA.close();
-            return tempOutputNgramIA;
-
-        } catch (Exception e) {
-            if (sourceNgramIA != null) try { sourceNgramIA.close(); } catch (IndexAccessException ignored) {}
-            if (tempOutputNgramIA != null) try { tempOutputNgramIA.close(); } catch (IndexAccessException ignored) {}
-            NgramAnnotationStitchGenerator.cleanupDirectory(tempNgramBySentenceOutputPath.toFile());
+            tempDb = new IndexAccess(tempNgramBySentenceOutputPath, "temp_" + ngramType.name().toLowerCase() + "_by_sentence", options);
+        } catch (IndexAccessException e) {
+            options.close();
             throw e;
         }
+
+        logger.info("Generating temporary index at {} for N-gram type {}...", tempNgramBySentenceOutputPath.toAbsolutePath(), ngramType.name());
+        Stopwatch sw = Stopwatch.createStarted();
+
+        Options sourceNgramOptions = RocksDBConfig.createOptimizedOptions();
+        sourceNgramOptions.setCreateIfMissing(false);
+        IndexAccessInterface sourceNgramIA = null;
+        org.rocksdb.RocksIterator iterator = null;
+
+        try {
+            sourceNgramIA = new IndexAccess(sourceNgramIndexPath, ngramType.name().toLowerCase() + "_source_reader", sourceNgramOptions);
+            iterator = sourceNgramIA.iterateFromFirst();
+            Map<String, List<TermOccurrenceInSentence>> sentenceBatch = new HashMap<>();
+            int batchCount = 0;
+            final int SENTENCE_BATCH_SIZE = 5000;
+
+            while (iterator.isValid()) {
+                byte[] key = iterator.key();
+                byte[] value = iterator.value();
+                PositionListSoA posList = PositionListSoA.deserializeFromCompositeBlob(value);
+
+                for (int i = 0; i < posList.getNumPositions(); i++) {
+                    int docId = posList.getDocIdAt(i);
+                    int sentenceId = posList.getSentenceIdAt(i);
+                    int beginChar = posList.getBeginCharAt(i);
+                    int endChar = posList.getEndCharAt(i);
+                    String sentenceKey = docId + "_" + sentenceId;
+                    sentenceBatch.computeIfAbsent(sentenceKey, k -> new ArrayList<>()).add(new TermOccurrenceInSentence(IndexAccess.asString(key), beginChar, endChar));
+                }
+
+                if (sentenceBatch.size() >= SENTENCE_BATCH_SIZE) {
+                    writeSentenceBatchToTempNgramDB(sentenceBatch, tempDb, ngramType.name());
+                    sentenceBatch.clear();
+                    batchCount++;
+                    if (batchCount % 10 == 0) {
+                        logger.debug("Processed {} sentence batches for temp {} index", batchCount, ngramType.name());
+                    }
+                }
+                iterator.next();
+            }
+            if (!sentenceBatch.isEmpty()) {
+                writeSentenceBatchToTempNgramDB(sentenceBatch, tempDb, ngramType.name());
+            }
+
+        } finally {
+            if (iterator != null) {
+                iterator.close();
+            }
+            if (sourceNgramIA != null) {
+            sourceNgramIA.close();
+            } else if (sourceNgramOptions != null) {
+                sourceNgramOptions.close();
+            }
+        }
+
+        logger.info("Finished generating temporary {} index in {} ms. Stored at: {}", ngramType.name(), sw.elapsed(TimeUnit.MILLISECONDS), tempNgramBySentenceOutputPath.toAbsolutePath());
+        return tempDb;
     }
 
     private static void writeSentenceBatchToTempNgramDB(Map<String, List<TermOccurrenceInSentence>> sentenceBatch,
                                             IndexAccess tempDb, String ngramTypeForLog) throws IOException, IndexAccessException {
-        try (WriteBatch batch = tempDb.createWriteBatch()) {
+        try (org.rocksdb.WriteBatch batch = tempDb.createWriteBatch()) {
             for (Map.Entry<String, List<TermOccurrenceInSentence>> entry : sentenceBatch.entrySet()) {
                 byte[] key = IndexAccess.bytes(entry.getKey());
                 byte[] value = TermOccurrenceInSentence.serializeList(entry.getValue());
+                try {
                 batch.put(key, value);
+                } catch (RocksDBException e) {
+                    throw new IndexAccessException("Failed to put entry into batch for temp N-gram DB", tempDb.getIndexType(), IndexAccessException.ErrorType.WRITE_ERROR, e);
+                }
             }
             tempDb.write(batch);
             logger.trace("Wrote batch of {} sentence entries for {} N-grams to {}", sentenceBatch.size(), ngramTypeForLog, tempDb.getIndexType());
@@ -603,11 +622,11 @@ public class IndexRunner {
     }
 
     private static IndexAccess generateTemporaryAnnotationBySentenceIndex(
-        String baseIndexDir, // not directly used for path construction, but for context
+        String baseIndexDir,
         AnnotationTypeSource annotationTypeSource,
         Path sourceAnnotationIndexPath,
         Path tempAnnotationBySentenceOutputPath,
-        Path mainIndexPath // not directly used here, context
+        Path mainIndexPath
     ) throws IOException, IndexAccessException {
 
         if (!Files.exists(sourceAnnotationIndexPath) || !Files.isDirectory(sourceAnnotationIndexPath)) {
@@ -619,82 +638,86 @@ public class IndexRunner {
             }
         }
 
-
         logger.info("Populating temporary Annotation-by-sentence index for '{}' from {} into {}.",
                 annotationTypeSource.getTypeIdentifier(), sourceAnnotationIndexPath, tempAnnotationBySentenceOutputPath);
 
-        NgramAnnotationStitchGenerator.cleanupDirectory(tempAnnotationBySentenceOutputPath.toFile()); // Clean before use
-        Files.createDirectories(tempAnnotationBySentenceOutputPath);
-
-        IndexAccess sourceAnnotationIA = null;
-        IndexAccess tempOutputAnnotationIA = null;
-        Options defaultOptions = LevelDBConfig.createOptimizedOptions();
-        final int TEMP_INDEX_BATCH_WRITE_SIZE = 5000; // Same as it was in NgramAnnotationStitchGenerator
-
+        ensureDirectoryExists(tempAnnotationBySentenceOutputPath, true);
+        Options options = RocksDBConfig.createOptimizedOptions();
+        IndexAccess tempDb = null;
         try {
-            sourceAnnotationIA = new IndexAccess(sourceAnnotationIndexPath, annotationTypeSource.getSourceIndexName() + "_source_for_temp_annot_gen", defaultOptions);
-            tempOutputAnnotationIA = new IndexAccess(tempAnnotationBySentenceOutputPath, "temp_" + annotationTypeSource.getTypeIdentifier() + "_by_sentence", defaultOptions);
-
-            long termsProcessed = 0;
-            long positionsProcessed = 0;
-            long sentencesWrittenToTemp = 0;
-            Map<String, List<TermOccurrenceInSentence>> sentenceAggregator = new HashMap<>();
-
-            try (DBIterator iterator = sourceAnnotationIA.iterateFromFirst()) {
-                for (iterator.seekToFirst(); iterator.hasNext(); iterator.next()) {
-                    byte[] termKeyBytes = iterator.peekNext().getKey();
-                    String term = IndexAccess.asString(termKeyBytes);
-                    byte[] positionListBytes = iterator.peekNext().getValue();
-                    PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(positionListBytes);
-
-                    for (int i = 0; i < positions.getNumPositions(); i++) {
-                        int docId = positions.getDocIdAt(i);
-                        int sentId = positions.getSentenceIdAt(i);
-                        int beginChar = positions.getBeginCharAt(i);
-                        int endChar = positions.getEndCharAt(i);
-                        String sentenceKey = docId + "_" + sentId;
-                        List<TermOccurrenceInSentence> occurrences = sentenceAggregator
-                                .computeIfAbsent(sentenceKey, k -> new ArrayList<>());
-                        occurrences.add(new TermOccurrenceInSentence(term, beginChar, endChar));
-                        positionsProcessed++;
-                    }
-                    termsProcessed++;
-                    if (sentenceAggregator.size() >= TEMP_INDEX_BATCH_WRITE_SIZE) {
-                        writeSentenceBatchToTempAnnotationDB(sentenceAggregator, tempOutputAnnotationIA, annotationTypeSource.getTypeIdentifier());
-                        sentencesWrittenToTemp += sentenceAggregator.size();
-                        sentenceAggregator.clear();
-                        if (termsProcessed % 10000 == 0) {
-                            logger.trace("Wrote {} sentence entries to temp Annotation index for {}. Total terms processed: {}, positions: {}",
-                                         sentencesWrittenToTemp, annotationTypeSource.getTypeIdentifier(), termsProcessed, positionsProcessed);
-                        }
-                    }
-                }
-                if (!sentenceAggregator.isEmpty()) {
-                    writeSentenceBatchToTempAnnotationDB(sentenceAggregator, tempOutputAnnotationIA, annotationTypeSource.getTypeIdentifier());
-                    sentencesWrittenToTemp += sentenceAggregator.size();
-                }
-            }
-            logger.info("Finished populating temporary index for '{}' Annotations. Total terms: {}, positions: {}, unique sentences written: {}",
-                         annotationTypeSource.getTypeIdentifier(), termsProcessed, positionsProcessed, sentencesWrittenToTemp);
-
-            sourceAnnotationIA.close(); // Close source IA once done
-            return tempOutputAnnotationIA; // Return the populated temp IA
-
-        } catch (Exception e) {
-            if (sourceAnnotationIA != null) try { sourceAnnotationIA.close(); } catch (IndexAccessException ignored) {}
-            if (tempOutputAnnotationIA != null) try { tempOutputAnnotationIA.close(); } catch (IndexAccessException ignored) {} // Close if error during population
-            NgramAnnotationStitchGenerator.cleanupDirectory(tempAnnotationBySentenceOutputPath.toFile()); // Clean up on failure
+            tempDb = new IndexAccess(tempAnnotationBySentenceOutputPath, "temp_" + annotationTypeSource.getTypeIdentifier() + "_by_sentence", options);
+        } catch (IndexAccessException e) {
+            options.close();
             throw e;
         }
+
+        logger.info("Generating temporary index at {} for Annotation type {}...", tempAnnotationBySentenceOutputPath.toAbsolutePath(), annotationTypeSource.getTypeIdentifier());
+        Stopwatch sw = Stopwatch.createStarted();
+
+        Options sourceAnnotationOptions = RocksDBConfig.createOptimizedOptions();
+        sourceAnnotationOptions.setCreateIfMissing(false);
+        IndexAccessInterface sourceAnnotationIA = null;
+        org.rocksdb.RocksIterator iterator = null;
+
+        try {
+            sourceAnnotationIA = new IndexAccess(sourceAnnotationIndexPath, annotationTypeSource.getSourceIndexName() + "_source_reader", sourceAnnotationOptions);
+            iterator = sourceAnnotationIA.iterateFromFirst();
+            Map<String, List<TermOccurrenceInSentence>> sentenceBatch = new HashMap<>();
+            int batchCount = 0;
+            final int SENTENCE_BATCH_SIZE = 5000;
+
+            while (iterator.isValid()) {
+                byte[] key = iterator.key();
+                byte[] value = iterator.value();
+                PositionListSoA posList = PositionListSoA.deserializeFromCompositeBlob(value);
+
+                for (int i = 0; i < posList.getNumPositions(); i++) {
+                    int docId = posList.getDocIdAt(i);
+                    int sentenceId = posList.getSentenceIdAt(i);
+                    int beginChar = posList.getBeginCharAt(i);
+                    int endChar = posList.getEndCharAt(i);
+                    String sentenceKey = docId + "_" + sentenceId;
+                    sentenceBatch.computeIfAbsent(sentenceKey, k -> new ArrayList<>()).add(new TermOccurrenceInSentence(IndexAccess.asString(key), beginChar, endChar));
+                }
+
+                if (sentenceBatch.size() >= SENTENCE_BATCH_SIZE) {
+                    writeSentenceBatchToTempAnnotationDB(sentenceBatch, tempDb, annotationTypeSource.getTypeIdentifier());
+                    sentenceBatch.clear();
+                    batchCount++;
+                    if (batchCount % 10 == 0) {
+                        logger.debug("Processed {} sentence batches for temp {} index", batchCount, annotationTypeSource.getTypeIdentifier());
+                    }
+                }
+                iterator.next();
+            }
+            if (!sentenceBatch.isEmpty()) {
+                writeSentenceBatchToTempAnnotationDB(sentenceBatch, tempDb, annotationTypeSource.getTypeIdentifier());
+            }
+        } finally {
+            if (iterator != null) {
+                iterator.close();
+            }
+            if (sourceAnnotationIA != null) {
+                sourceAnnotationIA.close();
+            } else if (sourceAnnotationOptions != null) {
+                sourceAnnotationOptions.close();
+            }
+        }
+        logger.info("Finished generating temporary {} index in {} ms. Stored at: {}", annotationTypeSource.getTypeIdentifier(), sw.elapsed(TimeUnit.MILLISECONDS), tempAnnotationBySentenceOutputPath.toAbsolutePath());
+        return tempDb;
     }
 
     private static void writeSentenceBatchToTempAnnotationDB(Map<String, List<TermOccurrenceInSentence>> sentenceBatch,
                                                       IndexAccess tempDb, String annotationTypeForLog) throws IOException, IndexAccessException {
-        try (WriteBatch batch = tempDb.createWriteBatch()) {
+        try (org.rocksdb.WriteBatch batch = tempDb.createWriteBatch()) {
             for (Map.Entry<String, List<TermOccurrenceInSentence>> entry : sentenceBatch.entrySet()) {
                 byte[] key = IndexAccess.bytes(entry.getKey());
                 byte[] value = TermOccurrenceInSentence.serializeList(entry.getValue());
+                try {
                 batch.put(key, value);
+                } catch (RocksDBException e) {
+                    throw new IndexAccessException("Failed to put entry into batch for temp Annotation DB", tempDb.getIndexType(), IndexAccessException.ErrorType.WRITE_ERROR, e);
+                }
             }
             tempDb.write(batch);
             logger.trace("Wrote batch of {} sentence entries for {} Annotations to {}", sentenceBatch.size(), annotationTypeForLog, tempDb.getIndexType());
