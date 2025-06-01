@@ -14,6 +14,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.logging.ProgressTracker;
@@ -32,12 +33,12 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     // SQL query part to select POS tags to exclude. Example: ('PUNCT', 'SYM')
     public static final String POS_TAGS_TO_EXCLUDE_SQL = "('SYM', 'PUNCT', '_SP', 'NFP', 'ADD', 'GW', 'AFX')"; // Public for potential re-use
 
-    public POSIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    public POSIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+    public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override

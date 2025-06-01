@@ -1,21 +1,29 @@
 package com.example.index.generators;
 
-import org.junit.jupiter.api.*;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.*;
-import java.sql.*;
+import java.io.File;
+import java.io.PrintWriter;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Set;
-import com.example.logging.ProgressTracker;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.rocksdb.Options;
+
+import com.example.core.IndexAccess;
 import com.example.index.NashDateEntryWithId;
-import com.example.index.generators.NashIndexGenerator;
 import com.example.index.util.NashSerializationUtils;
+import com.example.logging.ProgressTracker;
 
 public class NashIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-nash.txt";
     private NashIndexGenerator generator;
+    private IndexAccess indexAccess;
 
     @BeforeEach
     @Override
@@ -27,8 +35,14 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
             writer.println("a");
             writer.println("is");
         }
+
+        // Create IndexAccess instance first
+        try (Options options = createTestOptions()) {
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("nash"), "nash", options);
+        }
+
         generator = new NashIndexGenerator(
-            tempDir.resolve("test-leveldb-nash").toString(),
+            this.indexAccess,
             TEST_STOPWORDS_PATH,
             sqliteConn,
             new ProgressTracker(),
@@ -80,6 +94,9 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
     protected void tearDown() throws Exception {
         super.tearDown();
         new File(TEST_STOPWORDS_PATH).delete();
+        if (this.indexAccess != null) {
+            this.indexAccess.close();
+        }
     }
 
     @Test

@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 
-import org.iq80.leveldb.DBIterator;
+import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -107,20 +107,25 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                 byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 logger.debug("Iterating POS index with prefix: {}", prefix);
 
-                try (DBIterator iterator = index.seek(prefixBytes)) {
-                    while (iterator.hasNext()) {
-                        Map.Entry<byte[], byte[]> entry = iterator.next();
-                        String currentKey = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8);
+                try (RocksIterator iterator = index.seek(prefixBytes)) {
+                    while (iterator.isValid()) {
+                        byte[] keyBytes = iterator.key();
+                        byte[] valueBytes = iterator.value();
+                        String currentKey = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
 
                         if (!currentKey.startsWith(prefix)) {
                             break;
                         }
 
                         String extractedTerm = currentKey.substring(prefix.length());
-                        if (extractedTerm.isEmpty()) continue; // Should not happen with DELIMITER
+                        if (extractedTerm.isEmpty()) {
+                            iterator.next();
+                            continue;
+                        }
 
-                        conceptualRowIdCounter = addPositionsToSoA(entry.getValue(), extractedTerm, ValueType.POS_TERM,
+                        conceptualRowIdCounter = addPositionsToSoA(valueBytes, extractedTerm, ValueType.POS_TERM,
                                                                    isVariable ? variableName : null, requirements, resultSoA, conceptualRowIdCounter);
+                        iterator.next();
                     }
                 }
             }

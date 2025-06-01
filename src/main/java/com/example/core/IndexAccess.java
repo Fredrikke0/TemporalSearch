@@ -289,16 +289,6 @@ public class IndexAccess implements IndexAccessInterface {
         return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
     }
 
-    /**
-     * Gets the document text for a given document ID.
-     *
-     * @param documentId The document ID
-     * @return The document text, or null if not found
-     */
-    // public String getDocumentText(int documentId) {
-    //     logger.warn("getDocumentText(int) is a placeholder and not fully implemented for RocksDB.");
-    //     return "Document text for ID: " + documentId;
-    // }
 
     /**
      * Gets the sentences for a given document ID.

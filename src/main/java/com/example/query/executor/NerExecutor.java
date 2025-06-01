@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 
-import org.iq80.leveldb.DBIterator;
+import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -190,33 +190,87 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             (filterTargetValueLower != null ? " matching filter '" + filterTargetValueLower + "'" : ""),
             variableName);
 
-        ValueType valueType = "DATE".equals(entityType) ? ValueType.DATE : ValueType.ENTITY;
-        String prefix = entityType.toUpperCase() + IndexAccessInterface.DELIMITER;
-        byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        ValueType valueType = "DATE".equals(entityType.toUpperCase()) ? ValueType.DATE : ValueType.ENTITY;
 
-        logger.debug("Executing variable search on index '{}' with prefix: {}", index.getIndexType(), prefix);
+        logger.debug("Executing variable search on index '{}' for entity type '{}'", index.getIndexType(), entityType);
 
         int bindingsAdded = 0;
+        RocksIterator iterator = null;
+        String prefix = null;
 
-        try (DBIterator iterator = index.seek(prefixBytes)) {
-            while (iterator.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = iterator.next();
-                String key = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            if ("DATE".equals(entityType.toUpperCase())) {
+                iterator = index.iterateFromFirst();
+            } else if (entityType.startsWith("?")) {
+                iterator = index.iterateFromFirst();
+            } else {
+                prefix = entityType.toUpperCase() + IndexAccessInterface.DELIMITER;
+                byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                iterator = index.seek(prefixBytes);
+            }
 
-                if (!key.startsWith(prefix)) {
-                    break;
+            if (iterator == null) {
+                logger.error("NerExecutor: {} returned a null iterator for entityType '{}' (index type: {})",
+                             ("DATE".equals(entityType.toUpperCase()) || entityType.startsWith("?") ? "iterateFromFirst()" : "seek()"),
+                             entityType, index.getIndexType());
+                return 0;
+            }
+
+            for (/* iterator positioned */ ; iterator.isValid(); iterator.next()) {
+                byte[] keyBytes = iterator.key();
+                byte[] valueBytes = iterator.value();
+                String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+                String currentPrefix;
+                if ("DATE".equals(entityType.toUpperCase())) {
+                    currentPrefix = "";
+                } else if (entityType.startsWith("?")) {
+                    int delimiterPos = key.indexOf(IndexAccessInterface.DELIMITER);
+                    if (delimiterPos == -1) {
+                        logger.warn("Skipping key '{}' in variable type extraction due to missing delimiter.", key);
+                        continue;
+                    }
+                    currentPrefix = key.substring(0, delimiterPos + 1);
+                } else {
+                    currentPrefix = prefix;
+                    if (!key.startsWith(currentPrefix)) {
+                        break;
+                    }
                 }
 
-                String value = key.substring(prefix.length());
+                String value;
+                if ("DATE".equals(entityType.toUpperCase())) {
+                    value = key;
+                } else {
+                     value = key.substring(currentPrefix.length());
+                }
 
                 if (filterTargetValueLower != null && !value.toLowerCase().contains(filterTargetValueLower)) {
                     continue;
                 }
 
-                byte[] rawBlob = entry.getValue();
+                byte[] rawBlob = valueBytes;
+                String valueToBind;
+                String qualifiedVariableName;
+
+                if (entityType.startsWith("?")) {
+                    int delimiterPos = key.indexOf(IndexAccessInterface.DELIMITER);
+                    if (delimiterPos != -1) {
+                        valueToBind = key.substring(0, delimiterPos);
+                    } else {
+                        valueToBind = key;
+                    }
+                    qualifiedVariableName = variableName;
+                } else {
+                    valueToBind = value;
+                    qualifiedVariableName = variableName;
+                }
+
                 try {
                     int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-                    if (numPositions == 0) continue;
+                    if (numPositions == 0) {
+                        continue;
+                    }
 
                     IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
                     IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
@@ -226,9 +280,9 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
                     for (int i = 0; i < numPositions; i++) {
                         resultSoA.add(
-                            value,
+                            valueToBind,
                             valueType,
-                            variableName,
+                            qualifiedVariableName,
                             docIds.getInt(i),
                             sentIds != null ? sentIds.getInt(i) : -1,
                             beginChars != null ? beginChars.getInt(i) : -1,
@@ -244,9 +298,9 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                     PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
                     for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
                         resultSoA.add(
-                            value,
+                            valueToBind,
                             valueType,
-                            variableName,
+                            qualifiedVariableName,
                             positionListSoA.getDocIdAt(i),
                             positionListSoA.getSentenceIdAt(i),
                             positionListSoA.getBeginCharAt(i),
@@ -260,6 +314,10 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                      logger.error("Error processing NER entry with key '{}': {}", key, e.getMessage(), e);
                 }
             }
+        } finally {
+            if (iterator != null) {
+                iterator.close();
+            }
         }
         logger.debug("Extracted {} bindings for entity type '{}' into QueryResultSoA", bindingsAdded, entityType);
         return bindingsAdded;
@@ -272,28 +330,64 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
         logger.debug("Searching for all entities of type '{}' into QueryResultSoA, storing type as value.", entityType);
 
-        ValueType valueType = "DATE".equals(entityType) ? ValueType.DATE : ValueType.ENTITY;
-        String prefix = entityType.toUpperCase() + IndexAccessInterface.DELIMITER;
-        byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        ValueType valueType = "DATE".equals(entityType.toUpperCase()) ? ValueType.DATE : ValueType.ENTITY;
 
-        logger.debug("Executing entity type search on index '{}' with prefix: {}", index.getIndexType(), prefix);
+        logger.debug("Executing entity type search on index '{}' for entity type '{}'", index.getIndexType(), entityType);
         int bindingsAdded = 0;
+        RocksIterator iterator = null;
+        String prefix = null;
 
-        try (DBIterator iterator = index.seek(prefixBytes)) {
-            while (iterator.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = iterator.next();
-                String key = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            if ("DATE".equals(entityType.toUpperCase())) {
+                iterator = index.iterateFromFirst();
+            } else if (entityType.startsWith("?")) {
+                 logger.warn("executeEntityTypeSearchOptimized called with a variable entityType: {}. This is unexpected and likely a logic error.", entityType);
+                 iterator = index.iterateFromFirst();
+            } else {
+                prefix = entityType.toUpperCase() + IndexAccessInterface.DELIMITER;
+                byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                iterator = index.seek(prefixBytes);
+            }
 
-                if (!key.startsWith(prefix)) {
-                    break;
+            if (iterator == null) {
+                logger.error("NerExecutor: {} returned a null iterator for entityType '{}' in executeEntityTypeSearchOptimized (index type: {})",
+                             ("DATE".equals(entityType.toUpperCase()) || entityType.startsWith("?") ? "iterateFromFirst()" : "seek()"),
+                             entityType, index.getIndexType());
+                return 0;
+            }
+
+            for (/* iterator positioned */ ; iterator.isValid(); iterator.next()) {
+                byte[] keyBytes = iterator.key();
+                byte[] valueBytes = iterator.value();
+                String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+                String currentPrefix;
+                 if ("DATE".equals(entityType.toUpperCase())) {
+                    currentPrefix = "";
+                } else if (entityType.startsWith("?")) {
+                    int delimiterPos = key.indexOf(IndexAccessInterface.DELIMITER);
+                     if (delimiterPos == -1) continue;
+                    currentPrefix = key.substring(0, delimiterPos + 1);
+                } else {
+                    currentPrefix = prefix;
+                    if (!key.startsWith(currentPrefix)) {
+                        break;
+                    }
                 }
 
-                String specificEntityInstanceValue = key.substring(prefix.length()); // Value to store
+                String specificEntityInstanceValue;
+                if ("DATE".equals(entityType.toUpperCase())) {
+                    specificEntityInstanceValue = key;
+                } else {
+                     specificEntityInstanceValue = key.substring(currentPrefix.length());
+                }
 
-                byte[] rawBlob = entry.getValue();
+                byte[] rawBlob = valueBytes;
                 try {
                     int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-                    if (numPositions == 0) continue;
+                    if (numPositions == 0) {
+                        continue;
+                    }
 
                     IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
                     IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
@@ -303,15 +397,15 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
                     for (int i = 0; i < numPositions; i++) {
                         resultSoA.add(
-                            specificEntityInstanceValue, // Value is the specific entity instance text
+                            specificEntityInstanceValue,
                             valueType,
-                            null, // No variable name
+                            null,
                             docIds.getInt(i),
                             sentIds != null ? sentIds.getInt(i) : -1,
                             beginChars != null ? beginChars.getInt(i) : -1,
                             endChars != null ? endChars.getInt(i) : -1,
                             synonymIds != null ? synonymIds.getInt(i) : -1,
-                            bindingsAdded // This is conceptualRowId
+                            bindingsAdded
                         );
                         bindingsAdded++;
                     }
@@ -321,7 +415,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                     PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
                     for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
                         resultSoA.add(
-                            specificEntityInstanceValue, // Value is the specific entity instance text
+                            specificEntityInstanceValue,
                             valueType,
                             null,
                             positionListSoA.getDocIdAt(i),
@@ -336,6 +430,10 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 } catch (Exception e) {
                     logger.error("Error processing NER entry with key '{}': {}", key, e.getMessage(), e);
                 }
+            }
+        } finally {
+            if (iterator != null) {
+                iterator.close();
             }
         }
 

@@ -22,6 +22,7 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.logging.ProgressTracker;
@@ -69,12 +70,12 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
 
     private Set<String> uniqueDatesProcessed = new HashSet<>();
 
-    public NerDateIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    public NerDateIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    public NerDateIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+    public NerDateIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override

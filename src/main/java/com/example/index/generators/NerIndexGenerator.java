@@ -34,13 +34,13 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     public static final String NER_TAGS_TO_EXCLUDE_SQL = "('O', 'DATE')";
 
-    public NerIndexGenerator(String indexBaseDir, String stopwordsPath,
+    public NerIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    public NerIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+    public NerIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override

@@ -43,9 +43,11 @@
     </logger>
 
     <!-- Suppress non-critical messages from noisy libraries -->
-    <logger name="com.example.index.LevelDBConfig" level="WARN"/>
+    <!-- <logger name="com.example.index.LevelDBConfig" level="WARN"/> -->
+    <logger name="com.example.index.RocksDBConfig" level="WARN"/> <!-- Updated from LevelDBConfig -->
     <logger name="edu.stanford.nlp" level="WARN"/>
-    <logger name="org.iq80.leveldb" level="WARN"/> <!-- For LevelDB itself -->
+    <!-- <logger name="org.iq80.leveldb" level="WARN"/> --> <!-- For LevelDB itself -->
+    <logger name="org.rocksdb" level="WARN"/> <!-- Updated from org.iq80.leveldb -->
     <logger name="org.xerial.snappy" level="WARN"/> <!-- For Snappy compression -->
     <!-- Add any other noisy libraries here -->
 

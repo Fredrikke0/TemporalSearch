@@ -24,13 +24,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import org.iq80.leveldb.DBIterator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.stubbing.OngoingStubbing;
+import org.rocksdb.RocksIterator;
 
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
@@ -44,7 +44,7 @@ import com.example.query.model.condition.Pos;
 public class PosExecutorTest {
 
     @Mock private IndexAccessInterface mockPosIndex;
-    @Mock private DBIterator mockIterator;
+    @Mock private RocksIterator mockIterator;
 
     private PosExecutor executor;
     private Map<String, IndexAccessInterface> indexes;
@@ -62,7 +62,7 @@ public class PosExecutorTest {
         defaultTestRequirements.needsPositions = true;
 
         try {
-            lenient().when(mockIterator.hasNext()).thenReturn(false);
+            lenient().when(mockIterator.isValid()).thenReturn(false);
 
             lenient().when(mockPosIndex.getRaw(any(byte[].class))).thenReturn(Optional.empty());
             lenient().when(mockPosIndex.seek(any(byte[].class))).thenReturn(mockIterator);
@@ -91,21 +91,22 @@ public class PosExecutorTest {
         lenient().when(mockPosIndex.seek(argThat(k -> Arrays.equals(k, prefixBytes)))).thenReturn(mockIterator);
 
         if (mockDbEntries.isEmpty()) {
-            when(mockIterator.hasNext()).thenReturn(false);
-            lenient().when(mockIterator.next()).thenThrow(new java.util.NoSuchElementException());
+            when(mockIterator.isValid()).thenReturn(false);
+            lenient().when(mockIterator.key()).thenThrow(new java.util.NoSuchElementException());
         } else {
             Boolean[] hasNextBooleans = new Boolean[mockDbEntries.size() + 1];
             Arrays.fill(hasNextBooleans, true);
             hasNextBooleans[mockDbEntries.size()] = false;
-            OngoingStubbing<Boolean> hasNextStub = when(mockIterator.hasNext());
+            OngoingStubbing<Boolean> hasNextStub = when(mockIterator.isValid());
             for (Boolean b : hasNextBooleans) {
                 hasNextStub = hasNextStub.thenReturn(b);
             }
 
-            OngoingStubbing<Map.Entry<byte[], byte[]>> nextStub = when(mockIterator.next());
+            OngoingStubbing<byte[]> nextStub = when(mockIterator.key());
             for (Map.Entry<byte[], byte[]> dbEntry : mockDbEntries) {
-                nextStub = nextStub.thenReturn(dbEntry);
+                nextStub = nextStub.thenReturn(dbEntry.getKey());
             }
+            when(mockIterator.value()).thenReturn(mockDbEntries.get(0).getValue());
             nextStub.thenThrow(new java.util.NoSuchElementException());
         }
     }
@@ -229,8 +230,8 @@ public class PosExecutorTest {
 
         String expectedPrefix = "VB" + String.valueOf(IndexAccessInterface.DELIMITER);
         verify(mockPosIndex).seek(eq(expectedPrefix.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-        verify(mockIterator, times(terms.size() + 1)).hasNext();
-        verify(mockIterator, times(terms.size())).next();
+        verify(mockIterator, times(terms.size() + 1)).isValid();
+        verify(mockIterator, times(terms.size())).key();
     }
 
     @Test

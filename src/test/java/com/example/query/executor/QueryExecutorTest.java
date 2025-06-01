@@ -26,13 +26,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import org.iq80.leveldb.DBIterator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.rocksdb.RocksIterator;
 
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
@@ -68,8 +68,8 @@ class QueryExecutorTest {
     @Mock private IndexAccess dependencyIndex; // Added for completeness
     @Mock private IndexAccess nerDateIndex; // Added for NerDate
 
-    @Mock private DBIterator unigramIterator;
-    @Mock private DBIterator nerIterator;
+    @Mock private RocksIterator unigramIterator;
+    @Mock private RocksIterator nerIterator;
 
     // Mock dependencies needed by QueryExecutor and JoinHandler
     @Mock private TableResultService mockTableResultService;
@@ -119,7 +119,7 @@ class QueryExecutorTest {
 
         // Mock iterator behavior with lenient mode
         lenient().when(nerIndex.iterateFromFirst()).thenReturn(nerIterator);
-        lenient().when(nerIterator.hasNext()).thenReturn(false);
+        lenient().when(nerIterator.isValid()).thenReturn(false);
 
         // Mock unigram iterator to provide a universe for NOT tests
         // Let's define a universe of documents {1, 2, 3, 4}
@@ -136,8 +136,9 @@ class QueryExecutorTest {
 
         // Stub the iterator behavior
         lenient().when(unigramIndex.iterateFromFirst()).thenReturn(unigramIterator);
-        lenient().when(unigramIterator.hasNext()).thenReturn(true, true, true, true, false); // Iterate 4 times
-        lenient().when(unigramIterator.next()).thenReturn(entry1).thenReturn(entry2).thenReturn(entry3).thenReturn(entry4); // Return each entry
+        lenient().when(unigramIterator.isValid()).thenReturn(true, true, true, true, false); // Iterate 4 times
+        lenient().when(unigramIterator.key()).thenReturn(entry1.getKey(), entry2.getKey(), entry3.getKey(), entry4.getKey()); // Return each entry
+        lenient().when(unigramIterator.value()).thenReturn(entry1.getValue(), entry2.getValue(), entry3.getValue(), entry4.getValue()); // Return each entry
 
         // Set up mock data for the tests
         setupMockData();

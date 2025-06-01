@@ -1,23 +1,23 @@
 package com.example.index.generators;
 
-import com.google.common.io.MoreFiles;
-import com.google.common.io.RecursiveDeleteOption;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import static org.junit.jupiter.api.Assertions.*;
-import org.iq80.leveldb.Options;
-
+import java.io.File;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
-import java.io.*;
 
-import com.example.logging.ProgressTracker;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.rocksdb.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.example.index.RocksDBConfig;
+import com.google.common.io.MoreFiles;
+import com.google.common.io.RecursiveDeleteOption;
 
 /**
  * Base test class providing common utilities for index testing.
@@ -133,18 +133,11 @@ public abstract class BaseIndexTest {
     }
 
     /**
-     * Creates optimized LevelDB options for testing.
+     * Creates optimized RocksDB options for testing.
      * @return Options configured for testing
      */
     protected Options createTestOptions() {
-        Options options = new Options();
-        options.createIfMissing(true);
-        options.errorIfExists(false);
-        options.cacheSize(16 * 1024 * 1024); // 16MB cache for testing
-        options.writeBufferSize(4 * 1024 * 1024); // 4MB write buffer
-        options.blockSize(4 * 1024); // 4KB block size
-        options.compressionType(org.iq80.leveldb.CompressionType.SNAPPY);
-        return options;
+        return RocksDBConfig.createOptimizedOptions();
     }
 
     /**

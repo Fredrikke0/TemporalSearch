@@ -6,7 +6,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import org.iq80.leveldb.DBIterator;
+import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -104,11 +104,12 @@ public final class NotExecutor implements ConditionExecutor<Not> {
         logger.debug("Iterating '{}' index to approximate universe for NOT (granularity: {})...", UNIGRAM_INDEX_NAME, granularity);
         long count = 0;
 
-        try (DBIterator iterator = unigramIndex.iterateFromFirst()) {
-            while (iterator.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = iterator.next();
-                byte[] valueBytes = entry.getValue();
+        try (RocksIterator iterator = unigramIndex.iterateFromFirst()) {
+            while (iterator.isValid()) {
+                byte[] keyBytes = iterator.key();
+                byte[] valueBytes = iterator.value();
                 if (valueBytes == null || valueBytes.length == 0) {
+                    iterator.next();
                     continue;
                 }
 
@@ -124,17 +125,18 @@ public final class NotExecutor implements ConditionExecutor<Not> {
                             allIds.add(new SimpleEntry<>(actualPosition.getDocumentId(), actualPosition.getSentenceId()));
                         }
                     }
-                } catch (IOException e) { // Catch specific IOException for deserialization
+                } catch (IOException e) {
                     logger.warn("Failed to deserialize PositionListSoA for key '{}' in '{}': {}",
-                            new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8),
+                            new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8),
                             UNIGRAM_INDEX_NAME, e.getMessage());
-                } catch (Exception e) { // Catch other potential runtime exceptions during processing
+                } catch (Exception e) {
                     logger.warn("Error processing entry for key '{}' in '{}' during universe creation: {}",
-                            new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8),
+                            new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8),
                             UNIGRAM_INDEX_NAME, e.getMessage());
                 }
+                iterator.next();
             }
-        } catch (Exception e) { // Catch exceptions from iterator creation or during iteration itself
+        } catch (Exception e) {
             logger.error("Failed to iterate through '{}' index: {}", UNIGRAM_INDEX_NAME, e.getMessage(), e);
             throw new QueryExecutionException(
                 "Error accessing index '" + UNIGRAM_INDEX_NAME + "' for NOT operation.",

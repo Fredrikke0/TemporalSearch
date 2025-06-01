@@ -14,11 +14,11 @@ public class ProgressTracker implements AutoCloseable {
     private ProgressBar overallProgress;
     private ProgressBar currentIndexProgress;
     private ProgressBar batchProgress;
-    private ProgressBar levelDBWriteProgress;
+    private ProgressBar rocksDBWriteProgress;
     private final AtomicLong overallCount = new AtomicLong(0);
     private final AtomicLong indexCount = new AtomicLong(0);
     private final AtomicLong batchCount = new AtomicLong(0);
-    private final AtomicLong levelDBTermCount = new AtomicLong(0);
+    private final AtomicLong rocksDBTermCount = new AtomicLong(0);
     private final boolean isEnabled;
 
     public ProgressTracker() {
@@ -166,14 +166,14 @@ public class ProgressTracker implements AutoCloseable {
         }
     }
 
-    public void startLevelDBWrite(String indexName) {
+    public void startRocksDBWrite(String indexName) {
         if (!isEnabled) return;
-        if (levelDBWriteProgress != null) {
-            levelDBWriteProgress.close();
+        if (rocksDBWriteProgress != null) {
+            rocksDBWriteProgress.close();
         }
-        levelDBTermCount.set(0);
-        levelDBWriteProgress = new ProgressBarBuilder()
-            .setTaskName("Writing " + indexName + " to LevelDB")
+        rocksDBTermCount.set(0);
+        rocksDBWriteProgress = new ProgressBarBuilder()
+            .setTaskName("Writing " + indexName + " to RocksDB")
             .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
             .setUpdateIntervalMillis(200)
             .showSpeed()
@@ -181,19 +181,19 @@ public class ProgressTracker implements AutoCloseable {
             .build();
     }
 
-    public void updateLevelDBWrite(long termsProcessedInStep) {
+    public void updateRocksDBWrite(long termsProcessedInStep) {
         if (!isEnabled) return;
-        if (levelDBWriteProgress != null) {
-            levelDBWriteProgress.stepBy(termsProcessedInStep);
-            levelDBTermCount.addAndGet(termsProcessedInStep);
+        if (rocksDBWriteProgress != null) {
+            rocksDBWriteProgress.stepBy(termsProcessedInStep);
+            rocksDBTermCount.addAndGet(termsProcessedInStep);
         }
     }
 
-    public void completeLevelDBWrite() {
+    public void completeRocksDBWrite() {
         if (!isEnabled) return;
-        if (levelDBWriteProgress != null) {
-            levelDBWriteProgress.close();
-            levelDBWriteProgress = null;
+        if (rocksDBWriteProgress != null) {
+            rocksDBWriteProgress.close();
+            rocksDBWriteProgress = null;
         }
     }
 
@@ -201,7 +201,7 @@ public class ProgressTracker implements AutoCloseable {
     public void close() {
         completeBatch();
         completeIndex();
-        completeLevelDBWrite();
+        completeRocksDBWrite();
         completeOverall();
     }
 }

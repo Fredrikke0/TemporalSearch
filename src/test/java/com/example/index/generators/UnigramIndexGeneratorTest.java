@@ -1,42 +1,38 @@
 package com.example.index.generators;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.verify;
 
+import java.io.File;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.rocksdb.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.example.logging.ProgressTracker;
+
 import com.example.core.IndexAccess;
-import com.example.core.PositionList;
-import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
-import com.example.index.generators.UnigramIndexGenerator;
-
-import org.iq80.leveldb.Options;
-
-import java.io.File;
-import java.io.PrintWriter;
-import java.util.Optional;
+import com.example.logging.ProgressTracker;
 
 @ExtendWith(MockitoExtension.class)
 class UnigramIndexGeneratorTest extends BaseIndexTest {
@@ -66,12 +62,20 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
             writer.println("is");
         }
 
-        // Set up index directory is NOT needed here, IndexGenerator handles it.
-        // Path unigramIndexDir = indexBaseDir.resolve("unigram");
+        // Create IndexAccess instance first
+        // The UnigramIndexGenerator will use this IndexAccess to create its specific index directory if needed.
+        // BaseIndexTest ensures indexBaseDir (this.tempDir.resolve("indexes")) exists.
+        // UnigramIndexGenerator will create indexBaseDir.resolve("unigram")
+        try (Options options = createTestOptions()) {
+            // It seems the generator itself might be expecting to *receive* an IndexAccess instance
+            // that it will then use, rather than a path to create one. Let's check UnigramIndexGenerator constructor.
+            // Based on IndexGenerator superclass, it now takes IndexAccessInterface.
+            this.indexAccess = new IndexAccess(indexBaseDir, "unigram", options); // Create it here for the generator
+        }
 
-        // Create generator
+        // Create generator, passing the already created IndexAccess instance
         generator = new UnigramIndexGenerator(
-                indexBaseDir.toString(), // Pass the actual base directory for all indexes
+                this.indexAccess, // Pass the IndexAccessInterface instance
                 stopwordsPath.toString(),
                 sqliteConn,
                 mockProgressTracker,
@@ -206,19 +210,24 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         insertBasicTestData();
 
         // Generate index
+        // The generator uses the IndexAccess instance passed in its constructor.
         generator.generateIndex();
 
-        // Close the generator to release the LevelDB lock
+        // Close the generator to release its resources.
+        // The IndexAccess instance used by the generator is managed by the generator's close method.
         generator.close();
 
-        // Create a new IndexAccess instance for verification
-        try (IndexAccess indexAccess = new IndexAccess(indexBaseDir, "unigram", createTestOptions())) {
+        // For verification, we need a *new* IndexAccess instance for the *same path*.
+        // The previous this.indexAccess was passed to the generator and might be closed by generator.close().
+        // Let's re-initialize this.indexAccess for verification.
+        try (Options options = createTestOptions();
+             IndexAccess verificationIA = new IndexAccess(indexBaseDir.resolve("unigram"), "unigram", options)) {
             // Verify index contents
-            var testPositions = indexAccess.get("test".getBytes());
+            var testPositions = verificationIA.get("test".getBytes());
             assertTrue(testPositions.isPresent(), "Expected positions for 'test'");
             assertEquals(1, testPositions.get().getNumPositions());
 
-            var wordPositions = indexAccess.get("word".getBytes());
+            var wordPositions = verificationIA.get("word".getBytes());
             assertTrue(wordPositions.isPresent(), "Expected positions for 'word'");
             assertEquals(1, wordPositions.get().getNumPositions());
         }

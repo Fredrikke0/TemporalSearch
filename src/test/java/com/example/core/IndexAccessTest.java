@@ -12,13 +12,14 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
-import org.iq80.leveldb.CompressionType;
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.Options;
-import org.iq80.leveldb.WriteBatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.rocksdb.Options;
+import org.rocksdb.RocksIterator;
+import org.rocksdb.WriteBatch;
+
+import com.example.index.RocksDBConfig;
 
 /**
  * Tests for IndexAccess implementation.
@@ -32,6 +33,7 @@ public class IndexAccessTest {
     private static final String TEST_INDEX_PATH = "test-indexes";
     private IndexAccess indexAccess;
     private Path indexPath;
+    private Options options;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -41,10 +43,7 @@ public class IndexAccessTest {
         }
         Files.createDirectories(indexPath);
 
-        Options options = new Options();
-        options.createIfMissing(true);
-        options.compressionType(CompressionType.SNAPPY);
-        options.cacheSize(16 * 1024 * 1024); // 16MB cache
+        options = RocksDBConfig.createOptimizedOptions();
 
         indexAccess = new IndexAccess(indexPath, "test", options);
     }
@@ -53,6 +52,9 @@ public class IndexAccessTest {
     void tearDown() throws Exception {
         if (indexAccess != null) {
             indexAccess.close();
+        }
+        if (options != null) {
+            options.close();
         }
         if (Files.exists(indexPath)) {
             deleteDirectory(indexPath.toFile());
@@ -96,8 +98,7 @@ public class IndexAccessTest {
         }
 
         // Write batch
-        WriteBatch batch = indexAccess.createWriteBatch();
-        try {
+        try (WriteBatch batch = indexAccess.createWriteBatch()) {
             for (Map.Entry<String, PositionListSoA> entry : entries.entrySet()) {
                 batch.put(
                     entry.getKey().getBytes(),
@@ -105,8 +106,6 @@ public class IndexAccessTest {
                 );
             }
             indexAccess.write(batch);
-        } finally {
-            batch.close();
         }
 
         // Verify entries
@@ -158,13 +157,14 @@ public class IndexAccessTest {
 
         // Test iteration
         int count = 0;
-        try (DBIterator iterator = indexAccess.iterateFromFirst()) {
-            while (iterator.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = iterator.next();
-                assertNotNull(entry.getKey(), "Key should not be null");
-                assertNotNull(entry.getValue(), "Value should not be null");
+        try (RocksIterator iterator = indexAccess.iterateFromFirst()) {
+            for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
+                byte[] key = iterator.key();
+                byte[] value = iterator.value();
+                assertNotNull(key, "Key should not be null");
+                assertNotNull(value, "Value should not be null");
 
-                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
+                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(value);
                 assertEquals(1, positions.getNumPositions(),
                     "Should have correct number of positions");
                 count++;
@@ -179,14 +179,14 @@ public class IndexAccessTest {
     //     PositionListSoA positions = new PositionListSoA();
 
     //     // Verify operations throw appropriate exceptions
-    //     assertThrows(IndexAccessException.class, () ->
+    //     assertThrows(RocksDBException.class, () ->
     //         indexAccess.put("test".getBytes(), positions.serializeToCompositeBlob()));
-    //     assertThrows(IndexAccessException.class, () ->
+    //     assertThrows(RocksDBException.class, () ->
     //         indexAccess.get("test".getBytes()));
-    //     assertThrows(IndexAccessException.class, () -> indexAccess.createWriteBatch());
-    //     assertThrows(IndexAccessException.class, () ->
+    //     assertThrows(RocksDBException.class, () -> indexAccess.createWriteBatch());
+    //     assertThrows(RocksDBException.class, () ->
     //         indexAccess.iterateFromFirst());
-    //     assertThrows(IndexAccessException.class, () ->
+    //     assertThrows(RocksDBException.class, () ->
     //         indexAccess.seek("anykey".getBytes()));
     // }
 

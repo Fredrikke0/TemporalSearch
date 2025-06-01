@@ -1,8 +1,5 @@
 package com.example;
 
-import static org.iq80.leveldb.impl.Iq80DBFactory.asString;
-import static org.iq80.leveldb.impl.Iq80DBFactory.factory;
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -18,9 +15,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.iq80.leveldb.DB;
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.Options;
+import org.rocksdb.Options;
+import org.rocksdb.RocksDB;
+import org.rocksdb.RocksDBException;
+import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,9 +34,13 @@ import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
 
-public class LevelDBBrowser {
+/**
+ * A simple RocksDB browser.
+ * This class allows browsing contents of RocksDB index databases.
+ */
+public class RocksDBBrowser {
     private static final String DELIMITER = "\0";
-    private static final Logger logger = LoggerFactory.getLogger(LevelDBBrowser.class);
+    private static final Logger logger = LoggerFactory.getLogger(RocksDBBrowser.class);
     private static final String ANNOTATION_SYNONYMS_PREFIX = "%s_synonyms.ser";
     private static final String[] ANNOTATION_TYPES = {"date", "ner", "pos", "dependency"};
     private static final List<String> ALL_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
@@ -46,10 +48,10 @@ public class LevelDBBrowser {
     ));
 
     public static void main(String[] args) throws IOException {
-        logger.debug("Starting LevelDBBrowser...");
-        ArgumentParser parser = ArgumentParsers.newFor("LevelDBBrowser").build()
+        logger.debug("Starting RocksDBBrowser...");
+        ArgumentParser parser = ArgumentParsers.newFor("RocksDBBrowser").build()
                 .defaultHelp(true)
-                .description("Browse contents of LevelDB index databases. Supports listing entries, looking up specific keys/prefixes, and displaying statistics.");
+                .description("Browse contents of RocksDB index databases. Supports listing entries, looking up specific keys/prefixes, and displaying statistics.");
 
         List<String> availableIndexChoices = new ArrayList<>(ALL_INDEX_TYPES);
         availableIndexChoices.add("all");
@@ -107,7 +109,7 @@ public class LevelDBBrowser {
             parser.handleError(e);
             System.exit(1);
         } catch (Exception e) { // Catching other potential exceptions from initial setup
-            System.err.println("Error in LevelDBBrowser setup: " + e.getMessage());
+            System.err.println("Error in RocksDBBrowser setup: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
         }
@@ -130,18 +132,13 @@ public class LevelDBBrowser {
         }
 
         Options options = new Options();
-        options.createIfMissing(false); // Do not create if missing, we are browsing
+        options.setCreateIfMissing(false);
 
-        try (DB db = factory.open(dbFile, options)) {
+        try (RocksDB db = RocksDB.openReadOnly(options, dbFile.getAbsolutePath())) {
             if (showStats) {
                 displayStats(db, indexType);
-                // If only stats are shown for a single index, and "all" is not selected, main method's return handles exit.
-                // If "all" is selected, we want to continue to the next index if only stats are shown.
-                // The previous change (return in main if showStats) should be revisited if --stats for 'all' should only show stats and not list entries.
-                // For now, if --stats is true, it will show stats and then, if key/prefix not null, also show entries.
-                // The return in main: "if (showStats) { displayStats(db); return; }" is now inside processSingleIndex implicitly for the single index case.
-                // Let's refine this: if showStats is true, we only do stats for this index.
-                if (key == null && prefix == null) { // Only return if no specific key/prefix is given alongside --stats
+                if (key == null && prefix == null) {
+                    options.close();
                     return;
                 }
             }
@@ -149,31 +146,32 @@ public class LevelDBBrowser {
                 displayEntry(db, key, indexType, annotationSynonyms);
             } else if (prefix != null) {
                 listEntriesByPrefix(db, prefix, limit, indexType, annotationSynonyms);
-            } else { // If not showing only stats, and no key/prefix, list all
+            } else {
                 listAllEntries(db, limit, indexType, annotationSynonyms);
             }
+        } catch (RocksDBException e) {
+            System.err.printf("Error opening RocksDB database at %s: %s%n", dbPath, e.getMessage());
+            // e.printStackTrace(); // Uncomment for more detailed error
+        } finally {
+            if (options != null) {
+                options.close();
+            }
         }
-        // Catch DB spezifc errors here to allow processing of other dbs in "all" mode.
-        // General IOExceptions will be caught by the caller (main) if not in "all" mode, or handled per-index in "all" mode.
     }
 
-    private static void displayStats(DB db, String indexType) throws IOException {
+    private static void displayStats(RocksDB db, String indexType) throws IOException {
         long totalEntries = 0;
         long totalPositions = 0;
         long nashDateLookupCount = 0;
         boolean isNashIndex = "nash".equals(indexType);
 
-        try (DBIterator iterator = db.iterator()) {
-            for (iterator.seekToFirst(); iterator.hasNext(); iterator.next()) {
+        try (RocksIterator iterator = db.newIterator()) {
+            for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
                 totalEntries++;
                 if (isNashIndex) {
-                    // For Nash, we might want to count specific things if possible,
-                    // e.g. count of dates in the lookup table if we find that key.
-                    // For now, we just count entries.
-                    // If we find the date lookup key, we can count dates.
-                    if (Arrays.equals(iterator.peekNext().getKey(), NashSerializationUtils.DATE_LOOKUP_KEY)) {
+                    if (Arrays.equals(iterator.key(), NashSerializationUtils.DATE_LOOKUP_KEY)) {
                         try {
-                            List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(iterator.peekNext().getValue());
+                            List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(iterator.value());
                             nashDateLookupCount = dateLookup.size();
                         } catch (IOException e) {
                             logger.warn("Could not deserialize Nash date lookup table during stats: {}", e.getMessage());
@@ -181,7 +179,7 @@ public class LevelDBBrowser {
                     }
                 } else {
                     try {
-                        byte[] value = iterator.peekNext().getValue();
+                        byte[] value = iterator.value();
                         totalPositions += PositionListSoA.getNumPositionsFromBlob(value);
                     } catch (Exception e) {
                         logger.warn("Could not deserialize entry value in index '{}' during stats calculation: {}. Skipping for position count.", indexType, e.getMessage());
@@ -205,8 +203,15 @@ public class LevelDBBrowser {
         System.out.println();
     }
 
-    private static void displayEntry(DB db, String key, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
-        byte[] data = db.get(bytes(key));
+    private static void displayEntry(RocksDB db, String key, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
+        byte[] data = null;
+        try {
+            data = db.get(bytes(key));
+        } catch (RocksDBException e) {
+            System.err.printf("Error getting key '%s' from RocksDB: %s%n", key, e.getMessage());
+            return;
+        }
+
         if (data == null) {
             System.out.printf("Key not found: %s%n", key);
             return;
@@ -220,25 +225,27 @@ public class LevelDBBrowser {
         }
     }
 
-    private static void listEntriesByPrefix(DB db, String prefix, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
+    private static void listEntriesByPrefix(RocksDB db, String prefix, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
         boolean isNash = indexType.equals("nash");
         System.out.printf("Entries with prefix '%s':%n", prefix);
         System.out.println("=".repeat(20 + prefix.length()));
 
         int count = 0;
-        try (DBIterator iterator = db.iterator()) {
+        try (RocksIterator iterator = db.newIterator()) {
             iterator.seek(bytes(prefix));
 
-            while (iterator.hasNext() && (limit == 0 || count < limit)) {
-                Map.Entry<byte[], byte[]> entry = iterator.peekNext();
-                String key = asString(entry.getKey());
-                if (!key.startsWith(prefix)) break;
+            while (iterator.isValid() && (limit == 0 || count < limit)) {
+                byte[] keyBytes = iterator.key();
+                byte[] valueBytes = iterator.value();
+                String currentKey = asString(keyBytes);
+
+                if (!currentKey.startsWith(prefix)) break;
 
                 if (isNash) {
-                    displayNashEntry(entry.getKey(), entry.getValue());
+                    displayNashEntry(keyBytes, valueBytes);
                 } else {
-                    PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
-                    displayPositionsSoA(key, positionsSoA, indexType, synonyms);
+                    PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
+                    displayPositionsSoA(currentKey, positionsSoA, indexType, synonyms);
                 }
                 count++;
                 iterator.next();
@@ -250,49 +257,42 @@ public class LevelDBBrowser {
         }
     }
 
-    private static void listAllEntries(DB db, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
+    private static void listAllEntries(RocksDB db, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
         boolean isNash = indexType.equals("nash");
         System.out.println("All Entries Summary (Key and Position Count)");
         System.out.println("============================================");
 
-        // For non-Nash, store pairs of <Key, PositionCount> for sorting
         List<Map.Entry<String, Integer>> keyAndCountsList = new ArrayList<>();
-
-        // For Nash, we'll process directly as before, as their value structure is different
-        // and typically not as large in terms of individual entry *value* size for the summary.
         List<Map.Entry<byte[], byte[]>> nashEntriesList = new ArrayList<>();
 
         if (isNash) {
-            try (DBIterator iterator = db.iterator()) {
+            try (RocksIterator iterator = db.newIterator()) {
                 iterator.seekToFirst();
-                while (iterator.hasNext()) {
-                    Map.Entry<byte[], byte[]> entry = iterator.next();
-                    nashEntriesList.add(new AbstractMap.SimpleEntry<>(entry.getKey(), entry.getValue()));
+                while (iterator.isValid()) {
+                    nashEntriesList.add(new AbstractMap.SimpleEntry<>(iterator.key(), iterator.value()));
+                    iterator.next();
                 }
             }
         } else {
-            try (DBIterator iterator = db.iterator()) {
+            try (RocksIterator iterator = db.newIterator()) {
                 iterator.seekToFirst();
-                while (iterator.hasNext()) {
-                    Map.Entry<byte[], byte[]> entry = iterator.next();
-                    String key = asString(entry.getKey());
-                    // Efficiently get count without full deserialization
-                    int positionCount = PositionListSoA.getNumPositionsFromBlob(entry.getValue());
+                while (iterator.isValid()) {
+                    String key = asString(iterator.key());
+                    int positionCount = PositionListSoA.getNumPositionsFromBlob(iterator.value());
                     keyAndCountsList.add(new AbstractMap.SimpleEntry<>(key, positionCount));
+                    iterator.next();
                 }
             }
-            // Sort by position count (the Integer value in the Map.Entry)
             keyAndCountsList.sort((e1, e2) -> Integer.compare(e2.getValue(), e1.getValue()));
         }
 
         int count = 0;
         if (isNash) {
-            // Nash processing remains largely the same as it already deserializes for counts
             for (Map.Entry<byte[], byte[]> entry : nashEntriesList) {
                 if (limit > 0 && count >= limit) break;
                 byte[] keyBytes = entry.getKey();
                 byte[] valueBytes = entry.getValue();
-                String keyStr = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+                String keyStr = asString(keyBytes);
 
                 if (Arrays.equals(keyBytes, NashSerializationUtils.DATE_LOOKUP_KEY)) {
                     List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(valueBytes);
@@ -307,14 +307,13 @@ public class LevelDBBrowser {
             for (Map.Entry<String, Integer> entry : keyAndCountsList) {
                 if (limit > 0 && count >= limit) break;
                 String formattedKey = formatKey(entry.getKey(), indexType);
-                // entry.getValue() is now the position count directly
                 System.out.printf("Key: %s, Position Count: %d%n", formattedKey, entry.getValue());
                 count++;
             }
         }
 
         if (limit > 0 && count == limit) {
-            long totalEntriesInDb = isNash ? nashEntriesList.size() : keyAndCountsList.size(); // Corrected total for non-Nash
+            long totalEntriesInDb = isNash ? nashEntriesList.size() : keyAndCountsList.size();
             System.out.printf("%nShowing first %d entries (of %,d total). Use --limit 0 to see all.%n", limit, totalEntriesInDb);
         }
     }
@@ -325,7 +324,7 @@ public class LevelDBBrowser {
         System.out.println("----------");
 
         int count = 0;
-        int maxPositions = 100;  // Limit to 100 positions by default
+        int maxPositions = 100;
 
         for (Position pos : positions.getPositions()) {
             if (count >= maxPositions) {
@@ -363,9 +362,7 @@ public class LevelDBBrowser {
             String[] parts = key.split(DELIMITER);
             return parts.length == 3 ? String.format("%s-%s->%s", parts[0], parts[1], parts[2]) : key;
         } else if (indexType.equals("bigram") || indexType.equals("trigram") || indexType.equals("stitch_bigram_date")) {
-            // Replace the null delimiter with a space for readability
-            // For stitch_bigram_date, it could be " <DELIMITER_CHAR_VISUAL> " or similar for clarity
-            return key.replace(DELIMITER, " <STITCH> "); // Using a more specific visual for this stitch type
+            return key.replace(DELIMITER, " <STITCH> ");
         }
         return key;
     }
@@ -402,9 +399,13 @@ public class LevelDBBrowser {
         return str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
+    private static String asString(byte[] bytes) {
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     private static void displayNashEntry(byte[] keyBytes, byte[] valueBytes) throws IOException {
         if (Arrays.equals(keyBytes, NashSerializationUtils.DATE_LOOKUP_KEY)) {
-            System.out.printf("%nKey: %s (Date Lookup Table)%n", new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8));
+            System.out.printf("%nKey: %s (Date Lookup Table)%n", asString(keyBytes));
             System.out.println("----------");
             try {
                 List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(valueBytes);
@@ -413,7 +414,7 @@ public class LevelDBBrowser {
                 for (LocalDate date : dateLookup) {
                     System.out.printf("  [%d]: %s%n", displayCount, date);
                     displayCount++;
-                    if (displayCount >= 100) { // Limit displayed dates
+                    if (displayCount >= 100) {
                          System.out.println("  ... (showing first 100 dates)");
                          break;
                     }
@@ -422,18 +423,18 @@ public class LevelDBBrowser {
                 System.out.println("  Error deserializing date lookup table: " + e.getMessage());
             }
         } else {
-            String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+            String key = asString(keyBytes);
             System.out.printf("%nKey: %s (Nash Prefix)%n", key);
              System.out.println("----------");
             List<NashDateEntryWithId> entries = NashSerializationUtils.deserializeNashEntries(valueBytes);
             System.out.printf("Entries: %d%n", entries.size());
-            displayNashPositions(entries); // Use a helper for detailed display
+            displayNashPositions(entries);
         }
     }
 
     private static void displayNashPositions(List<NashDateEntryWithId> entries) {
          int count = 0;
-         int maxPositions = 100; // Limit display
+         int maxPositions = 100;
          for (NashDateEntryWithId entry : entries) {
              if (count >= maxPositions) {
                  System.out.printf("%nShowing first %d entries. Total entries: %d%n", maxPositions, entries.size());
@@ -456,7 +457,7 @@ public class LevelDBBrowser {
         System.out.println("----------");
 
         int count = 0;
-        int maxPositions = 100;  // Limit to 100 positions by default
+        int maxPositions = 100;
 
         for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
             Position pos = positionsSoA.getPositionAt(i);

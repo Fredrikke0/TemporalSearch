@@ -1,18 +1,25 @@
 package com.example.index.generators;
 
-import org.junit.jupiter.api.*;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.*;
-import java.sql.*;
-import java.util.Map;
-import com.example.logging.ProgressTracker;
-import com.google.common.collect.ListMultimap;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.index.generators.NerIndexGenerator;
+import java.io.File;
+import java.io.PrintWriter;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.rocksdb.Options;
+
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessInterface;
+import com.example.core.Position;
+import com.example.core.PositionListSoA;
+import com.example.logging.ProgressTracker;
+import com.google.common.collect.ListMultimap;
 
 public class NerIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-ner-general.txt";
@@ -31,9 +38,14 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
             writer.println("is");
         }
 
+        // Create IndexAccess instance first
+        try (Options options = createTestOptions()) {
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("ner"), "ner", options);
+        }
+
         // Create generator
         generator = new NerIndexGenerator(
-            tempDir.resolve("test-leveldb-ner").toString(),
+            this.indexAccess,
             TEST_STOPWORDS_PATH,
             sqliteConn,
             new ProgressTracker(),

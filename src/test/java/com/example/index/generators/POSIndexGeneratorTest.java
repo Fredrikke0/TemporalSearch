@@ -1,19 +1,22 @@
 package com.example.index.generators;
 
-import org.junit.jupiter.api.*;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.*;
-import java.sql.*;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.io.File;
+import java.io.PrintWriter;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.rocksdb.Options;
+
+import com.example.core.IndexAccess;
+import com.example.core.PositionListSoA;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.index.generators.POSIndexGenerator;
-import com.example.core.IndexAccess;
 
 public class POSIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-pos.txt";
@@ -32,9 +35,14 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
             writer.println("is");
         }
 
-        // Create generator
+        // Create IndexAccess instance first
+        try (Options options = createTestOptions()) {
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("pos"), "pos", options);
+        }
+
+        // Create generator, passing the IndexAccess instance
         generator = new POSIndexGenerator(
-            tempDir.resolve("test-leveldb-pos").toString(),
+            this.indexAccess,
             TEST_STOPWORDS_PATH,
             sqliteConn,
             new ProgressTracker(),

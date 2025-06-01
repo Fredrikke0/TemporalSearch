@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import org.iq80.leveldb.DBIterator;
+import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -170,10 +170,11 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         int originalConceptualRowIdCounter = conceptualRowIdCounter;
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
-        try (DBIterator iterator = index.seek(prefixBytes)) {
-            while (iterator.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = iterator.next();
-                String key = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8);
+        try (RocksIterator iterator = index.seek(prefixBytes)) {
+            while (iterator.isValid()) {
+                byte[] keyBytes = iterator.key();
+                byte[] valueBytes = iterator.value();
+                String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
 
                 if (!key.startsWith(prefix)) {
                     // We've iterated past the prefix range
@@ -181,7 +182,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                 }
 
                 // Deserialize the value to PositionListSoA
-                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
+                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
 
                 // Always reconstruct value for human readability if it contained delimiters
                 String actualValue = reconstructValue(key, DELIMITER);
@@ -200,6 +201,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                         conceptualRowIdCounter++ // Assign a new ID for each detail
                     );
                 }
+                iterator.next();
             }
         } catch (IOException e) {
             throw new QueryExecutionException(

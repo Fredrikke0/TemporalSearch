@@ -19,7 +19,7 @@ import org.rocksdb.WriteBatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.core.IndexAccess;
+import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationType;
 import com.example.index.StitchEntry;
@@ -48,7 +48,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
     @SuppressWarnings("this-escape") // Suppress warning: populateSpecificAnnotationSynonyms is an abstract method
                                      // called from constructor. Implementations are verified to only use
                                      // superclass fields initialized prior to this call, or their own parameters.
-    protected AbstractUnigramStitchGenerator(String indexBaseDir, String indexNameParam,
+    protected AbstractUnigramStitchGenerator(IndexAccessInterface indexAccess, String indexNameParam,
                                            String stopwordsPathString, Connection sqliteConnParam,
                                            ProgressTracker progressTrackerParam, int batchSizeParam, Path customSortTempParam,
                                            AnnotationType managedAnnotationType) throws IOException {
@@ -56,7 +56,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         // - actualIndexDbPath: The full specific path for this stitch index's LevelDB files.
         // - indexName: The logical name for this stitch index.
         // The calculation for specificStitchIndexPath must happen *inside* the super call.
-        super(Path.of(indexBaseDir, indexNameParam).toString(), // actualIndexDbPath
+        super(Path.of(indexAccess.getIndexPath(), indexNameParam).toString(), // actualIndexDbPath
               indexNameParam,                                 // indexName
               stopwordsPathString,
               sqliteConnParam,
@@ -68,7 +68,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
 
         // The indexDBPath for TypedAnnotationSynonymStore needs the specific path.
         // It's derived from the same inputs as what super() used.
-        this.indexDBPath = Path.of(indexBaseDir, this.resolvedIndexName);
+        this.indexDBPath = Path.of(indexAccess.getIndexPath(), this.resolvedIndexName); // TODO: This is not correct.
         if (!Files.exists(this.indexDBPath)) {
             Files.createDirectories(this.indexDBPath); // Ensure it exists for synonym store
         }
@@ -461,7 +461,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
     }
 
     // Method to allow tests to access the DB instance via IndexAccess
-    public IndexAccess getIndexAccess() {
+    public IndexAccessInterface getIndexAccess() {
         return this.indexAccess;
     }
 

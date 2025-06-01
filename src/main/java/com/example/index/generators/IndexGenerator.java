@@ -18,15 +18,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.rocksdb.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
+import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.IndexEntry;
-import com.example.index.RocksDBConfig;
 import com.example.logging.IndexingMetrics;
 import com.example.logging.ProgressTracker;
 import com.google.code.externalsorting.ExternalSort;
@@ -45,7 +43,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     public static final String DELIMITER = "\0";
     public static final char ESCAPE_CHAR = '\u001F';
 
-    protected final IndexAccess indexAccess;
+    protected final IndexAccessInterface indexAccess;
     protected final Connection sqliteConn;
     protected Set<String> stopwords;
     protected final ProgressTracker progress;
@@ -92,37 +90,12 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     public abstract long getDocumentCountForIndex() throws SQLException;
 
-    // Slim constructor
-    protected IndexGenerator(String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath, String indexNameForLogging) throws IOException {
-        this.sqliteConn = sqliteConn;
-        this.progress = progress;
-        this.batchSize = batchSize;
-        this.stopwords = loadStopwordsInternal(stopwordsPath);
-        this.tempDir = initializeTempDir(indexNameForLogging, customTempPath);
-        this.indexAccess = null;
-        this.effectiveIndexName = indexNameForLogging;
-        logger.debug("IndexGenerator (slim constructor for [{}]) initialized. Temp dir: {}, Batch size: {}", indexNameForLogging, this.tempDir.toAbsolutePath(), this.batchSize);
-        registerShutdownHook();
-    }
-
-    // Original full constructor (delegates to the one with customTempPath)
-    protected IndexGenerator(String actualIndexDbPath, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progressTracker, int batchSizeNum) throws IOException {
-        this(actualIndexDbPath, Path.of(actualIndexDbPath).getFileName().toString(), stopwordsPath, sqliteConn, progressTracker, batchSizeNum, null);
-    }
-
-    // Main constructor with customTempPath (and now explicit indexName)
-    @SuppressWarnings("this-escape")
-    protected IndexGenerator(String actualIndexDbPath, String indexName, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progressTracker, int batchSizeNum, Path customTempPath) throws IOException {
-        this.effectiveIndexName = indexName;
-        Options options = RocksDBConfig.createOptimizedOptions();
-        try {
-            this.indexAccess = new IndexAccess(Path.of(actualIndexDbPath), this.effectiveIndexName, options);
-        } catch (IndexAccessException e) {
-            options.close();
-            throw new IOException("Failed to initialize IndexAccess for " + this.effectiveIndexName, e);
-        }
+    // Primary constructor that all IndexGenerator implementations should use.
+    @SuppressWarnings("this-escape") // For getDocumentCountForIndex and getIndexType in constructor
+    protected IndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
+                             Connection sqliteConn, ProgressTracker progressTracker, int batchSizeNum, Path customTempPath) throws IOException {
+        this.indexAccess = indexAccess;
+        this.effectiveIndexName = indexAccess.getIndexType(); // Get name from IndexAccess
         this.sqliteConn = sqliteConn;
         this.progress = progressTracker;
         this.batchSize = batchSizeNum;
@@ -130,14 +103,19 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         this.tempDir = initializeTempDir(this.effectiveIndexName, customTempPath);
 
         try {
-            long totalDocs = getDocumentCountForIndex();
+            long totalDocs = getDocumentCountForIndex(); // `this` is used here before constructor finishes
             this.progress.startIndex(this.effectiveIndexName, totalDocs);
         } catch (SQLException e) {
             throw new IOException("Failed to get document count for index: " + this.effectiveIndexName, e);
         }
-        logger.debug("IndexGenerator for [{}] initialized. DB Path: {}, Temp dir: {}, Batch size: {}",
-                     this.effectiveIndexName, actualIndexDbPath, this.tempDir.toAbsolutePath(), this.batchSize);
+        logger.debug("IndexGenerator for [{}] initialized. IndexAccess provided. Temp dir: {}, Batch size: {}",
+                     this.effectiveIndexName, this.tempDir.toAbsolutePath(), this.batchSize);
         registerShutdownHook();
+    }
+
+    // Slim constructor that delegates to the primary one, providing null for customTempPath.
+    protected IndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
     private Path initializeTempDir(String indexNameForTempDir, Path customTempPath) throws IOException {
@@ -265,6 +243,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         }
         // logger.info("Successfully wrote batch to temp file: {}. Final size: {} bytes",
         //     tempFile.getAbsolutePath(), tempFile.length());
+        //logger.info("Temp file {} written with {} bytes.", tempFile.getAbsolutePath(), bytesWrittenToFile);
         return tempFile;
     }
 

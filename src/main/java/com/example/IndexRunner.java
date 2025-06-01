@@ -155,129 +155,137 @@ public class IndexRunner {
                     long documentCountForType = getDocumentCountForType(conn, type);
                     progress.startIndex(type, documentCountForType);
 
-                    if (type.equals("unigram")) {
-                        metrics.startBatch(batchSize, "unigram");
-                        try (UnigramIndexGenerator gen = new UnigramIndexGenerator(
-                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                            gen.generateIndex();
-                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                        } catch (Exception e) {
-                            metrics.recordBatchFailure();
-                            logger.error("Error generating unigram index: {}", e.getMessage(), e);
-                        } finally {
-                            progress.completeIndex();
-                        }
-                    }
-                    if (type.equals("bigram")) {
-                        metrics.startBatch(batchSize, "bigram");
-                        try (BigramIndexGenerator gen = new BigramIndexGenerator(
-                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                            gen.generateIndex();
-                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                        } catch (Exception e) {
-                            metrics.recordBatchFailure();
-                            logger.error("Error generating bigram index: {}", e.getMessage(), e);
-                        } finally {
-                            progress.completeIndex();
-                        }
-                    }
+                    try (Options options = RocksDBConfig.createOptimizedOptions();
+                         IndexAccessInterface indexAccess = new IndexAccess(specificIndexDir, type, options)) {
 
-                    if (type.equals("trigram")) {
-                        metrics.startBatch(batchSize, "trigram");
-                        try (TrigramIndexGenerator gen = new TrigramIndexGenerator(
-                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                            gen.generateIndex();
-                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                        } catch (Exception e) {
-                            metrics.recordBatchFailure();
-                            logger.error("Error generating trigram index: {}", e.getMessage(), e);
-                        } finally {
-                            progress.completeIndex();
+                        if (type.equals("unigram")) {
+                            metrics.startBatch(batchSize, "unigram");
+                            try (UnigramIndexGenerator gen = new UnigramIndexGenerator(
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                gen.generateIndex();
+                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
+                            } catch (Exception e) {
+                                metrics.recordBatchFailure();
+                                logger.error("Error generating unigram index: {}", e.getMessage(), e);
+                            } finally {
+                                progress.completeIndex();
+                            }
                         }
-                    }
+                        if (type.equals("bigram")) {
+                            metrics.startBatch(batchSize, "bigram");
+                            try (BigramIndexGenerator gen = new BigramIndexGenerator(
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                gen.generateIndex();
+                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
+                            } catch (Exception e) {
+                                metrics.recordBatchFailure();
+                                logger.error("Error generating bigram index: {}", e.getMessage(), e);
+                            } finally {
+                                progress.completeIndex();
+                            }
+                        }
 
-                    if (type.equals("dependency")) {
-                        metrics.startBatch(batchSize, "dependency");
-                        try (DependencyIndexGenerator gen = new DependencyIndexGenerator(
-                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                            gen.generateIndex();
-                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                        } catch (Exception e) {
-                            metrics.recordBatchFailure();
-                            logger.error("Error generating dependency index: {}", e.getMessage(), e);
-                        } finally {
-                            progress.completeIndex();
+                        if (type.equals("trigram")) {
+                            metrics.startBatch(batchSize, "trigram");
+                            try (TrigramIndexGenerator gen = new TrigramIndexGenerator(
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                gen.generateIndex();
+                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
+                            } catch (Exception e) {
+                                metrics.recordBatchFailure();
+                                logger.error("Error generating trigram index: {}", e.getMessage(), e);
+                            } finally {
+                                progress.completeIndex();
+                            }
                         }
-                    }
 
-                    if (type.equals("ner_date")) {
-                        metrics.startBatch(batchSize, "ner_date");
-                        try (NerDateIndexGenerator gen = new NerDateIndexGenerator(
-                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                            gen.generateIndex();
-                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                        } catch (Exception e) {
-                            metrics.recordBatchFailure();
-                            logger.error("Error generating NER date index: {}", e.getMessage(), e);
-                        } finally {
-                            progress.completeIndex();
+                        if (type.equals("dependency")) {
+                            metrics.startBatch(batchSize, "dependency");
+                            try (DependencyIndexGenerator gen = new DependencyIndexGenerator(
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                gen.generateIndex();
+                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
+                            } catch (Exception e) {
+                                metrics.recordBatchFailure();
+                                logger.error("Error generating dependency index: {}", e.getMessage(), e);
+                            } finally {
+                                progress.completeIndex();
+                            }
                         }
-                    }
 
-                    if (type.equals("ner")) {
-                        metrics.startBatch(batchSize, "ner");
-                        try (NerIndexGenerator gen = new NerIndexGenerator(
-                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                            gen.generateIndex();
-                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                        } catch (Exception e) {
-                            metrics.recordBatchFailure();
-                            logger.error("Error generating NER index: {}", e.getMessage(), e);
-                        } finally {
-                            progress.completeIndex();
+                        if (type.equals("ner_date")) {
+                            metrics.startBatch(batchSize, "ner_date");
+                            try (NerDateIndexGenerator gen = new NerDateIndexGenerator(
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                gen.generateIndex();
+                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
+                            } catch (Exception e) {
+                                metrics.recordBatchFailure();
+                                logger.error("Error generating NER date index: {}", e.getMessage(), e);
+                            } finally {
+                                progress.completeIndex();
+                            }
                         }
-                    }
 
-                    if (type.equals("pos")) {
-                        metrics.startBatch(batchSize, "pos");
-                        try (POSIndexGenerator gen = new POSIndexGenerator(
-                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                            gen.generateIndex();
-                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                        } catch (Exception e) {
-                            metrics.recordBatchFailure();
-                            logger.error("Error generating POS index: {}", e.getMessage(), e);
-                        } finally {
-                            progress.completeIndex();
+                        if (type.equals("ner")) {
+                            metrics.startBatch(batchSize, "ner");
+                            try (NerIndexGenerator gen = new NerIndexGenerator(
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                gen.generateIndex();
+                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
+                            } catch (Exception e) {
+                                metrics.recordBatchFailure();
+                                logger.error("Error generating NER index: {}", e.getMessage(), e);
+                            } finally {
+                                progress.completeIndex();
+                            }
                         }
-                    }
 
-                    if (type.equals("hypernym")) {
-                        metrics.startBatch(batchSize, "hypernym");
-                        try (HypernymIndexGenerator gen = new HypernymIndexGenerator(
-                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                            gen.generateIndex();
-                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                        } catch (Exception e) {
-                            metrics.recordBatchFailure();
-                            logger.error("Error generating hypernym index: {}", e.getMessage(), e);
-                        } finally {
-                            progress.completeIndex();
+                        if (type.equals("pos")) {
+                            metrics.startBatch(batchSize, "pos");
+                            try (POSIndexGenerator gen = new POSIndexGenerator(
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                gen.generateIndex();
+                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
+                            } catch (Exception e) {
+                                metrics.recordBatchFailure();
+                                logger.error("Error generating POS index: {}", e.getMessage(), e);
+                            } finally {
+                                progress.completeIndex();
+                            }
                         }
-                    }
 
-                    if (type.equals("nash")) {
-                        metrics.startBatch(batchSize, "nash");
-                        try (NashIndexGenerator gen = new NashIndexGenerator(
-                                specificIndexDir.toString(), stopwordsPath, conn, progress, batchSize, customTempPath)) {
-                            gen.generateIndex();
-                            metrics.recordBatchSuccess((int)gen.getDocumentCountForIndex());
-                        } catch (Exception e) {
-                            metrics.recordBatchFailure();
-                            logger.error("Error generating nash index: {}", e.getMessage(), e);
-                        } finally {
-                            progress.completeIndex();
+                        if (type.equals("hypernym")) {
+                            metrics.startBatch(batchSize, "hypernym");
+                            try (HypernymIndexGenerator gen = new HypernymIndexGenerator(
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                gen.generateIndex();
+                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
+                            } catch (Exception e) {
+                                metrics.recordBatchFailure();
+                                logger.error("Error generating hypernym index: {}", e.getMessage(), e);
+                            } finally {
+                                progress.completeIndex();
+                            }
                         }
+
+                        if (type.equals("nash")) {
+                            metrics.startBatch(batchSize, "nash");
+                            try (NashIndexGenerator gen = new NashIndexGenerator(
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                gen.generateIndex();
+                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
+                            } catch (Exception e) {
+                                metrics.recordBatchFailure();
+                                logger.error("Error generating nash index: {}", e.getMessage(), e);
+                            } finally {
+                                progress.completeIndex();
+                            }
+                        }
+                    } catch (IndexAccessException e) {
+                        logger.error("Failed to initialize IndexAccess for type {}: {}", type, e.getMessage(), e);
+                        metrics.recordBatchFailure(); // Or a more specific metric
+                        progress.completeIndex(); // Ensure progress is marked complete even on failure
                     }
                 }
 
@@ -326,13 +334,7 @@ public class IndexRunner {
                                     temporaryNgramBySentenceIA = generateTemporaryNgramBySentenceIndex(indexDir, currentNgramType, sourceNgramIndexPath, tempNgramBySentenceOutputPath, indexPath);
                                 } else {
                                     logger.debug("Reusing existing temporary N-gram by sentence index for {} from {}", currentNgramType, tempNgramBySentenceOutputPath);
-                                    Options tempNgramOpts = RocksDBConfig.createOptimizedOptions();
-                                    try {
-                                        temporaryNgramBySentenceIA = new IndexAccess(tempNgramBySentenceOutputPath, "temp_" + currentNgramType.name().toLowerCase() + "_by_sentence_reused", tempNgramOpts);
-                                    } catch (IndexAccessException e) {
-                                        tempNgramOpts.close();
-                                        throw e;
-                                    }
+                                    temporaryNgramBySentenceIA = new IndexAccess(tempNgramBySentenceOutputPath, "temp_" + currentNgramType.name().toLowerCase() + "_by_sentence_reused", RocksDBConfig.createOptimizedOptions());
                                 }
 
                                 // Inner loop: AnnotationTypeSource
@@ -362,13 +364,7 @@ public class IndexRunner {
                                             );
                                         } else {
                                             logger.debug("Reusing existing temporary Annotation-by-sentence index for {} from {}", currentAnnotationType.getTypeIdentifier(), tempAnnotationBySentenceOutputPath);
-                                            Options tempAnnotOpts = RocksDBConfig.createOptimizedOptions();
-                                            try {
-                                                temporaryAnnotationBySentenceIA = new IndexAccess(tempAnnotationBySentenceOutputPath, "temp_" + currentAnnotationType.getTypeIdentifier() + "_by_sentence_reused", tempAnnotOpts);
-                                            } catch (IndexAccessException e) {
-                                                tempAnnotOpts.close();
-                                                throw e;
-                                            }
+                                            temporaryAnnotationBySentenceIA = new IndexAccess(tempAnnotationBySentenceOutputPath, "temp_" + currentAnnotationType.getTypeIdentifier() + "_by_sentence_reused", RocksDBConfig.createOptimizedOptions());
                                         }
 
                                         String finalStitchIndexName = "stitch_" + currentNgramType.name().toLowerCase() + "_" + currentAnnotationType.getTypeIdentifier();
@@ -580,7 +576,7 @@ public class IndexRunner {
                     sentenceBatch.clear();
                     batchCount++;
                     if (batchCount % 10 == 0) {
-                        logger.debug("Processed {} sentence batches for temp {} index", batchCount, ngramType.name());
+                        //logger.debug("Processed {} sentence batches for temp {} index", batchCount, ngramType.name());
                     }
                 }
                 iterator.next();
@@ -685,7 +681,7 @@ public class IndexRunner {
                     sentenceBatch.clear();
                     batchCount++;
                     if (batchCount % 10 == 0) {
-                        logger.debug("Processed {} sentence batches for temp {} index", batchCount, annotationTypeSource.getTypeIdentifier());
+                        //logger.debug("Processed {} sentence batches for temp {} index", batchCount, annotationTypeSource.getTypeIdentifier());
                     }
                 }
                 iterator.next();

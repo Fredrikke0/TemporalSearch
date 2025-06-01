@@ -9,7 +9,7 @@ import java.util.Optional;
 // import java.util.Objects; // Not directly needed now
 // import java.util.stream.Collectors; // Not directly needed now
 
-import org.iq80.leveldb.DBIterator;
+import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -175,41 +175,33 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
         logger.debug("Executing variable search for dependency relations with relation filter: '{}', gov filter: '{}', dep filter: '{}'",
             relationFilterLower, governorFilterLower, dependentFilterLower);
 
-        DBIterator initialIterator;
-        String prefix = null;
-        StringBuilder prefixBuilder = new StringBuilder();
+        if (index == null) {
+            logger.error("IndexAccessInterface is null in DependencyExecutor.executeVariableSearchOptimized");
+            throw new IndexAccessException("IndexAccessInterface cannot be null", null, null);
+        }
 
-        // Construct prefix for seek, stopping if a component is '*' or null (effectively a wildcard for that point onwards)
-        if (governorFilterLower != null && !"*".equals(governorFilterLower)) {
-            prefixBuilder.append(governorFilterLower).append(IndexAccessInterface.DELIMITER);
-            // Only add relation to prefix if governor was specific
-            if (relationFilterLower != null && !"*".equals(relationFilterLower)) {
-                prefixBuilder.append(relationFilterLower).append(IndexAccessInterface.DELIMITER);
-                // Dependent filter is not used for prefix seek, as relation must be specific if dependent is.
-                // And if relation is '*', then dependent cannot make prefix more specific.
+        try (RocksIterator iterator = getIteratorForVariableSearch(index, governorFilterLower, relationFilterLower)) {
+            if (iterator == null) {
+                 logger.warn("RocksIterator was not initialized in DependencyExecutor.executeVariableSearchOptimized. Returning empty results.");
+                 return currentConceptualRowId;
             }
-        }
 
-        if (prefixBuilder.length() > 0) {
-            prefix = prefixBuilder.toString();
-            logger.debug("Using prefix seek: {}", prefix);
-            initialIterator = index.seek(prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        } else {
-            logger.debug("No specific prefix possible (due to wildcards or missing governor), iterating from first.");
-            initialIterator = index.iterateFromFirst();
-        }
+            String prefix = null;
+            StringBuilder prefixBuilder = new StringBuilder();
+            if (governorFilterLower != null && !"*".equals(governorFilterLower)) {
+                prefixBuilder.append(governorFilterLower).append(IndexAccessInterface.DELIMITER);
+                if (relationFilterLower != null && !"*".equals(relationFilterLower)) {
+                    prefixBuilder.append(relationFilterLower).append(IndexAccessInterface.DELIMITER);
+                }
+            }
+            if (prefixBuilder.length() > 0) {
+                prefix = prefixBuilder.toString();
+            }
 
-        final DBIterator iterator = initialIterator;
-
-        if (iterator == null) {
-            logger.warn("DBIterator was not initialized in DependencyExecutor.executeVariableSearchOptimized. Returning empty results.");
-            return currentConceptualRowId;
-        }
-
-        try (iterator) {
-            while (iterator.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = iterator.next();
-                String key = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8);
+            while (iterator.isValid()) {
+                byte[] keyBytes = iterator.key();
+                byte[] valueBytes = iterator.value();
+                String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
 
                 if (prefix != null && !key.startsWith(prefix)) {
                     break;
@@ -221,33 +213,32 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     String currentRelation = parts[1];
                     String currentDependent = parts[2];
 
-                    // Apply filters, treating '*' as a wildcard match for that component.
-                    // Relation filter (relationFilterLower) is assumed to be non-null and not '*' for this path based on current condition checks.
-                    // However, if it were allowed to be '*', it would be:
-                    // if (!"*".equals(relationFilterLower) && !currentRelation.equals(relationFilterLower)) continue;
-                    if (!currentRelation.equals(relationFilterLower)) { // Relation must match exactly as per current pre-check for this method
+                    if (!currentRelation.equals(relationFilterLower)) {
+                        iterator.next();
                         continue;
                     }
 
                     if (governorFilterLower != null && !"*".equals(governorFilterLower) && !currentGovernor.equals(governorFilterLower)) {
+                        iterator.next();
                         continue;
                     }
                     if (dependentFilterLower != null && !"*".equals(dependentFilterLower) && !currentDependent.equals(dependentFilterLower)) {
+                        iterator.next();
                         continue;
                     }
 
                     String valueToBind = key.replace(IndexAccessInterface.DELIMITER, ':');
+                    int numPositions = PositionListSoA.getNumPositionsFromBlob(valueBytes);
+                    if (numPositions == 0) {
+                        iterator.next();
+                        continue;
+                    }
 
-                    byte[] directRawBlob = entry.getValue();
-
-                    int numPositions = PositionListSoA.getNumPositionsFromBlob(directRawBlob);
-                    if (numPositions == 0) continue;
-
-                    IntArrayList docIds = PositionListSoA.decompressDocIds(directRawBlob);
-                    IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(directRawBlob) : null;
-                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(directRawBlob) : null;
-                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(directRawBlob) : null;
-                    IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(directRawBlob) : null;
+                    IntArrayList docIds = PositionListSoA.decompressDocIds(valueBytes);
+                    IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(valueBytes) : null;
+                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(valueBytes) : null;
+                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(valueBytes) : null;
+                    IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(valueBytes) : null;
 
                     for (int i = 0; i < numPositions; i++) {
                         resultSoA.add(
@@ -259,20 +250,43 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                             beginChars != null ? beginChars.getInt(i) : -1,
                             endChars != null ? endChars.getInt(i) : -1,
                             synonymIds != null ? synonymIds.getInt(i) : -1,
-                            currentConceptualRowId // Use currentConceptualRowId for this whole match group
+                            currentConceptualRowId
                         );
                     }
-                    // Increment conceptual ID once per unique dependency key matched from the index.
                     if (numPositions > 0) {
                          currentConceptualRowId++;
                     }
                 } else {
                     logger.warn("Skipping invalid key format in dependency index: {}", key);
                 }
+                iterator.next();
             }
         }
 
         logger.debug("Variable search for dependency produced {} conceptual rows into QueryResultSoA", currentConceptualRowId);
         return currentConceptualRowId;
+    }
+
+    /**
+     * Helper method to create and position a RocksIterator based on filters.
+     * This consolidates the iterator creation logic.
+     */
+    private RocksIterator getIteratorForVariableSearch(IndexAccessInterface index, String governorFilterLower, String relationFilterLower) throws IndexAccessException {
+        StringBuilder prefixBuilder = new StringBuilder();
+        if (governorFilterLower != null && !"*".equals(governorFilterLower)) {
+            prefixBuilder.append(governorFilterLower).append(IndexAccessInterface.DELIMITER);
+            if (relationFilterLower != null && !"*".equals(relationFilterLower)) {
+                prefixBuilder.append(relationFilterLower).append(IndexAccessInterface.DELIMITER);
+            }
+        }
+
+        if (prefixBuilder.length() > 0) {
+            String prefix = prefixBuilder.toString();
+            logger.debug("Using prefix seek for RocksIterator: {}", prefix);
+            return index.seek(prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } else {
+            logger.debug("No specific prefix possible (due to wildcards or missing governor), creating RocksIterator from first.");
+            return index.iterateFromFirst();
+        }
     }
 }

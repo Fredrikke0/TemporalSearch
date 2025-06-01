@@ -11,7 +11,9 @@ import java.sql.SQLException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.rocksdb.Options;
 
+import com.example.core.IndexAccess;
 import com.example.core.PositionListSoA;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
@@ -19,6 +21,7 @@ import com.google.common.collect.ListMultimap;
 public class NerDateIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-ner.txt";
     private NerDateIndexGenerator generator;
+    private IndexAccess indexAccess;
 
     @BeforeEach
     @Override
@@ -32,9 +35,14 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
             writer.println("is");
         }
 
+        // Create IndexAccess instance first
+        try (Options options = createTestOptions()) {
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("ner_date"), "ner_date", options);
+        }
+
         // Create generator
         generator = new NerDateIndexGenerator(
-            tempDir.resolve("test-leveldb-ner-date").toString(),
+            this.indexAccess,
             TEST_STOPWORDS_PATH,
             sqliteConn,
             new ProgressTracker(),
@@ -92,6 +100,9 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
     protected void tearDown() throws Exception {
         super.tearDown();
         new File(TEST_STOPWORDS_PATH).delete();
+        if (this.indexAccess != null) {
+            this.indexAccess.close();
+        }
     }
 
     @Test

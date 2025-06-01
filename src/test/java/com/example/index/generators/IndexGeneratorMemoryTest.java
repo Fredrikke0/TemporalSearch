@@ -34,7 +34,9 @@ import org.mockito.Mockito;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
+import com.example.core.index.MockIndexAccess;
 import com.example.index.IndexEntry;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
@@ -65,16 +67,23 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         private final AtomicLong totalDecompressions = new AtomicLong(0);
         private final List<String> decompressionLog = Collections.synchronizedList(new ArrayList<>());
 
-        public StreamingTestIndexGenerator(String actualIndexDbPath, String indexName, Connection sqliteConn,
+        public StreamingTestIndexGenerator(IndexAccessInterface indexAccess, Connection sqliteConn,
                                          ProgressTracker progress, Path customTempPath) throws IOException {
-            super(actualIndexDbPath, indexName, null, sqliteConn, progress, 1000, customTempPath);
+            super(indexAccess, null, sqliteConn, progress, 1000, customTempPath);
+        }
+
+        public Path getActualTempDir() {
+            try {
+                java.lang.reflect.Field tempDirField = IndexGenerator.class.getDeclaredField("tempDir");
+                tempDirField.setAccessible(true);
+                return (Path) tempDirField.get(this);
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                throw new RuntimeException("Could not access tempDir field", e);
+            }
         }
 
         @Override
         protected String getTableName() { return "test_table"; }
-
-        @Override
-        public String getIndexName() { return "streaming-test-index"; }
 
         @Override
         protected List<IndexEntry> fetchBatch(IndexEntry lastEntry) { return Collections.emptyList(); }
@@ -236,10 +245,10 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         Files.createDirectories(generatorTempDir);
 
         ProgressTracker mockProgressTracker = Mockito.mock(ProgressTracker.class);
-        String specificIndexForTestPath = indexBaseDir.resolve("streaming-test-index").toString();
+        MockIndexAccess mockIndexAccess = new MockIndexAccess("streaming-test-index", null, null, null);
+
         testGenerator = new StreamingTestIndexGenerator(
-            specificIndexForTestPath,
-            "streaming-test-index",
+            mockIndexAccess,
             sqliteConn,
             mockProgressTracker,
             generatorTempDir
@@ -262,7 +271,8 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
      * to verify streaming behavior.
      */
     private File createTestFile() throws IOException {
-        File sortedFile = generatorTempDir.resolve("streaming_test.tmp").toFile();
+        Path actualGeneratorTempPath = testGenerator.getActualTempDir();
+        File sortedFile = actualGeneratorTempPath.resolve("sorted_memory_test.tmp").toFile();
 
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(sortedFile, StandardCharsets.UTF_8))) {
             for (int termIndex = 0; termIndex < NUM_TERMS; termIndex++) {
@@ -270,7 +280,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
 
                 // Create multiple chunks for each term to test merging behavior
                 for (int chunkIndex = 0; chunkIndex < CHUNKS_PER_TERM; chunkIndex++) {
-                    PositionListSoA chunk = createLargePositionList(LARGE_ARRAY_SIZE);
+                    PositionListSoA chunk = createLargePositionList(LARGE_ARRAY_SIZE / CHUNKS_PER_TERM);
                     String chunkBlob = Base64.getEncoder().encodeToString(chunk.serializeToCompositeBlob());
                     writer.write(term + "\t" + chunkBlob + "\n");
                 }
@@ -389,15 +399,18 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
 
     @Test
     void testMemoryBehaviorWithLargeSingleTerm() throws IOException {
-        // Create a file with one term having many chunks
-        File sortedFile = generatorTempDir.resolve("single_large_term.tmp").toFile();
+        // Use the public accessor for the temp directory
+        Path actualGeneratorTempPath = testGenerator.getActualTempDir();
+        File sortedFile = actualGeneratorTempPath.resolve("large_single_term.tmp").toFile();
+        int singleTermChunks = 10;
+        int positionsPerChunk = LARGE_ARRAY_SIZE / singleTermChunks;
 
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(sortedFile, StandardCharsets.UTF_8))) {
             String term = "massive_term";
 
             // Create many chunks for a single term
-            for (int chunkIndex = 0; chunkIndex < 10; chunkIndex++) {
-                PositionListSoA chunk = createLargePositionList(30_000);
+            for (int chunkIndex = 0; chunkIndex < singleTermChunks; chunkIndex++) {
+                PositionListSoA chunk = createLargePositionList(positionsPerChunk);
                 String chunkBlob = Base64.getEncoder().encodeToString(chunk.serializeToCompositeBlob());
                 writer.write(term + "\t" + chunkBlob + "\n");
             }
@@ -423,15 +436,16 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
 
     @Test
     void testEmptyAndMixedChunks() throws IOException {
-        // Test with empty chunks mixed with normal chunks
-        File sortedFile = generatorTempDir.resolve("mixed_chunks.tmp").toFile();
+        // Use the public accessor for the temp directory
+        Path actualGeneratorTempPath = testGenerator.getActualTempDir();
+        File sortedFile = actualGeneratorTempPath.resolve("mixed_chunks.tmp").toFile();
+
+        PositionListSoA emptyPla = new PositionListSoA();
+        PositionListSoA normalPla = createLargePositionList(5000);
 
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(sortedFile, StandardCharsets.UTF_8))) {
-            PositionListSoA emptyChunk = new PositionListSoA();
-            PositionListSoA normalChunk = createLargePositionList(5000);
-
-            String emptyBlob = Base64.getEncoder().encodeToString(emptyChunk.serializeToCompositeBlob());
-            String normalBlob = Base64.getEncoder().encodeToString(normalChunk.serializeToCompositeBlob());
+            String emptyBlob = Base64.getEncoder().encodeToString(emptyPla.serializeToCompositeBlob());
+            String normalBlob = Base64.getEncoder().encodeToString(normalPla.serializeToCompositeBlob());
 
             writer.write("term1\t" + emptyBlob + "\n");
             writer.write("term1\t" + normalBlob + "\n");

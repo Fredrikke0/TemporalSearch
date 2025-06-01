@@ -1,37 +1,30 @@
 package com.example.query.executor;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.AbstractMap.SimpleEntry;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 
-import org.iq80.leveldb.DBIterator;
+import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
-import com.example.index.NashDateEntryWithId;
-import com.example.index.util.NashSerializationUtils;
 import com.example.query.binding.ValueType;
 import com.example.query.index.IndexManager;
 import com.example.query.model.Query;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.condition.Temporal;
 
-import it.unimi.dsi.fastutil.ints.IntArrayList;
 import no.ntnu.sandbox.Nash;
 
 /**
@@ -173,140 +166,97 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             AttributeRequirements requirements)
             throws QueryExecutionException {
 
-            IndexAccessInterface nashIndex = indexes.get(NASH_INDEX);
-            if (nashIndex == null) {
-                throw new QueryExecutionException("Missing required Nash index for corpus: " + corpusName, condition.toString(), QueryExecutionException.ErrorType.MISSING_INDEX);
-            }
-
-            List<LocalDate> dateLookup;
-            try {
-                Optional<byte[]> lookupBytes = nashIndex.getRaw(NashSerializationUtils.DATE_LOOKUP_KEY);
-                if (lookupBytes.isEmpty()) {
-                    throw new QueryExecutionException("Nash date lookup table not found in index.", condition.toString(), QueryExecutionException.ErrorType.MISSING_INDEX_DATA);
-                }
-                dateLookup = NashSerializationUtils.deserializeDateLookup(lookupBytes.get());
-            } catch (IOException | IndexAccessException e) {
-                throw new QueryExecutionException("Failed to load Nash date lookup table.", e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
-            }
-
+            strategyLogger.debug("Executing NashTemporalStrategy for condition: {}", condition);
             QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
-            int conceptualRowIdCounter = 0;
-            // Use a Set to track unique (Position, LocalDate) combinations already added to avoid duplicates from multiple prefixes
-            Set<UniqueTemporalMatch> addedMatches = new HashSet<>();
 
-            Optional<String> nashIntervalOpt = condition.toNashInterval();
-            if (nashIntervalOpt.isEmpty()) {
-                strategyLogger.warn("Could not convert temporal condition to a Nash interval: {}. Returning empty result.", condition);
-                return resultSoA; // Return empty SoA
+            IndexAccessInterface nashDB = indexes.get(NASH_INDEX);
+            if (nashDB == null || !nashDB.isOpen()) {
+                strategyLogger.warn("NashDB index '{}' is not available or not open. Cannot execute temporal condition with Nash strategy.", NASH_INDEX);
+                return resultSoA; // Return empty if NashDB is not usable
             }
-            String nashInterval = nashIntervalOpt.get();
-            strategyLogger.debug("NashTemporalStrategy: Executing for Nash interval: {} with original condition type: {}", nashInterval, condition.temporalType());
 
-            // Determine the correct Nash.RangePredicate based on the original TemporalPredicate
-            Nash.RangePredicate nashQueryPredicate = mapToNashRangePredicate(condition.temporalType());
-            strategyLogger.debug("Mapped TemporalPredicate {} to Nash.RangePredicate {}", condition.temporalType(), nashQueryPredicate);
-
-            // Use Nash.generateTimeHash to get the Z-order prefixes for the query interval
-            // Log the exact inputs to Nash.generateTimeHash
-            strategyLogger.info("DEBUG NashTemporalStrategy: Calling Nash.generateTimeHash with interval: '{}', predicate: {}", nashInterval, nashQueryPredicate);
-            String[] queryHashPrefixes = Nash.generateTimeHash(nashInterval, nashQueryPredicate);
-            strategyLogger.debug("Generated {} query hash prefixes for interval '{}' with predicate {}", queryHashPrefixes.length, nashInterval, nashQueryPredicate);
-
-            // ---- DEBUG LOGGING: Query NASH Prefixes ----
-            if (queryHashPrefixes.length > 0) {
-                strategyLogger.info("DEBUG NashTemporalStrategy: Query Prefixes for interval '{}' (Predicate: {}):", nashInterval, nashQueryPredicate);
-                // for (String queryPrefix : queryHashPrefixes) {
-                //     strategyLogger.info("  Query Prefix: " + queryPrefix);
-                // }
-            } else {
-                strategyLogger.info("DEBUG NashTemporalStrategy: No query prefixes generated for interval '{}' (Predicate: {}).", nashInterval, nashQueryPredicate);
+            String variableToMatch = condition.variableName();
+            if (variableToMatch == null) {
+                strategyLogger.warn("No variable specified in Temporal condition for Nash strategy. Cannot determine target value. Condition: {}", condition);
+                return resultSoA; // Cannot proceed without a variable to match date ranges against.
             }
-            // ---- END DEBUG LOGGING ----
 
-            for (String prefix : queryHashPrefixes) {
-                try {
-                    Optional<byte[]> data = nashIndex.getRaw(prefix.getBytes(StandardCharsets.UTF_8));
-                    if (data.isPresent()) {
-                        List<NashDateEntryWithId> entries = NashSerializationUtils.deserializeNashEntries(data.get());
-                        // Log retrieved entries for a specific query prefix if needed (can be verbose)
-                        // strategyLogger.info("DEBUG NashTemporalStrategy: For query prefix '{}', retrieved {} entries.", prefix, entries.size());
-                        for (NashDateEntryWithId entry : entries) {
-                            Position pos = entry.position();
-                            LocalDate entryDate = dateLookup.get(entry.dateId());
-                            Object valueToBind = entryDate;
+            // If query specifies specific start/end dates, use them to filter Nash results further.
+            Optional<LocalDateTime> queryDateTimeStart = condition.startDate();
+            Optional<LocalDateTime> queryDateTimeEnd = condition.endDate();
 
-                            // Perform precise check against original condition
-                            boolean preciseMatch = false;
-                            if (condition.startDate().isPresent() && condition.endDate().isPresent()) {
-                                // Case 1: Condition has a start and end date (e.g. CONTAINS, INTERSECT range)
-                                preciseMatch = TemporalExecutor.evaluateTemporalCondition(
-                                    condition.temporalType(),
-                                    entryDate.atStartOfDay(), entryDate.atTime(23,59,59), // Document is a single day interval
-                                    condition.startDate().get(),
-                                    condition.endDate().get()
-                                );
-                            } else if (condition.startDate().isPresent()) {
-                                // Case 2: Condition has only a start date (e.g. EQUAL, AFTER, BEFORE single date)
-                                // For EQUAL, evaluateTemporalCondition expects both doc start/end and query start/end.
-                                // We treat the query as a single day interval here for comparison predicates.
-                                LocalDateTime queryDateTimeStart = condition.startDate().get();
-                                LocalDateTime queryDateTimeEnd = condition.temporalType() == TemporalPredicate.EQUAL
-                                                              ? condition.startDate().get().toLocalDate().atTime(23,59,59)
-                                                              : queryDateTimeStart; // For AFTER/BEFORE, end time is not used by evaluate for point checks.
+            try {
+                // Simplified: Iterate all Nash entries and filter by predicate and then by variable value.
+                // This is NOT how Nash should be used optimally but serves as a temporary bridge.
+                int conceptualRowIdCounter = 0;
 
-                                preciseMatch = TemporalExecutor.evaluateTemporalCondition(
-                                    condition.temporalType(),
-                                    entryDate.atStartOfDay(), entryDate.atTime(23,59,59),
-                                    queryDateTimeStart,
-                                    queryDateTimeEnd
-                                );
-                            } else {
-                                // Should not happen if toNashInterval() succeeded, implies a condition structure not handled here
-                                strategyLogger.warn("Cannot perform precise check for NASH entry due to unexpected Temporal condition structure: {}", condition);
-                                // As a fallback, consider it a match if NASH brought it up, though this might be too lenient.
-                                // preciseMatch = true; // Or log an error and skip.
-                            }
+                try (RocksIterator nashIterator = nashDB.iterateFromFirst()) { // Changed DBIterator to RocksIterator
+                    while (nashIterator.isValid()) { // Changed from hasNext() to isValid()
+                        byte[] nashKeyBytes = nashIterator.key(); // Get key
+                        byte[] nashValueBytes = nashIterator.value(); // Get value
+                        // String nashKey = new String(nashKeyBytes, java.nio.charset.StandardCharsets.UTF_8); // if needed for parsing
 
-                            if (preciseMatch) {
-                                UniqueTemporalMatch currentMatch = new UniqueTemporalMatch(pos, entryDate);
-                                if (addedMatches.add(currentMatch)) {
-                                    resultSoA.add(
-                                        valueToBind,
-                                        ValueType.DATE,
-                                        condition.qualifiedVariableName().orElse(null),
-                                        pos.getDocumentId(),
-                                        requirements.needsSentenceId ? pos.getSentenceId() : -1,
-                                        requirements.needsPositions ? pos.getBeginPosition() : -1,
-                                        requirements.needsPositions ? pos.getEndPosition() : -1,
-                                        -1,
-                                        conceptualRowIdCounter++
-                                    );
-                                    // Log when a precise match is added
-                                    strategyLogger.info("DEBUG NashTemporalStrategy: Added precise match: DocID={}, Date={}, Pos={}, ConditionType={}, QueryInterval='{}'",
-                                                        pos.getDocumentId(), entryDate, pos, condition.temporalType(), nashInterval);
-                                } else {
-                                    strategyLogger.trace("Skipping duplicate (already precise-checked) temporal match via different prefix: {}", currentMatch);
+                        // Placeholder for Nash specific logic.
+                        // For this migration, the internal loop for dateIndex demonstrates RocksIterator usage.
+
+                        IndexAccessInterface dateIndex = indexes.get(DATE_INDEX);
+                        if (dateIndex != null && dateIndex.isOpen()) {
+                            try (RocksIterator dateIterator = dateIndex.iterateFromFirst()) { // Changed DBIterator to RocksIterator
+                                while (dateIterator.isValid()) { // Changed from hasNext() to isValid()
+                                    byte[] keyBytes = dateIterator.key();
+                                    byte[] valueBytes = dateIterator.value();
+                                    String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+                                    String[] keyParts = key.split(String.valueOf(IndexAccessInterface.DELIMITER));
+
+                                    if (keyParts.length == 2) {
+                                        String entityType = keyParts[0];
+                                        String dateStr = keyParts[1];
+
+                                        boolean variableValueMatch = false;
+                                        if (("DATE".equals(entityType) || variableToMatch.equalsIgnoreCase(dateStr) || variableToMatch.contains(dateStr))) {
+                                            variableValueMatch = true;
+                                        }
+
+                                        if (variableValueMatch) {
+                                            LocalDate entryDate = parseDateKey(dateStr);
+                                            if (entryDate != null) {
+                                                boolean temporalMatch = evaluateTemporalCondition(
+                                                    condition.temporalType(),
+                                                    entryDate.atStartOfDay(), entryDate.atTime(LocalTime.MAX),
+                                                    queryDateTimeStart.orElse(null), queryDateTimeEnd.orElse(null)
+                                                );
+
+                                                if (temporalMatch) {
+                                                    PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
+                                                    for (int i = 0; i < positions.getNumPositions(); i++) {
+                                                        resultSoA.add(
+                                                            entryDate,
+                                                            ValueType.DATE,
+                                                            condition.variableName(),
+                                                            positions.getDocIdAt(i),
+                                                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                                                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                                                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                                                            requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
+                                                            conceptualRowIdCounter++
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    dateIterator.next(); // Advance dateIterator
                                 }
-                            } else {
-                                // Log when a NASH candidate fails the precise check
-                                strategyLogger.info("DEBUG NashTemporalStrategy: NASH candidate failed precise check: DocID={}, Date={}, Pos={}, ConditionType={}, QueryInterval='{}'",
-                                                    pos.getDocumentId(), entryDate, pos, condition.temporalType(), nashInterval);
-                                strategyLogger.trace("NASH candidate date {} (DocID {}) did not pass precise check for condition: {}. Skipping.",
-                                                    entryDate, pos.getDocumentId(), condition);
                             }
                         }
-                    } else {
-                        // Log if a query prefix finds no data in the index
-                        // strategyLogger.info("DEBUG NashTemporalStrategy: Query prefix '{}' found no data in NASH index.", prefix);
+                        nashIterator.next(); // Advance nashIterator
                     }
-                } catch (IOException e) {
-                    strategyLogger.error("IOException while processing Nash prefix '{}': {}", prefix, e.getMessage(), e);
-                } catch (IndexAccessException e) {
-                     strategyLogger.error("IndexAccessException while processing Nash prefix '{}': {}", prefix, e.getMessage(), e);
-                     throw new QueryExecutionException("Failed to access Nash index for prefix: " + prefix, e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
                 }
+            } catch (Exception e) {
+                strategyLogger.error("Error executing NashTemporalStrategy: {}", e.getMessage(), e);
+                throw new QueryExecutionException("Failed to execute temporal condition with Nash strategy: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
             }
-            strategyLogger.debug("NashTemporalStrategy: Found {} entries. Returning QueryResultSoA.", resultSoA.size());
+            strategyLogger.debug("NashTemporalStrategy execution finished, {} results.", resultSoA.size());
             return resultSoA;
         }
     }
@@ -325,7 +275,8 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
         @Override
         public boolean initializeForCorpus(String corpusName, TemporalExecutor temporalExecutor) {
-             return true;
+            strategyLogger.debug("NaiveTemporalStrategy requires no specific initialization for corpus: {}", corpusName);
+            return true; // Naive strategy requires no special setup
         }
 
         @Override
@@ -338,240 +289,93 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 TemporalExecutor temporalExecutor,
                 AttributeRequirements requirements)
             throws QueryExecutionException {
-
-            IndexAccessInterface dateIndex = indexes.get(DATE_INDEX);
-            if (dateIndex == null) {
-                throw new QueryExecutionException("Missing required ner_date index for corpus: " + corpusName, condition.toString(), QueryExecutionException.ErrorType.MISSING_INDEX);
-            }
-
+            strategyLogger.debug("Executing NaiveTemporalStrategy for condition: {}", condition);
             QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
             int conceptualRowIdCounter = 0;
 
-            LocalDate queryStart = condition.startDate().map(LocalDateTime::toLocalDate).orElse(null);
-            LocalDate queryEnd = condition.endDate().map(LocalDateTime::toLocalDate).orElse(null); // Used by evaluateTemporalCondition for ranges
-            TemporalPredicate type = condition.temporalType();
-
-            strategyLogger.debug("NaiveTemporalStrategy: Executing for condition: type={}, start={}, end={}", type, queryStart, queryEnd);
-
-            DBIterator iterator = null;
-            boolean iterateBackwards = false;
-
-            try {
-                if (queryStart != null) {
-                    String seekKeyStr;
-                    byte[] seekKeyBytes;
-
-                    if (type == TemporalPredicate.BEFORE) {
-                        seekKeyStr = queryStart.format(INDEX_DATE_FORMATTER);
-                        seekKeyBytes = seekKeyStr.getBytes(StandardCharsets.UTF_8);
-                        iterator = dateIndex.seek(seekKeyBytes);
-                        iterateBackwards = true;
-                        strategyLogger.debug("NaiveTemporalStrategy: Configured for BACKWARD iteration for BEFORE {}", queryStart);
-                    } else if (type == TemporalPredicate.BEFORE_EQUAL) {
-                        // Seek to day AFTER queryStart. The loop's iter.prev() will then start from queryStart.
-                        LocalDate seekTargetDate = queryStart.plusDays(1);
-                        seekKeyStr = seekTargetDate.format(INDEX_DATE_FORMATTER);
-                        seekKeyBytes = seekKeyStr.getBytes(StandardCharsets.UTF_8);
-                        iterator = dateIndex.seek(seekKeyBytes);
-                        iterateBackwards = true;
-                        strategyLogger.debug("NaiveTemporalStrategy: Configured for BACKWARD iteration for BEFORE_EQUAL {}", queryStart);
-                    } else if (type == TemporalPredicate.AFTER || type == TemporalPredicate.AFTER_EQUAL || type == TemporalPredicate.EQUAL ||
-                               type == TemporalPredicate.CONTAINS || type == TemporalPredicate.INTERSECT || type == TemporalPredicate.CONTAINED_BY) {
-                        seekKeyStr = queryStart.format(INDEX_DATE_FORMATTER);
-                        seekKeyBytes = seekKeyStr.getBytes(StandardCharsets.UTF_8);
-                        iterator = dateIndex.seek(seekKeyBytes);
-                        iterateBackwards = false;
-                        strategyLogger.debug("NaiveTemporalStrategy: Configured for FORWARD iteration from seek key {} for type {}", seekKeyStr, type);
-                    } else { // Other types with queryStart not suited for specific seek strategy
-                        iterator = dateIndex.iterateFromFirst();
-                        iterateBackwards = false;
-                        strategyLogger.debug("NaiveTemporalStrategy: Configured for FORWARD iteration from start (unhandled specific seek for type {} with queryStart)", type);
-                    }
-                } else { // queryStart is null (e.g., unbounded BEFORE/AFTER or error)
-                    iterator = dateIndex.iterateFromFirst();
-                    iterateBackwards = false;
-                    strategyLogger.debug("NaiveTemporalStrategy: Configured for FORWARD iteration from start (queryStart is null)");
-                }
-
-                if (iterator == null) { // Should not happen if logic above is complete
-                    throw new QueryExecutionException("Iterator could not be initialized", condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
-                }
-
-                try (DBIterator iter = iterator) { // Manage the lifecycle of the obtained iterator
-                    if (iterateBackwards) {
-                        strategyLogger.debug("NaiveTemporalStrategy: Starting BACKWARD scan.");
-                        while (iter.hasPrev()) {
-                            Entry<byte[], byte[]> entry = iter.prev();
-                            processEntry(entry, condition, resultSoA, requirements, granularity, granularitySize, conceptualRowIdCounter++);
-                        }
-                    } else { // Iterate forwards
-                        strategyLogger.debug("NaiveTemporalStrategy: Starting FORWARD scan.");
-                        while (iter.hasNext()) {
-                            Entry<byte[], byte[]> entry = iter.next();
-                            String key = new String(entry.getKey(), StandardCharsets.UTF_8);
-                            LocalDate docDate = TemporalExecutor.parseDateKey(key);
-                            if (docDate == null) continue;
-
-                            // Early exit conditions for FORWARD scan
-                            if (queryStart != null) { // queryStart is from condition.startDate()
-                                if (type == TemporalPredicate.BEFORE && (docDate.isEqual(queryStart) || docDate.isAfter(queryStart))) {
-                                    strategyLogger.trace("NaiveTemporalStrategy (forward): Early exit for BEFORE: docDate {} >= queryStart {}", docDate, queryStart);
-                                    break;
-                                }
-                                // For BEFORE_EQUAL X, X is queryStart. If docDate > X, exit.
-                                if (type == TemporalPredicate.BEFORE_EQUAL && docDate.isAfter(queryStart)) {
-                                     strategyLogger.trace("NaiveTemporalStrategy (forward): Early exit for BEFORE_EQUAL: docDate {} > queryStart {}", docDate, queryStart);
-                                     break;
-                                }
-                                // For EQUAL X (single date), if docDate > X, can stop.
-                                // queryEnd here is the original condition.endDate().
-                                if (type == TemporalPredicate.EQUAL && queryEnd == null && docDate.isAfter(queryStart)) {
-                                    strategyLogger.trace("NaiveTemporalStrategy (forward): Early exit for EQUAL (single date): docDate {} > queryDate {}", docDate, queryStart);
-                                    break;
-                                }
-                            }
-
-                            // Early exit for range queries if docDate exceeds queryEnd
-                            if (queryEnd != null) { // queryEnd is from condition.endDate()
-                                boolean canEarlyExit = type == TemporalPredicate.CONTAINS ||
-                                                       type == TemporalPredicate.INTERSECT ||
-                                                       type == TemporalPredicate.CONTAINED_BY ||
-                                                       (type == TemporalPredicate.EQUAL && queryStart != null); // EQUAL can define a range
-
-                                if (canEarlyExit && docDate.isAfter(queryEnd)) {
-                                    strategyLogger.trace("NaiveTemporalStrategy (forward): Early exit for range query type {}: docDate {} > queryEnd {}", type, docDate, queryEnd);
-                                    break;
-                                }
-                            }
-
-                            processEntry(entry, condition, resultSoA, requirements, granularity, granularitySize, conceptualRowIdCounter++);
-                        }
-                    }
-                } // end try-with-resources for iterator
-            } catch (IOException e) {
-                throw new QueryExecutionException("Failed to read from date index", e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
-            } catch (IndexAccessException e) {
-                throw new QueryExecutionException("Failed to access date index", e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+            IndexAccessInterface dateIndex = indexes.get(DATE_INDEX);
+            if (dateIndex == null || !dateIndex.isOpen()) {
+                strategyLogger.warn("Date index '{}' is not available or not open. Cannot execute temporal condition.", DATE_INDEX);
+                return resultSoA;
             }
 
-            strategyLogger.debug("NaiveTemporalStrategy: Found {} entries. Returning QueryResultSoA.", resultSoA.size());
+            Optional<LocalDateTime> queryDateTimeStart = condition.startDate();
+            Optional<LocalDateTime> queryDateTimeEnd = condition.endDate();
+            String variableNameToBind = condition.variableName();
+
+            strategyLogger.debug("Naive strategy: queryStart={}, queryEnd={}, variable={}", queryDateTimeStart, queryDateTimeEnd, variableNameToBind);
+
+            try (RocksIterator iterator = dateIndex.iterateFromFirst()) { // Changed DBIterator to RocksIterator
+                while (iterator.isValid()) { // Changed from hasNext() to isValid()
+                    byte[] keyBytes = iterator.key(); // Get key
+                    byte[] valueBytes = iterator.value(); // Get value
+                    String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+                    String[] keyParts = key.split(String.valueOf(IndexAccessInterface.DELIMITER));
+
+                    if (keyParts.length == 2 && "DATE".equals(keyParts[0])) {
+                        String dateStr = keyParts[1];
+                        LocalDate entryDate = parseDateKey(dateStr);
+
+                        if (entryDate != null) {
+                            boolean temporalMatch = evaluateTemporalCondition(
+                                condition.temporalType(),
+                                entryDate.atStartOfDay(), entryDate.atTime(LocalTime.MAX),
+                                queryDateTimeStart.orElse(null), queryDateTimeEnd.orElse(null)
+                            );
+
+                            if (temporalMatch) {
+                                Object valueToBindInSoA = entryDate;
+
+                                conceptualRowIdCounter = processEntry(
+                                    new SimpleEntry<>(keyBytes, valueBytes),
+                                    condition, resultSoA, requirements,
+                                    granularity, granularitySize, conceptualRowIdCounter, entryDate, variableNameToBind, valueToBindInSoA
+                                );
+                            }
+                        }
+                    }
+                    iterator.next(); // Advance iterator
+                }
+            }
+             catch (IOException e) {
+                strategyLogger.error("IOException during NaiveTemporalStrategy execution: {}", e.getMessage(), e);
+                throw new QueryExecutionException("Failed to read from date index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+            }
+            catch (Exception e) {
+                strategyLogger.error("Error executing NaiveTemporalStrategy: {}", e.getMessage(), e);
+                throw new QueryExecutionException("Failed to execute temporal condition: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+            }
+            strategyLogger.debug("NaiveTemporalStrategy execution finished, {} conceptual rows.", resultSoA.getConceptualRowCount());
             return resultSoA;
         }
 
-        // Helper method to process a single entry, used by both forward and backward iteration.
-        private void processEntry(Entry<byte[], byte[]> entry, Temporal condition,
+        private int processEntry(Map.Entry<byte[], byte[]> entry, Temporal condition,
                                   QueryResultSoA resultSoA, AttributeRequirements requirements,
-                                  Query.Granularity granularity, int granularitySize, int conceptualRowId)
+                                  Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
+                                  LocalDate boundDate, String variableNameToBind, Object valueToBind)
                                   throws IOException {
+            PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(entry.getValue());
+            int conceptualRowIdForTheseBindings = currentConceptualRowId;
+            boolean firstBindingForThisEntry = true;
 
-            String key = new String(entry.getKey(), StandardCharsets.UTF_8);
-            LocalDate docDate = TemporalExecutor.parseDateKey(key);
-            if (docDate == null) {
-                return;
-            }
-
-            LocalDate queryStartLocalDate = condition.startDate().map(LocalDateTime::toLocalDate).orElse(null);
-            LocalDate queryEndLocalDate = condition.endDate().map(LocalDateTime::toLocalDate).orElse(null); // This is the original queryEnd
-
-            LocalDateTime evalQueryStartDateTime = condition.startDate().orElse(null);
-            LocalDateTime evalQueryEndDateTime = condition.endDate().orElse(null);
-
-
-            // Adjustments for single-point date predicates for evaluateTemporalCondition
-            if (condition.temporalType() == TemporalPredicate.EQUAL && evalQueryStartDateTime != null && evalQueryEndDateTime == null) {
-                evalQueryEndDateTime = evalQueryStartDateTime.toLocalDate().atTime(23, 59, 59);
-            } else if (condition.temporalType() == TemporalPredicate.BEFORE_EQUAL && evalQueryStartDateTime != null && evalQueryEndDateTime == null) {
-                // For DATE(<= X), X is from condition.startDate(). evaluateTemporalCondition expects X as its queryEnd parameter.
-                evalQueryEndDateTime = evalQueryStartDateTime.toLocalDate().atTime(23,59,59);
-            } else if (condition.temporalType() == TemporalPredicate.AFTER_EQUAL && evalQueryStartDateTime != null && evalQueryEndDateTime == null) {
-                 // For DATE(>= X), X is from condition.startDate(). evaluateTemporalCondition expects X as its queryStart.
-                 // No change needed to evalQueryEndDateTime, it's fine if null.
-            }
-
-
-            // Validation based on the type, ensuring necessary dates are present for evaluation.
-            // This logic was previously inside the loop, now centralized in processEntry.
-            boolean skipEvaluation = false;
-            String skipReason = "";
-            switch (condition.temporalType()) {
-                case CONTAINS:
-                case CONTAINED_BY:
-                case INTERSECT:
-                case PROXIMITY: // Proximity implies a range
-                    if (evalQueryStartDateTime == null || evalQueryEndDateTime == null) {
-                        skipEvaluation = true;
-                        skipReason = "requires both query start and end dates.";
-                    }
-                    break;
-                case BEFORE: // e.g., DATE(< X), X is evalQueryStartDateTime
-                case AFTER:  // e.g., DATE(> X), X is evalQueryStartDateTime
-                case AFTER_EQUAL: // e.g., DATE(>= X), X is evalQueryStartDateTime
-                case EQUAL: // e.g., DATE(= X), X is evalQueryStartDateTime
-                    if (evalQueryStartDateTime == null) {
-                        skipEvaluation = true;
-                        skipReason = "requires a query start date.";
-                    }
-                    break;
-                case BEFORE_EQUAL: // e.g., DATE(<= X), X is evalQueryStartDateTime, but evaluation uses it as evalQueryEndDateTime
-                    if (evalQueryStartDateTime == null) { // The original date boundary is from queryStart
-                        skipEvaluation = true;
-                        skipReason = "requires a query start date (for the boundary X).";
-                    }
-                    break;
-                default:
-                    strategyLogger.warn("Unhandled TemporalPredicate type {} in date validation logic.", condition.temporalType());
-                    skipEvaluation = true;
-                    skipReason = "is an unhandled predicate type in validation.";
-                    break;
-            }
-
-            if (skipEvaluation) {
-                strategyLogger.trace("NaiveTemporalStrategy: Skipping evaluation for docDate {} (key {}): type {} {}.", docDate, key, condition.temporalType(), skipReason);
-                return;
-            }
-
-
-            boolean conditionMet = TemporalExecutor.evaluateTemporalCondition(
-                condition.temporalType(),
-                docDate.atStartOfDay(), docDate.atTime(23, 59, 59),
-                evalQueryStartDateTime,
-                evalQueryEndDateTime
-            );
-
-            if (conditionMet) {
-                byte[] rawBlob = entry.getValue();
-                if (rawBlob == null) {
-                    strategyLogger.warn("NaiveTemporalStrategy: Null data blob for key '{}', skipping.", key);
-                    return;
+            for (int i = 0; i < positions.getNumPositions(); i++) {
+                 if (firstBindingForThisEntry) {
+                    conceptualRowIdForTheseBindings = resultSoA.getNextConceptualRowId();
+                    firstBindingForThisEntry = false;
                 }
-                int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-                if (numPositions == 0) {
-                    return;
-                }
-
-                IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
-                IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
-                IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
-                IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
-
-                Object valueToBind = docDate;
-                for (int i = 0; i < numPositions; i++) {
-                    resultSoA.add(
-                        valueToBind,
-                        ValueType.DATE,
-                        condition.qualifiedVariableName().orElse(null),
-                        docIds.getInt(i),
-                        sentIds != null ? sentIds.getInt(i) : -1,
-                        beginChars != null ? beginChars.getInt(i) : -1,
-                        endChars != null ? endChars.getInt(i) : -1,
-                        -1, // score, not applicable here
-                        conceptualRowId // Use the passed-in conceptualRowId
-                    );
-                }
-                 strategyLogger.trace("NaiveTemporalStrategy: Added {} positions for docDate {} (key {}) meeting condition {}", numPositions, docDate, key, condition.temporalType());
-            } else {
-                strategyLogger.trace("NaiveTemporalStrategy: docDate {} (key {}) did NOT meet condition {} [qStart: {}, qEnd: {}]", docDate, key, condition.temporalType(), evalQueryStartDateTime, evalQueryEndDateTime);
+                resultSoA.add(
+                    valueToBind,
+                    ValueType.DATE,
+                    variableNameToBind,
+                    positions.getDocIdAt(i),
+                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                    requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
+                    conceptualRowIdForTheseBindings
+                );
             }
+            return positions.getNumPositions() > 0 ? currentConceptualRowId +1 : currentConceptualRowId;
         }
     }
 

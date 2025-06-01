@@ -18,13 +18,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import org.iq80.leveldb.DBIterator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.rocksdb.RocksIterator;
 
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
@@ -39,7 +39,7 @@ import com.example.query.model.condition.Pos;
 class PosConditionExecutorTest {
 
     @Mock private IndexAccess posIndex;
-    @Mock private DBIterator posIterator;
+    @Mock private RocksIterator posIterator;
     @Mock private ConditionExecutorFactory factory;
     @InjectMocks private PosExecutor executor;
 
@@ -54,7 +54,7 @@ class PosConditionExecutorTest {
         defaultTestRequirements.needsSentenceId = true;
         defaultTestRequirements.needsPositions = true;
 
-        lenient().when(posIterator.hasNext()).thenReturn(false);
+        lenient().when(posIterator.isValid()).thenReturn(false);
         lenient().when(posIndex.getRaw(any(byte[].class))).thenReturn(Optional.empty());
         lenient().when(posIndex.seek(any(byte[].class))).thenReturn(posIterator);
         lenient().when(posIndex.iterateFromFirst()).thenReturn(posIterator);
@@ -175,11 +175,9 @@ class PosConditionExecutorTest {
 
         when(posIndex.seek(eq(expectedKeyPrefixBytes))).thenReturn(posIterator);
 
-        when(posIterator.hasNext()).thenReturn(true, true, true, false);
-        when(posIterator.next())
-            .thenReturn(mockEntries.get(0))
-            .thenReturn(mockEntries.get(1))
-            .thenReturn(mockEntries.get(2));
+        when(posIterator.isValid()).thenReturn(true, true, true, false);
+        when(posIterator.key()).thenReturn(mockEntries.get(0).getKey(), mockEntries.get(1).getKey(), mockEntries.get(2).getKey());
+        when(posIterator.value()).thenReturn(mockEntries.get(0).getValue(), mockEntries.get(1).getValue(), mockEntries.get(2).getValue());
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
@@ -200,7 +198,7 @@ class PosConditionExecutorTest {
 
         verify(posIndex, times(0)).getRaw(any());
         verify(posIndex).seek(eq(expectedKeyPrefixBytes));
-        verify(posIterator, times(4)).hasNext();
+        verify(posIterator, times(4)).isValid();
         verify(posIterator, times(3)).next();
     }
 }

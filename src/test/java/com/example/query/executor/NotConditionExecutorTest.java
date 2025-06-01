@@ -15,12 +15,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.iq80.leveldb.DBIterator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.rocksdb.RocksIterator;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
@@ -40,7 +40,7 @@ public class NotConditionExecutorTest {
     @Mock
     private IndexAccessInterface mockUnigramIndex;
     @Mock
-    private DBIterator mockDBIterator;
+    private RocksIterator mockDBIterator;
 
     private NotExecutor notExecutor;
     private Map<String, IndexAccessInterface> indexes;
@@ -68,6 +68,7 @@ public class NotConditionExecutorTest {
 
         when(mockFactory.getExecutor(any(Contains.class))).thenReturn(mockSubExecutor);
         when(mockUnigramIndex.iterateFromFirst()).thenReturn(mockDBIterator);
+        when(mockDBIterator.isValid()).thenReturn(false);
     }
 
     private void mockUnigramIndexForUniverse(List<Position> positionsInUniverse) throws Exception {
@@ -77,8 +78,13 @@ public class NotConditionExecutorTest {
         }
         byte[] universeBlob = universePositions.serializeToCompositeBlob();
 
-        when(mockDBIterator.hasNext()).thenReturn(true, false);
-        when(mockDBIterator.next()).thenReturn(new java.util.AbstractMap.SimpleEntry<>("any_key".getBytes(), universeBlob));
+        if (positionsInUniverse.isEmpty()) {
+            when(mockDBIterator.isValid()).thenReturn(false);
+        } else {
+            when(mockDBIterator.isValid()).thenReturn(true, false);
+            when(mockDBIterator.key()).thenReturn("any_key".getBytes());
+            when(mockDBIterator.value()).thenReturn(universeBlob);
+        }
     }
 
     @Test
@@ -117,7 +123,7 @@ public class NotConditionExecutorTest {
         when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class)))
             .thenReturn(nonEmptySubResult);
 
-        when(mockDBIterator.hasNext()).thenReturn(false);
+        when(mockDBIterator.isValid()).thenReturn(false);
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
             notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements);

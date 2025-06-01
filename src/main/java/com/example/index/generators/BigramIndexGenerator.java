@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.logging.ProgressTracker;
@@ -27,14 +28,14 @@ import com.google.common.collect.ListMultimap;
  */
 public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
-    public BigramIndexGenerator(String indexBaseDir, String stopwordsPath,
+    public BigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    public BigramIndexGenerator(String indexBaseDir, String stopwordsPath,
+    public BigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+        super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override

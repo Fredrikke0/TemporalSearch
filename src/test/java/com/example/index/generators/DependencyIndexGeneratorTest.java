@@ -11,6 +11,7 @@ import java.sql.SQLException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.rocksdb.Options;
 
 import com.example.core.IndexAccess;
 import com.example.core.PositionListSoA;
@@ -34,9 +35,14 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
             writer.println("is");
         }
 
+        // Create IndexAccess instance first
+        try (Options options = createTestOptions()) {
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("dependency"), "dependency", options);
+        }
+
         // Create generator
         generator = new DependencyIndexGenerator(
-            tempDir.resolve("test-leveldb-dep").toString(),
+            this.indexAccess,
             TEST_STOPWORDS_PATH,
             sqliteConn,
             new ProgressTracker(),
