@@ -40,8 +40,26 @@ public class PositionListSoA {
     private int numPositions;        // Number of logical positions stored, also the size of each active list
 
     private static final IntegerCODEC CODEC = new FastPFOR128();
-    private static final int UNCOMPRESSED_THRESHOLD = 128; // Small arrays might not benefit from compression.
+    public static final int UNCOMPRESSED_THRESHOLD = 20; // Small arrays might not benefit from compression.
     private static final int RLE_ENCODED_MARKER = Integer.MIN_VALUE + 2024; // Marker for Run-Length Encoded constant arrays
+
+    /**
+     * Defines compression override behavior for serialization.
+     */
+    public enum CompressionOverride {
+        /**
+         * Uses the default compression logic (e.g., UNCOMPRESSED_THRESHOLD, RLE).
+         */
+        DEFAULT,
+        /**
+         * Forces compression if applicable (e.g., FastPFOR, RLE), ignoring thresholds like UNCOMPRESSED_THRESHOLD.
+         */
+        FORCE_COMPRESSION,
+        /**
+         * Forces data to be written uncompressed. RLE will not be applied.
+         */
+        FORCE_UNCOMPRESSED
+    }
 
     /**
      * Convenience constructor, defaults to a non-stitch list (isStitchList = false).
@@ -271,7 +289,7 @@ public class PositionListSoA {
 
     // --- Methods for Serialization / Deserialization ---
     /**
-     * Serializes the {@code PositionListSoA} into a single composite binary blob.
+     * Serializes the {@code PositionListSoA} into a single composite binary blob using default compression.
      * The blob contains a metadata header followed by individually compressed attribute arrays.
      *
      * Structure:
@@ -283,17 +301,35 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs during serialization.
      */
     public byte[] serializeToCompositeBlob() throws IOException {
+        return serializeToCompositeBlob(CompressionOverride.DEFAULT);
+    }
+
+    /**
+     * Serializes the {@code PositionListSoA} into a single composite binary blob
+     * with a specific compression override.
+     * The blob contains a metadata header followed by individually compressed attribute arrays.
+     *
+     * Structure:
+     * - num_positions (int)
+     * - For each attribute array (docIds, sentenceIds, beginChars, endChars, and synonymIds):
+     *   - Compressed data (prefixed by its own length metadata, see writeCompressedIntArray)
+     *
+     * @param compressionOverride The compression strategy to use.
+     * @return A byte array representing the serialized {@code PositionListSoA}.
+     * @throws IOException If an I/O error occurs during serialization.
+     */
+    public byte[] serializeToCompositeBlob(CompressionOverride compressionOverride) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream(this.numPositions * 10); // Adjusted estimate for 5 arrays
         try (DataOutputStream dos = new DataOutputStream(baos)) {
             // 1. Write Metadata Header
             dos.writeInt(this.numPositions);
 
             // 2. Write Attribute Blobs
-            writeCompressedIntArrayList(dos, this.documentIds, true);     // applyDelta = true
-            writeCompressedIntArrayList(dos, this.sentenceIds, true);     // applyDelta = true
-            writeCompressedIntArrayList(dos, this.beginChars, true);      // applyDelta = true
-            writeCompressedIntArrayList(dos, this.endChars, true);        // applyDelta = true
-            writeCompressedIntArrayList(dos, this.synonymIds, false);     // applyDelta = false
+            writeCompressedIntArrayList(dos, this.documentIds, true, compressionOverride);     // applyDelta = true
+            writeCompressedIntArrayList(dos, this.sentenceIds, true, compressionOverride);     // applyDelta = true
+            writeCompressedIntArrayList(dos, this.beginChars, true, compressionOverride);      // applyDelta = true
+            writeCompressedIntArrayList(dos, this.endChars, true, compressionOverride);        // applyDelta = true
+            writeCompressedIntArrayList(dos, this.synonymIds, false, compressionOverride);     // applyDelta = false
             dos.flush();
         }
         return baos.toByteArray();
@@ -301,6 +337,7 @@ public class PositionListSoA {
 
     /**
      * Writes an integer array to the output stream, compressing it if it's large enough.
+     * This version calls the overridden method with default compression.
      * The format is:
      * 1. originalLength (int): Number of integers in the original array.
      * 2. compressedLengthOrMarker (int):
@@ -315,6 +352,27 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs.
      */
     public static void writeCompressedIntArray(DataOutputStream out, int[] data, int numElementsInArray, boolean applyDelta) throws IOException {
+        writeCompressedIntArray(out, data, numElementsInArray, applyDelta, CompressionOverride.DEFAULT);
+    }
+
+    /**
+     * Writes an integer array to the output stream, compressing it based on the override.
+     * The format is:
+     * 1. originalLength (int): Number of integers in the original array.
+     * 2. compressedLengthOrMarker (int):
+     *    - If negative: -originalLength, indicating data is uncompressed.
+     *    - If positive: Number of integers in the compressed data.
+     *    - If RLE_ENCODED_MARKER: data is RLE encoded.
+     * 3. data (int[] or int): Actual integer data (either uncompressed, compressed, or the RLE value).
+     *
+     * @param out The DataOutputStream to write to.
+     * @param data The integer array to write.
+     * @param numElementsInArray The number of elements from the beginning of the array to write.
+     * @param applyDelta Whether to apply delta coding before compression.
+     * @param override The compression override strategy.
+     * @throws IOException If an I/O error occurs.
+     */
+    public static void writeCompressedIntArray(DataOutputStream out, int[] data, int numElementsInArray, boolean applyDelta, CompressionOverride override) throws IOException {
         out.writeInt(numElementsInArray); // Store the original number of elements
 
         if (numElementsInArray == 0) {
@@ -323,7 +381,10 @@ public class PositionListSoA {
         }
 
         // Attempt RLE for non-delta coded arrays if they are constant
-        if (!applyDelta) { // RLE only considered if not applying delta and array is not empty
+        // RLE should be skipped if FORCE_UNCOMPRESSED is active.
+        // RLE should be attempted if FORCE_COMPRESSION is active (and !applyDelta).
+        // RLE should be attempted if DEFAULT is active (and !applyDelta).
+        if (override != CompressionOverride.FORCE_UNCOMPRESSED && !applyDelta && numElementsInArray > 0) {
             boolean allSame = true;
             int firstVal = data[0];
             for (int i = 1; i < numElementsInArray; i++) {
@@ -339,15 +400,16 @@ public class PositionListSoA {
             }
         }
 
-        // If not RLE'd (either because applyDelta was true, or not allSame, or numElementsInArray was 0)
-        // Proceed with existing logic: uncompressed threshold or FastPFOR
-        if (numElementsInArray <= UNCOMPRESSED_THRESHOLD) {
+        // If not RLE'd (either because applyDelta was true, or not allSame, or numElementsInArray was 0, or forced uncompressed)
+        // Proceed with FastPFOR or write uncompressed, modified by override
+        if (override == CompressionOverride.FORCE_UNCOMPRESSED ||
+            (override == CompressionOverride.DEFAULT && numElementsInArray <= UNCOMPRESSED_THRESHOLD)) {
             out.writeInt(-numElementsInArray); // Negative marker for uncompressed
             // For uncompressed, write original data regardless of applyDelta
             for (int i = 0; i < numElementsInArray; i++) {
                 out.writeInt(data[i]);
             }
-        } else {
+        } else { // FORCE_COMPRESSION or (DEFAULT and numElementsInArray > UNCOMPRESSED_THRESHOLD)
             // Ensure input array for compression is correctly sized
             int[] dataToCompress = (data.length == numElementsInArray) ? data : Arrays.copyOf(data, numElementsInArray);
 
@@ -846,15 +908,17 @@ public class PositionListSoA {
     }
 
     /**
-     * Helper to write an IntArrayList's elements to a DataOutputStream using the compression logic.
+     * Helper to write an IntArrayList's elements to a DataOutputStream using the compression logic
+     * and a specific compression override.
      *
      * @param dos The DataOutputStream to write to.
      * @param list The IntArrayList whose elements are to be written.
      * @param applyDelta Whether to apply delta coding before compression.
+     * @param override The compression override strategy.
      * @throws IOException If an I/O error occurs.
      */
-    private void writeCompressedIntArrayList(DataOutputStream dos, IntArrayList list, boolean applyDelta) throws IOException {
-        writeCompressedIntArray(dos, list.elements(), list.size(), applyDelta);
+    private void writeCompressedIntArrayList(DataOutputStream dos, IntArrayList list, boolean applyDelta, CompressionOverride override) throws IOException {
+        writeCompressedIntArray(dos, list.elements(), list.size(), applyDelta, override);
     }
 
 }
