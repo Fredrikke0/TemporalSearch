@@ -11,6 +11,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.logging.ProgressTracker;
@@ -23,25 +26,21 @@ import com.google.common.collect.ListMultimap;
  * Uses streaming processing and external sorting for efficient memory usage.
  */
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
-
-    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '\'\'','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-')";
+    private static final Logger logger = LoggerFactory.getLogger(POSIndexGenerator.class);
+    // SQL query part to select POS tags to exclude. Example: ('PUNCT', 'SYM')
+    public static final String POS_TAGS_TO_EXCLUDE_SQL = "('SYM', 'PUNCT', '_SP', 'NFP', 'ADD', 'GW', 'AFX')"; // Public for potential re-use
 
     public POSIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
     public POSIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
     protected String getTableName() {
         return "annotations";
-    }
-
-    @Override
-    protected String getIndexName() {
-        return "pos";
     }
 
     @Override

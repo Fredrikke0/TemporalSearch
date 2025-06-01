@@ -29,17 +29,12 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
     }
 
     public UnigramIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
     protected String getTableName() {
         return "annotations";
-    }
-
-    @Override
-    protected String getIndexName() {
-        return "unigram";
     }
 
     @Override

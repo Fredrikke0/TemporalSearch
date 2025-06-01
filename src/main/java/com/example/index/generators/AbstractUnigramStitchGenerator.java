@@ -52,22 +52,26 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
                                            String stopwordsPathString, Connection sqliteConnParam,
                                            ProgressTracker progressTrackerParam, int batchSizeParam, Path customSortTempParam,
                                            AnnotationType managedAnnotationType) throws IOException {
-        // Call the full constructor of IndexGenerator which initializes indexAccess
-        // and also passes the correct index name for indexAccess to use for its subdirectory.
-        super(indexBaseDir, stopwordsPathString, sqliteConnParam, progressTrackerParam, batchSizeParam, customSortTempParam);
+        // Call the modified IndexGenerator constructor:
+        // - actualIndexDbPath: The full specific path for this stitch index's LevelDB files.
+        // - indexName: The logical name for this stitch index.
+        // The calculation for specificStitchIndexPath must happen *inside* the super call.
+        super(Path.of(indexBaseDir, indexNameParam).toString(), // actualIndexDbPath
+              indexNameParam,                                 // indexName
+              stopwordsPathString,
+              sqliteConnParam,
+              progressTrackerParam,
+              batchSizeParam,
+              customSortTempParam);
 
-        this.resolvedIndexName = indexNameParam; // Keep this for clarity and synonym store path
-        // this.batchSize = batchSizeParam; // Handled by parent
+        this.resolvedIndexName = indexNameParam; // For synonym store path and local getIndexName()
 
-        // The indexDBPath for a stitch index is indexBaseDir/resolvedIndexName (e.g., projects/nyt/indexes/stitch-date)
-        // This path is used by TypedAnnotationSynonymStore for its own files.
+        // The indexDBPath for TypedAnnotationSynonymStore needs the specific path.
+        // It's derived from the same inputs as what super() used.
         this.indexDBPath = Path.of(indexBaseDir, this.resolvedIndexName);
         if (!Files.exists(this.indexDBPath)) {
-            Files.createDirectories(this.indexDBPath);
+            Files.createDirectories(this.indexDBPath); // Ensure it exists for synonym store
         }
-
-        // this.db = null; // No longer managing its own DB instance
-        // logger.info("Skipping LevelDB initialization for {} (initializeDB=false)", this.resolvedIndexName);
 
         // Construct the specific path for the synonym file for this stitch index
         Path synonymFilePath = this.indexDBPath.resolve("synonyms.dat");
@@ -80,15 +84,8 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
                     managedAnnotationType, annotationSynonyms.size(), managedAnnotationType);
         } catch (SQLException | IOException e) {
             closeSynonymsOnError();
-            // No db to close here as it's managed by the parent (indexAccess)
-            // If indexAccess failed to initialize in super, it would have thrown from there.
             throw new UncheckedIOException("Failed to populate " + managedAnnotationType + " annotation synonyms for " + this.resolvedIndexName, e instanceof IOException ? (IOException)e : new IOException(e));
         }
-
-        // Progress starting is handled by the parent IndexGenerator constructor if indexAccess is successfully created.
-        // We just need to make sure getIndexName() in this class returns what the parent expects for its progress bar.
-        // The parent constructor already calls: this.progress.startIndex(getIndexName(), totalDocs);
-        // So, the override of getIndexName() at the bottom of this file to return this.resolvedIndexName is correct.
     }
 
     private void closeSynonymsOnError() {

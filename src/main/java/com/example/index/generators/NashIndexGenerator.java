@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 import org.apache.pig.impl.util.MultiMap;
 import org.slf4j.Logger;
@@ -38,25 +39,19 @@ import no.ntnu.sandbox.Nash;
 public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(NashIndexGenerator.class);
     private static final DateTimeFormatter NASH_INTERVAL_FORMATTER = DateTimeFormatter.ISO_DATE; // YYYY-MM-DD
+    private static final Pattern DATE_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
 
-    public NashIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize)
-            throws IOException {
+    public NashIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    public NashIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath)
-            throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+    public NashIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
     protected String getTableName() {
         return "annotations";
-    }
-
-    @Override
-    protected String getIndexName() {
-        return "nash";
     }
 
     @Override

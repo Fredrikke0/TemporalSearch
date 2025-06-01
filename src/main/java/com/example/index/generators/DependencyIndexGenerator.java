@@ -33,24 +33,17 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
         "dep"
     );
 
-    public DependencyIndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+    public DependencyIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    public DependencyIndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+    public DependencyIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
     protected String getTableName() {
-        return "dependencies"; // Assuming this is the source table
-    }
-
-    @Override
-    protected String getIndexName() {
-        return "dependency";
+        return "dependencies"; // Assuming a dependencies table
     }
 
     @Override

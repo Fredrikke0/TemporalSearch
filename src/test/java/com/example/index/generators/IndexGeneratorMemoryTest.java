@@ -65,16 +65,16 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         private final AtomicLong totalDecompressions = new AtomicLong(0);
         private final List<String> decompressionLog = Collections.synchronizedList(new ArrayList<>());
 
-        public StreamingTestIndexGenerator(String indexBaseDir, Connection sqliteConn,
+        public StreamingTestIndexGenerator(String actualIndexDbPath, String indexName, Connection sqliteConn,
                                          ProgressTracker progress, Path customTempPath) throws IOException {
-            super(indexBaseDir, null, sqliteConn, progress, 1000, customTempPath);
+            super(actualIndexDbPath, indexName, null, sqliteConn, progress, 1000, customTempPath);
         }
 
         @Override
         protected String getTableName() { return "test_table"; }
 
         @Override
-        protected String getIndexName() { return "streaming-test-index"; }
+        public String getIndexName() { return "streaming-test-index"; }
 
         @Override
         protected List<IndexEntry> fetchBatch(IndexEntry lastEntry) { return Collections.emptyList(); }
@@ -236,8 +236,10 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         Files.createDirectories(generatorTempDir);
 
         ProgressTracker mockProgressTracker = Mockito.mock(ProgressTracker.class);
+        String specificIndexForTestPath = indexBaseDir.resolve("streaming-test-index").toString();
         testGenerator = new StreamingTestIndexGenerator(
-            indexBaseDir.toString(),
+            specificIndexForTestPath,
+            "streaming-test-index",
             sqliteConn,
             mockProgressTracker,
             generatorTempDir

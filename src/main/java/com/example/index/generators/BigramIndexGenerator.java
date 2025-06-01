@@ -32,7 +32,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
 
     public BigramIndexGenerator(String indexBaseDir, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
@@ -127,11 +127,6 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
     @Override
     protected String getTableName() {
         return "annotations";
-    }
-
-    @Override
-    protected String getIndexName() {
-        return "bigram";
     }
 
     @Override

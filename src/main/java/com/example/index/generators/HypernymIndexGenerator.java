@@ -38,24 +38,17 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
         "nmod:particularly"
     );
 
-    public HypernymIndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+    public HypernymIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    public HypernymIndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
-        super(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+    public HypernymIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+        super(indexBaseDir, Path.of(indexBaseDir).getFileName().toString(), stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
     @Override
     protected String getTableName() {
-        return "dependencies";
-    }
-
-    @Override
-    protected String getIndexName() {
-        return "hypernym";
+        return "hypernyms";
     }
 
     @Override

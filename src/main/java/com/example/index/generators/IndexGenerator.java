@@ -53,6 +53,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     private final Path tempDir;
     private long totalNGramsGenerated = 0;
     protected final int batchSize;
+    protected final String effectiveIndexName;
 
     /**
      * Gets the name of the table to query for entries.
@@ -64,7 +65,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * Gets the name of this index for progress tracking and logging.
      * @return The name of the index
      */
-    protected abstract String getIndexName();
+    public String getIndexName() {
+        return this.effectiveIndexName;
+    }
 
     /**
      * Fetches a batch of entries from the database.
@@ -98,41 +101,42 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         this.stopwords = loadStopwordsInternal(stopwordsPath);
         this.tempDir = initializeTempDir(indexNameForLogging, customTempPath);
         this.indexAccess = null;
+        this.effectiveIndexName = indexNameForLogging;
         logger.debug("IndexGenerator (slim constructor for [{}]) initialized. Temp dir: {}, Batch size: {}", indexNameForLogging, this.tempDir.toAbsolutePath(), this.batchSize);
         registerShutdownHook();
     }
 
     // Original full constructor (delegates to the one with customTempPath)
-    protected IndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        this(indexBaseDir, stopwordsPath, sqliteConn, progress, batchSize, null);
+    protected IndexGenerator(String actualIndexDbPath, String stopwordsPath,
+            Connection sqliteConn, ProgressTracker progressTracker, int batchSizeNum) throws IOException {
+        this(actualIndexDbPath, Path.of(actualIndexDbPath).getFileName().toString(), stopwordsPath, sqliteConn, progressTracker, batchSizeNum, null);
     }
 
-    // Original full constructor with customTempPath
-    @SuppressWarnings("this-escape") // Suppress warning: getIndexName() and getDocumentCountForIndex() are abstract methods
-                                     // called from constructor. Implementations are verified to only use
-                                     // superclass fields initialized prior to this call, or their own static/final fields.
-    protected IndexGenerator(String indexBaseDir, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+    // Main constructor with customTempPath (and now explicit indexName)
+    @SuppressWarnings("this-escape")
+    protected IndexGenerator(String actualIndexDbPath, String indexName, String stopwordsPath,
+            Connection sqliteConn, ProgressTracker progressTracker, int batchSizeNum, Path customTempPath) throws IOException {
+        this.effectiveIndexName = indexName;
         Options options = LevelDBConfig.createOptimizedOptions();
         try {
-            this.indexAccess = new IndexAccess(Path.of(indexBaseDir), getIndexName(), options);
+            this.indexAccess = new IndexAccess(Path.of(actualIndexDbPath), this.effectiveIndexName, options);
         } catch (IndexAccessException e) {
-            throw new IOException("Failed to initialize IndexAccess for " + getIndexName(), e);
+            throw new IOException("Failed to initialize IndexAccess for " + this.effectiveIndexName, e);
         }
         this.sqliteConn = sqliteConn;
-        this.progress = progress;
-        this.batchSize = batchSize;
+        this.progress = progressTracker;
+        this.batchSize = batchSizeNum;
         this.stopwords = loadStopwordsInternal(stopwordsPath);
-        this.tempDir = initializeTempDir(getIndexName(), customTempPath); // Use getIndexName() here
+        this.tempDir = initializeTempDir(this.effectiveIndexName, customTempPath);
 
         try {
             long totalDocs = getDocumentCountForIndex();
-            this.progress.startIndex(getIndexName(), totalDocs);
+            this.progress.startIndex(this.effectiveIndexName, totalDocs);
         } catch (SQLException e) {
-            throw new IOException("Failed to get document count for index: " + getIndexName(), e);
+            throw new IOException("Failed to get document count for index: " + this.effectiveIndexName, e);
         }
-        logger.debug("IndexGenerator for [{}] initialized. Temp dir: {}, Batch size: {}", getIndexName(), this.tempDir.toAbsolutePath(), this.batchSize);
+        logger.debug("IndexGenerator for [{}] initialized. DB Path: {}, Temp dir: {}, Batch size: {}",
+                     this.effectiveIndexName, actualIndexDbPath, this.tempDir.toAbsolutePath(), this.batchSize);
         registerShutdownHook();
     }
 

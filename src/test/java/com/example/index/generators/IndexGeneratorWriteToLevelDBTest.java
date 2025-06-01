@@ -45,9 +45,9 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
     private static class TestIndexGenerator extends IndexGenerator<IndexEntry> {
         // private final Path actualTempDirToUse; // Not strictly needed if getActualTempDir() works
 
-        protected TestIndexGenerator(String indexBaseDir, Connection sqliteConn, ProgressTracker progress, Path customTempDir) throws IOException {
+        protected TestIndexGenerator(String indexBaseDir, String indexName, Connection sqliteConn, ProgressTracker progress, Path customTempDir) throws IOException {
             // Pass null for stopwordsPath, batchSize can be arbitrary for this test's focus
-            super(indexBaseDir, null, sqliteConn, progress, 10, customTempDir);
+            super(indexBaseDir, indexName, null, sqliteConn, progress, 10, customTempDir);
             // The super constructor already calls initializeTempDir, which creates the unique subdir.
             // We retrieve it later via getActualTempDir()
             // this.actualTempDirToUse = customTempDir.resolve(getIndexName() + "-index-temp-" + UUID.randomUUID().toString());
@@ -69,7 +69,7 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
         @Override
         protected String getTableName() { return "test_table"; }
         @Override
-        protected String getIndexName() { return "test-index"; }
+        public String getIndexName() { return "test-index"; }
         @Override
         protected List<IndexEntry> fetchBatch(IndexEntry lastEntry) { return Collections.emptyList(); } // Not used in this test
         @Override
@@ -99,7 +99,7 @@ public class IndexGeneratorWriteToLevelDBTest extends BaseIndexTest {
         Files.createDirectories(generatorTempDir);
 
         ProgressTracker mockProgressTracker = Mockito.mock(ProgressTracker.class);
-        testGenerator = new TestIndexGenerator(indexBaseDir.toString(), sqliteConn, mockProgressTracker, generatorTempDir);
+        testGenerator = new TestIndexGenerator(indexBaseDir.resolve("test-index").toString(), "test-index", sqliteConn, mockProgressTracker, generatorTempDir);
 
         // Diagnostic: Print size of serialized empty PositionListSoA
         PositionListSoA emptyList = new PositionListSoA();
