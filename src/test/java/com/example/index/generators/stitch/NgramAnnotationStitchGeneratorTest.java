@@ -1,0 +1,412 @@
+package com.example.index.generators.stitch;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.iq80.leveldb.Options;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.example.core.IndexAccess;
+import com.example.core.IndexAccessException;
+import com.example.core.PositionListSoA;
+import com.example.index.AnnotationTypeSource;
+import com.example.index.LevelDBConfig;
+import com.example.index.NgramType;
+import com.example.index.generators.stitch.NgramAnnotationStitchGenerator.TermOccurrenceInSentence;
+
+
+public class NgramAnnotationStitchGeneratorTest {
+    private static final Logger logger = LoggerFactory.getLogger(NgramAnnotationStitchGeneratorTest.class);
+
+    @TempDir
+    Path tempDir; // JUnit 5 temporary directory for tests
+
+    private record TestPositionTuple(int docId, int sentId, int begin, int end) {}
+
+    private Path baseIndexDirPath;
+    private Path tempBaseStitchGenPath; // Main temporary directory for stitch operations
+
+    // Specific paths for a Bigram-Date test
+    private Path bigramSourcePath;
+    private Path dateSourcePath;
+    private Path stitchBigramDateOutputPath;
+    private Path tempBigramBySentencePath; // Shared N-gram temp index
+    // private Path tempDateBySentencePath;   // Annotation-specific temp index - this will now be created by a helper
+    //                                        // and its path constructed more generically within tests or helpers.
+
+
+    @BeforeEach
+    void setUp() throws IOException {
+        baseIndexDirPath = tempDir.resolve("test_indexes");
+        Files.createDirectories(baseIndexDirPath);
+
+        tempBaseStitchGenPath = baseIndexDirPath.resolve("temp_stitch_gen"); // As used by IndexRunner
+        Files.createDirectories(tempBaseStitchGenPath);
+
+        // Setup for a Bigram-Date scenario
+        bigramSourcePath = baseIndexDirPath.resolve(NgramType.BIGRAM.name().toLowerCase());
+        Files.createDirectories(bigramSourcePath);
+
+        dateSourcePath = baseIndexDirPath.resolve(AnnotationTypeSource.NER_DATE.getSourceIndexName()); // Corrected to NER_DATE if that's the intended enum for dates
+        Files.createDirectories(dateSourcePath);
+
+        stitchBigramDateOutputPath = baseIndexDirPath.resolve("stitch_" + NgramType.BIGRAM.name().toLowerCase() + "_" + AnnotationTypeSource.NER_DATE.getTypeIdentifier()); // Corrected
+
+        // Path for the *shared* temporary N-gram index that IndexRunner would create
+        tempBigramBySentencePath = tempBaseStitchGenPath.resolve("temp_" + NgramType.BIGRAM.name().toLowerCase() + "_by_sentence");
+
+        // Path for the *annotation-specific* temporary index that NgramAnnotationStitchGenerator creates
+        // Its name is constructed inside NgramAnnotationStitchGenerator, so we predict it for assertion.
+        // String tempAnnotationIndexName = "temp_" + AnnotationTypeSource.NER_DATE.getTypeIdentifier() + "_by_sentence_" + NgramType.BIGRAM.name().toLowerCase() + "_stitch_prep"; // Corrected
+        // tempDateBySentencePath = tempBaseStitchGenPath.resolve(tempAnnotationIndexName);
+        // The above is removed as the NgramAnnotationStitchGenerator no longer creates this specific uniquely named temp index.
+        // Temporary annotation-by-sentence indexes will be created by a dedicated helper in tests,
+        // mirroring IndexRunner's new responsibility.
+    }
+
+    @AfterEach
+    void tearDown() {
+        // TempDir handles cleanup of baseIndexDirPath and its contents.
+        // Explicitly try to clean tempBaseStitchGenPath to mimic IndexRunner behavior for empty dirs
+        try {
+            if (Files.exists(tempBaseStitchGenPath) && Files.isDirectory(tempBaseStitchGenPath)) {
+                if (Files.list(tempBaseStitchGenPath).findAny().isEmpty()) {
+                    Files.delete(tempBaseStitchGenPath);
+                }
+            }
+        } catch (IOException e) {
+            logger.warn("Could not clean up tempBaseStitchGenPath in tearDown: {}", e.getMessage());
+        }
+    }
+
+    private IndexAccess createTestIndexAccess(Path path, String type) throws IndexAccessException {
+        Options options = LevelDBConfig.createOptimizedOptions();
+        options.createIfMissing(true);
+        // Ensure parent directory exists before creating IndexAccess
+        try {
+            if (path.getParent() != null) {
+                 Files.createDirectories(path.getParent());
+            }
+        } catch (IOException e) {
+            // Assuming a generic error type for this directory creation failure.
+            throw new IndexAccessException("Failed to create parent directory for index: " + path,
+                                         path.getFileName() != null ? path.getFileName().toString() : "unknown_index_type",
+                                         IndexAccessException.ErrorType.INITIALIZATION_ERROR,
+                                         e);
+        }
+        return new IndexAccess(path, type, options);
+    }
+
+    private void populateSourceIndex(Path indexPath, String term, int docId, int sentId, int begin, int end) throws IndexAccessException, IOException {
+        populateSourceIndex(indexPath, term, List.of(new TestPositionTuple(docId, sentId, begin, end)));
+    }
+
+    private void populateSourceIndex(Path indexPath, String term, List<TestPositionTuple> positions) throws IndexAccessException, IOException {
+        try (IndexAccess ia = createTestIndexAccess(indexPath, indexPath.getFileName().toString())) {
+            PositionListSoA pl = new PositionListSoA();
+            for (TestPositionTuple pos : positions) {
+                pl.add(pos.docId(), pos.sentId(), pos.begin(), pos.end());
+            }
+            ia.put(IndexAccess.bytes(term), pl.serializeToCompositeBlob());
+        }
+    }
+
+    // Helper to create the temporary N-gram by sentence index (simulating IndexRunner's role)
+    private IndexAccess createTemporaryNgramBySentenceIndex(NgramType ngramType, Path sourceNgramPath, Path tempNgramBySentencePathToCreate)
+            throws IOException, IndexAccessException {
+        NgramAnnotationStitchGenerator.cleanupDirectory(tempNgramBySentencePathToCreate.toFile());
+        Files.createDirectories(tempNgramBySentencePathToCreate);
+
+        IndexAccess sourceIA = null;
+        IndexAccess tempOutputIA = null;
+        Options defaultOptions = LevelDBConfig.createOptimizedOptions();
+
+        try {
+            sourceIA = createTestIndexAccess(sourceNgramPath, ngramType.name().toLowerCase() + "_source_for_temp");
+            tempOutputIA = createTestIndexAccess(tempNgramBySentencePathToCreate, "temp_" + ngramType.name().toLowerCase() + "_by_sentence");
+
+            Map<String, List<TermOccurrenceInSentence>> sentenceAggregator = new HashMap<>();
+            final int BATCH_SIZE = 100; // Small batch for tests
+
+            try (org.iq80.leveldb.DBIterator iterator = sourceIA.iterateFromFirst()) {
+                for (iterator.seekToFirst(); iterator.hasNext(); iterator.next()) {
+                    String term = IndexAccess.asString(iterator.peekNext().getKey());
+                    PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(iterator.peekNext().getValue());
+                    for (int i = 0; i < positions.getNumPositions(); i++) {
+                        String sentenceKey = positions.getDocIdAt(i) + "_" + positions.getSentenceIdAt(i);
+                        sentenceAggregator.computeIfAbsent(sentenceKey, k -> new ArrayList<>())
+                                .add(new TermOccurrenceInSentence(term, positions.getBeginCharAt(i), positions.getEndCharAt(i)));
+                    }
+                    if (sentenceAggregator.size() >= BATCH_SIZE) {
+                        writeSentenceBatchToTempDB(sentenceAggregator, tempOutputIA, ngramType.name());
+                        sentenceAggregator.clear();
+                    }
+                }
+                if (!sentenceAggregator.isEmpty()) {
+                    writeSentenceBatchToTempDB(sentenceAggregator, tempOutputIA, ngramType.name());
+                }
+            }
+            return tempOutputIA; // Return open, caller (test method) should close
+        } catch (Exception e) {
+            if (tempOutputIA != null) try { tempOutputIA.close(); } catch (IndexAccessException ignored) {}
+            throw e;
+        } finally {
+             if (sourceIA != null) try { sourceIA.close(); } catch (IndexAccessException ignored) {}
+        }
+    }
+
+    private void writeSentenceBatchToTempDB(Map<String, List<TermOccurrenceInSentence>> sentenceBatch,
+                                        IndexAccess tempDb, String termTypeForLog) throws IOException, IndexAccessException {
+        try (org.iq80.leveldb.WriteBatch batch = tempDb.createWriteBatch()) {
+            for (Map.Entry<String, List<TermOccurrenceInSentence>> entry : sentenceBatch.entrySet()) {
+                batch.put(IndexAccess.bytes(entry.getKey()), TermOccurrenceInSentence.serializeList(entry.getValue()));
+            }
+            tempDb.write(batch);
+        }
+    }
+
+    // Helper method to create and populate a temporary annotation-by-sentence index
+    // This mirrors the new generateTemporaryAnnotationBySentenceIndex in IndexRunner
+    private IndexAccess createTemporaryAnnotationBySentenceIndex(
+            AnnotationTypeSource annotationTypeSource,
+            Path sourceAnnotationPath, // e.g., dateSourcePath
+            Path tempAnnotationBySentencePathToCreate // e.g., tempBaseStitchGenPath.resolve("temp_ner_date_by_sentence")
+    ) throws IOException, IndexAccessException {
+        NgramAnnotationStitchGenerator.cleanupDirectory(tempAnnotationBySentencePathToCreate.toFile());
+        Files.createDirectories(tempAnnotationBySentencePathToCreate);
+
+        IndexAccess sourceIA = null;
+        IndexAccess tempOutputIA = null;
+        Options defaultOptions = LevelDBConfig.createOptimizedOptions();
+        final int BATCH_SIZE = 100; // Small batch for tests, similar to the N-gram helper
+
+        try {
+            sourceIA = createTestIndexAccess(sourceAnnotationPath, annotationTypeSource.getSourceIndexName() + "_source_for_temp_annot");
+            tempOutputIA = createTestIndexAccess(tempAnnotationBySentencePathToCreate, "temp_" + annotationTypeSource.getTypeIdentifier() + "_by_sentence");
+
+            Map<String, List<TermOccurrenceInSentence>> sentenceAggregator = new HashMap<>();
+
+            try (org.iq80.leveldb.DBIterator iterator = sourceIA.iterateFromFirst()) {
+                for (iterator.seekToFirst(); iterator.hasNext(); iterator.next()) {
+                    String term = IndexAccess.asString(iterator.peekNext().getKey()); // Annotation term
+                    PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(iterator.peekNext().getValue());
+                    for (int i = 0; i < positions.getNumPositions(); i++) {
+                        String sentenceKey = positions.getDocIdAt(i) + "_" + positions.getSentenceIdAt(i);
+                        sentenceAggregator.computeIfAbsent(sentenceKey, k -> new ArrayList<>())
+                                .add(new TermOccurrenceInSentence(term, positions.getBeginCharAt(i), positions.getEndCharAt(i)));
+                    }
+                    if (sentenceAggregator.size() >= BATCH_SIZE) {
+                        // Use the same writeSentenceBatchToTempDB as N-grams, as the structure is identical
+                        writeSentenceBatchToTempDB(sentenceAggregator, tempOutputIA, annotationTypeSource.getTypeIdentifier());
+                        sentenceAggregator.clear();
+                    }
+                }
+                if (!sentenceAggregator.isEmpty()) {
+                    writeSentenceBatchToTempDB(sentenceAggregator, tempOutputIA, annotationTypeSource.getTypeIdentifier());
+                }
+            }
+            return tempOutputIA; // Return open, caller (test method) should close
+        } catch (Exception e) {
+            if (tempOutputIA != null) try { tempOutputIA.close(); } catch (IndexAccessException ignored) {}
+            throw e;
+        } finally {
+             if (sourceIA != null) try { sourceIA.close(); } catch (IndexAccessException ignored) {}
+        }
+    }
+
+    @Test
+    void testGenerateStitchIndex_BigramDate_CoOccurrence() throws IOException, IndexAccessException {
+        // 1. Populate source N-gram (bigram) index
+        populateSourceIndex(bigramSourcePath, "hello world", 1, 1, 0, 10);
+
+        // 2. Populate source annotation (date) index
+        populateSourceIndex(dateSourcePath, "20230101", 1, 1, 15, 22);
+
+        // 3. Create the temporary N-gram-by-sentence index (simulating IndexRunner)
+        final IndexAccess tempBigramBySentenceIA = createTemporaryNgramBySentenceIndex(NgramType.BIGRAM, bigramSourcePath, tempBigramBySentencePath);
+
+        // 4. Create the temporary Annotation-by-sentence index (simulating IndexRunner)
+        Path tempDateBySentencePathActual = tempBaseStitchGenPath.resolve("temp_" + AnnotationTypeSource.NER_DATE.getTypeIdentifier() + "_by_sentence");
+        final IndexAccess tempDateBySentenceIA = createTemporaryAnnotationBySentenceIndex(AnnotationTypeSource.NER_DATE, dateSourcePath, tempDateBySentencePathActual);
+
+        try {
+            // 5. Instantiate and run the NgramAnnotationStitchGenerator
+            try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(
+                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE)) {
+                generator.generateStitchIndex(tempBigramBySentenceIA, tempDateBySentenceIA);
+            }
+
+            // 6. Verify the final stitch index
+            try (IndexAccess stitchIA = createTestIndexAccess(stitchBigramDateOutputPath, "stitch_bigram_date_test")) {
+                String expectedKey = "hello world" + IndexAccess.DELIMITER + "20230101";
+                java.util.Optional<PositionListSoA> resultOpt = stitchIA.get(IndexAccess.bytes(expectedKey));
+
+                assertTrue(resultOpt.isPresent(), "Stitch key should exist for bigram-date co-occurrence.");
+                PositionListSoA resultPl = resultOpt.get();
+                assertEquals(1, resultPl.getNumPositions(), "Should be one position for the bigram.");
+                assertEquals(1, resultPl.getDocIdAt(0));
+                assertEquals(1, resultPl.getSentenceIdAt(0));
+                assertEquals(0, resultPl.getBeginCharAt(0)); // Bigram's original begin char
+                assertEquals(10, resultPl.getEndCharAt(0));  // Bigram's original end char
+            }
+
+            // 7. Verify cleanup
+            // NgramAnnotationStitchGenerator no longer cleans up the temp annotation index it receives.
+            // assertFalse(Files.exists(tempDateBySentencePath), "Generator's temp annotation-by-sentence index should be deleted. Path: " + tempDateBySentencePath);
+            assertTrue(Files.exists(tempDateBySentencePathActual), "Shared temp Annotation-by-sentence index should NOT be deleted by the generator.");
+            assertTrue(Files.exists(tempBigramBySentencePath), "Shared temp N-gram index should NOT be deleted by the generator itself.");
+
+        } finally {
+            if (tempBigramBySentenceIA != null) {
+                try {
+                    tempBigramBySentenceIA.close();
+                } catch (IndexAccessException e) {
+                    logger.warn("Failed to close tempBigramBySentenceIA: {}", e.getMessage());
+                }
+                NgramAnnotationStitchGenerator.cleanupDirectory(tempBigramBySentencePath.toFile());
+            }
+            if (tempDateBySentenceIA != null) {
+                try {
+                    tempDateBySentenceIA.close();
+                } catch (IndexAccessException e) {
+                    logger.warn("Failed to close tempDateBySentenceIA: {}", e.getMessage());
+                }
+                NgramAnnotationStitchGenerator.cleanupDirectory(tempDateBySentencePathActual.toFile());
+            }
+        }
+         assertFalse(Files.exists(tempBigramBySentencePath), "Shared temp N-gram index should be cleaned up by test finally block.");
+         assertFalse(Files.exists(tempDateBySentencePathActual), "Shared temp Annotation-by-sentence index should be cleaned by test finally block.");
+    }
+
+    @Test
+    void testGenerateStitchIndex_BigramDate_NoCoOccurrence_DifferentSentences() throws IOException, IndexAccessException {
+        populateSourceIndex(bigramSourcePath, "hello there", 1, 1, 0, 10); // doc 1, sent 1
+        populateSourceIndex(dateSourcePath, "20230102", 1, 2, 15, 22);   // doc 1, sent 2
+
+        final IndexAccess tempBigramBySentenceIA = createTemporaryNgramBySentenceIndex(NgramType.BIGRAM, bigramSourcePath, tempBigramBySentencePath);
+        Path tempDateBySentencePathActual = tempBaseStitchGenPath.resolve("temp_" + AnnotationTypeSource.NER_DATE.getTypeIdentifier() + "_by_sentence");
+        final IndexAccess tempDateBySentenceIA = createTemporaryAnnotationBySentenceIndex(AnnotationTypeSource.NER_DATE, dateSourcePath, tempDateBySentencePathActual);
+
+        try {
+            try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(
+                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE)) {
+                generator.generateStitchIndex(tempBigramBySentenceIA, tempDateBySentenceIA);
+            }
+
+            try (IndexAccess stitchIA = createTestIndexAccess(stitchBigramDateOutputPath, "stitch_bigram_date_test_no_cooccur")) {
+                String searchKey = "hello there" + IndexAccess.DELIMITER + "20230102";
+                assertFalse(stitchIA.get(IndexAccess.bytes(searchKey)).isPresent(), "Stitch key should NOT exist for different sentences.");
+            }
+        } finally {
+            if (tempBigramBySentenceIA != null) {
+                 try { tempBigramBySentenceIA.close(); } catch (IndexAccessException ignored) {}
+                 NgramAnnotationStitchGenerator.cleanupDirectory(tempBigramBySentencePath.toFile());
+            }
+            if (tempDateBySentenceIA != null) {
+                try { tempDateBySentenceIA.close(); } catch (IndexAccessException ignored) {}
+                NgramAnnotationStitchGenerator.cleanupDirectory(tempDateBySentencePathActual.toFile());
+            }
+        }
+    }
+
+    @Test
+    void testGenerateStitchIndex_NoNgrams() throws IOException, IndexAccessException {
+        // No N-grams populated
+        // Populate source annotation (date) index
+        populateSourceIndex(dateSourcePath, "20230103", 1, 1, 15, 22);
+
+        // Create an empty temporary N-gram-by-sentence index
+        final IndexAccess tempBigramBySentenceIA = createTemporaryNgramBySentenceIndex(NgramType.BIGRAM, bigramSourcePath, tempBigramBySentencePath);
+        Path tempDateBySentencePathActual = tempBaseStitchGenPath.resolve("temp_" + AnnotationTypeSource.NER_DATE.getTypeIdentifier() + "_by_sentence");
+        final IndexAccess tempDateBySentenceIA = createTemporaryAnnotationBySentenceIndex(AnnotationTypeSource.NER_DATE, dateSourcePath, tempDateBySentencePathActual);
+
+        try {
+            try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(
+                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE)) {
+                generator.generateStitchIndex(tempBigramBySentenceIA, tempDateBySentenceIA);
+            }
+
+            try (IndexAccess stitchIA = createTestIndexAccess(stitchBigramDateOutputPath, "stitch_bigram_date_test_no_ngrams")) {
+                String searchKey = "any_ngram" + IndexAccess.DELIMITER + "20230103"; // Example key
+                assertFalse(stitchIA.get(IndexAccess.bytes(searchKey)).isPresent(), "Stitch key should NOT exist if no ngrams.");
+                // Also check if the database is empty or doesn't contain any relevant keys
+                try (org.iq80.leveldb.DBIterator iter = stitchIA.iterateFromFirst()) {
+                    assertFalse(iter.hasNext(), "Stitch index should be empty if no ngrams were present.");
+                }
+            }
+        } finally {
+            if (tempBigramBySentenceIA != null) {
+                 try { tempBigramBySentenceIA.close(); } catch (IndexAccessException ignored) {}
+                 NgramAnnotationStitchGenerator.cleanupDirectory(tempBigramBySentencePath.toFile());
+            }
+            if (tempDateBySentenceIA != null) {
+                try { tempDateBySentenceIA.close(); } catch (IndexAccessException ignored) {}
+                NgramAnnotationStitchGenerator.cleanupDirectory(tempDateBySentencePathActual.toFile());
+            }
+        }
+    }
+
+    @Test
+    void testGenerateStitchIndex_NoAnnotations() throws IOException, IndexAccessException {
+        // Populate source N-gram (bigram) index
+        populateSourceIndex(bigramSourcePath, "hello world", 1, 1, 0, 10);
+        // No annotations populated
+
+        final IndexAccess tempBigramBySentenceIA = createTemporaryNgramBySentenceIndex(NgramType.BIGRAM, bigramSourcePath, tempBigramBySentencePath);
+        // Create an empty temporary Annotation-by-sentence index
+        Path tempDateBySentencePathActual = tempBaseStitchGenPath.resolve("temp_" + AnnotationTypeSource.NER_DATE.getTypeIdentifier() + "_by_sentence");
+        final IndexAccess tempDateBySentenceIA = createTemporaryAnnotationBySentenceIndex(AnnotationTypeSource.NER_DATE, dateSourcePath, tempDateBySentencePathActual);
+
+        try {
+            try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(
+                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE)) {
+                generator.generateStitchIndex(tempBigramBySentenceIA, tempDateBySentenceIA);
+            }
+
+            try (IndexAccess stitchIA = createTestIndexAccess(stitchBigramDateOutputPath, "stitch_bigram_date_test_no_annotations")) {
+                String searchKey = "hello world" + IndexAccess.DELIMITER + "any_annotation"; // Example key
+                assertFalse(stitchIA.get(IndexAccess.bytes(searchKey)).isPresent(), "Stitch key should NOT exist if no annotations.");
+                try (org.iq80.leveldb.DBIterator iter = stitchIA.iterateFromFirst()) {
+                    assertFalse(iter.hasNext(), "Stitch index should be empty if no annotations were present.");
+                }
+            }
+        } finally {
+            if (tempBigramBySentenceIA != null) {
+                 try { tempBigramBySentenceIA.close(); } catch (IndexAccessException ignored) {}
+                 NgramAnnotationStitchGenerator.cleanupDirectory(tempBigramBySentencePath.toFile());
+            }
+            if (tempDateBySentenceIA != null) {
+                try { tempDateBySentenceIA.close(); } catch (IndexAccessException ignored) {}
+                NgramAnnotationStitchGenerator.cleanupDirectory(tempDateBySentencePathActual.toFile());
+            }
+        }
+    }
+
+    // TODO: More tests:
+    // - Different NgramTypes (UNIGRAM, TRIGRAM) with DATE annotation.
+    // - BIGRAM with NER annotation.
+    // - BIGRAM with POS annotation.
+    // - Multiple N-grams in one sentence, one annotation -> multiple stitch entries.
+    // - One N-gram, multiple annotations in one sentence -> multiple stitch entries.
+    // - Multiple N-grams and multiple annotations in one sentence -> cross-product.
+    // - Data spanning multiple documents.
+    // - Correct aggregation in PositionListSoA if the same stitch key appears due to different original sentences
+    //   (e.g., "bigramX<D>dateY" found in sent1 and sent2 -> final PLS should have positions from both for bigramX).
+    // - Empty source N-gram index AND empty source annotation index.
+    // - Ensure tempAnnotationBySentencePath is cleaned up even if generateStitchIndex throws an exception. (Tricky with try-with-resources for generator)
+    // - Test with special characters in terms (requires robust TermOccurrenceInSentence serialization if not already handled).
+}

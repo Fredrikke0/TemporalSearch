@@ -42,7 +42,7 @@ public class LevelDBBrowser {
     private static final String ANNOTATION_SYNONYMS_PREFIX = "%s_synonyms.ser";
     private static final String[] ANNOTATION_TYPES = {"date", "ner", "pos", "dependency"};
     private static final List<String> ALL_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
-        "unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "hypernym", "stitch", "nash"
+        "unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "hypernym", "stitch", "nash", "stitch_bigram_date"
     ));
 
     public static void main(String[] args) throws IOException {
@@ -362,9 +362,10 @@ public class LevelDBBrowser {
         if (indexType.equals("dependency")) {
             String[] parts = key.split(DELIMITER);
             return parts.length == 3 ? String.format("%s-%s->%s", parts[0], parts[1], parts[2]) : key;
-        } else if (indexType.equals("bigram") || indexType.equals("trigram")) {
+        } else if (indexType.equals("bigram") || indexType.equals("trigram") || indexType.equals("stitch_bigram_date")) {
             // Replace the null delimiter with a space for readability
-            return key.replace(DELIMITER, " ");
+            // For stitch_bigram_date, it could be " <DELIMITER_CHAR_VISUAL> " or similar for clarity
+            return key.replace(DELIMITER, " <STITCH> "); // Using a more specific visual for this stitch type
         }
         return key;
     }

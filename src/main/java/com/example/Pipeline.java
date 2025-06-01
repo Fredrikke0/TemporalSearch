@@ -109,9 +109,10 @@ public class Pipeline {
                 .help("Number of documents to fetch from DB at a time by an index generator. Critical for memory usage of complex indexes like 'stitch'.");
 
         indexGroup.addArgument("-y", "--index-type")
-                .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "stitch", "nash", "all") // Added 'nash'
+                .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash", "all", "stitches")
                 .setDefault("all")
-                .help("Type of index to generate: " +
+                .nargs("+") // Allow multiple values
+                .help("Type of index to generate (can specify multiple, space-separated): " +
                       "unigram - Single word index; " +
                       "bigram - Two word phrases; " +
                       "trigram - Three word phrases; " +
@@ -120,8 +121,8 @@ public class Pipeline {
                       "ner - Named entity recognition; " +
                       "pos - Part-of-speech tagging; " +
                       "hypernym - Word hypernyms; " +
-                      "stitch - Connects unigrams with their associated dates; " +
                       "nash - Efficient index for searching for dates; " +
+                      "stitches - Generates all N-gram/Annotation stitch combinations (e.g., bigram-date, unigram-ner, etc.); " +
                       "all - Generate all available index types");
 
         indexGroup.addArgument("--custom-temp-dir")
@@ -151,8 +152,10 @@ public class Pipeline {
         Integer limit = ns.getInt("limit");
         Integer cliStartDocId = ns.get("cli_start_doc_id");
 
-        logger.info("Starting Pipeline for project '{}' (DB: '{}', Index Dir: '{}', Stage: {})",
-                    projectName, projectDbPath, indexDirPath, stage);
+        java.util.List<String> indexTypes = ns.getList("index_type"); // Get list of index types
+
+        logger.info("Starting Pipeline for project '{}' (DB: '{}', Index Dir: '{}', Stage: {}, Index Types: {})",
+                    projectName, projectDbPath, indexDirPath, stage, indexTypes);
 
         // --- Project Initialization & Validation ---
 
@@ -223,7 +226,22 @@ public class Pipeline {
         if (stage.equals("all") || stage.equals("index")) {
             logger.info("--- Indexing Stage ---");
             logger.debug("About to run indexing on DB: {}", projectDbPath.toAbsolutePath());
-            String indexType = ns.getString("index_type");
+            java.util.List<String> requestedIndexTypes = ns.getList("index_type");
+            java.util.Set<String> effectiveIndexTypes = new java.util.HashSet<>();
+
+            if (requestedIndexTypes.contains("all")) {
+                effectiveIndexTypes.addAll(java.util.List.of("unigram", "bigram", "trigram", "dependency", "hypernym", "ner_date", "pos", "ner", "nash"));
+                if (requestedIndexTypes.contains("stitches")) {
+                    effectiveIndexTypes.add("stitches");
+                    effectiveIndexTypes.addAll(java.util.List.of("unigram", "bigram", "trigram", "pos", "ner", "ner_date"));
+                }
+            } else {
+                effectiveIndexTypes.addAll(requestedIndexTypes);
+                if (requestedIndexTypes.contains("stitches")) {
+                    effectiveIndexTypes.addAll(java.util.List.of("unigram", "bigram", "trigram", "pos", "ner", "ner_date"));
+                }
+            }
+
             String stopwordsPath = ns.getString("stopwords");
             int indexBatchSize = ns.getInt("idx_batch_size");
             String customTempDirArg = ns.getString("custom_temp_dir");
@@ -233,11 +251,9 @@ public class Pipeline {
                 effectiveCustomTempDirStr = customTempDirArg;
                 logger.info("Using user-provided custom temporary directory: {}", effectiveCustomTempDirStr);
             } else {
-                Path defaultTempPath = indexBasePath.resolve("temp"); // temp dir inside 'indexes' directory
+                Path defaultTempPath = indexBasePath.resolve("temp");
                 effectiveCustomTempDirStr = defaultTempPath.toString();
                 logger.info("Using default temporary directory for indexing: {}", effectiveCustomTempDirStr);
-                // IndexRunner (or other components) will need to create this path if it doesn't exist if they manage temp dirs.
-                // Or, create it here:
                 Path defaultTempDir = Path.of(effectiveCustomTempDirStr);
                 if (!Files.exists(defaultTempDir)) {
                     Files.createDirectories(defaultTempDir);
@@ -245,89 +261,73 @@ public class Pipeline {
                 }
             }
 
-            // Determine the specific index directory path
-            Path specificIndexDir = indexBasePath.resolve(indexType.equals("all") ? "" : indexType); // Base path if 'all'
+            if (force) {
+                 logger.info("--force specified. Indexing will proceed and overwrite existing data. Cleanup handled by Pipeline before calling IndexRunner.");
 
-             // Check if the specific index type needs processing
-            boolean needsIndexing = true; // Assume yes unless we check
-            if (!force) {
-                if (indexType.equals("all")) {
-                    logger.info("Index type 'all' selected without --force. Existing individual indexes might be regenerated by the indexer if it doesn't skip internally.");
-                    needsIndexing = true; // Proceed with the call
-                } else {
-                    if (Files.exists(specificIndexDir)) {
-                       logger.info("Index directory for type '{}' already exists: '{}'. Skipping. Use --force to regenerate.", indexType, specificIndexDir.toAbsolutePath());
-                       needsIndexing = false;
-                    } else {
-                       logger.info("Index directory for type '{}' does not exist. Proceeding with generation.", indexType);
-                       needsIndexing = true;
-                    }
-                }
-            } else {
-                 logger.info("--force specified. Indexing will proceed and overwrite existing data.");
-                 needsIndexing = true;
-                 if (!indexType.equals("all") && Files.exists(specificIndexDir)) {
-                     logger.warn("Deleting existing index directory due to --force: {}", specificIndexDir.toAbsolutePath());
-                     try (Stream<Path> walk = Files.walk(specificIndexDir)) {
-                         walk.sorted((a, b) -> b.compareTo(a)) // Reverse order for deletion
-                             .forEach(path -> {
-                                 try {
-                                     Files.deleteIfExists(path);
-                                 } catch (IOException e) {
-                                     logger.error("Could not delete path '{}': {}", path.toAbsolutePath(), e.getMessage(), e);
-                                 }
-                             });
-                         logger.info("Successfully deleted existing index directory: {}", specificIndexDir.toAbsolutePath());
-                     } catch (IOException e) {
-                          logger.error("Error walking directory tree for deletion '{}': {}", specificIndexDir.toAbsolutePath(), e.getMessage(), e);
-                          throw new IOException("Failed to delete existing index directory before forced regeneration: " + specificIndexDir.toAbsolutePath(), e);
-                     }
-                 } else if (indexType.equals("all") && Files.exists(indexBasePath)) {
-                     logger.warn("Deleting all contents of index base directory due to --force: {}", indexBasePath.toAbsolutePath());
-                     try (Stream<Path> walk = Files.list(indexBasePath)) { // Only list immediate children
-                          walk.forEach(path -> {
-                              try {
-                                  if (Files.isDirectory(path)) {
-                                       try (Stream<Path> subWalk = Files.walk(path)) {
-                                            subWalk.sorted((a, b) -> b.compareTo(a))
-                                                 .forEach(subPath -> {
-                                                     try { Files.deleteIfExists(subPath); }
-                                                     catch (IOException e) { logger.error("Could not delete path '{}': {}", subPath.toAbsolutePath(), e.getMessage(), e); }
-                                                 });
-                                       }
-                                  } else {
-                                      Files.deleteIfExists(path); // Delete files directly
-                                  }
-                                  logger.info("Deleted existing index artifact: {}", path.toAbsolutePath());
-                              } catch (IOException e) {
-                                  logger.error("Could not delete path '{}': {}", path.toAbsolutePath(), e.getMessage(), e);
-                              }
-                          });
-                          logger.info("Successfully deleted contents of index base directory: {}", indexBasePath.toAbsolutePath());
-                     } catch (IOException e) {
-                         logger.error("Error clearing index base directory '{}': {}", indexBasePath.toAbsolutePath(), e.getMessage(), e);
-                         throw new IOException("Failed to clear index base directory before forced 'all' regeneration: " + indexBasePath.toAbsolutePath(), e);
+                 if (requestedIndexTypes.contains("all")) {
+                     logger.warn("Deleting all contents of index base directory due to --force and 'all' type: {}", indexBasePath.toAbsolutePath());
+                     deleteDirectoryRecursively(indexBasePath);
+                     Files.createDirectories(indexBasePath);
+                 } else {
+                     for (String typeToClean : effectiveIndexTypes) {
+                         if (typeToClean.equalsIgnoreCase("stitches")) {
+                            logger.warn("--force specified for stitches. Deleting all potential stitch output directories and temp_stitch_gen directory.");
+                            for (com.example.index.NgramType nt : com.example.index.NgramType.values()) {
+                                for (com.example.index.AnnotationTypeSource ats : com.example.index.AnnotationTypeSource.values()) {
+                                    String dirName = "stitch_" + nt.name().toLowerCase() + "_" + ats.getTypeIdentifier();
+                                    Path dirToDelete = indexBasePath.resolve(dirName);
+                                    deleteDirectoryRecursively(dirToDelete);
+                                }
+                            }
+                            Path tempStitchGenDir = indexBasePath.resolve("temp_stitch_gen");
+                            deleteDirectoryRecursively(tempStitchGenDir);
+                         } else {
+                             Path specificIndexDirToClean = indexBasePath.resolve(typeToClean);
+                             if (Files.exists(specificIndexDirToClean)) {
+                                 logger.warn("Deleting existing index directory due to --force: {}", specificIndexDirToClean.toAbsolutePath());
+                                 deleteDirectoryRecursively(specificIndexDirToClean);
+                             }
+                         }
                      }
                  }
+            } else {
+                logger.info("Pipeline called without --force. IndexRunner will check individual index directories for existence and decide whether to generate/skip.");
             }
 
-
-            if (needsIndexing) {
-                 logger.info("Running Indexer (type={}, stopwords='{}', batchSize={}, customTempDir='{}')",
-                             indexType, stopwordsPath, indexBatchSize, effectiveCustomTempDirStr);
-                 IndexRunner.runIndexing(
-                     projectDbPath.toString(),
-                     indexBasePath.toString(), // Pass base index dir
-                     stopwordsPath,
-                     indexBatchSize, // Pass specific index batch size
-                     indexType, // Pass specific type ('all' or single)
-                     effectiveCustomTempDirStr, // Pass the effective custom temp dir path
-                     force // Pass the force flag
-                 );
-                 logger.info("Indexing stage completed.");
-            }
+            logger.info("Calling Indexer (types={}, stopwords='{}', batchSize={}, customTempDir='{}', force={})",
+                        new java.util.ArrayList<>(effectiveIndexTypes), stopwordsPath, indexBatchSize, effectiveCustomTempDirStr, force);
+            IndexRunner.runIndexing(
+                projectDbPath.toString(),
+                indexBasePath.toString(),
+                stopwordsPath,
+                indexBatchSize,
+                new java.util.ArrayList<>(effectiveIndexTypes),
+                effectiveCustomTempDirStr,
+                force
+            );
+            logger.info("Indexing stage completed.");
         }
 
         logger.info("Pipeline completed successfully for project '{}'!", projectName);
+    }
+
+    // Helper method to delete directories recursively
+    private static void deleteDirectoryRecursively(Path path) throws IOException {
+        if (Files.exists(path)) { // Check if path exists before attempting to delete
+            if (Files.isDirectory(path)) {
+                try (Stream<Path> walk = Files.walk(path)) {
+                    walk.sorted((a, b) -> b.compareTo(a))
+                        .forEach(subPath -> {
+                            try { Files.deleteIfExists(subPath); }
+                            catch (IOException e) { logger.error("Could not delete path '{}': {}", subPath.toAbsolutePath(), e.getMessage(), e); }
+                        });
+                }
+            } else {
+                Files.deleteIfExists(path);
+            }
+            logger.debug("Successfully deleted: {}", path.toAbsolutePath());
+        } else {
+            logger.trace("Path to delete does not exist, skipping deletion: {}", path.toAbsolutePath());
+        }
     }
 }

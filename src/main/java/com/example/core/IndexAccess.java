@@ -59,7 +59,7 @@ public class IndexAccess implements IndexAccessInterface {
 
             // Initialize LevelDB
             this.db = factory.open(indexDir, options);
-            logger.info("Initialized IndexAccess for type {} at {}", indexType, indexPath);
+            logger.debug("Initialized IndexAccess for type {} at {}", indexType, indexPath);
 
         } catch (IOException e) {
             throw new IndexAccessException(
@@ -266,11 +266,11 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     // Utility methods
-    protected static byte[] bytes(String str) {
+    public static byte[] bytes(String str) {
         return str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
-    protected static String asString(byte[] bytes) {
+    public static String asString(byte[] bytes) {
         return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
     }
 
