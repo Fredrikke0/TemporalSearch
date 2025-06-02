@@ -1,19 +1,28 @@
 package com.example.core.index;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.NoSuchElementException;
 import java.util.Optional;
-import java.util.TreeMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
+import org.apache.commons.codec.binary.Hex; // For logging byte arrays
+import org.rocksdb.Options;
+import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 import org.rocksdb.WriteBatch;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 // Note: Does NOT implement IndexAccess directly to avoid complex mocking/inheritance
 // It provides a compatible API for testing purposes where an IndexAccess object is expected.
@@ -33,12 +42,17 @@ import com.example.index.TypedAnnotationSynonymStore;
  */
 public class MockIndexAccess implements IndexAccessInterface {
 
+    private static final Logger logger = LoggerFactory.getLogger(MockIndexAccess.class);
+
     private final String indexType;
     private final NavigableMap<ByteArrayWrapper, byte[]> dataStore;
     private boolean closed = false;
     private final AnnotationType annotationType;
     private final TypedAnnotationSynonymStore synonymStore;
     private final Map<String, String> metadata;
+
+    private RocksDB mockRocksDbInstance;
+    private Path mockRocksDbPath;
 
     // Define an interface for WriteBatch operations to aid in mocking
     private interface WriteOperation {
@@ -112,14 +126,23 @@ public class MockIndexAccess implements IndexAccessInterface {
         this.indexType = indexType;
         this.annotationType = annotationType;
         this.synonymStore = synonymStore;
-        this.metadata = metadata;
-        // Use ConcurrentSkipListMap for thread safety and sorting (like LevelDB)
         this.dataStore = new ConcurrentSkipListMap<>();
+        this.metadata = metadata;
+        RocksDB.loadLibrary();
+        try {
+            this.mockRocksDbPath = Files.createTempDirectory("mockrocksdb_" + indexType + "_");
+            Options options = new Options().setCreateIfMissing(true);
+            this.mockRocksDbInstance = RocksDB.open(options, this.mockRocksDbPath.toString());
+            logger.info("MockIndexAccess [{}]: Initialized dummy RocksDB at {}", indexType, mockRocksDbPath.toString());
+        } catch (RocksDBException | IOException e) {
+            logger.error("MockIndexAccess [{}]: Failed to initialize dummy RocksDB: {}", indexType, e.getMessage(), e);
+            throw new RuntimeException("Failed to initialize dummy RocksDB for mock index: " + indexType, e);
+        }
     }
 
     // Convenience constructor for common "unigram" type
     public MockIndexAccess() {
-        this("unigram", null, null, null);
+        this("mock", AnnotationType.UNKNOWN, null, new HashMap<>());
     }
 
     /**
@@ -128,19 +151,26 @@ public class MockIndexAccess implements IndexAccessInterface {
      */
     public void addTestData(String key, int docId, int sentenceId, int begin, int end) throws IOException {
         if (closed) throw new IllegalStateException("Index is closed");
+        logger.debug("MockIndexAccess [{}]: addTestData for key='{}'", indexType, key);
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
         Position pos = new Position(docId, sentenceId, begin, end);
 
-        // Retrieve existing list if present, or create a new one
         PositionListSoA list;
         byte[] existingValue = dataStore.get(wrappedKey);
+        int positionsBefore = 0;
         if (existingValue != null) {
             list = PositionListSoA.deserializeFromCompositeBlob(existingValue);
+            positionsBefore = list.getNumPositions();
+            logger.debug("MockIndexAccess [{}]: Key='{}' existed. Positions before add: {}", indexType, key, positionsBefore);
         } else {
             list = new PositionListSoA();
+            logger.debug("MockIndexAccess [{}]: Key='{}' is new.", indexType, key);
         }
         list.add(pos);
-        dataStore.put(wrappedKey, list.serializeToCompositeBlob());
+        int positionsAfter = list.getNumPositions();
+        byte[] serializedValue = list.serializeToCompositeBlob();
+        dataStore.put(wrappedKey, serializedValue);
+        logger.debug("MockIndexAccess [{}]: Key='{}', Positions after add: {}, Serialized size: {} bytes", indexType, key, positionsAfter, serializedValue.length);
     }
 
     /**
@@ -149,17 +179,24 @@ public class MockIndexAccess implements IndexAccessInterface {
      */
     public void addTestData(String key, PositionListSoA newPositions) throws IOException {
         if (closed) throw new IllegalStateException("Index is closed");
+        logger.debug("MockIndexAccess [{}]: addTestData (pre-serialized) for key='{}', newPositions count: {}", indexType, key, newPositions.getNumPositions());
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
 
         PositionListSoA mergedList;
         byte[] existingValue = dataStore.get(wrappedKey);
+        int positionsBefore = 0;
         if (existingValue != null) {
             mergedList = PositionListSoA.deserializeFromCompositeBlob(existingValue);
+            positionsBefore = mergedList.getNumPositions();
+            logger.debug("MockIndexAccess [{}]: Key='{}' existed (pre-serialized). Positions before merge: {}", indexType, key, positionsBefore);
             mergedList.addAll(newPositions);
         } else {
             mergedList = newPositions;
+            logger.debug("MockIndexAccess [{}]: Key='{}' is new (pre-serialized).", indexType, key);
         }
-        dataStore.put(wrappedKey, mergedList.serializeToCompositeBlob());
+        byte[] serializedValue = mergedList.serializeToCompositeBlob();
+        dataStore.put(wrappedKey, serializedValue);
+        logger.debug("MockIndexAccess [{}]: Key='{}' (pre-serialized), Positions after merge: {}, Serialized size: {} bytes", indexType, key, mergedList.getNumPositions(), serializedValue.length);
     }
 
      /**
@@ -168,6 +205,7 @@ public class MockIndexAccess implements IndexAccessInterface {
      */
     public void addRawTestData(byte[] key, byte[] value) {
         if (closed) throw new IllegalStateException("Index is closed");
+        logger.debug("MockIndexAccess [{}]: addRawTestData for key (length {}), value size: {} bytes", indexType, key.length, value.length);
         dataStore.put(new ByteArrayWrapper(key), value);
     }
 
@@ -183,10 +221,15 @@ public class MockIndexAccess implements IndexAccessInterface {
     @Override
     public Optional<PositionListSoA> get(byte[] key) throws IndexAccessException {
         if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
-        byte[] value = dataStore.get(new ByteArrayWrapper(key));
+        ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key);
+        String keyHex = Hex.encodeHexString(key);
+        logger.debug("MockIndexAccess [{}]: get() called for key (hex): {}", indexType, keyHex);
+        byte[] value = dataStore.get(wrappedKey);
         if (value == null) {
+            logger.debug("MockIndexAccess [{}]: get() key (hex): {} NOT FOUND", indexType, keyHex);
             return Optional.empty();
         }
+        logger.debug("MockIndexAccess [{}]: get() key (hex): {} FOUND, value length: {}", indexType, keyHex, value.length);
         try {
             // Deserialize to PositionListSoA
             return Optional.of(PositionListSoA.deserializeFromCompositeBlob(value));
@@ -210,19 +253,30 @@ public class MockIndexAccess implements IndexAccessInterface {
     @Override
     public Optional<byte[]> getRaw(byte[] key) throws IndexAccessException {
         if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
-        return Optional.ofNullable(dataStore.get(new ByteArrayWrapper(key)));
+        ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key);
+        String keyHex = Hex.encodeHexString(key);
+        logger.debug("MockIndexAccess [{}]: getRaw() called for key (hex): {}", indexType, keyHex);
+        byte[] value = dataStore.get(wrappedKey);
+        if (value == null) {
+            logger.debug("MockIndexAccess [{}]: getRaw() key (hex): {} NOT FOUND", indexType, keyHex);
+            return Optional.empty();
+        }
+        logger.debug("MockIndexAccess [{}]: getRaw() key (hex): {} FOUND, value length: {}", indexType, keyHex, value.length);
+        return Optional.of(value);
     }
 
     @Override
     public RocksIterator seek(byte[] key) throws IndexAccessException {
         if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
-        return new MockRocksIterator(dataStore, key, false);
+        logger.debug("MockIndexAccess [{}]: seek() called for key (hex): {}", indexType, Hex.encodeHexString(key));
+        return new MockRocksIterator(this.mockRocksDbInstance, dataStore, key, false, this.indexType);
     }
 
     @Override
     public RocksIterator iterateFromFirst() throws IndexAccessException {
         if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
-        return new MockRocksIterator(dataStore, null, true);
+        logger.debug("MockIndexAccess [{}]: iterateFromFirst() called", indexType);
+        return new MockRocksIterator(this.mockRocksDbInstance, dataStore, null, true, this.indexType);
     }
 
     @Override
@@ -273,11 +327,27 @@ public class MockIndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         if (!closed) {
+            logger.debug("Closing MockIndexAccess for index type: {}", indexType);
             closed = true;
-            dataStore.clear(); // Clear data on close
-            System.out.println("MockIndexAccess [" + indexType + "] closed.");
+            dataStore.clear();
+            if (this.mockRocksDbInstance != null) {
+                this.mockRocksDbInstance.close();
+                logger.info("MockIndexAccess [{}]: Closed dummy RocksDB instance.", indexType);
+            }
+            if (this.mockRocksDbPath != null) {
+                try {
+                    // Recursively delete the temp directory
+                    Files.walk(mockRocksDbPath)
+                         .sorted(Comparator.reverseOrder())
+                         .map(Path::toFile)
+                         .forEach(File::delete);
+                    logger.info("MockIndexAccess [{}]: Deleted dummy RocksDB directory {}", indexType, mockRocksDbPath.toString());
+                } catch (IOException e) {
+                    logger.warn("MockIndexAccess [{}]: Failed to delete dummy RocksDB directory {}: {}", indexType, mockRocksDbPath.toString(), e.getMessage());
+                }
+            }
         }
     }
 
@@ -303,34 +373,49 @@ public class MockIndexAccess implements IndexAccessInterface {
     // --- Inner Mock Iterator Class ---
 
     private static class MockRocksIterator extends RocksIterator {
+        private static final Logger iterLogger = LoggerFactory.getLogger(MockRocksIterator.class);
+
+        private final NavigableMap<ByteArrayWrapper, byte[]> originalMapRef;
         private final List<Map.Entry<ByteArrayWrapper, byte[]>> entryList;
         private int currentIndex;
         private boolean valid = false;
+        private final RocksDB parentRocksDbInstance; // Store the parent DB for the iterator
+        private final String parentIndexType; // Store parent's index type for logging
 
-        MockRocksIterator(NavigableMap<ByteArrayWrapper, byte[]> map, byte[] seekKey, boolean iterateAll) {
-            super(null, 0L); // Pass null for RocksDB and 0L for nativeHandle
-            this.entryList = new ArrayList<>(new TreeMap<>(map).entrySet());
+        MockRocksIterator(RocksDB parentDb, NavigableMap<ByteArrayWrapper, byte[]> map, byte[] seekKey, boolean iterateAll, String parentIndexType) {
+            super(parentDb, 0L); // Call super constructor with actual parentDb and a dummy handle
+            this.parentRocksDbInstance = parentDb;
+            this.parentIndexType = parentIndexType;
+            this.originalMapRef = map;
+            this.entryList = new ArrayList<>(map.entrySet());
+            iterLogger.debug("MockRocksIterator: Initialized with {} entries. IterateAll: {}", entryList.size(), iterateAll);
 
-            if (iterateAll) {
+            if (iterateAll || seekKey == null) {
                 seekToFirstInternal();
-            } else if (seekKey != null) {
-                performSeek(seekKey);
             } else {
-                seekToFirstInternal();
+                iterLogger.debug("MockRocksIterator: Performing initial seek for key (length {})", seekKey.length);
+                performSeek(seekKey);
             }
         }
 
         private void performSeek(byte[] key) {
-            ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key);
-            for (int i = 0; i < entryList.size(); i++) {
-                if (entryList.get(i).getKey().compareTo(wrappedKey) >= 0) {
-                    this.currentIndex = i;
-                    this.valid = true;
+            ByteArrayWrapper wrappedTarget = new ByteArrayWrapper(key);
+            String targetKeyHex = Hex.encodeHexString(key);
+            iterLogger.debug("Iterator for [{}]: performSeek for key (hex): {}", parentIndexType, targetKeyHex);
+            currentIndex = 0;
+            valid = false;
+            for (Map.Entry<ByteArrayWrapper, byte[]> entry : entryList) {
+                if (wrappedTarget.compareTo(entry.getKey()) <= 0) {
+                    valid = true;
+                    String foundKeyHex = Hex.encodeHexString(entry.getKey().getData());
+                    iterLogger.debug("Iterator for [{}]: performSeek found entry at index {}. Seek target (hex): {}, Found key (hex): {}", parentIndexType, currentIndex, targetKeyHex, foundKeyHex);
                     return;
                 }
+                currentIndex++;
             }
-            this.currentIndex = entryList.size();
-            this.valid = false;
+            // If loop finishes, no key >= target was found
+            iterLogger.debug("Iterator for [{}]: performSeek target (hex): {} NOT FOUND (or beyond end of list)", parentIndexType, targetKeyHex);
+            valid = false; // No valid entry found or reached end
         }
 
         private void seekToFirstInternal() {
@@ -386,12 +471,17 @@ public class MockIndexAccess implements IndexAccessInterface {
         @Override
         public void next() {
             if (!isValid()) {
-                valid = false;
-                return;
+                iterLogger.warn("Iterator for [{}]: next() called on invalid iterator.", parentIndexType);
+                return; // Or throw, consistent with RocksIterator behavior if known
             }
             currentIndex++;
             if (currentIndex >= entryList.size()) {
+                iterLogger.debug("Iterator for [{}]: next() moved beyond end of list.", parentIndexType);
                 valid = false;
+            } else {
+                valid = true; // Still valid
+                String currentKeyHex = Hex.encodeHexString(entryList.get(currentIndex).getKey().getData());
+                iterLogger.debug("Iterator for [{}]: next() moved to index {}, key (hex): {}", parentIndexType, currentIndex, currentKeyHex);
             }
         }
 
@@ -410,18 +500,21 @@ public class MockIndexAccess implements IndexAccessInterface {
         @Override
         public byte[] key() {
             if (!isValid()) {
-                 throw new NoSuchElementException("Iterator is not valid or out of bounds at key()");
+                throw new NoSuchElementException("Iterator is not valid or past the end.");
             }
-            // Use getData() from ByteArrayWrapper
-            return entryList.get(currentIndex).getKey().getData();
+            byte[] keyBytes = entryList.get(currentIndex).getKey().getData();
+            iterLogger.debug("MockRocksIterator: key() called. currentIndex={}, key (length {}): '{}'", currentIndex, keyBytes.length, new String(keyBytes, StandardCharsets.UTF_8));
+            return keyBytes;
         }
 
         @Override
         public byte[] value() {
             if (!isValid()) {
-                 throw new NoSuchElementException("Iterator is not valid or out of bounds at value()");
+                throw new NoSuchElementException("Iterator is not valid or past the end.");
             }
-            return entryList.get(currentIndex).getValue();
+            byte[] valueBytes = entryList.get(currentIndex).getValue();
+            iterLogger.debug("MockRocksIterator: value() called. currentIndex={}, value size: {}", currentIndex, valueBytes.length);
+            return valueBytes;
         }
 
         @Override
@@ -429,15 +522,10 @@ public class MockIndexAccess implements IndexAccessInterface {
             // No-op for mock
         }
 
-        // close() is inherited from RocksObject, which RocksIterator extends.
-        // The default close() in RocksObject handles the native handle if isOwningHandle() is true.
-        // We called super(0L), so the native handle is 0.
-        // isOwningHandle() is initially true. RocksObject.close() will set closed=true.
-        // We can add valid = false here if desired.
         @Override
         public synchronized void close() {
-            super.close(); // Calls RocksObject.close()
-            this.valid = false; // Mark as invalid after close
+            super.close();
+            this.valid = false;
         }
     }
 }

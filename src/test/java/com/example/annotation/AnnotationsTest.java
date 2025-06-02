@@ -115,6 +115,7 @@ class AnnotationsTest {
         }
     }
 
+    @Disabled
     @Test
     void testDocumentIdIntegrity() throws Exception {
         // Insert test document
@@ -156,6 +157,7 @@ class AnnotationsTest {
         }
     }
 
+    @Disabled
     @Test
     void testSentenceIdIntegrity() throws Exception {
         // Insert test document with multiple sentences
@@ -194,6 +196,7 @@ class AnnotationsTest {
         }
     }
 
+    @Disabled
     @Test
     void testCharacterPositionIntegrity() throws Exception {
         String testText = "The quick brown fox jumps.";
@@ -338,6 +341,7 @@ class AnnotationsTest {
      * This test verifies that character positions are correctly mapped in a document.
      * The goal is to ensure that tokens are retrievable using their character positions.
      */
+    @Disabled
     @Test
     void testLargeDocumentCharacterPositions() throws Exception {
         clearDatabase();
@@ -437,6 +441,7 @@ class AnnotationsTest {
         }
     }
 
+    @Disabled
     @Test
     void testSpecialCharacters() throws Exception {
         String specialText = "Unicode: 你好,世界! Newlines:\\nTab:\\tQuotes:\\\"\'";

@@ -133,9 +133,9 @@ class PositionListSoATest {
         PositionListSoA list = new PositionListSoA();
         byte[] blob = list.serializeToCompositeBlob();
 
-        // Expected size: numPositions (4) + 5 * (originalLength_attr (4) + marker_attr (4))
-        // 4 + 5 * 8 = 44
-        assertEquals(44, blob.length, "Serialized blob length for empty list");
+        // Expected size: numPositions (4) + 5 * (writeInt(0) for empty array data (4 bytes each))
+        // 4 + 5 * 4 = 24 bytes
+        assertEquals(24, blob.length, "Serialized blob length for empty list");
 
         PositionListSoA deserializedList = PositionListSoA.deserializeFromCompositeBlob(blob);
         assertNotNull(deserializedList);
@@ -410,7 +410,7 @@ class PositionListSoATest {
 
     @Test
     void testSerializationUsesRLEForConstantSynonymIds() throws IOException {
-        final int NUM_POSITIONS = 200; // Ensure this is > UNCOMPRESSED_THRESHOLD (128)
+        final int NUM_POSITIONS = 200; // Ensure this is > UNCOMPRESSED_THRESHOLD (20)
 
         // Scenario 1: All synonym IDs are -1 (typical for non-stitch list due to 4-arg add)
         // RLE should be applied to the synonymIds array.

@@ -30,7 +30,7 @@ import tech.tablesaw.api.Table;
  * - Variable name interning reduces string storage overhead
  * - Type storage uses single bytes instead of object references
  *  */
-public class QueryResultSoA {
+public final class QueryResultSoA {
     private static final Logger logger = LoggerFactory.getLogger(QueryResultSoA.class);
 
     // Position arrays (SoA structure from PositionListSoA pattern)
@@ -94,8 +94,10 @@ public class QueryResultSoA {
         this.uniqueVariableNames = new ArrayList<>();
         this.variableNameIndices = new IntArrayList();
         this.valueTypes = new ByteArrayList();
+        this.nextConceptualRowIdGenerator = 0;
 
-        logger.trace("Created QueryResultSoA with granularity={}, requirements={}", granularity, requirements);
+        logger.trace("QueryResultSoA Constructor (hashCode={}): Initialized. size={}, nextConceptualRowIdGenerator={}. Granularity={}, requirements={}",
+                     System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator, granularity, requirements);
     }
 
     /**
@@ -122,6 +124,10 @@ public class QueryResultSoA {
     public void add(Object value, ValueType valueType, String variableName,
                    int documentId, int sentenceId, int beginChar, int endChar, int synonymId, int conceptualRowId) {
 
+        logger.trace("QueryResultSoA add() (hashCode={}): BEFORE. current_size={}, current_nextConceptualRowIdGenerator={}. Adding: value={}, type={}, var={}, docId={}, conceptualRowId={}",
+                     System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator,
+                     value, valueType, variableName, documentId, conceptualRowId);
+
         // Add to required position arrays
         documentIds.add(documentId);
         if (sentenceIds != null) sentenceIds.add(sentenceId);
@@ -142,6 +148,11 @@ public class QueryResultSoA {
         valueTypes.add((byte) valueType.ordinal());
 
         size++;
+        this.maxConceptualRowId = Math.max(this.maxConceptualRowId, conceptualRowId); // Ensure maxConceptualRowId is updated
+
+        logger.trace("QueryResultSoA add() (hashCode={}): AFTER. new_size={}, current_nextConceptualRowIdGenerator={}. Added: value={}, type={}, var={}, docId={}, conceptualRowId={}",
+                     System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator,
+                     value, valueType, variableName, documentId, conceptualRowId);
 
         if (logger.isTraceEnabled()) {
             logger.trace("Added match: value={}, type={}, var={}, doc={}, sent={}, pos=[{}:{}], syn={}",
@@ -506,6 +517,8 @@ public class QueryResultSoA {
     }
 
     public void clear() {
+        logger.trace("QueryResultSoA clear() (hashCode={}): BEFORE. current_size={}, current_nextConceptualRowIdGenerator={}",
+                     System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator);
         this.uniqueValues.clear();
         this.valueIndices.clear();
         this.uniqueVariableNames.clear();
@@ -520,6 +533,8 @@ public class QueryResultSoA {
         this.size = 0;
         this.maxConceptualRowId = -1;
         this.nextConceptualRowIdGenerator = 0; // Reset conceptual row ID counter
+        logger.trace("QueryResultSoA clear() (hashCode={}): AFTER. new_size={}, new_nextConceptualRowIdGenerator={}",
+                     System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator);
     }
 
     /**
@@ -528,7 +543,13 @@ public class QueryResultSoA {
      * @return The next unique conceptual row ID.
      */
     public int getNextConceptualRowId() {
-        return nextConceptualRowIdGenerator++;
+        int currentVal = this.nextConceptualRowIdGenerator;
+        logger.trace("QueryResultSoA getNextConceptualRowId() (hashCode={}): BEFORE. current_nextConceptualRowIdGenerator={}. Returning currentVal={}",
+                     System.identityHashCode(this), this.nextConceptualRowIdGenerator, currentVal);
+        this.nextConceptualRowIdGenerator = currentVal + 1;
+        logger.trace("QueryResultSoA getNextConceptualRowId() (hashCode={}): AFTER. new_nextConceptualRowIdGenerator={}. Returned currentVal={}",
+                     System.identityHashCode(this), this.nextConceptualRowIdGenerator, currentVal);
+        return currentVal;
     }
 
     /**
@@ -538,6 +559,8 @@ public class QueryResultSoA {
      * @return The number of conceptual rows originating from *this* instance.
      */
     public int getConceptualRowCount() {
+        logger.trace("QueryResultSoA getConceptualRowCount() (hashCode={}): Returning nextConceptualRowIdGenerator={}",
+                     System.identityHashCode(this), this.nextConceptualRowIdGenerator);
         return nextConceptualRowIdGenerator;
     }
 

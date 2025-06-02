@@ -56,7 +56,7 @@ public class IndexAccess implements IndexAccessInterface {
                 }
             }
             this.db = RocksDB.open(options, indexDir.getAbsolutePath());
-            logger.debug("Initialized IndexAccess for type {} at {}", indexType, this.indexPath);
+            //logger.debug("Initialized IndexAccess for type {} at {}", indexType, this.indexPath);
         } catch (RocksDBException e) {
             this.isOpen.set(false); // Ensure isOpen reflects the failure
             if(this.options != null) { // Attempt to close options if open failed
@@ -252,7 +252,7 @@ public class IndexAccess implements IndexAccessInterface {
     @Override
     public void close() throws IndexAccessException {
         if (isOpen.compareAndSet(true, false)) {
-            logger.debug("Closing IndexAccess for type {} at {}", indexType, indexPath);
+            //logger.debug("Closing IndexAccess for type {} at {}", indexType, indexPath);
             // RocksDB's own resources (like iterators, batches) should be closed by their users before closing the DB.
             // The DB should be closed before its associated Options object.
             try {

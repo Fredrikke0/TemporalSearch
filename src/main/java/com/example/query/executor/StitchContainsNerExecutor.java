@@ -121,10 +121,15 @@ public class StitchContainsNerExecutor {
                         );
 
                         // Add entry for NER part
+                        String nerVar = nerCondition.qualifiedVariableName();
+                        if (nerVar == null) {
+                            logger.warn("Null variable name for NER condition. Skipping.");
+                            continue;
+                        }
                         resultSoA.add(
                             parsedEntityText,
                             ValueType.ENTITY,
-                            nerCondition.variableName(),
+                            nerVar,
                             docId, sentenceId,
                             -1, -1, // Sentinel coordinates for stitched annotation
                             stitchedSynonymId,

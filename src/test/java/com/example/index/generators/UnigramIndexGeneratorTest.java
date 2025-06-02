@@ -213,15 +213,27 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         // The generator uses the IndexAccess instance passed in its constructor.
         generator.generateIndex();
 
-        // Close the generator to release its resources.
-        // The IndexAccess instance used by the generator is managed by the generator's close method.
+        // Close the generator to release its resources (like temp sort files).
+        // IndexGenerator.close() does NOT close the IndexAccessInterface it received.
         generator.close();
 
-        // For verification, we need a *new* IndexAccess instance for the *same path*.
-        // The previous this.indexAccess was passed to the generator and might be closed by generator.close().
-        // Let's re-initialize this.indexAccess for verification.
+        // Explicitly close the IndexAccess instance that was used by the generator
+        // to ensure the lock is released before verificationIA tries to open it.
+        if (this.indexAccess != null) {
+            this.indexAccess.close();
+        }
+
+        // For verification, we need a *new* IndexAccess instance for the *same path* as the original one.
+        // The original this.indexAccess was created with baseDir=this.indexBaseDir and indexName="unigram".
+        // So the database is at this.indexBaseDir.resolve("unigram").
+        // We need to open this exact path.
+        // The IndexAccess constructor IndexAccess(Path baseDir, String indexName, Options options)
+        // creates the DB at baseDir.resolve(indexName).
+        // So, to open the existing DB at this.indexBaseDir.resolve("unigram"),
+        // we should use this.indexBaseDir as the baseDir argument and "unigram" as the indexName argument.
+
         try (Options options = createTestOptions();
-             IndexAccess verificationIA = new IndexAccess(indexBaseDir.resolve("unigram"), "unigram", options)) {
+             IndexAccess verificationIA = new IndexAccess(this.indexBaseDir, "unigram", options)) {
             // Verify index contents
             var testPositions = verificationIA.get("test".getBytes());
             assertTrue(testPositions.isPresent(), "Expected positions for 'test'");

@@ -1,6 +1,7 @@
 package com.example.query.executor;
 
 import java.io.IOException;
+import java.time.LocalDate;
 import java.util.Map;
 import java.util.Optional;
 
@@ -43,20 +44,30 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                                AttributeRequirements requirements)
         throws QueryExecutionException {
 
-        logger.debug("Executing NER condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        logger.debug("Executing NER condition: {}, AttrReqs: {}", condition, requirements.getRequiredSoAAttributes());
 
         String entityType = condition.entityType();
         String normalizedEntityType = entityType.toUpperCase();
         boolean isVariable = condition.isVariable();
-        String variableName = condition.variableName();
+        String variableName = condition.qualifiedVariableName();
         String targetValue = condition.target(); // Can be null
 
         logger.debug("NER condition details: entityType='{}', target='{}', isVariable={}, variableName='{}'",
                      normalizedEntityType, targetValue, isVariable, variableName != null ? variableName : "(none)");
 
-        if ("*".equals(normalizedEntityType)) {
+        // Check for wildcards in entityType
+        if (normalizedEntityType.contains("*")) {
             throw new QueryExecutionException(
-                "Wildcard entity type (*) is not currently supported for execution.",
+                "Wildcard in entity type ('" + entityType + "') is not currently supported for execution.",
+                condition.toString(),
+                QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION
+            );
+        }
+
+        // Check for wildcards in targetValue
+        if (targetValue != null && targetValue.contains("*")) {
+            throw new QueryExecutionException(
+                "Wildcard in target value ('" + targetValue + "') is not currently supported for execution.",
                 condition.toString(),
                 QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION
             );
@@ -82,22 +93,19 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
         try {
             if (isVariable) {
-                // Handles NER(type, ?var) and NER(type, 'target', ?var)
-                // Value stored is the specific entity instance text.
+                logger.debug("NER path: Variable Extraction. Type='{}', TargetVal='{}', VarName='{}'", normalizedEntityType, targetValue, variableName);
                 conceptualRowsAdded = executeVariableExtractionOptimized(normalizedEntityType, targetValue, variableName, index, condition, requirements, resultSoA);
             } else {
                 if (targetValue != null) {
-                    // Handles NER(type, 'target')
-                    // Value stored is targetValue.
+                    logger.debug("NER path: Specific Entity Search. Type='{}', TargetVal='{}'", normalizedEntityType, targetValue);
                     conceptualRowsAdded = executeSpecificEntitySearchOptimized(normalizedEntityType, targetValue, index, condition, requirements, resultSoA);
                 } else {
-                    // Handles NER(type)
-                    // Value stored is normalizedEntityType.
+                    logger.debug("NER path: Entity Type Search. Type='{}'", normalizedEntityType);
                     conceptualRowsAdded = executeEntityTypeSearchOptimized(normalizedEntityType, index, condition, requirements, resultSoA);
                 }
             }
 
-            logger.debug("NER condition execution produced {} conceptual rows in QueryResultSoA", conceptualRowsAdded);
+            logger.debug("NER condition execution produced {} conceptual rows, total SoA size: {}", conceptualRowsAdded, resultSoA.size());
             return resultSoA;
 
         } catch (Exception e) {
@@ -114,23 +122,65 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
     }
 
     // For NER(type, 'targetText') -- non-variable
-    private int executeSpecificEntitySearchOptimized(String entityType, String targetValue, IndexAccessInterface index,
+    private int executeSpecificEntitySearchOptimized(String entityType, String targetValueFromQuery, IndexAccessInterface index,
                                                      Ner condition, AttributeRequirements requirements, QueryResultSoA resultSoA)
         throws IOException, IndexAccessException {
 
-        logger.debug("Searching for specific entity type '{}' with target '{}' into QueryResultSoA", entityType, targetValue);
         ValueType valueType = "DATE".equals(entityType) ? ValueType.DATE : ValueType.ENTITY;
-        String keyString = entityType.toUpperCase() + IndexAccessInterface.DELIMITER + targetValue;
-        byte[] keyBytes = keyString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        logger.debug("executeSpecificEntitySearchOptimized: Seeking for Type='{}', Target='{}' in index '{}'", entityType, targetValueFromQuery, index.getIndexType());
+
+        byte[] keyForIndexLookup;
+        String valueToStoreInSoa;
+
+        if (valueType == ValueType.DATE) {
+            LocalDate parsedDate = null;
+            try {
+                // Try parsing as yyyy-MM-dd first (more common user input)
+                parsedDate = LocalDate.parse(targetValueFromQuery, java.time.format.DateTimeFormatter.ISO_LOCAL_DATE);
+            } catch (java.time.format.DateTimeParseException e1) {
+                try {
+                    // Try parsing as yyyyMMdd if first attempt failed (index key format)
+                    parsedDate = LocalDate.parse(targetValueFromQuery, java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
+                } catch (java.time.format.DateTimeParseException e2) {
+                    logger.warn("DATE targetValue '{}' could not be parsed as yyyy-MM-dd or yyyyMMdd.", targetValueFromQuery);
+                }
+            }
+
+            if (parsedDate != null) {
+                // Key for ner_date_index should be yyyyMMdd
+                keyForIndexLookup = parsedDate.format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                // Value stored in SoA should be yyyy-MM-dd
+                valueToStoreInSoa = parsedDate.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE);
+            } else {
+                // Fallback: use targetValueFromQuery as is for lookup and storage if unparsable
+                keyForIndexLookup = targetValueFromQuery.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                valueToStoreInSoa = targetValueFromQuery;
+                logger.warn("Using target DATE value '{}' directly for lookup and storage due to parsing failure.", targetValueFromQuery);
+            }
+        } else { // ValueType.ENTITY
+            String normalizedTermForIndex = targetValueFromQuery.toLowerCase();
+            String keyString = entityType + IndexAccessInterface.DELIMITER + normalizedTermForIndex;
+            keyForIndexLookup = keyString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            valueToStoreInSoa = targetValueFromQuery; // Store original casing from query for ENTITY
+        }
+
+        logger.debug("executeSpecificEntitySearchOptimized: Effective key for index lookup: '{}', Value to store: '{}'",
+            new String(keyForIndexLookup, java.nio.charset.StandardCharsets.UTF_8), valueToStoreInSoa);
 
         int bindingsAdded = 0;
-        Optional<byte[]> rawBlobOptional = index.getRaw(keyBytes);
+        Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
+        logger.debug("executeSpecificEntitySearchOptimized: getRaw for key returned present: {}, blob length if present: {}",
+                     rawBlobOptional.isPresent(), rawBlobOptional.map(b -> b.length).orElse(-1));
 
         if (rawBlobOptional.isPresent()) {
             byte[] rawBlob = rawBlobOptional.get();
+            logger.debug("executeSpecificEntitySearchOptimized: Blob found. Attempting to get numPositions from blob.");
+            int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
+            logger.debug("executeSpecificEntitySearchOptimized: numPositions from blob: {}", numPositions);
+
             try {
-                int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
                 if (numPositions > 0) {
+                    int conceptualRowIdForThisEntity = resultSoA.getNextConceptualRowId();
                     IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
                     IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
                     IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
@@ -139,139 +189,161 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
                     for (int i = 0; i < numPositions; i++) {
                         resultSoA.add(
-                            targetValue, // Value is the specific target
+                            valueToStoreInSoa, // Use the (potentially formatted) value
                             valueType,
-                            null, // No variable name
+                            null, // No variable for specific entity search
                             docIds.getInt(i),
                             sentIds != null ? sentIds.getInt(i) : -1,
                             beginChars != null ? beginChars.getInt(i) : -1,
                             endChars != null ? endChars.getInt(i) : -1,
                             synonymIds != null ? synonymIds.getInt(i) : -1,
-                            bindingsAdded // This is conceptualRowId
+                            conceptualRowIdForThisEntity
+                        );
+                        bindingsAdded++;
+                    }
+                } else {
+                    logger.debug("executeSpecificEntitySearchOptimized: numPositions is 0, no positions to add.");
+                }
+            } catch (IOException e) {
+                logger.warn("IOException during selective deserialization for key, falling back to full deserialization: {}", e.getMessage());
+                PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
+                if (positionListSoA.getNumPositions() > 0) {
+                    int conceptualRowIdForThisEntity = resultSoA.getNextConceptualRowId();
+                    for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                         resultSoA.add(
+                            valueToStoreInSoa,
+                            valueType,
+                            null,
+                            positionListSoA.getDocIdAt(i),
+                            positionListSoA.getSentenceIdAt(i),
+                            positionListSoA.getBeginCharAt(i),
+                            positionListSoA.getEndCharAt(i),
+                            positionListSoA.getSynonymIdAt(i),
+                            conceptualRowIdForThisEntity
                         );
                         bindingsAdded++;
                     }
                 }
-            } catch (IOException e) {
-                logger.warn("IOException during selective deserialization for specific NER key '{}', falling back to full deserialization: {}",
-                           keyString, e.getMessage());
-                PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
-                for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
-                     resultSoA.add(
-                        targetValue,
-                        valueType,
-                        null,
-                        positionListSoA.getDocIdAt(i),
-                        positionListSoA.getSentenceIdAt(i),
-                        positionListSoA.getBeginCharAt(i),
-                        positionListSoA.getEndCharAt(i),
-                        positionListSoA.getSynonymIdAt(i),
-                        bindingsAdded
-                    );
-                    bindingsAdded++;
-                }
             } catch (Exception e) {
-                 logger.error("Error processing specific NER entry with key '{}': {}", keyString, e.getMessage(), e);
+                 logger.error("Error processing specific NER entry: {}", e.getMessage(), e);
             }
         }
-        logger.debug("Specific entity search for type '{}' target '{}' added {} bindings to QueryResultSoA", entityType, targetValue, bindingsAdded);
+        logger.debug("Specific entity search for Type '{}' Target '{}' added {} bindings to QueryResultSoA",
+            entityType, targetValueFromQuery, bindingsAdded);
         return bindingsAdded;
     }
 
     // For NER(type) BIND ?var  OR NER(type, 'target', ?var)
-    private int executeVariableExtractionOptimized(String entityType, String filterTargetValue, String variableName, IndexAccessInterface index,
-                                                  Ner condition, AttributeRequirements requirements, QueryResultSoA resultSoA)
+    private int executeVariableExtractionOptimized(String normalizedEntityTypeFromQuery, String filterTargetValue, String queryVariableName,
+                                                  IndexAccessInterface index, Ner condition,
+                                                  AttributeRequirements requirements, QueryResultSoA resultSoA)
         throws IOException, IndexAccessException {
 
         String filterTargetValueLower = (filterTargetValue != null) ? filterTargetValue.toLowerCase() : null;
+        // normalizedEntityTypeFromQuery is already .toUpperCase()
 
-        logger.debug("Extracting entities of type '{}'{}{} for variable '{}' into QueryResultSoA",
-            entityType,
-            (filterTargetValueLower != null ? " matching filter '" + filterTargetValueLower + "'" : ""),
-            variableName);
+        logger.debug("executeVariableExtractionOptimized: QueryEntityType='{}', FilterTarget='{}', QueryVarName='{}', Index='{}'",
+            normalizedEntityTypeFromQuery, filterTargetValueLower, queryVariableName, index.getIndexType());
 
-        ValueType valueType = "DATE".equals(entityType.toUpperCase()) ? ValueType.DATE : ValueType.ENTITY;
+        ValueType valueTypeForSoa = "DATE".equals(normalizedEntityTypeFromQuery) ? ValueType.DATE : ValueType.ENTITY;
+        if (normalizedEntityTypeFromQuery.startsWith("?") && !"DATE".equals(normalizedEntityTypeFromQuery)) {
+             // If query type is "?FOO" (and not DATE), the actual type comes from index key, so it's ENTITY.
+             // DATE is a special case as its index structure and type are fixed.
+            valueTypeForSoa = ValueType.ENTITY;
+        }
 
-        logger.debug("Executing variable search on index '{}' for entity type '{}'", index.getIndexType(), entityType);
+
+        logger.debug("Executing variable search on index '{}' for query entity type '{}'. Effective ValueType for SoA: {}",
+            index.getIndexType(), normalizedEntityTypeFromQuery, valueTypeForSoa);
 
         int bindingsAdded = 0;
         RocksIterator iterator = null;
-        String prefix = null;
+        String prefixForSeek = null;
 
         try {
-            if ("DATE".equals(entityType.toUpperCase())) {
-                iterator = index.iterateFromFirst();
-            } else if (entityType.startsWith("?")) {
-                iterator = index.iterateFromFirst();
-            } else {
-                prefix = entityType.toUpperCase() + IndexAccessInterface.DELIMITER;
-                byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if (valueTypeForSoa == ValueType.DATE) { // Query is for DATE entities
+                iterator = index.iterateFromFirst(); // ner_date index contains only dates
+                logger.debug("executeVariableExtractionOptimized: DATE type query, using iterateFromFirst() on index '{}'", index.getIndexType());
+            } else if (normalizedEntityTypeFromQuery.startsWith("?")) { // Query is for variable type, e.g. NER(?type) BIND ?v
+                iterator = index.iterateFromFirst(); // Iterate all types in ner_index
+                logger.debug("executeVariableExtractionOptimized: Variable entity type query '{}', using iterateFromFirst() on index '{}'",
+                             normalizedEntityTypeFromQuery, index.getIndexType());
+            } else { // Query is for a specific entity type, e.g. NER(PERSON) BIND ?v
+                prefixForSeek = normalizedEntityTypeFromQuery + IndexAccessInterface.DELIMITER;
+                byte[] prefixBytes = prefixForSeek.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                logger.debug("executeVariableExtractionOptimized: Specific entity type query '{}', seeking prefix '{}' in index '{}'",
+                             normalizedEntityTypeFromQuery, prefixForSeek, index.getIndexType());
                 iterator = index.seek(prefixBytes);
             }
 
             if (iterator == null) {
-                logger.error("NerExecutor: {} returned a null iterator for entityType '{}' (index type: {})",
-                             ("DATE".equals(entityType.toUpperCase()) || entityType.startsWith("?") ? "iterateFromFirst()" : "seek()"),
-                             entityType, index.getIndexType());
+                logger.error("NerExecutor executeVariableExtractionOptimized: Iterator is NULL after seek/iterateFromFirst for queryEntityType '{}' (index type: {})!",
+                             normalizedEntityTypeFromQuery, index.getIndexType());
                 return 0;
             }
+            logger.debug("executeVariableExtractionOptimized: Iterator obtained. Initial isValid: {}", iterator.isValid());
 
-            for (/* iterator positioned */ ; iterator.isValid(); iterator.next()) {
+            for (/* iterator positioned by seek/iterateFromFirst */ ; iterator.isValid(); iterator.next()) {
                 byte[] keyBytes = iterator.key();
-                byte[] valueBytes = iterator.value();
-                String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+                byte[] valueBlobBytes = iterator.value(); // PositionListSoA blob
+                String keyStringFromIndex = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+                logger.trace("executeVariableExtractionOptimized: Iterator valid. IndexKey='{}', Value blob size={}", keyStringFromIndex, valueBlobBytes.length);
 
-                String currentPrefix;
-                if ("DATE".equals(entityType.toUpperCase())) {
-                    currentPrefix = "";
-                } else if (entityType.startsWith("?")) {
-                    int delimiterPos = key.indexOf(IndexAccessInterface.DELIMITER);
+                String termFromIndex;
+                String actualEntityTypeFromIndexKey = null; // For logging/debugging
+
+                if (valueTypeForSoa == ValueType.DATE) {
+                    actualEntityTypeFromIndexKey = "DATE"; // For logging
+                    try {
+                        // Parse the key from index (yyyyMMdd)
+                        LocalDate date = LocalDate.parse(keyStringFromIndex, java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
+                        // Reformat to yyyy-MM-dd for storage in SoA
+                        termFromIndex = date.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE);
+                    } catch (java.time.format.DateTimeParseException e) {
+                        logger.warn("Could not parse DATE key '{}' from index using yyyyMMdd format. Storing as is. Error: {}", keyStringFromIndex, e.getMessage());
+                        termFromIndex = keyStringFromIndex; // Fallback to raw key string
+                    }
+                } else { // ValueType.ENTITY
+                    // Key from ner_index is "TYPE\0term"
+                    int delimiterPos = keyStringFromIndex.indexOf(IndexAccessInterface.DELIMITER);
                     if (delimiterPos == -1) {
-                        logger.warn("Skipping key '{}' in variable type extraction due to missing delimiter.", key);
+                        logger.warn("Skipping key '{}' from NER index in variable extraction: missing delimiter.", keyStringFromIndex);
                         continue;
                     }
-                    currentPrefix = key.substring(0, delimiterPos + 1);
-                } else {
-                    currentPrefix = prefix;
-                    if (!key.startsWith(currentPrefix)) {
+                    actualEntityTypeFromIndexKey = keyStringFromIndex.substring(0, delimiterPos);
+                    termFromIndex = keyStringFromIndex.substring(delimiterPos + 1);
+
+                    // If query was for a specific type (e.g. NER(PERSON)), ensure iterator key matches.
+                    // Prefix seek should handle this, but this is a safeguard.
+                    if (prefixForSeek != null && !keyStringFromIndex.startsWith(prefixForSeek)) {
+                        logger.debug("Iterator key '{}' no longer matches prefix '{}'. Breaking loop.", keyStringFromIndex, prefixForSeek);
                         break;
                     }
                 }
 
-                String value;
-                if ("DATE".equals(entityType.toUpperCase())) {
-                    value = key;
-                } else {
-                     value = key.substring(currentPrefix.length());
-                }
+                logger.trace("Extracted from index: ActualType='{}', Term='{}'", actualEntityTypeFromIndexKey, termFromIndex);
 
-                if (filterTargetValueLower != null && !value.toLowerCase().contains(filterTargetValueLower)) {
+                // Filter by targetValue from query condition, if present (e.g. NER(PERSON, 'Smith', ?var))
+                if (filterTargetValueLower != null && !termFromIndex.toLowerCase().contains(filterTargetValueLower)) {
+                    logger.trace("Term '{}' (from key '{}') does not contain filter '{}'. Skipping.", termFromIndex, keyStringFromIndex, filterTargetValueLower);
                     continue;
                 }
 
-                byte[] rawBlob = valueBytes;
-                String valueToBind;
-                String qualifiedVariableName;
+                logger.debug("executeVariableExtractionOptimized: Processing IndexKey='{}'. Attempting to get numPositions from value blob (size {}).",
+                             keyStringFromIndex, valueBlobBytes.length);
+                int numPositions = PositionListSoA.getNumPositionsFromBlob(valueBlobBytes);
+                logger.debug("executeVariableExtractionOptimized: numPositions from blob for IndexKey='{}': {}", keyStringFromIndex, numPositions);
 
-                if (entityType.startsWith("?")) {
-                    int delimiterPos = key.indexOf(IndexAccessInterface.DELIMITER);
-                    if (delimiterPos != -1) {
-                        valueToBind = key.substring(0, delimiterPos);
-                    } else {
-                        valueToBind = key;
-                    }
-                    qualifiedVariableName = variableName;
-                } else {
-                    valueToBind = value;
-                    qualifiedVariableName = variableName;
-                }
+                byte[] rawBlob = valueBlobBytes;
 
                 try {
-                    int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
+                    logger.trace("executeVariableExtractionOptimized: IndexKey='{}', numPositions from blob: {}", keyStringFromIndex, numPositions);
                     if (numPositions == 0) {
+                        logger.trace("executeVariableExtractionOptimized: IndexKey='{}', numPositions is 0, skipping.", keyStringFromIndex);
                         continue;
                     }
 
+                    int currentConceptualRowId = resultSoA.getNextConceptualRowId();
                     IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
                     IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
                     IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
@@ -280,38 +352,41 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
                     for (int i = 0; i < numPositions; i++) {
                         resultSoA.add(
-                            valueToBind,
-                            valueType,
-                            qualifiedVariableName,
+                            termFromIndex,        // The extracted term (formatted for DATE)
+                            valueTypeForSoa,      // DATE or ENTITY
+                            queryVariableName,    // The variable name from the Ner condition
                             docIds.getInt(i),
                             sentIds != null ? sentIds.getInt(i) : -1,
                             beginChars != null ? beginChars.getInt(i) : -1,
                             endChars != null ? endChars.getInt(i) : -1,
                             synonymIds != null ? synonymIds.getInt(i) : -1,
-                            bindingsAdded
+                            currentConceptualRowId
                         );
                         bindingsAdded++;
                     }
                 } catch (IOException e) {
-                    logger.warn("IOException during selective deserialization for NER key '{}', falling back to full deserialization: {}",
-                               key, e.getMessage());
+                    logger.warn("IOException during selective deserialization for NER IndexKey '{}', falling back to full deserialization: {}",
+                               keyStringFromIndex, e.getMessage());
                     PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
-                    for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
-                        resultSoA.add(
-                            valueToBind,
-                            valueType,
-                            qualifiedVariableName,
-                            positionListSoA.getDocIdAt(i),
-                            positionListSoA.getSentenceIdAt(i),
-                            positionListSoA.getBeginCharAt(i),
-                            positionListSoA.getEndCharAt(i),
-                            positionListSoA.getSynonymIdAt(i),
-                            bindingsAdded
-                        );
-                        bindingsAdded++;
+                    if (positionListSoA.getNumPositions() > 0) {
+                        int currentConceptualRowId = resultSoA.getNextConceptualRowId(); // Get new ID for this fallback block
+                        for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                            resultSoA.add(
+                                termFromIndex, // Use the same termFromIndex
+                                valueTypeForSoa,
+                                queryVariableName,
+                                positionListSoA.getDocIdAt(i),
+                                positionListSoA.getSentenceIdAt(i),
+                                positionListSoA.getBeginCharAt(i),
+                                positionListSoA.getEndCharAt(i),
+                                positionListSoA.getSynonymIdAt(i),
+                                currentConceptualRowId
+                            );
+                            bindingsAdded++;
+                        }
                     }
                 } catch (Exception e) {
-                     logger.error("Error processing NER entry with key '{}': {}", key, e.getMessage(), e);
+                     logger.error("Error processing NER entry with IndexKey '{}': {}", keyStringFromIndex, e.getMessage(), e);
                 }
             }
         } finally {
@@ -319,75 +394,88 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 iterator.close();
             }
         }
-        logger.debug("Extracted {} bindings for entity type '{}' into QueryResultSoA", bindingsAdded, entityType);
+        logger.debug("Extracted {} bindings for query entity type '{}' into QueryResultSoA", bindingsAdded, normalizedEntityTypeFromQuery);
         return bindingsAdded;
     }
 
     // For NER(type) -- non-variable, no specific target. Value stored is entityType.
-    private int executeEntityTypeSearchOptimized(String entityType, IndexAccessInterface index,
+    private int executeEntityTypeSearchOptimized(String entityTypeFromQuery, IndexAccessInterface index,
                                              Ner condition, AttributeRequirements requirements, QueryResultSoA resultSoA)
         throws IOException, IndexAccessException {
+        // entityTypeFromQuery is already .toUpperCase()
 
-        logger.debug("Searching for all entities of type '{}' into QueryResultSoA, storing type as value.", entityType);
+        logger.debug("executeEntityTypeSearchOptimized: QueryEntityType='{}', Index='{}'", entityTypeFromQuery, index.getIndexType());
+        ValueType valueTypeForSoa = "DATE".equals(entityTypeFromQuery) ? ValueType.DATE : ValueType.ENTITY;
 
-        ValueType valueType = "DATE".equals(entityType.toUpperCase()) ? ValueType.DATE : ValueType.ENTITY;
-
-        logger.debug("Executing entity type search on index '{}' for entity type '{}'", index.getIndexType(), entityType);
+        logger.debug("Executing entity type search on index '{}' for query entity type '{}'. Effective ValueType for SoA: {}",
+            index.getIndexType(), entityTypeFromQuery, valueTypeForSoa);
         int bindingsAdded = 0;
         RocksIterator iterator = null;
-        String prefix = null;
+        String prefixForSeek = null;
 
         try {
-            if ("DATE".equals(entityType.toUpperCase())) {
+            if (valueTypeForSoa == ValueType.DATE) {
+                logger.debug("executeEntityTypeSearchOptimized: DATE type query, using iterateFromFirst on index '{}'.", index.getIndexType());
                 iterator = index.iterateFromFirst();
-            } else if (entityType.startsWith("?")) {
-                 logger.warn("executeEntityTypeSearchOptimized called with a variable entityType: {}. This is unexpected and likely a logic error.", entityType);
-                 iterator = index.iterateFromFirst();
-            } else {
-                prefix = entityType.toUpperCase() + IndexAccessInterface.DELIMITER;
-                byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            } else { // ENTITY Type
+                prefixForSeek = entityTypeFromQuery + IndexAccessInterface.DELIMITER;
+                byte[] prefixBytes = prefixForSeek.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                logger.debug("executeEntityTypeSearchOptimized: Specific entity type query '{}', seeking prefix '{}' in index '{}'",
+                             entityTypeFromQuery, prefixForSeek, index.getIndexType());
                 iterator = index.seek(prefixBytes);
             }
 
             if (iterator == null) {
-                logger.error("NerExecutor: {} returned a null iterator for entityType '{}' in executeEntityTypeSearchOptimized (index type: {})",
-                             ("DATE".equals(entityType.toUpperCase()) || entityType.startsWith("?") ? "iterateFromFirst()" : "seek()"),
-                             entityType, index.getIndexType());
+                 logger.error("NerExecutor executeEntityTypeSearchOptimized: Iterator is NULL after seek/iterateFromFirst for queryEntityType '{}' (index type: {})!",
+                             entityTypeFromQuery, index.getIndexType());
                 return 0;
             }
+            logger.debug("executeEntityTypeSearchOptimized: Iterator obtained. Initial isValid: {}", iterator.isValid());
 
             for (/* iterator positioned */ ; iterator.isValid(); iterator.next()) {
                 byte[] keyBytes = iterator.key();
-                byte[] valueBytes = iterator.value();
-                String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+                byte[] valueBlobBytes = iterator.value();
+                String keyStringFromIndex = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+                logger.trace("executeEntityTypeSearchOptimized: Iterator valid. IndexKey='{}', Value blob size={}", keyStringFromIndex, valueBlobBytes.length);
 
-                String currentPrefix;
-                 if ("DATE".equals(entityType.toUpperCase())) {
-                    currentPrefix = "";
-                } else if (entityType.startsWith("?")) {
-                    int delimiterPos = key.indexOf(IndexAccessInterface.DELIMITER);
-                     if (delimiterPos == -1) continue;
-                    currentPrefix = key.substring(0, delimiterPos + 1);
-                } else {
-                    currentPrefix = prefix;
-                    if (!key.startsWith(currentPrefix)) {
-                        break;
+                // If query was for a specific type (e.g. NER(PERSON)), ensure iterator key matches.
+                // Prefix seek should handle this, but this is a safeguard.
+                if (prefixForSeek != null && !keyStringFromIndex.startsWith(prefixForSeek)) {
+                    logger.debug("executeEntityTypeSearchOptimized: IndexKey '{}' does not match prefix '{}'. Breaking loop.", keyStringFromIndex, prefixForSeek);
+                    break;
+                }
+
+                String termToStoreInSoa;
+                if (valueTypeForSoa == ValueType.DATE) {
+                    // Key from ner_date_index is "yyyyMMdd"
+                    try {
+                        LocalDate date = LocalDate.parse(keyStringFromIndex, java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
+                        termToStoreInSoa = date.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE); // "yyyy-MM-dd"
+                    } catch (java.time.format.DateTimeParseException e) {
+                        logger.warn("Could not parse DATE key '{}' from index (entityTypeSearch) using yyyyMMdd. Storing as is. Error: {}", keyStringFromIndex, e.getMessage());
+                        termToStoreInSoa = keyStringFromIndex; // Fallback
                     }
+                } else { // ENTITY
+                    // Key from ner_index is "TYPE\0term". We want the "term" part.
+                    // prefixForSeek is "QUERY_TYPE\0"
+                    termToStoreInSoa = keyStringFromIndex.substring(prefixForSeek.length());
                 }
+                logger.trace("executeEntityTypeSearchOptimized: Extracted term '{}' from IndexKey '{}'", termToStoreInSoa, keyStringFromIndex);
 
-                String specificEntityInstanceValue;
-                if ("DATE".equals(entityType.toUpperCase())) {
-                    specificEntityInstanceValue = key;
-                } else {
-                     specificEntityInstanceValue = key.substring(currentPrefix.length());
-                }
 
-                byte[] rawBlob = valueBytes;
+                logger.debug("executeEntityTypeSearchOptimized: Processing IndexKey '{}'. Attempting to get numPositions from value blob (size {}).",
+                             keyStringFromIndex, valueBlobBytes.length);
+                int numPositions = PositionListSoA.getNumPositionsFromBlob(valueBlobBytes);
+                logger.debug("executeEntityTypeSearchOptimized: numPositions from blob for IndexKey '{}': {}", keyStringFromIndex, numPositions);
+
+                byte[] rawBlob = valueBlobBytes;
                 try {
-                    int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
+                    logger.trace("executeEntityTypeSearchOptimized: IndexKey='{}', numPositions from blob: {}", keyStringFromIndex, numPositions);
                     if (numPositions == 0) {
+                        logger.trace("executeEntityTypeSearchOptimized: IndexKey='{}', numPositions is 0, skipping.", keyStringFromIndex);
                         continue;
                     }
+                    int currentConceptualRowId = resultSoA.getNextConceptualRowId();
 
                     IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
                     IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
@@ -397,38 +485,41 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
                     for (int i = 0; i < numPositions; i++) {
                         resultSoA.add(
-                            specificEntityInstanceValue,
-                            valueType,
-                            null,
+                            termToStoreInSoa, // The extracted term (formatted for DATE)
+                            valueTypeForSoa,  // Correctly DATE or ENTITY
+                            null,             // No variable name in this method's context (not a variable binding query)
                             docIds.getInt(i),
                             sentIds != null ? sentIds.getInt(i) : -1,
                             beginChars != null ? beginChars.getInt(i) : -1,
                             endChars != null ? endChars.getInt(i) : -1,
                             synonymIds != null ? synonymIds.getInt(i) : -1,
-                            bindingsAdded
+                            currentConceptualRowId
                         );
                         bindingsAdded++;
                     }
                 } catch (IOException e) {
-                    logger.warn("IOException during selective deserialization for NER key '{}' (entity type search), falling back to full deserialization: {}",
-                               key, e.getMessage());
+                    logger.warn("IOException during selective deserialization for NER IndexKey '{}' (entity type search), falling back to full deserialization: {}",
+                               keyStringFromIndex, e.getMessage());
                     PositionListSoA positionListSoA = PositionListSoA.deserializeFromCompositeBlob(rawBlob);
-                    for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
-                        resultSoA.add(
-                            specificEntityInstanceValue,
-                            valueType,
-                            null,
-                            positionListSoA.getDocIdAt(i),
-                            positionListSoA.getSentenceIdAt(i),
-                            positionListSoA.getBeginCharAt(i),
-                            positionListSoA.getEndCharAt(i),
-                            positionListSoA.getSynonymIdAt(i),
-                            bindingsAdded
-                        );
-                        bindingsAdded++;
+                    if (positionListSoA.getNumPositions() > 0) {
+                        int currentConceptualRowId = resultSoA.getNextConceptualRowId(); // Get new ID for this fallback
+                        for (int i = 0; i < positionListSoA.getNumPositions(); i++) {
+                            resultSoA.add(
+                                termToStoreInSoa, // Use the same term
+                                valueTypeForSoa,
+                                null,
+                                positionListSoA.getDocIdAt(i),
+                                positionListSoA.getSentenceIdAt(i),
+                                positionListSoA.getBeginCharAt(i),
+                                positionListSoA.getEndCharAt(i),
+                                positionListSoA.getSynonymIdAt(i),
+                                currentConceptualRowId
+                            );
+                            bindingsAdded++;
+                        }
                     }
                 } catch (Exception e) {
-                    logger.error("Error processing NER entry with key '{}': {}", key, e.getMessage(), e);
+                    logger.error("Error processing NER entry with IndexKey '{}': {}", keyStringFromIndex, e.getMessage(), e);
                 }
             }
         } finally {
@@ -437,7 +528,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
         }
 
-        logger.debug("Found {} bindings matching entity type '{}' into QueryResultSoA", bindingsAdded, entityType);
+        logger.debug("Found {} bindings matching entity type '{}' into QueryResultSoA", bindingsAdded, entityTypeFromQuery);
         return bindingsAdded;
     }
 }

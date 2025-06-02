@@ -24,6 +24,7 @@ import com.example.core.PositionListSoA;
 import com.example.index.AnnotationTypeSource;
 import com.example.index.NgramType;
 import com.example.index.RocksDBConfig;
+import com.example.logging.ProgressTracker;
 
 /**
  * Generates a generalized "stitch" index by finding co-occurrences of N-grams (from a pre-built
@@ -43,6 +44,7 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
 
     private final Path annotationSourcePath; // Path to the primary annotation index (e.g., ner_date, ner, pos)
     private final Path stitchOutputPath;
+    private final ProgressTracker progress;
 
     private IndexAccess annotationSourceIA;       // For reading main annotation index
     private IndexAccess stitchOutputIA;           // For final stitch index output
@@ -93,10 +95,11 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
         }
     }
 
-    public NgramAnnotationStitchGenerator(String baseIndexDirectory, NgramType ngramType, AnnotationTypeSource annotationTypeSource) throws IOException {
+    public NgramAnnotationStitchGenerator(String baseIndexDirectory, NgramType ngramType, AnnotationTypeSource annotationTypeSource, ProgressTracker progressTracker) throws IOException {
         this.baseIndexDirectory = Objects.requireNonNull(baseIndexDirectory);
         this.ngramType = Objects.requireNonNull(ngramType);
         this.annotationTypeSource = Objects.requireNonNull(annotationTypeSource);
+        this.progress = Objects.requireNonNull(progressTracker);
 
         this.sourceAnnotationIndexName = this.annotationTypeSource.getSourceIndexName();
         this.outputStitchIndexName = "stitch_" + this.ngramType.name().toLowerCase() + "_" + this.annotationTypeSource.getTypeIdentifier();
@@ -132,6 +135,7 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
                     temporaryNgramBySentenceIA.getIndexType(),
                     temporaryAnnotationBySentenceIA.getIndexType());
         long startTime = System.currentTimeMillis();
+        this.progress.startIndex(outputStitchIndexName + " Join Phase", 0); // Using 0 for indeterminate progress
         try {
             setupStitchAccess(); // Sets up IAs for annotation source and final output
 
@@ -142,6 +146,7 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
             long endTime = System.currentTimeMillis();
             logger.info("{} stitch index generation completed successfully in {} ms.", outputStitchIndexName, (endTime - startTime));
         } finally {
+            this.progress.completeIndex(); // Complete the "Join Phase"
             close(); // Closes IAs managed by this instance
         }
     }
@@ -186,16 +191,12 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
                     }
                 }
                 sentencesProcessed++;
+                this.progress.updateIndex(1); // Update progress for each sentence processed
+
                 if (finalStitchAggregator.size() >= DEFAULT_BATCH_WRITE_SIZE) {
                     writeStitchBatchToFinalDB(finalStitchAggregator, stitchOutputIA);
                     stitchKeysWritten += finalStitchAggregator.size();
                     finalStitchAggregator.clear();
-                     logger.trace("Wrote a batch of {} stitch keys to final index {}. Total sentences processed: {}, individual stitch entries: {}",
-                                 stitchKeysWritten, outputStitchIndexName, sentencesProcessed, stitchEntriesGenerated);
-                }
-                if (sentencesProcessed % 100000 == 0) {
-                     logger.debug("Join Phase for {}: Processed {} sentences, generated {} stitch entries, written {} unique stitch keys so far.",
-                                 outputStitchIndexName, sentencesProcessed, stitchEntriesGenerated, stitchKeysWritten);
                 }
             }
             if (!finalStitchAggregator.isEmpty()) {

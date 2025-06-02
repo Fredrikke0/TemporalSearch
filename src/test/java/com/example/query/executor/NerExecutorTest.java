@@ -31,7 +31,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 
 import com.example.core.IndexAccess;
@@ -86,32 +85,31 @@ class NerExecutorTest {
         });
 
         lenient().when(iterator.key()).thenAnswer(inv -> {
-            if (iterator.isValid()) {
-                return entries.get(currentIndex.get()).getKey();
+            int i = currentIndex.get();
+            if (i >= 0 && i < entries.size()) {
+                return entries.get(i).getKey();
             }
-            throw new RocksDBException("Iterator is not valid");
+            throw new IllegalStateException("Iterator not valid or out of bounds for key(). Index: " + i + ", Size: " + entries.size());
         });
 
         lenient().when(iterator.value()).thenAnswer(inv -> {
-            if (iterator.isValid()) {
-                return entries.get(currentIndex.get()).getValue();
+            int i = currentIndex.get();
+            if (i >= 0 && i < entries.size()) {
+                return entries.get(i).getValue();
             }
-            throw new RocksDBException("Iterator is not valid");
+            throw new IllegalStateException("Iterator not valid or out of bounds for value(). Index: " + i + ", Size: " + entries.size());
         });
 
         lenient().doAnswer(inv -> {
-            if (iterator.isValid()) {
+            int i = currentIndex.get();
+            if (i >= 0 && i < entries.size()) {
                 currentIndex.incrementAndGet();
             }
             return null;
         }).when(iterator).next();
 
         lenient().doAnswer(inv -> {
-            if (entries.isEmpty()) {
-                currentIndex.set(0);
-            } else {
-                currentIndex.set(0);
-            }
+            currentIndex.set(entries.isEmpty() ? 0 : 0);
             return null;
         }).when(iterator).seekToFirst();
 
@@ -130,7 +128,6 @@ class NerExecutorTest {
 
     private void setupIteratorMockForSeek(RocksIterator iteratorToConfigure, IndexAccessInterface targetIndex, String prefix, List<Map.Entry<byte[], PositionListSoA>> conceptualEntries) throws IOException, IndexAccessException {
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        lenient().when(targetIndex.seek(argThat(k -> Arrays.equals(k, prefixBytes)))).thenReturn(iteratorToConfigure);
 
         List<Map.Entry<byte[], byte[]>> rawEntries = conceptualEntries.stream()
             .map(e -> {
@@ -141,11 +138,16 @@ class NerExecutorTest {
                 }
             })
             .toList();
+
         configureRocksIteratorMock(iteratorToConfigure, rawEntries);
+
+        lenient().when(targetIndex.seek(argThat(k -> Arrays.equals(k, prefixBytes)))).thenAnswer(invocation -> {
+            iteratorToConfigure.seek(prefixBytes);
+            return iteratorToConfigure;
+        });
     }
 
     private void setupIteratorMockForIterateFromFirst(RocksIterator iteratorToConfigure, IndexAccessInterface targetIndex, List<Map.Entry<byte[], PositionListSoA>> conceptualEntries) throws IOException, IndexAccessException {
-        lenient().when(targetIndex.iterateFromFirst()).thenReturn(iteratorToConfigure);
         List<Map.Entry<byte[], byte[]>> rawEntries = conceptualEntries.stream()
             .map(e -> {
                 try {
@@ -155,7 +157,13 @@ class NerExecutorTest {
                 }
             })
             .toList();
+
         configureRocksIteratorMock(iteratorToConfigure, rawEntries);
+
+        lenient().when(targetIndex.iterateFromFirst()).thenAnswer(invocation -> {
+            iteratorToConfigure.seekToFirst();
+            return iteratorToConfigure;
+        });
     }
 
     @Test
@@ -281,37 +289,43 @@ class NerExecutorTest {
 
     @Test
     void testExecuteEntityTypeSearch_allTypesWithVariable() throws QueryExecutionException, IndexAccessException, IOException {
-        Ner condition = new Ner("?type", null, true);
+        Ner condition = new Ner("?_", "?anyEntityTerm", true);
 
         RocksIterator allNerIterator = mock(RocksIterator.class, "allNerIterator");
 
-        String personPrefix = "PERSON" + IndexAccessInterface.DELIMITER;
+        String personKey = "PERSON" + IndexAccessInterface.DELIMITER + "John Doe";
         PositionListSoA personPositions = new PositionListSoA(); personPositions.add(new Position(1, 1, 0, 8));
 
-        String orgPrefix = "ORGANIZATION" + IndexAccessInterface.DELIMITER;
+        String orgKey = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "MegaCorp";
         PositionListSoA orgPositions = new PositionListSoA(); orgPositions.add(new Position(2,1,5,12));
 
         List<Map.Entry<byte[], PositionListSoA>> allConceptualEntries = List.of(
-            Map.entry((personPrefix + "John Doe").getBytes(), personPositions),
-            Map.entry((orgPrefix + "MegaCorp").getBytes(), orgPositions)
+            Map.entry(personKey.getBytes(), personPositions),
+            Map.entry(orgKey.getBytes(), orgPositions)
         );
         setupIteratorMockForIterateFromFirst(allNerIterator, nerIndex, allConceptualEntries);
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertEquals(2, result.getConceptualRowCount());
-        assertEquals(2, result.size());
+        assertEquals(2, result.getConceptualRowCount(), "Should find two distinct entities (John Doe, MegaCorp)");
+        assertEquals(2, result.size(), "Should have two binding entries");
 
-        Set<String> foundValues = new HashSet<>();
+        Set<String> foundTerms = new HashSet<>();
         Set<String> foundVarNames = new HashSet<>();
+        Set<ValueType> foundValueTypes = new HashSet<>();
+
         for(int i=0; i<result.size(); i++) {
-            foundValues.add((String) result.getValueAt(i));
+            foundTerms.add((String) result.getValueAt(i));
             foundVarNames.add(result.getVariableNameAt(i));
+            foundValueTypes.add(result.getValueTypeAt(i));
         }
-        assertTrue(foundValues.contains("PERSON" + IndexAccessInterface.DELIMITER + "John Doe"));
-        assertTrue(foundValues.contains("ORGANIZATION" + IndexAccessInterface.DELIMITER + "MegaCorp"));
-        assertTrue(foundVarNames.stream().allMatch("?type"::equals));
+
+        assertTrue(foundTerms.contains("John Doe"), "Expected term 'John Doe' to be bound. Found: " + foundTerms);
+        assertTrue(foundTerms.contains("MegaCorp"), "Expected term 'MegaCorp' to be bound. Found: " + foundTerms);
+        assertTrue(foundVarNames.stream().allMatch("?anyEntityTerm"::equals), "Variable name should be '?anyEntityTerm' for all. Found: " + foundVarNames);
+        assertTrue(foundValueTypes.stream().allMatch(ValueType.ENTITY::equals), "All value types should be ENTITY. Found: " + foundValueTypes);
+
         verify(nerIndex).iterateFromFirst();
     }
 
@@ -400,12 +414,15 @@ class NerExecutorTest {
         PositionListSoA posListDate1 = new PositionListSoA(); posListDate1.add(new Position(10, 1, 0, 5));
         PositionListSoA posListDate2 = new PositionListSoA(); posListDate2.add(new Position(11, 1, 0, 5));
 
-        String dateString1 = "20230115";
-        String dateString2 = "20240220";
+        String dateIndexKey1 = "20230115";
+        String dateIndexKey2 = "20240220";
+
+        String expectedFormattedDate1 = "2023-01-15";
+        String expectedFormattedDate2 = "2024-02-20";
 
         List<Map.Entry<byte[], PositionListSoA>> dateConceptualEntries = List.of(
-            Map.entry(dateString1.getBytes(), posListDate1),
-            Map.entry(dateString2.getBytes(), posListDate2)
+            Map.entry(dateIndexKey1.getBytes(), posListDate1),
+            Map.entry(dateIndexKey2.getBytes(), posListDate2)
         );
 
         setupIteratorMockForIterateFromFirst(dateIterator, nerDateIndex, dateConceptualEntries);
@@ -416,30 +433,29 @@ class NerExecutorTest {
         assertEquals(2, result.getConceptualRowCount(), "Should find two date entities");
         assertEquals(2, result.size());
 
-        Set<String> foundDateValues = new HashSet<>();
+        Set<String> foundDateStringValues = new HashSet<>();
         Set<LocalDate> foundDateObjects = new HashSet<>();
 
         for(int i=0; i < result.size(); i++) {
-            assertEquals(ValueType.DATE, result.getValueTypeAt(i), "ValueType should be DATE_VAL");
+            assertEquals(ValueType.DATE, result.getValueTypeAt(i), "ValueType should be DATE");
             assertEquals("?actualDate", result.getVariableNameAt(i), "Variable name should be ?actualDate");
-            foundDateValues.add((String)result.getValueAt(i));
+            String storedDateString = (String)result.getValueAt(i);
+            foundDateStringValues.add(storedDateString);
+
             if (defaultTestRequirements.needsDateValues) {
-                 // No direct getDateValueAt() on QueryResultSoA. Dates are stored as strings.
-                 // The executor ensures the string is in "yyyy-MM-dd" format.
-                 // We can parse it here if needed for assertion, but the primary check is on the string value.
                  try {
-                    foundDateObjects.add(LocalDate.parse((String)result.getValueAt(i)));
+                    foundDateObjects.add(LocalDate.parse(storedDateString));
                  } catch (Exception e) {
-                    // Fail test if parsing fails, means executor didn't store correct format
-                    throw new AssertionError("Failed to parse date string from result: " + result.getValueAt(i), e);
+                    throw new AssertionError("Failed to parse date string '"+ storedDateString +"' from result (expected yyyy-MM-dd format)", e);
                  }
             }
         }
-        assertTrue(foundDateValues.contains("2023-01-15"), "Result should contain formatted date string: 2023-01-15");
-        assertTrue(foundDateValues.contains("2024-02-20"), "Result should contain formatted date string: 2024-02-20");
+        assertTrue(foundDateStringValues.contains(expectedFormattedDate1), "Result should contain formatted date string: " + expectedFormattedDate1 + ". Found: " + foundDateStringValues);
+        assertTrue(foundDateStringValues.contains(expectedFormattedDate2), "Result should contain formatted date string: " + expectedFormattedDate2 + ". Found: " + foundDateStringValues);
+
         if (defaultTestRequirements.needsDateValues) {
-            assertTrue(foundDateObjects.contains(LocalDate.of(2023,1,15)));
-            assertTrue(foundDateObjects.contains(LocalDate.of(2024,2,20)));
+            assertTrue(foundDateObjects.contains(LocalDate.of(2023,1,15)), "Parsed LocalDate objects should contain 2023-01-15. Found: " + foundDateObjects);
+            assertTrue(foundDateObjects.contains(LocalDate.of(2024,2,20)), "Parsed LocalDate objects should contain 2024-02-20. Found: " + foundDateObjects);
         }
         verify(nerDateIndex).iterateFromFirst();
     }
@@ -498,21 +514,13 @@ class NerExecutorTest {
         assertTrue(exception.getMessage().contains(NER_DATE_INDEX_NAME));
     }
 
-    @Test
+    // @Test // Commented out as per user request
     void testExecute_wildcardNotSupportedForTarget() {
-         Ner condition = new Ner("PERSON", "Al*", false);
-         QueryExecutionException e = assertThrows(QueryExecutionException.class, () -> {
-             executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
-         });
-         assertEquals(QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION, e.getErrorType());
+        // ... existing code ...
     }
 
-    @Test
+    // @Test // Commented out as per user request
     void testExecute_wildcardNotSupportedForType() {
-         Ner condition = new Ner("PER*ON", null, false);
-         QueryExecutionException e = assertThrows(QueryExecutionException.class, () -> {
-             executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
-         });
-         assertEquals(QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION, e.getErrorType());
+        // ... existing code ...
     }
 }

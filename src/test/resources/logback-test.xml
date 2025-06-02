@@ -11,7 +11,7 @@
     </appender>
 
     <!-- Keep other com.example logging at WARN to reduce noise, unless overridden -->
-    <logger name="com.example" level="WARN" additivity="false">
+    <logger name="com.example" level="DEBUG" additivity="false">
         <appender-ref ref="CONSOLE"/>
     </logger>
 

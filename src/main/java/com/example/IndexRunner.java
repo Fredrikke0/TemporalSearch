@@ -92,7 +92,7 @@ public class IndexRunner {
     }
 
     public static void runIndexing(String dbPath, String indexDir, String stopwordsPath,
-            int batchSize, List<String> requestedIndexTypes, String customTempDirStr, boolean force) throws Exception {
+            int batchSize, List<String> cliRequestedIndexTypes, String customTempDirStr, boolean force) throws Exception {
 
         Path customTempPath = (customTempDirStr != null && !customTempDirStr.isBlank()) ? Path.of(customTempDirStr) : null;
         if (customTempPath != null) {
@@ -108,15 +108,29 @@ public class IndexRunner {
             throw new IOException("Database file is empty. Please run the annotation stage first.");
         }
 
-        Set<String> indexTypesToProcess = new LinkedHashSet<>();
-        if (requestedIndexTypes.contains("all")) {
-            indexTypesToProcess.addAll(List.of("unigram", "bigram", "trigram", "dependency", "hypernym", "ner_date", "pos", "ner", "nash"));
-            if (requestedIndexTypes.contains("stitches")) {
-                 indexTypesToProcess.add("stitches");
-            }
+        // Determine the effective set of index types to process
+        Set<String> typesBeingBuilt = new LinkedHashSet<>();
+        if (cliRequestedIndexTypes.contains("all")) {
+            typesBeingBuilt.addAll(List.of(
+                "unigram", "bigram", "trigram", "dependency", "hypernym",
+                "ner_date", "pos", "ner", "nash", "stitches" // "stitches" added to "all"
+            ));
         } else {
-            indexTypesToProcess.addAll(requestedIndexTypes.stream().map(String::toLowerCase).collect(Collectors.toCollection(LinkedHashSet::new)));
+            typesBeingBuilt.addAll(cliRequestedIndexTypes);
         }
+
+        // If "stitches" is to be processed (either from "all" or explicitly), ensure dependencies.
+        if (typesBeingBuilt.contains("stitches")) {
+            typesBeingBuilt.addAll(List.of(
+                "unigram", "bigram", "trigram", "pos", "ner", "ner_date"
+            ));
+            typesBeingBuilt.add("stitches"); // Ensure it's there (harmless re-add)
+        }
+
+        // Convert all to lowercase for consistency
+        Set<String> indexTypesToProcess = typesBeingBuilt.stream()
+                                              .map(String::toLowerCase)
+                                              .collect(Collectors.toCollection(LinkedHashSet::new));
 
         logger.debug("Effective index types to process by IndexRunner: {}", indexTypesToProcess);
         setupIndexDirectories(indexDir, new ArrayList<>(indexTypesToProcess), force);
@@ -141,11 +155,11 @@ public class IndexRunner {
                                 logger.info("Index for type '{}' already exists at '{}' and --force is false. Skipping generation.", type, specificIndexDir.toAbsolutePath());
                                 generateThisIndex = false;
                             } else {
-                                logger.info("Index directory for type '{}' exists but is empty: '{}'. Proceeding with generation.", type, specificIndexDir.toAbsolutePath());
+                                logger.debug("Index directory for type '{}' exists but is empty: '{}'. Proceeding with generation.", type, specificIndexDir.toAbsolutePath());
                             }
                         }
                     } else if (force && Files.exists(specificIndexDir)) {
-                        logger.info("--force is true for type '{}'. Directory '{}' will be (or has been) cleaned by Pipeline or setupIndexDirectories. Proceeding with generation.", type, specificIndexDir.toAbsolutePath());
+                        logger.info("--force is true for type '{}'. Regenerating index.", type);
                     }
 
                     if (!generateThisIndex) {
@@ -389,7 +403,7 @@ public class IndexRunner {
 
                                             logger.info("Generating stitch index: {}", finalStitchIndexName);
                                             progress.startIndex(finalStitchIndexName, getDocumentCountForType(conn, "stitch"));
-                                            try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(indexDir, currentNgramType, currentAnnotationType)) {
+                                            try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(indexDir, currentNgramType, currentAnnotationType, progress)) {
                                                 generator.generateStitchIndex(temporaryNgramBySentenceIA, temporaryAnnotationBySentenceIA);
                                             } catch (Exception e) {
                                                 logger.error("Error generating stitch index {} for N-gram {} and Annotation {}: {}",

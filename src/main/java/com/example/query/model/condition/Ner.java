@@ -1,7 +1,6 @@
 package com.example.query.model.condition;
 
 import java.util.Collections;
-import java.util.Objects;
 import java.util.Set;
 
 import com.example.query.binding.VariableRegistry;
@@ -32,19 +31,19 @@ import com.example.query.binding.VariableType;
  */
 public record Ner(
     String entityType,
-    String target,
-    String qualifiedVariableName,
+    String target,            // Specific entity text to match, or null
+    String qualifiedVariableName, // Variable to bind entities to (e.g., $main.person), or null
     boolean isVariable
 ) implements Condition {
 
     /**
-     * Creates a new NER condition with validation.
+     * Creates a new NER condition with validation. This is the compact constructor.
      */
-    public Ner {
-        Objects.requireNonNull(entityType, "entityType cannot be null");
+    public Ner { // Compact constructor
+        java.util.Objects.requireNonNull(entityType, "entityType cannot be null");
 
         if (isVariable) {
-            Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
+            java.util.Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
         }
     }
 
@@ -68,14 +67,22 @@ public record Ner(
     }
 
     /**
-     * Creates a new NER condition with variable binding.
+     * Creates a new NER condition.
+     * This constructor intelligently assigns targetOrVariable to either target or qualifiedVariableName
+     * based on the isVariable flag. It also handles the case where entityType itself is a variable (e.g., "?type").
      *
-     * @param entityType The entity type to match
-     * @param variableName The variable to bind the entities to
-     * @param isVariable Flag indicating if binding occurs (always true for this constructor)
+     * @param entityType The entity type (e.g., "PERSON", or "?type" if variable)
+     * @param targetOrVariable If isVariable is false, this is the target entity text.
+     *                         If isVariable is true, this is the variable name (e.g., "?person", or null if entityType is the variable like "?type").
+     * @param isVariable True if this condition binds a variable.
      */
-    public Ner(String entityType, String variableName, boolean isVariable) {
-        this(entityType, null, variableName, isVariable);
+    public Ner(String entityType, String targetOrVariable, boolean isVariable) {
+        this(
+            entityType,
+            (!isVariable && targetOrVariable != null) ? targetOrVariable : null, // target
+            isVariable ? (targetOrVariable != null ? targetOrVariable : (entityType != null && entityType.startsWith("?") ? entityType : null)) : null, // qualifiedVariableName
+            isVariable
+        );
     }
 
     /**
@@ -131,24 +138,17 @@ public record Ner(
 
     @Override
     public String toString() {
-        if (isVariable) {
-            // Format: NER(Type) BIND alias.var
-            return String.format("NER(%s) BIND %s", entityType, qualifiedVariableName);
-        } else if (target != null) {
-            // Format: NER(Type, Target)
-            return String.format("NER(%s, %s)", entityType, target);
-        } else {
-            // Format: NER(Type)
-            return String.format("NER(%s)", entityType);
-        }
-    }
+        StringBuilder sb = new StringBuilder();
+        sb.append("NER(").append(entityType);
 
-    /**
-     * Returns the variable name if this is a variable binding condition.
-     *
-     * @return The qualified variable name, or null if not bound
-     */
-    public String variableName() {
-        return qualifiedVariableName;
+        if (target != null) {
+            sb.append(", ").append(target);
+        }
+        sb.append(")");
+
+        if (isVariable && qualifiedVariableName != null) {
+            sb.append(" BIND ").append(qualifiedVariableName);
+        }
+        return sb.toString();
     }
 }

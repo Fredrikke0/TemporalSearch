@@ -45,12 +45,13 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
     protected final IndexAccessInterface indexAccess;
     protected final Connection sqliteConn;
-    protected Set<String> stopwords;
     protected final ProgressTracker progress;
     private final Path tempDir;
     private long totalNGramsGenerated = 0;
     protected final int batchSize;
     protected final String effectiveIndexName;
+    protected final Path tempFilePathForSorting;
+    protected final Set<String> stopwords;
 
     /**
      * Gets the name of the table to query for entries.
@@ -99,8 +100,23 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         this.sqliteConn = sqliteConn;
         this.progress = progressTracker;
         this.batchSize = batchSizeNum;
-        this.stopwords = loadStopwordsInternal(stopwordsPath);
+
+        // Load stopwords first as it only depends on effectiveIndexName for logging
+        this.stopwords = loadStopwords(stopwordsPath);
+
+        // Initialize tempDir, which also uses effectiveIndexName for logging and path creation
         this.tempDir = initializeTempDir(this.effectiveIndexName, customTempPath);
+
+        // Initialize tempFilePathForSorting, which might depend on tempDir or be a custom path
+        if (customTempPath != null) {
+            this.tempFilePathForSorting = customTempPath;
+            Path parentDir = customTempPath.getParent();
+            if (parentDir != null && !Files.exists(parentDir)) {
+                Files.createDirectories(parentDir);
+            }
+        } else {
+            this.tempFilePathForSorting = this.tempDir.resolve("sorted.tmp");
+        }
 
         try {
             long totalDocs = getDocumentCountForIndex(); // `this` is used here before constructor finishes
@@ -139,28 +155,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         return resolvedTempDir;
     }
 
-    private Set<String> loadStopwordsInternal(String path) throws IOException {
-        if (path == null || path.trim().isEmpty()) {
-            logger.warn("Stopwords path is null or empty. Proceeding without stopwords.");
-            return Collections.emptySet();
-        }
-        Path filePath = Path.of(path);
-        if (!Files.exists(filePath) || !Files.isReadable(filePath)) {
-            logger.warn("Stopwords file not found or not readable: {}. Proceeding without stopwords.", filePath.toAbsolutePath());
-            return Collections.emptySet();
-        }
-        try {
-            Set<String> loadedStopwords = new HashSet<>(Files.readAllLines(filePath, StandardCharsets.UTF_8));
-            logger.info("Loaded {} stopwords from {}", loadedStopwords.size(), filePath.toAbsolutePath());
-            return loadedStopwords;
-        } catch (IOException e) {
-            logger.error("Error loading stopwords from {}. Proceeding without stopwords.", filePath.toAbsolutePath(), e);
-            // Still return empty set on error after logging, or rethrow. Current behavior is to proceed without.
-            // Rethrowing to make failure explicit, consistent with original throw for this method.
-            throw e;
-        }
-    }
-
     private void registerShutdownHook() {
          Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
@@ -183,15 +177,42 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         }));
     }
 
+    private Set<String> loadStopwords(String stopwordsPath) throws IOException {
+        if (stopwordsPath == null || stopwordsPath.trim().isEmpty()) {
+            logger.info("No stopwords file path provided for index [{}]. No stopwords will be used.", this.effectiveIndexName);
+            return Collections.emptySet();
+        }
+        Path path = Path.of(stopwordsPath);
+        if (!Files.exists(path) || !Files.isReadable(path)) {
+            logger.warn("Stopwords file not found or not readable at: {} for index [{}]. No stopwords will be used.", stopwordsPath, this.effectiveIndexName);
+            return Collections.emptySet();
+        }
+        Set<String> loadedStopwords = new HashSet<>();
+        try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmedLine = line.trim();
+                if (!trimmedLine.isEmpty() && !trimmedLine.startsWith("#")) { // Ignore empty lines and comments
+                    loadedStopwords.add(trimmedLine.toLowerCase());
+                }
+            }
+        }
+        logger.info("Loaded {} stopwords from {} for index [{}].", loadedStopwords.size(), stopwordsPath, this.effectiveIndexName);
+        return Collections.unmodifiableSet(loadedStopwords);
+    }
+
     /**
-     * Checks if a word is a stopword.
-     * The input word is expected to be already lowercased by the caller.
+     * Checks if the given term is a stopword.
+     * The check is case-insensitive (term is converted to lowercase).
      *
-     * @param word The word to check (expected to be in lowercase).
-     * @return True if the word is null or a stopword, false otherwise.
+     * @param term The term to check.
+     * @return True if the term is a stopword, false otherwise.
      */
-    protected boolean isStopword(String word) {
-        return word == null || stopwords.contains(word);
+    protected boolean isStopword(String term) {
+        if (term == null || term.isEmpty()) {
+            return false; // Or true, depending on desired behavior for empty strings
+        }
+        return stopwords.contains(term.toLowerCase());
     }
 
     /**
@@ -571,12 +592,32 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
     @Override
     public void close() throws IOException {
-        if (indexAccess != null) {
-            try {
-                indexAccess.close();
-            } catch (IndexAccessException e) {
-                throw new IOException("Failed to close index access", e);
+        // The IndexAccessInterface instance (this.indexAccess) is provided by the caller.
+        // The caller is responsible for its lifecycle (e.g., closing it).
+        // This generator should not close an externally managed IndexAccessInterface.
+
+        // Clean up the main temporary sorted file if it was created and path is known.
+        if (this.tempFilePathForSorting != null) {
+            // Check if tempFilePathForSorting is inside the auto-managed tempDir.
+            // The shutdown hook for tempDir will handle its contents if so.
+            // Only explicitly delete if it's NOT inside tempDir (i.e., a custom path was given).
+            boolean isInsideAutoTempDir = this.tempDir != null && this.tempFilePathForSorting.startsWith(this.tempDir);
+
+            if (!isInsideAutoTempDir) { // Only delete if it's a custom path outside the auto-managed tempDir
+                try {
+                    boolean deleted = Files.deleteIfExists(this.tempFilePathForSorting);
+                    if (deleted) {
+                        logger.debug("Successfully deleted custom temporary sort file: {}", this.tempFilePathForSorting);
+                    } else {
+                        logger.debug("Custom temporary sort file did not exist or could not be deleted: {}", this.tempFilePathForSorting);
+                    }
+                } catch (IOException e) {
+                    logger.warn("Failed to delete custom temporary sort file: {}. Error: {}", this.tempFilePathForSorting, e.getMessage());
+                }
             }
         }
+        // The auto-created tempDir (this.tempDir) and its contents (including sorted.tmp if default path was used)
+        // are cleaned up by the shutdown hook registered in initializeTempDir.
+        // Individual batch files within tempDir are cleaned up in generateIndex() finally block.
     }
 }

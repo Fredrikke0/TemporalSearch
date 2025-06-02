@@ -159,25 +159,34 @@ public class SoALargeResultSetTest {
         assertTrue(rawResult instanceof QueryResultSoA, "Result should be QueryResultSoA");
         QueryResultSoA result = (QueryResultSoA) rawResult;
 
-        long endTime = System.nanoTime();
+        long executionTimeMeasuredMs = (System.nanoTime() - startTime) / 1_000_000; // Measure actual execution time here
+
+        // Force GC before measuring end memory to account for temporary objects
+        System.gc();
+        try {
+            Thread.sleep(200); // Increased sleep slightly for GC, ensure InterruptedException is handled
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt(); // Restore interrupt status
+            System.err.println("Thread sleep interrupted during GC pause: " + e.getMessage());
+        }
         long endMemory = getUsedMemory();
 
         // Validate memory efficiency
         long memoryIncrease = endMemory - baselineMemory;
-        long executionTime = (endTime - startTime) / 1_000_000; // Convert to milliseconds
 
         logger.info("\n=== Very Large Result Set Performance ===");
         logger.info("Result set size: " + VERY_LARGE_RESULT_SET_SIZE);
-        logger.info("Execution time: " + executionTime + " ms");
+        logger.info("Execution time: " + executionTimeMeasuredMs + " ms");
         logger.info("Memory increase: " + (memoryIncrease / 1024 / 1024) + " MB");
         logger.info("Memory per result: " + (memoryIncrease / VERY_LARGE_RESULT_SET_SIZE) + " bytes");
 
-        // Validate that result is correct
-        validateLargeResultSet(result, VERY_LARGE_RESULT_SET_SIZE, startTime, endTime, baselineMemory, endMemory, "Very Large Result Set");
+        // Reconstruct an endTime for the validateLargeResultSet logging, if needed by its internals (it only logs it)
+        long endTimeForLogging = startTime + (executionTimeMeasuredMs * 1_000_000);
+        validateLargeResultSet(result, VERY_LARGE_RESULT_SET_SIZE, startTime, endTimeForLogging, baselineMemory, endMemory, "Very Large Result Set");
 
         // Memory efficiency assertions
         long maxExpectedMemoryPerResult = 200; // bytes per result (conservative estimate)
-        long actualMemoryPerResult = memoryIncrease / VERY_LARGE_RESULT_SET_SIZE;
+        long actualMemoryPerResult = (memoryIncrease > 0 && VERY_LARGE_RESULT_SET_SIZE > 0) ? (memoryIncrease / VERY_LARGE_RESULT_SET_SIZE) : 0;
 
         assertTrue(actualMemoryPerResult < maxExpectedMemoryPerResult,
                   String.format("Memory usage too high: %d bytes/result (expected < %d)",
@@ -185,9 +194,9 @@ public class SoALargeResultSetTest {
 
         // Performance assertions
         long maxExpectedTimeMs = 5000; // 5 seconds max for 500K results
-        assertTrue(executionTime < maxExpectedTimeMs,
+        assertTrue(executionTimeMeasuredMs < maxExpectedTimeMs,
                   String.format("Execution time too slow: %d ms (expected < %d)",
-                               executionTime, maxExpectedTimeMs));
+                               executionTimeMeasuredMs, maxExpectedTimeMs));
     }
     @Test
     void testSelectiveDeserializationBenefit() throws Exception {

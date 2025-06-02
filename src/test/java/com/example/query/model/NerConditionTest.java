@@ -1,13 +1,17 @@
 package com.example.query.model;
 
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import com.example.query.model.condition.Ner;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("NerCondition Tests")
 class NerConditionTest {
@@ -21,7 +25,7 @@ class NerConditionTest {
         Ner condition = new Ner(entityType, null, variableName, true);
 
         assertEquals(entityType, condition.entityType());
-        assertEquals(variableName, condition.variableName());
+        assertEquals(variableName, condition.qualifiedVariableName());
         assertTrue(condition.isVariable());
     }
 
@@ -69,7 +73,7 @@ class NerConditionTest {
     void basicConstructorShouldCreateConditionWithoutVariable() {
         Ner condition = new Ner("PERSON");
         assertEquals("PERSON", condition.entityType());
-        assertNull(condition.variableName());
+        assertNull(condition.qualifiedVariableName());
         assertFalse(condition.isVariable());
     }
 
@@ -79,7 +83,7 @@ class NerConditionTest {
         Ner condition = new Ner("PERSON", "John Doe");
         assertEquals("PERSON", condition.entityType());
         assertEquals("John Doe", condition.target());
-        assertNull(condition.variableName());
+        assertNull(condition.qualifiedVariableName());
         assertFalse(condition.isVariable());
     }
 
@@ -88,7 +92,7 @@ class NerConditionTest {
     void constructorWithVariableShouldCreateConditionWithVariable() {
         Ner condition = new Ner("PERSON", null, "scientist", true);
         assertEquals("PERSON", condition.entityType());
-        assertEquals("scientist", condition.variableName());
+        assertEquals("scientist", condition.qualifiedVariableName());
         assertTrue(condition.isVariable());
     }
 

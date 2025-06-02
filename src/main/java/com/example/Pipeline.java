@@ -106,7 +106,7 @@ public class Pipeline {
 
         indexGroup.addArgument("-y", "--index-type")
                 .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash", "all", "stitches")
-                .setDefault("all")
+                .setDefault(java.util.List.of("all"))
                 .nargs("+")
                 .help("Type of index to generate (can specify multiple, space-separated): " +
                       "unigram - Single word index; " +
@@ -145,10 +145,10 @@ public class Pipeline {
         Integer limit = ns.getInt("limit");
         Integer cliStartDocId = ns.get("cli_start_doc_id");
 
-        java.util.List<String> indexTypes = ns.getList("index_type"); // Get list of index types
+        java.util.List<String> cliRequestedIndexTypes = ns.getList("index_type"); // Renamed for clarity
 
-        logger.info("Starting Pipeline (DB: '{}', Index Dir: '{}', Stage: {}, Index Types: {})",
-                    dbFilePath, indexDirPath, stage, indexTypes);
+        logger.info("Starting Pipeline (DB: '{}', Index Dir: '{}', Stage: {}, CLI Requested Index Types: {})",
+                    dbFilePath, indexDirPath, stage, cliRequestedIndexTypes);
 
         // --- Project Initialization & Validation ---
 
@@ -214,22 +214,32 @@ public class Pipeline {
         // Run indexing stage if requested ('all' or 'index')
         if (stage.equals("all") || stage.equals("index")) {
             logger.info("--- Indexing Stage ---");
-            java.util.List<String> requestedIndexTypes = ns.getList("index_type");
-            java.util.Set<String> effectiveIndexTypes = new java.util.LinkedHashSet<>();
 
-            if (requestedIndexTypes.contains("all")) {
-                effectiveIndexTypes.addAll(java.util.List.of("unigram", "bigram", "trigram", "dependency", "hypernym", "ner_date", "pos", "ner", "nash"));
-                if (requestedIndexTypes.contains("stitches")) {
-                    effectiveIndexTypes.add("stitches");
-                    effectiveIndexTypes.addAll(java.util.List.of("unigram", "bigram", "trigram", "pos", "ner", "ner_date"));
-                }
+            // Determine the effective set of index types for Pipeline's own logic (e.g., cleanup)
+            // This logic mirrors the one in IndexRunner for consistency.
+            java.util.Set<String> typesForPipelineLogic = new java.util.LinkedHashSet<>();
+            if (cliRequestedIndexTypes.contains("all")) {
+                typesForPipelineLogic.addAll(java.util.List.of(
+                    "unigram", "bigram", "trigram", "dependency", "hypernym",
+                    "ner_date", "pos", "ner", "nash", "stitches"
+                ));
             } else {
-                effectiveIndexTypes.addAll(requestedIndexTypes);
-                if (requestedIndexTypes.contains("stitches")) {
-                    effectiveIndexTypes.addAll(java.util.List.of("unigram", "bigram", "trigram", "pos", "ner", "ner_date"));
-                    effectiveIndexTypes.add("stitches");
-                }
+                typesForPipelineLogic.addAll(cliRequestedIndexTypes);
             }
+
+            if (typesForPipelineLogic.contains("stitches")) {
+                typesForPipelineLogic.addAll(java.util.List.of(
+                    "unigram", "bigram", "trigram", "pos", "ner", "ner_date"
+                ));
+                 typesForPipelineLogic.add("stitches"); // Ensure it's there
+            }
+
+            // Convert all to lowercase for consistency in pipeline logic
+            java.util.Set<String> effectiveIndexTypesForPipeline = typesForPipelineLogic.stream()
+                                                                    .map(String::toLowerCase)
+                                                                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+
+            logger.debug("Effective index types for Pipeline internal logic (e.g. cleanup): {}", effectiveIndexTypesForPipeline);
 
             String stopwordsPath = ns.getString("stopwords");
             int indexBatchSize = ns.getInt("idx_batch_size");
@@ -253,12 +263,12 @@ public class Pipeline {
             if (force) {
                  logger.info("--force specified. Indexing will proceed and overwrite existing data. Cleanup handled by Pipeline before calling IndexRunner.");
 
-                 if (requestedIndexTypes.contains("all")) {
+                 if (cliRequestedIndexTypes.contains("all")) { // Use cliRequested for the 'all' check for outer cleanup
                      logger.warn("Deleting all contents of index base directory due to --force and 'all' type: {}", indexBasePath.toAbsolutePath());
                      deleteDirectoryRecursively(indexBasePath);
                      Files.createDirectories(indexBasePath);
                  } else {
-                     for (String typeToClean : effectiveIndexTypes) {
+                     for (String typeToClean : effectiveIndexTypesForPipeline) { // Iterate using the expanded set for pipeline logic
                          if (typeToClean.equalsIgnoreCase("stitches")) {
                             logger.warn("--force specified for stitches. Deleting all potential stitch output directories and temp_stitch_gen directory.");
                             for (com.example.index.NgramType nt : com.example.index.NgramType.values()) {
@@ -283,14 +293,14 @@ public class Pipeline {
                 logger.info("Pipeline called without --force. IndexRunner will check individual index directories for existence and decide whether to generate/skip.");
             }
 
-            logger.info("Calling IndexRunner (types={}, stopwords='{}', batchSize={}, customTempDir='{}', force={})",
-                        new java.util.ArrayList<>(effectiveIndexTypes), stopwordsPath, indexBatchSize, effectiveCustomTempDirStr, force);
+            logger.info("Calling IndexRunner (CLI requested types={}, stopwords='{}', batchSize={}, customTempDir='{}', force={})",
+                        cliRequestedIndexTypes, stopwordsPath, indexBatchSize, effectiveCustomTempDirStr, force);
             IndexRunner.runIndexing(
                 dbFilePath.toString(),
                 indexBasePath.toString(),
                 stopwordsPath,
                 indexBatchSize,
-                new java.util.ArrayList<>(effectiveIndexTypes),
+                cliRequestedIndexTypes, // Pass the original CLI requested types
                 effectiveCustomTempDirStr,
                 force
             );

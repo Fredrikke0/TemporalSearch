@@ -175,7 +175,17 @@ class PosConditionExecutorTest {
 
         when(posIndex.seek(eq(expectedKeyPrefixBytes))).thenReturn(posIterator);
 
-        when(posIterator.isValid()).thenReturn(true, true, true, false);
+        when(posIterator.isValid()).thenReturn(
+            true, // Initial log message
+            true, // Loop 1 condition (item: good)
+            true, // Log after next in loop 1
+            true, // Loop 2 condition (item: bad)
+            true, // Log after next in loop 2
+            true, // Loop 3 condition (item: ugly)
+            false, // Log after next in loop 3 (makes next loop condition false)
+            false, // Loop 4 condition (terminates loop)
+            false  // Final log after loop
+        );
         when(posIterator.key()).thenReturn(mockEntries.get(0).getKey(), mockEntries.get(1).getKey(), mockEntries.get(2).getKey());
         when(posIterator.value()).thenReturn(mockEntries.get(0).getValue(), mockEntries.get(1).getValue(), mockEntries.get(2).getValue());
 
@@ -198,7 +208,7 @@ class PosConditionExecutorTest {
 
         verify(posIndex, times(0)).getRaw(any());
         verify(posIndex).seek(eq(expectedKeyPrefixBytes));
-        verify(posIterator, times(4)).isValid();
+        verify(posIterator, times(9)).isValid();
         verify(posIterator, times(3)).next();
     }
 }

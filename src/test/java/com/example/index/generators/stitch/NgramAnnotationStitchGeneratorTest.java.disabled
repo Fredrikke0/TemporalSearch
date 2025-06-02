@@ -27,6 +27,7 @@ import com.example.index.AnnotationTypeSource;
 import com.example.index.LevelDBConfig;
 import com.example.index.NgramType;
 import com.example.index.generators.stitch.NgramAnnotationStitchGenerator.TermOccurrenceInSentence;
+import com.example.logging.ProgressTracker;
 
 
 public class NgramAnnotationStitchGeneratorTest {
@@ -246,7 +247,7 @@ public class NgramAnnotationStitchGeneratorTest {
         try {
             // 5. Instantiate and run the NgramAnnotationStitchGenerator
             try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(
-                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE)) {
+                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE, new ProgressTracker())) {
                 generator.generateStitchIndex(tempBigramBySentenceIA, tempDateBySentenceIA);
             }
 
@@ -303,7 +304,7 @@ public class NgramAnnotationStitchGeneratorTest {
 
         try {
             try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(
-                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE)) {
+                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE, new ProgressTracker())) {
                 generator.generateStitchIndex(tempBigramBySentenceIA, tempDateBySentenceIA);
             }
 
@@ -336,7 +337,7 @@ public class NgramAnnotationStitchGeneratorTest {
 
         try {
             try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(
-                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE)) {
+                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE, new ProgressTracker())) {
                 generator.generateStitchIndex(tempBigramBySentenceIA, tempDateBySentenceIA);
             }
 
@@ -373,7 +374,7 @@ public class NgramAnnotationStitchGeneratorTest {
 
         try {
             try (NgramAnnotationStitchGenerator generator = new NgramAnnotationStitchGenerator(
-                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE)) {
+                    baseIndexDirPath.toString(), NgramType.BIGRAM, AnnotationTypeSource.NER_DATE, new ProgressTracker())) {
                 generator.generateStitchIndex(tempBigramBySentenceIA, tempDateBySentenceIA);
             }
 

@@ -1,7 +1,28 @@
 package com.example.query;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import com.example.query.model.JoinCondition;
 import com.example.query.model.Query;
-import com.example.query.model.TemporalRange;
+import com.example.query.model.SubquerySpec;
+import com.example.query.model.TemporalPredicate;
+import com.example.query.model.VariableColumn;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Dependency;
@@ -9,25 +30,6 @@ import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
 import com.example.query.model.condition.Temporal;
-import com.example.query.model.SubquerySpec;
-import com.example.query.model.JoinCondition;
-import com.example.query.model.TemporalPredicate;
-import com.example.query.model.SelectColumn;
-import com.example.query.model.VariableColumn;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
-
-import java.time.LocalDateTime;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.util.List;
-import java.util.Optional;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("Query Parser Tests")
 class QueryParserTest {
@@ -80,7 +82,7 @@ class QueryParserTest {
 
         Ner condition = (Ner) query.conditions().get(0);
         assertEquals("PERSON", condition.entityType());
-        assertNull(condition.variableName());
+        assertNull(condition.qualifiedVariableName());
         assertFalse(condition.isVariable());
     }
 
@@ -92,7 +94,7 @@ class QueryParserTest {
 
         Ner condition = (Ner) query.conditions().get(0);
         assertEquals("*", condition.entityType());
-        assertNull(condition.variableName());
+        assertNull(condition.qualifiedVariableName());
         assertFalse(condition.isVariable());
     }
 
@@ -104,7 +106,7 @@ class QueryParserTest {
 
         Ner condition = (Ner) query.conditions().get(0);
         assertEquals("PERSON", condition.entityType());
-        assertEquals("t1.scientist", condition.variableName());
+        assertEquals("t1.scientist", condition.qualifiedVariableName());
         assertTrue(condition.isVariable());
 
         // Check select column
@@ -251,13 +253,13 @@ class QueryParserTest {
         // Extract and check the NER condition from the nested AND
         Ner nerCondition = (Ner) nestedCondition.conditions().get(1);
         assertEquals("PERSON", nerCondition.entityType());
-        assertEquals("t1.scientist", nerCondition.variableName()); // Expect qualified name
+        assertEquals("t1.scientist", nerCondition.qualifiedVariableName());
         assertTrue(nerCondition.isVariable());
 
         // Extract and check the Temporal condition from the outer AND
         Temporal temporalCondition = (Temporal) condition.conditions().get(1);
         assertEquals(TemporalPredicate.BEFORE, temporalCondition.temporalType());
-        assertEquals("t1.publication", temporalCondition.variableName()); // Expect qualified name
+        assertEquals("t1.publication", temporalCondition.qualifiedVariableName().get());
         // Add more detailed checks on the temporal range if necessary
         assertTrue(temporalCondition.startDate().isPresent());
         assertEquals(LocalDateTime.of(2000, 1, 1, 0, 0), temporalCondition.startDate().get());
@@ -333,7 +335,7 @@ class QueryParserTest {
 
         Ner nerCondition = (Ner) condition.conditions().get(1);
         assertEquals("PERSON", nerCondition.entityType());
-        assertNull(nerCondition.variableName());
+        assertNull(nerCondition.qualifiedVariableName());
         assertFalse(nerCondition.isVariable());
     }
 
