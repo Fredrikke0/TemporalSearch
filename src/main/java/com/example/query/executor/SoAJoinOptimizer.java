@@ -25,7 +25,7 @@ public class SoAJoinOptimizer {
     /**
      * Represents a pair of conceptualRowIds from the left and right QueryResultSoA that have matched on a join key.
      */
-    public record SoAJoinKeyMatch(int leftConceptualRowId, int rightConceptualRowId) {}
+    public record SoAJoinKeyMatch(int leftConceptualRowId, int rightConceptualRowId, Object joinKeyValue) {}
 
     /**
      * Performs an optimized hash join by selecting the best algorithm based on join keys.
@@ -95,13 +95,18 @@ public class SoAJoinOptimizer {
                  extractedValue = soa.getSentenceIdAt(i);
                  keyFound = true;
             } else if (isStructuralDateKey(keyName)) {
-                 if (soa.getValueTypeAt(i) == ValueType.DATE) { // More direct check for date type
-                     extractedValue = soa.getValueAt(i);
-                     keyFound = true;
-                 } else if (varNameAtIndex != null && (varNameAtIndex.endsWith("date") || varNameAtIndex.endsWith("DATE"))) { // Fallback for var names
-                    extractedValue = soa.getValueAt(i);
-                    keyFound = true;
-                 }
+                if (varNameAtIndex != null) {
+                    String plainVarName = varNameAtIndex.substring(varNameAtIndex.lastIndexOf('.') + 1);
+                    if (plainVarName.equalsIgnoreCase(keyName)) {
+                        if (soa.getValueTypeAt(i) == ValueType.DATE) {
+                            extractedValue = soa.getValueAt(i);
+                            keyFound = true;
+                        } else {
+                            logger.warn("Structural date join key '{}': Variable '{}' was expected to be DATE type but is {}. Skipping for join key map.",
+                                        keyName, varNameAtIndex, soa.getValueTypeAt(i));
+                        }
+                    }
+                }
             }
 
             if (keyFound && extractedValue != null) {
@@ -182,7 +187,7 @@ public class SoAJoinOptimizer {
                         // depending on how JoinHandler processes these. If leftSoA == rightSoA and leftCid == rightCid,
                         // it means an item is joining with itself. This check is subtle.
                         // For now, allow all pairs; JoinHandler's logic for creating output rows is key.
-                        results.add(new SoAJoinKeyMatch(leftCid, rightCid));
+                        results.add(new SoAJoinKeyMatch(leftCid, rightCid, key));
                     }
                 }
             }
@@ -229,7 +234,7 @@ public class SoAJoinOptimizer {
                 for (TemporalConceptualPair left : leftPairs) {
                     for (TemporalConceptualPair right : rightPairs) {
                         if (left.date().isBefore(right.date())) {
-                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId()));
+                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId(), left.date()));
                         }
                     }
                 }
@@ -238,7 +243,7 @@ public class SoAJoinOptimizer {
                 for (TemporalConceptualPair left : leftPairs) {
                     for (TemporalConceptualPair right : rightPairs) {
                         if (left.date().isAfter(right.date())) {
-                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId()));
+                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId(), left.date()));
                         }
                     }
                 }
@@ -247,7 +252,7 @@ public class SoAJoinOptimizer {
                  for (TemporalConceptualPair left : leftPairs) {
                     for (TemporalConceptualPair right : rightPairs) {
                         if (left.date().isEqual(right.date())) {
-                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId()));
+                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId(), left.date()));
                         }
                     }
                 }

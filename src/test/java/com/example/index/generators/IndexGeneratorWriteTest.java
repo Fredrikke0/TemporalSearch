@@ -173,8 +173,6 @@ public class IndexGeneratorWriteTest extends BaseIndexTest { // Renamed class
 
         // Verify Term C (written with an empty PositionListSoA)
         Optional<PositionListSoA> termC_value_opt = ia.get(IndexGenerator.bytes("termC"));
-        // The original test asserted null for LevelDB.get(). For RocksDB with IndexAccessInterface.get(),
-        // it returns Optional.empty(). The filter for empty lists should still apply.
         assertTrue(termC_value_opt.isEmpty(), "Value for 'termC' (from empty list) should NOT exist in DB / be empty Optional.");
 
         // Verify Term D

@@ -1,15 +1,19 @@
 package com.example.query.executor;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.query.binding.ValueType;
 import com.example.query.model.JoinCondition;
 import com.example.query.model.Query;
 import com.example.query.model.TemporalPredicate;
@@ -27,13 +31,6 @@ public class JoinHandler {
     public JoinHandler() {
         // Constructor remains simple
     }
-
-    // convertSoAToMatchDetails is no longer needed and will be removed.
-    /*
-    private List<MatchDetail> convertSoAToMatchDetails(QueryResultSoA soaResult) {
-        // ... old implementation ...
-    }
-    */
 
     private Map<Integer, List<Integer>> buildConceptualIdToRowIndicesMap(QueryResultSoA soa) {
         Map<Integer, List<Integer>> map = new HashMap<>();
@@ -146,13 +143,43 @@ public class JoinHandler {
 
         for (SoAJoinOptimizer.SoAJoinKeyMatch pair : matchingConceptualIdPairs) {
             int currentOutputConceptualId = nextOutputConceptualId++;
+            // Using a single set to track all variables added to this specific output conceptual row
+            // to prevent adding the same qualified variable (e.g., "q1.date") multiple times if it's
+            // present in multiple raw entries that map to the same leftConceptualRowId.
+            Set<String> addedVariablesInCurrentOutputRow = new HashSet<>();
 
             List<Integer> leftIndices = leftConceptualIdToIndices.getOrDefault(pair.leftConceptualRowId(), Collections.emptyList());
             for (int leftIdx : leftIndices) {
+                String variableName = leftSoA.getVariableNameAt(leftIdx); // Expected to be fully qualified, e.g., "q1.date"
+                if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) {
+                    continue; // Skip null variable names or if already added for this output row
+                }
+
+                Object valueToAdd = leftSoA.getValueAt(leftIdx);
+                ValueType typeToAdd = leftSoA.getValueTypeAt(leftIdx);
+
+                // For EQUALITY joins on a specific key (e.g. q1.date = q2.date),
+                // if this variable IS the join key, use the matched joinKeyValue.
+                // This ensures the output reflects the value that caused the equality.
+                // The joinKeyValue itself comes from the left side's map in combineMaps for equality.
+                if (operatorType == JoinCondition.JoinOperatorType.EQUALITY &&
+                    variableName.equals(leftAlias + "." + leftKey)) {
+                    valueToAdd = pair.joinKeyValue();
+                    // Infer type from joinKeyValue if possible, otherwise keep original
+                    if (valueToAdd instanceof LocalDate) {
+                        typeToAdd = ValueType.DATE;
+                    } else if (valueToAdd instanceof String) {
+                        typeToAdd = ValueType.TERM; // Or TERM, etc. - needs robust type inference or carry-over
+                    } else if (valueToAdd instanceof Number) {
+                        typeToAdd = ValueType.TERM;
+                    }
+                    // else keep original typeToAdd from leftSoA.getValueTypeAt(leftIdx)
+                }
+
                 finalJoinedResultSoA.add(
-                    leftSoA.getValueAt(leftIdx),
-                    leftSoA.getValueTypeAt(leftIdx),
-                    leftSoA.getVariableNameAt(leftIdx),
+                    valueToAdd,
+                    typeToAdd,
+                    variableName, // Use the fully qualified variable name from SoA
                     leftSoA.getDocumentIdAt(leftIdx),
                     finalOutputRequirements.needsSentenceId ? leftSoA.getSentenceIdAt(leftIdx) : -1,
                     finalOutputRequirements.needsPositions ? leftSoA.getBeginCharAt(leftIdx) : -1,
@@ -160,14 +187,38 @@ public class JoinHandler {
                     finalOutputRequirements.needsSynonymIds ? leftSoA.getSynonymIdAt(leftIdx) : -1,
                     currentOutputConceptualId
                 );
+                addedVariablesInCurrentOutputRow.add(variableName);
             }
 
             List<Integer> rightIndices = rightConceptualIdToIndices.getOrDefault(pair.rightConceptualRowId(), Collections.emptyList());
             for (int rightIdx : rightIndices) {
+                String variableName = rightSoA.getVariableNameAt(rightIdx); // Expected to be fully qualified
+                if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) {
+                    continue;
+                }
+
+                Object valueToAdd = rightSoA.getValueAt(rightIdx);
+                ValueType typeToAdd = rightSoA.getValueTypeAt(rightIdx);
+
+                // For EQUALITY joins, if this variable IS the right join key, use the matched joinKeyValue.
+                if (operatorType == JoinCondition.JoinOperatorType.EQUALITY &&
+                    variableName.equals(rightAlias + "." + rightKey)) {
+                    valueToAdd = pair.joinKeyValue();
+                     // Infer type from joinKeyValue
+                    if (valueToAdd instanceof LocalDate) {
+                        typeToAdd = ValueType.DATE;
+                    } else if (valueToAdd instanceof String) {
+                        typeToAdd = ValueType.TERM;
+                    } else if (valueToAdd instanceof Number) {
+                        typeToAdd = ValueType.TERM;
+                    }
+                    // else keep original typeToAdd from rightSoA.getValueTypeAt(rightIdx)
+                }
+
                 finalJoinedResultSoA.add(
-                    rightSoA.getValueAt(rightIdx),
-                    rightSoA.getValueTypeAt(rightIdx),
-                    rightSoA.getVariableNameAt(rightIdx),
+                    valueToAdd,
+                    typeToAdd,
+                    variableName, // Use the fully qualified variable name from SoA
                     rightSoA.getDocumentIdAt(rightIdx),
                     finalOutputRequirements.needsSentenceId ? rightSoA.getSentenceIdAt(rightIdx) : -1,
                     finalOutputRequirements.needsPositions ? rightSoA.getBeginCharAt(rightIdx) : -1,
@@ -175,6 +226,7 @@ public class JoinHandler {
                     finalOutputRequirements.needsSynonymIds ? rightSoA.getSynonymIdAt(rightIdx) : -1,
                     currentOutputConceptualId
                 );
+                addedVariablesInCurrentOutputRow.add(variableName);
             }
         }
 

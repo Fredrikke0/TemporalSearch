@@ -9,7 +9,7 @@ A high-performance natural language processing pipeline specializing in temporal
 - **Advanced Indexing**:
   - Multiple index types (unigram, bigram, trigram, dependency, NER date)
   - Temporal-aware index structures
-  - Flexible storage using SQLite for documents and LevelDB for indexes
+  - Flexible storage using SQLite for documents and RocksDB for indexes
 - **Temporal Query Interface**:
   - TBD
 

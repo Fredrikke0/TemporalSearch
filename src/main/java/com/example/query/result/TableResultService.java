@@ -8,13 +8,13 @@ import static tech.tablesaw.aggregate.AggregateFunctions.first;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -153,13 +153,27 @@ public class TableResultService {
 
             Map<String, Object> contextCache = new HashMap<>();
 
-            // Main loop: Iterate over unique conceptualRowIds
-            // Collect all unique conceptualRowIds first to define the number of rows.
-            // Ensure they are processed in a defined order if possible (e.g., sorted).
-            IntStream conceptualRowIdStream = IntStream.range(0, result.size()).map(result::getConceptualRowIdAt);
-            List<Integer> uniqueConceptualRowIds = conceptualRowIdStream.distinct().sorted().boxed().collect(Collectors.toList());
+            // --- START OPTIMIZATION ---
+            // Pre-group raw indices by their conceptualRowId
+            Map<Integer, List<Integer>> conceptualIdToRawIndicesMap = new HashMap<>();
+            if (result != null && !result.isEmpty()) { // Only process if there's data
+                for (int i = 0; i < result.size(); i++) {
+                    conceptualIdToRawIndicesMap
+                        .computeIfAbsent(result.getConceptualRowIdAt(i), k -> new ArrayList<>())
+                        .add(i);
+                }
+            }
 
-            logger.info("QueryResultSoA contains {} unique conceptualRowIds, which will form the table rows.", uniqueConceptualRowIds.size());
+            // Get unique conceptualRowIds from the map's keyset and sort them
+            List<Integer> uniqueConceptualRowIds = new ArrayList<>(conceptualIdToRawIndicesMap.keySet());
+            Collections.sort(uniqueConceptualRowIds); // Ensure sorted order
+
+            if (result != null && !result.isEmpty()) {
+                logger.info("QueryResultSoA processed into {} unique conceptualRowIds for table rows. Original binding count: {}", uniqueConceptualRowIds.size(), result.size());
+            } else if (result != null) { // result is not null but empty
+                 logger.info("QueryResultSoA is empty. No conceptual rows to process.");
+            }
+            // --- END OPTIMIZATION ---
 
             String source = query.source();
 
@@ -168,23 +182,8 @@ public class TableResultService {
                 int currentRowIndex = table.rowCount() - 1; // Get the index of the row just added
                 contextCache.clear(); // Clear context for each new conceptual row
 
-                // Find all raw indices in QueryResultSoA that match the current conceptualRowId
-                List<Integer> indicesInSoA = new ArrayList<>();
-                if (result.getRequirements().needsConceptualRowIds) {
-                    for (int i = 0; i < result.size(); i++) {
-                        if (result.getConceptualRowIdAt(i) == conceptualRowId) {
-                            indicesInSoA.add(i);
-                        }
-                    }
-                } else {
-                    // If no conceptualRowIds, assume each raw entry is its own "conceptual row"
-                    // This case might be problematic if TableResultService is always called with results that *should* have them.
-                    // For now, to prevent errors, we'll assume the conceptualRowId *is* the raw index if conceptualRowIds are not present.
-                    // This is a fallback and might need review based on how QueryResultSoA is constructed without conceptualRowIds.
-                    if (conceptualRowId < result.size()) { // conceptualRowId here would be a direct index
-                         indicesInSoA.add(conceptualRowId);
-                    }
-                }
+                // Retrieve pre-computed list of raw indices for the current conceptualRowId
+                List<Integer> indicesInSoA = conceptualIdToRawIndicesMap.getOrDefault(conceptualRowId, Collections.emptyList());
 
                 if (indicesInSoA.isEmpty() && result.getRequirements().needsConceptualRowIds) {
                     // This could happen if a conceptualRowId was in uniqueConceptualRowIds but no raw rows actually match it.

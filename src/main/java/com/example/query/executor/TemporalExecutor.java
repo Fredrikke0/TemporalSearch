@@ -25,7 +25,6 @@ import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
-import com.example.index.NashDateEntryWithId;
 import com.example.index.util.NashSerializationUtils;
 import com.example.query.binding.ValueType;
 import com.example.query.index.IndexManager;
@@ -148,7 +147,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
     /**
      * Strategy using the Nash index for efficient temporal queries, supporting document and sentence granularity.
-     * Reads from LevelDB using IndexAccessInterface and NashSerializationUtils.
+     * Reads from RocksDB using IndexAccessInterface and NashSerializationUtils.
      */
     private static class NashTemporalStrategy implements TemporalExecutionStrategy {
         private static final Logger strategyLogger = LoggerFactory.getLogger(NashTemporalStrategy.class);
@@ -247,36 +246,34 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     Optional<byte[]> serializedEntriesBytes = nashDB.getRaw(prefix.getBytes(StandardCharsets.UTF_8));
 
                     if (serializedEntriesBytes.isPresent()) {
-                        strategyLogger.trace("NashTemporalStrategy: Found data for prefix '{}'. Deserializing NashDateEntryWithId list.", prefix);
-                        List<NashDateEntryWithId> nashEntries = NashSerializationUtils.deserializeNashEntries(serializedEntriesBytes.get());
-                        strategyLogger.trace("NashTemporalStrategy: Deserialized {} NashDateEntryWithId entries for prefix '{}'.", nashEntries.size(), prefix);
+                        strategyLogger.trace("NashTemporalStrategy: Found data for prefix '{}'. Deserializing with PositionListSoA.", prefix);
+                        PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(serializedEntriesBytes.get());
+                        strategyLogger.trace("NashTemporalStrategy: Deserialized {} entries using PositionListSoA for prefix '{}'.", positionsSoA.getNumPositions(), prefix);
 
-                        for (NashDateEntryWithId nashEntry : nashEntries) {
-                            int dateId = nashEntry.dateId();
-                            Position position = nashEntry.position();
+                        for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
+                            Position currentPosition = positionsSoA.getPositionAt(i);
+                            int dateId = positionsSoA.getSynonymIdAt(i); // dateId is stored in synonymId field
 
                             if (dateId >= 0 && dateId < idToDateLookup.size()) {
-                                LocalDate actualDate = idToDateLookup.get(dateId);
-                                strategyLogger.trace("NashTemporalStrategy: Resolved dateId {} to date {} for position {}.", dateId, actualDate, position);
-
-                                // Final precise check: Nash prefixes are a first-pass filter.
-                                // The actualDate must satisfy the original query's temporal constraints.
-                                boolean finalMatch = evaluateTemporalCondition(
+                                LocalDate entryDate = idToDateLookup.get(dateId);
+                                // Use the existing evaluateTemporalCondition method logic by passing appropriate parameters
+                                // The original evaluateTemporalCondition took LocalDateTime, so convert entryDate to start/end of day.
+                                boolean match = evaluateTemporalCondition(
                                     condition.temporalType(),
-                                    actualDate.atStartOfDay(),
-                                    actualDate.atTime(LocalTime.MAX), // Consider date as full day
+                                    entryDate.atStartOfDay(),
+                                    entryDate.atTime(LocalTime.MAX),
                                     queryDateTimeStart.orElse(null),
                                     queryDateTimeEnd.orElse(null)
                                 );
 
-                                if (finalMatch) {
-                                    strategyLogger.trace("NashTemporalStrategy: Final temporal condition met for date {}, position {}. Adding to unique matches.", actualDate, position);
-                                    uniqueMatches.add(new UniqueTemporalMatch(position, actualDate));
-                                } else {
-                                    strategyLogger.trace("NashTemporalStrategy: Date {} (from prefix {}) did NOT meet final condition. Query start: {}, Query end: {}, Type: {}", actualDate, prefix, queryDateTimeStart, queryDateTimeEnd, condition.temporalType());
+                                if (match) {
+                                    strategyLogger.trace("NashTemporalStrategy: Match found for prefix '{}'. Date: {}, Position: Doc={}, Sent={}, Begin={}, End={}",
+                                                         prefix, entryDate, currentPosition.getDocumentId(), currentPosition.getSentenceId(), currentPosition.getBeginPosition(), currentPosition.getEndPosition());
+                                    uniqueMatches.add(new UniqueTemporalMatch(currentPosition, entryDate));
                                 }
                             } else {
-                                strategyLogger.warn("NashTemporalStrategy: Invalid dateId {} found for position {} with prefix '{}'. Max valid id: {}. Skipping entry.", dateId, position, prefix, idToDateLookup.size() - 1);
+                                strategyLogger.warn("NashTemporalStrategy: Invalid dateId {} found for prefix '{}' at index {}. Max valid dateId is {}. Skipping entry.",
+                                                    dateId, prefix, i, idToDateLookup.size() -1);
                             }
                         }
                     } else {

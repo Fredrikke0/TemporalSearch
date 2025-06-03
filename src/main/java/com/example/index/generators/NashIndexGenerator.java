@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
+import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.index.NashDateEntryWithId;
 import com.example.index.util.NashSerializationUtils;
@@ -32,9 +33,9 @@ import com.example.logging.ProgressTracker;
 import no.ntnu.sandbox.Nash;
 
 /**
- * Generates a persistent LevelDB index for Nash time hashes.
+ * Generates a persistent RocksDB index for Nash time hashes.
  * Reads all DATE annotations, builds the Nash structure in memory,
- * and writes the inverted index and date lookup table to LevelDB.
+ * and writes the inverted index and date lookup table to RocksDB.
  * Note: This generator loads all relevant data into memory, which might be an issue for very large datasets.
  */
 public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
@@ -70,7 +71,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     /**
      * Overrides the base generateIndex to implement Nash-specific logic.
      * Fetches all DATE annotations, builds the Nash structure in memory,
-     * performs inversion, and writes results directly to LevelDB.
+     * performs inversion, and writes results directly to RocksDB.
      * Bypasses the standard batching/external sort mechanism of IndexGenerator.
      */
     @Override
@@ -179,40 +180,77 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             throw new IOException("Failed to generate Nash inverted index", e);
         }
 
-        logger.info("Writing Nash index data to LevelDB at {} ...", getIndexName());
+        logger.info("Writing Nash index data to RocksDB at {} ...", getIndexName());
         long termsWritten = 0;
         try {
             for (String nashPrefix : invertedIndex.keySet()) {
-                List<NashDateEntryWithId> aggregatedEntries = new ArrayList<>();
-                for (Integer dateIdFromNash : invertedIndex.get(nashPrefix)) {
+                // Calculate the potential size of aggregatedEntries for logging
+                long potentialAggregatedEntryCount = 0;
+                java.util.Collection<Integer> dateIdsForThisPrefix = invertedIndex.get(nashPrefix);
+                if (dateIdsForThisPrefix == null) {
+                    dateIdsForThisPrefix = Collections.emptyList(); // Should not happen with MultiMap but defensive
+                }
+
+                for (Integer dateIdFromNash : dateIdsForThisPrefix) {
                     List<NashDateEntryWithId> entriesForDate = listIndexToEntries.get(dateIdFromNash);
                     if (entriesForDate != null) {
-                        aggregatedEntries.addAll(entriesForDate);
+                        potentialAggregatedEntryCount += entriesForDate.size();
+                    }
+                }
+
+                logger.info("Processing Nash prefix: '{}'. Maps to {} unique dates. Aggregating a total of ~{} NashDateEntryWithId objects.",
+                            nashPrefix, dateIdsForThisPrefix.size(), potentialAggregatedEntryCount);
+
+                if (potentialAggregatedEntryCount > 50_000_000) { // Log a strong warning if it's very large
+                    // Estimate based on PositionListSoA might be different, but this warning is about raw entry count
+                    long estimatedRawBytes = (potentialAggregatedEntryCount * 20L) + 4L;
+                    logger.warn("HIGH POTENTIAL FOR LARGE SERIALIZED BLOB (using PositionListSoA now): Nash prefix '{}' will attempt to aggregate {} entries. Old estimated raw serialized byte array size: ~{} bytes.",
+                                nashPrefix, potentialAggregatedEntryCount, estimatedRawBytes);
+                }
+
+                PositionListSoA aggregatedEntriesSoA = new PositionListSoA(); // Changed from List<NashDateEntryWithId>
+                for (Integer dateIdFromNash : dateIdsForThisPrefix) {
+                    List<NashDateEntryWithId> entriesForDate = listIndexToEntries.get(dateIdFromNash);
+                    if (entriesForDate != null) {
+                        for (NashDateEntryWithId entry : entriesForDate) {
+                            Position pos = entry.position();
+                            // Add to PositionListSoA, using dateId as synonymId
+                            aggregatedEntriesSoA.add(pos.getDocumentId(), pos.getSentenceId(), pos.getBeginPosition(), pos.getEndPosition(), entry.dateId());
+                        }
                     } else {
                         logger.warn("Inconsistency: Nash prefix '{}' mapped to date ID {} which has no entries.", nashPrefix, dateIdFromNash);
                     }
                 }
-                if (!aggregatedEntries.isEmpty()) {
-                    byte[] serializedEntries = NashSerializationUtils.serializeNashEntries(aggregatedEntries);
+
+                if (!aggregatedEntriesSoA.isEmpty()) {
+                    // PositionListSoA's serializeToCompositeBlob handles compression.
+                    // Sorting aggregatedEntriesSoA.sort() could be done here if needed to optimize delta coding further,
+                    // but PositionListSoA's delta coding works on individual arrays which are built in added order.
+                    // The main benefit of sorting would be for docId, sentId arrays if they are not already largely sorted by the aggregation logic.
+                    // Given the structure (iteration by nashPrefix, then by dateIdFromNash, then by entriesForDate),
+                    // the order might not be optimal for docId/sentId compression across all entries for a single Nash prefix.
+                    // However, let's try without explicit sort first.
+
+                    byte[] serializedEntries = aggregatedEntriesSoA.serializeToCompositeBlob(); // Changed serialization
                     indexAccess.put(bytes(nashPrefix), serializedEntries);
                     termsWritten++;
                     if (termsWritten % 1000 == 0) {
-                        logger.info("Written {} Nash prefixes to LevelDB...", termsWritten);
+                        logger.info("Written {} Nash prefixes to RocksDB...", termsWritten);
                     }
                 }
             }
             byte[] serializedLookup = NashSerializationUtils.serializeDateLookup(idToDate);
             indexAccess.put(NashSerializationUtils.DATE_LOOKUP_KEY, serializedLookup);
-            logger.info("Written date lookup table ({} entries) to LevelDB.", idToDate.size());
+            logger.info("Written date lookup table ({} entries) to RocksDB.", idToDate.size());
             long endTime = System.currentTimeMillis();
             logger.info("Successfully generated Nash index. Total unique prefixes written: {}. Time taken: {} ms",
                     termsWritten, (endTime - startTime));
         } catch (IndexAccessException e) {
-            logger.error("LevelDB error writing Nash index data", e);
-            throw new IOException("Failed to write Nash index to LevelDB", e);
+            logger.error("RocksDB error writing Nash index data", e);
+            throw new IOException("Failed to write Nash index to RocksDB", e);
         } catch (IOException e) {
             logger.error("Serialization error writing Nash index data", e);
-            throw new IOException("Failed to serialize Nash index data for LevelDB", e);
+            throw new IOException("Failed to serialize Nash index data for RocksDB", e);
         }
     }
 

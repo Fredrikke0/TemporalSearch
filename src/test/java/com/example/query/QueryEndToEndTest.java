@@ -32,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
+import com.example.core.PositionListSoA;
 import com.example.core.index.MockIndexAccess;
 import com.example.index.NashDateEntryWithId;
 import com.example.index.util.NashSerializationUtils;
@@ -192,20 +193,33 @@ public class QueryEndToEndTest {
         for (String nashPrefix : invertedNashIndex.keySet()) { // Iterate over keys
             List<Integer> dateIdsForPrefix = invertedNashIndex.get(nashPrefix); // Get values for the current key
 
-            List<NashDateEntryWithId> entriesToStoreForPrefix = new ArrayList<>();
+            PositionListSoA entriesToStoreForPrefixSoA = new PositionListSoA();
+
             if (dateIdsForPrefix != null) { // Check if there are any date IDs for this prefix
                 for (Integer originalDateId : dateIdsForPrefix) { // originalDateId is the one derived from idToDateLookupListForNash index
                     List<NashDateEntryWithId> actualEntries = dateIdToNashEntries.get(originalDateId);
                     if (actualEntries != null) {
-                        entriesToStoreForPrefix.addAll(actualEntries);
+                        // OLD: entriesToStoreForPrefix.addAll(actualEntries);
+                        // NEW: Add to PositionListSoA
+                        for (NashDateEntryWithId entry : actualEntries) {
+                            Position pos = entry.position();
+                            entriesToStoreForPrefixSoA.add(
+                                pos.getDocumentId(),
+                                pos.getSentenceId(),
+                                pos.getBeginPosition(),
+                                pos.getEndPosition(),
+                                entry.dateId() // entry.dateId() is the originalDateId here
+                            );
+                        }
                     } else {
                          logger.warn("Warning: No NashDateEntryWithId found for originalDateId: {} during mockNashIndex population for prefix: {}", originalDateId, nashPrefix);
                     }
                 }
             }
 
-            if (!entriesToStoreForPrefix.isEmpty()) {
-                byte[] serializedEntries = NashSerializationUtils.serializeNashEntries(entriesToStoreForPrefix);
+            if (!entriesToStoreForPrefixSoA.isEmpty()) { // Check the new SoA list
+                // OLD: byte[] serializedEntries = NashSerializationUtils.serializeNashEntries(entriesToStoreForPrefix);
+                byte[] serializedEntries = entriesToStoreForPrefixSoA.serializeToCompositeBlob(); // NEW
                 mockNashIndex.put(nashPrefix.getBytes(StandardCharsets.UTF_8), serializedEntries);
             }
         }

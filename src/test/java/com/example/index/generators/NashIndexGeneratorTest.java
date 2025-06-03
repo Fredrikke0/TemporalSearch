@@ -16,7 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.rocksdb.Options;
 
 import com.example.core.IndexAccess;
-import com.example.index.NashDateEntryWithId;
+import com.example.core.Position;
+import com.example.core.PositionListSoA;
 import com.example.index.util.NashSerializationUtils;
 import com.example.logging.ProgressTracker;
 
@@ -103,7 +104,7 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
     public void testNashIndexGenerationAndSerialization() throws Exception {
         // Generate the Nash index
         generator.generateIndex();
-        // Check that the LevelDB index exists and contains the lookup table
+        // Check that the RocksDB index exists and contains the lookup table
         var nashIndex = generator.indexAccess;
         var rawLookup = nashIndex.getRaw(NashSerializationUtils.DATE_LOOKUP_KEY);
         assertTrue(rawLookup.isPresent(), "Date lookup table should be present in Nash index");
@@ -115,14 +116,33 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
 
     @Test
     public void testNashEntrySerializationRoundTrip() throws Exception {
-        // Create a sample NashDateEntryWithId list
-        var pos = new com.example.core.Position(1, 0, 18, 33);
-        var entry = new NashDateEntryWithId(pos, 0);
-        var entries = List.of(entry);
-        byte[] serialized = NashSerializationUtils.serializeNashEntries(entries);
-        List<NashDateEntryWithId> deserialized = NashSerializationUtils.deserializeNashEntries(serialized);
-        assertEquals(1, deserialized.size());
-        assertEquals(entry.position(), deserialized.get(0).position());
-        assertEquals(entry.dateId(), deserialized.get(0).dateId());
+        // Create a sample PositionListSoA as it would be stored by NashIndexGenerator
+        Position pos1 = new Position(1, 0, 18, 33);
+        int dateId1 = 0;
+        Position pos2 = new Position(1, 1, 5, 10);
+        int dateId2 = 1;
+
+        PositionListSoA originalSoA = new PositionListSoA();
+        originalSoA.add(pos1.getDocumentId(), pos1.getSentenceId(), pos1.getBeginPosition(), pos1.getEndPosition(), dateId1);
+        originalSoA.add(pos2.getDocumentId(), pos2.getSentenceId(), pos2.getBeginPosition(), pos2.getEndPosition(), dateId2);
+
+        byte[] serialized = originalSoA.serializeToCompositeBlob();
+        PositionListSoA deserializedSoA = PositionListSoA.deserializeFromCompositeBlob(serialized);
+
+        assertEquals(2, deserializedSoA.getNumPositions());
+
+        // Check first entry
+        assertEquals(pos1.getDocumentId(), deserializedSoA.getDocIdAt(0));
+        assertEquals(pos1.getSentenceId(), deserializedSoA.getSentenceIdAt(0));
+        assertEquals(pos1.getBeginPosition(), deserializedSoA.getBeginCharAt(0));
+        assertEquals(pos1.getEndPosition(), deserializedSoA.getEndCharAt(0));
+        assertEquals(dateId1, deserializedSoA.getSynonymIdAt(0)); // dateId is stored in synonymId
+
+        // Check second entry
+        assertEquals(pos2.getDocumentId(), deserializedSoA.getDocIdAt(1));
+        assertEquals(pos2.getSentenceId(), deserializedSoA.getSentenceIdAt(1));
+        assertEquals(pos2.getBeginPosition(), deserializedSoA.getBeginCharAt(1));
+        assertEquals(pos2.getEndPosition(), deserializedSoA.getEndCharAt(1));
+        assertEquals(dateId2, deserializedSoA.getSynonymIdAt(1)); // dateId is stored in synonymId
     }
 }

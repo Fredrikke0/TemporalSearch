@@ -25,7 +25,6 @@ import org.slf4j.LoggerFactory;
 import com.example.core.Position;
 import com.example.core.PositionList;
 import com.example.core.PositionListSoA;
-import com.example.index.NashDateEntryWithId;
 import com.example.index.StitchPosition;
 import com.example.index.util.NashSerializationUtils;
 
@@ -39,12 +38,16 @@ import net.sourceforge.argparse4j.inf.Namespace;
  * This class allows browsing contents of RocksDB index databases.
  */
 public class RocksDBBrowser {
-    private static final String DELIMITER = "\0";
+    private static final String DELIMITER = "\\0";
     private static final Logger logger = LoggerFactory.getLogger(RocksDBBrowser.class);
     private static final String ANNOTATION_SYNONYMS_PREFIX = "%s_synonyms.ser";
     private static final String[] ANNOTATION_TYPES = {"date", "ner", "pos", "dependency"};
     private static final List<String> ALL_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
-        "unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "hypernym", "stitch", "nash", "stitch_bigram_date"
+        "unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "hypernym", "nash",
+        // New stitch index types from NgramAnnotationStitchGenerator
+        "stitch_unigram_date", "stitch_unigram_ner", "stitch_unigram_pos", "stitch_unigram_dependency",
+        "stitch_bigram_date", "stitch_bigram_ner", "stitch_bigram_pos", "stitch_bigram_dependency",
+        "stitch_trigram_date", "stitch_trigram_ner", "stitch_trigram_pos", "stitch_trigram_dependency"
     ));
 
     public static void main(String[] args) throws IOException {
@@ -126,7 +129,7 @@ public class RocksDBBrowser {
         System.out.printf("Accessing database at: %s%n", dbPath);
 
         Map<String, Map<Integer, String>> annotationSynonyms = new HashMap<>();
-        if (indexType.equals("stitch") && (key != null || prefix != null)) {
+        if (indexType.startsWith("stitch_") && (key != null || prefix != null)) {
             // Pass the base path for indexes, not the specific stitch index path for synonyms
             annotationSynonyms = loadAnnotationSynonyms(basePath);
         }
@@ -298,8 +301,12 @@ public class RocksDBBrowser {
                     List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(valueBytes);
                     System.out.printf("Key: %s (Date Lookup Table), Dates: %d%n", keyStr, dateLookup.size());
                 } else {
-                    List<NashDateEntryWithId> nashEntries = NashSerializationUtils.deserializeNashEntries(valueBytes);
-                    System.out.printf("Key: %s (Nash Prefix), Entries: %d%n", keyStr, nashEntries.size());
+                    try {
+                        PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
+                        System.out.printf("Key: %s (Nash Prefix), Position Entries: %d%n", keyStr, positionsSoA.getNumPositions());
+                    } catch (IOException e) {
+                        System.out.printf("Key: %s (Nash Prefix), Error deserializing: %s%n", keyStr, e.getMessage());
+                    }
                 }
                 count++;
             }
@@ -361,7 +368,7 @@ public class RocksDBBrowser {
         if (indexType.equals("dependency")) {
             String[] parts = key.split(DELIMITER);
             return parts.length == 3 ? String.format("%s-%s->%s", parts[0], parts[1], parts[2]) : key;
-        } else if (indexType.equals("bigram") || indexType.equals("trigram") || indexType.equals("stitch_bigram_date")) {
+        } else if (indexType.startsWith("stitch_") || indexType.equals("bigram") || indexType.equals("trigram")) {
             return key.replace(DELIMITER, " <STITCH> ");
         }
         return key;
@@ -425,30 +432,24 @@ public class RocksDBBrowser {
         } else {
             String key = asString(keyBytes);
             System.out.printf("%nKey: %s (Nash Prefix)%n", key);
-             System.out.println("----------");
-            List<NashDateEntryWithId> entries = NashSerializationUtils.deserializeNashEntries(valueBytes);
-            System.out.printf("Entries: %d%n", entries.size());
-            displayNashPositions(entries);
+            System.out.println("----------");
+            try {
+                PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
+                System.out.printf("Entries: %d%n", positionsSoA.getNumPositions());
+                for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
+                    if (i >= 100) { // Limit display
+                        System.out.println("  ... (showing first 100 entries)");
+                        break;
+                    }
+                    Position pos = positionsSoA.getPositionAt(i);
+                    int dateId = positionsSoA.getSynonymIdAt(i); // dateId is in synonymId
+                    System.out.printf("  Entry %d: DocID=%d, SentID=%d, Begin=%d, End=%d, DateID=%d%n",
+                                      i, pos.getDocumentId(), pos.getSentenceId(), pos.getBeginPosition(), pos.getEndPosition(), dateId);
+                }
+            } catch (IOException e) {
+                System.out.println("  Error deserializing Nash prefix data (PositionListSoA): " + e.getMessage());
+            }
         }
-    }
-
-    private static void displayNashPositions(List<NashDateEntryWithId> entries) {
-         int count = 0;
-         int maxPositions = 100;
-         for (NashDateEntryWithId entry : entries) {
-             if (count >= maxPositions) {
-                 System.out.printf("%nShowing first %d entries. Total entries: %d%n", maxPositions, entries.size());
-                 break;
-             }
-             Position pos = entry.position();
-             System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][dateId:%d]%n",
-                     pos.getDocumentId(),
-                     pos.getSentenceId(),
-                     pos.getBeginPosition(),
-                     pos.getEndPosition(),
-                     entry.dateId());
-             count++;
-         }
     }
 
     private static void displayPositionsSoA(String key, PositionListSoA positionsSoA, String indexType, Map<String, Map<Integer, String>> synonyms) {
