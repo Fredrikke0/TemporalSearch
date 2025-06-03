@@ -130,10 +130,10 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             if (entityBreak) {
                 if (!currentEntityRawTokens.isEmpty() && prevEntry != null) {
                     try {
-                        addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
-                                                currentEntityRawTokens,
-                                                currentEntityDocId, currentEntitySentId,
-                                                currentEntityBeginChar, prevEntry.getEndChar());
+                    addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
+                                            currentEntityRawTokens,
+                                            currentEntityDocId, currentEntitySentId,
+                                            currentEntityBeginChar, prevEntry.getEndChar());
                     } catch (RocksDBException e) {
                         logger.error("RocksDBException while processing entity for NerIndexGenerator. Entity type: {}, tokens: {}. Error: {}", currentEntityType, currentEntityRawTokens, e.getMessage(), e);
                     }
@@ -156,10 +156,10 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
         if (currentEntityType != null && !currentEntityRawTokens.isEmpty() && prevEntry != null) {
             try {
-                addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
-                                       currentEntityRawTokens,
-                                       currentEntityDocId, currentEntitySentId,
-                                       currentEntityBeginChar, prevEntry.getEndChar());
+             addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
+                                    currentEntityRawTokens,
+                                    currentEntityDocId, currentEntitySentId,
+                                    currentEntityBeginChar, prevEntry.getEndChar());
             } catch (RocksDBException e) {
                 logger.error("RocksDBException while processing final entity for NerIndexGenerator. Entity type: {}, tokens: {}. Error: {}", currentEntityType, currentEntityRawTokens, e.getMessage(), e);
             }

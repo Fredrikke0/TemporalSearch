@@ -424,7 +424,8 @@ class PositionListSoATest {
         assertSoaListsEqual(listWithRLE_NegativeOne, deserializedListWithRLE_NegativeOne);
 
         // Scenario 2: Synonym IDs vary.
-        // RLE should NOT be applied to synonymIds array; it will go through FastPFOR (since applyDelta=false and not constant).
+        // RLE should NOT be applied to synonymIds array. Since applyDelta=false for synonymIds and they are not constant,
+        // they will be written raw (uncompressed).
         PositionListSoA listWithoutRLEForSynonyms = new PositionListSoA();
         for (int i = 0; i < NUM_POSITIONS; i++) {
             // Use same doc/sent/begin/end as above to isolate synonymId's impact
@@ -436,10 +437,10 @@ class PositionListSoATest {
         assertSoaListsEqual(listWithoutRLEForSynonyms, deserializedListWithoutRLE);
 
         // Assert that the RLE blob is smaller.
-        // The synonymIds array in rleBlob_NegativeOne (all -1s) should be RLE'd (approx 12 bytes data part + overhead).
-        // The synonymIds array in nonRleSynonymBlob (varying) should be FastPFOR'd (much larger for 200 ints).
+        // The synonymIds array in rleBlob_NegativeOne (all -1s) should be RLE'd (approx 8 bytes data part + overhead).
+        // The synonymIds array in nonRleSynonymBlob (varying) should be raw uncompressed (NUM_POSITIONS * 4 bytes data + overhead).
         assertTrue(rleBlob_NegativeOne.length < nonRleSynonymBlob.length,
-                "Blob with RLE for constant synonymIds (-1) should be smaller than blob with FastPFOR for varying synonymIds. " +
+                "Blob with RLE for constant synonymIds (-1) should be smaller than blob with raw uncompressed for varying synonymIds. " +
                 "RLE (-1) size: " + rleBlob_NegativeOne.length + ", Non-RLE (varying) size: " + nonRleSynonymBlob.length);
 
         // Scenario 3: All synonym IDs are a constant positive value (e.g., 777)

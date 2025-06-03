@@ -43,8 +43,8 @@ public class RocksDBBrowser {
     private static final String ANNOTATION_SYNONYMS_PREFIX = "%s_synonyms.ser";
     private static final String[] ANNOTATION_TYPES = {"date", "ner", "pos", "dependency"};
     private static final List<String> ALL_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
-        "unigram", "bigram", "trigram", "dependency", "ner_date", "pos", "hypernym", "nash",
-        // New stitch index types from NgramAnnotationStitchGenerator
+        "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash",
+        // Stitch indexes
         "stitch_unigram_date", "stitch_unigram_ner", "stitch_unigram_pos", "stitch_unigram_dependency",
         "stitch_bigram_date", "stitch_bigram_ner", "stitch_bigram_pos", "stitch_bigram_dependency",
         "stitch_trigram_date", "stitch_trigram_ner", "stitch_trigram_pos", "stitch_trigram_dependency"

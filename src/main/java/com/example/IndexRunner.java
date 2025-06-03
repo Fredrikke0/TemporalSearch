@@ -1,5 +1,7 @@
 package com.example;
 
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -704,55 +706,130 @@ public class IndexRunner {
             while (iterator.isValid()) {
                 byte[] keyBytes = iterator.key();
                 byte[] valueBytes = iterator.value();
-                PositionListSoA posList = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
-                String keyFromSourceIndex = IndexAccess.asString(keyBytes);
 
-                for (int i = 0; i < posList.getNumPositions(); i++) {
-                    int docId = posList.getDocIdAt(i);
-                    int sentenceId = posList.getSentenceIdAt(i);
-                    int beginChar = posList.getBeginCharAt(i);
-                    int endChar = posList.getEndCharAt(i);
-                    String sentenceKey = docId + "_" + sentenceId;
+                logger.debug("Attempting to deserialize PositionListSoA for key '{}' (annotation type {}). Blob size: {} bytes.", IndexAccess.asString(keyBytes), annotationTypeSource.getTypeIdentifier(), (valueBytes != null ? valueBytes.length : "null"));
 
-                    String annotationTypeForTOS;
-                    int specificValueIdForTOS;
+                try {
+                    PositionListSoA posList = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
 
-                    if (annotationTypeSource == AnnotationTypeSource.NER || annotationTypeSource == AnnotationTypeSource.POS) {
-                        // For NER/POS, keyFromSourceIndex is the type ("PERSON", "NOUN")
-                        // and specificValueId is already in synonymId from their generators.
-                        annotationTypeForTOS = keyFromSourceIndex;
-                        specificValueIdForTOS = posList.getSynonymIdAt(i);
-                    } else if (annotationTypeSource == AnnotationTypeSource.NER_DATE) {
-                        // For NER_DATE, keyFromSourceIndex is the date string (e.g., "20230101")
-                        // The type string for TOS should be the type identifier (e.g., "NER_DATE")
-                        // The date string itself needs to be looked up in ValueLookupManager.
-                        annotationTypeForTOS = annotationTypeSource.getTypeIdentifier();
-                        String dateValue = keyFromSourceIndex; // This is the YYYYMMDD date string
-                        specificValueIdForTOS = valueLookupManager.getId(dateValue);
-                    } else {
-                        // Fallback for any other unforeseen AnnotationTypeSource values.
-                        // This could log an error or attempt a default behavior.
-                        logger.warn("Unhandled AnnotationTypeSource '{}' in generateTemporaryAnnotationBySentenceIndex. Attempting default ID lookup.", annotationTypeSource);
-                        annotationTypeForTOS = annotationTypeSource.getTypeIdentifier();
-                        String valueToLookup = keyFromSourceIndex;
-                        specificValueIdForTOS = valueLookupManager.getId(valueToLookup);
+                    String keyFromSourceIndex = IndexAccess.asString(keyBytes);
+
+                    for (int i = 0; i < posList.getNumPositions(); i++) {
+                        int docId = posList.getDocIdAt(i);
+                        int sentenceId = posList.getSentenceIdAt(i);
+                        int beginChar = posList.getBeginCharAt(i);
+                        int endChar = posList.getEndCharAt(i);
+                        String sentenceKey = docId + "_" + sentenceId;
+
+                        String annotationTypeForTOS;
+                        int specificValueIdForTOS;
+
+                        if (annotationTypeSource == AnnotationTypeSource.NER || annotationTypeSource == AnnotationTypeSource.POS) {
+                            annotationTypeForTOS = keyFromSourceIndex;
+                            specificValueIdForTOS = posList.getSynonymIdAt(i);
+                        } else if (annotationTypeSource == AnnotationTypeSource.NER_DATE) {
+                            annotationTypeForTOS = annotationTypeSource.getTypeIdentifier();
+                            String dateValue = keyFromSourceIndex;
+                            specificValueIdForTOS = valueLookupManager.getId(dateValue);
+                        } else {
+                            logger.warn("Unhandled AnnotationTypeSource '{}' in generateTemporaryAnnotationBySentenceIndex. Attempting default ID lookup.", annotationTypeSource);
+                            annotationTypeForTOS = annotationTypeSource.getTypeIdentifier();
+                            String valueToLookup = keyFromSourceIndex;
+                            specificValueIdForTOS = valueLookupManager.getId(valueToLookup);
+                        }
+
+                        sentenceBatch.computeIfAbsent(sentenceKey, k -> new ArrayList<>()).add(
+                            new TermOccurrenceInSentence(annotationTypeForTOS, specificValueIdForTOS, beginChar, endChar)
+                        );
                     }
+                } catch (ArrayIndexOutOfBoundsException aioobe) {
+                    logger.error("### AIOOBE Deserializing PositionListSoA for key '{}', annotationType '{}'. Blob size: {} bytes.",
+                                IndexAccess.asString(keyBytes), annotationTypeSource.getTypeIdentifier(), (valueBytes != null ? valueBytes.length : "null"), aioobe);
+                    // Now, let's try to manually inspect the problematic blob
+                    if (valueBytes != null) {
+                        try (ByteArrayInputStream bais = new ByteArrayInputStream(valueBytes);
+                             DataInputStream dis = new DataInputStream(bais)) {
+                            logger.error("### Manual Blob Inspection for Key '{}':", IndexAccess.asString(keyBytes));
+                            int numPositionsReported = dis.readInt();
+                            logger.error("###   Reported numPositions in blob: {}", numPositionsReported);
 
-                    sentenceBatch.computeIfAbsent(sentenceKey, k -> new ArrayList<>()).add(
-                        new TermOccurrenceInSentence(annotationTypeForTOS, specificValueIdForTOS, beginChar, endChar)
-                    );
+                            // Basic sanity check on numPositions
+                            if (numPositionsReported >= 0 && numPositionsReported < 10000000) { // Allow 0 for empty lists that somehow got here
+                                String[] arrayNames = {"docIds", "sentenceIds", "beginChars", "endChars", "synonymIds"};
+                                for (String arrayName : arrayNames) {
+                                    if (numPositionsReported == 0 && dis.available() >=4) { // if numPos is 0, writer still writes a 0 for array size marker
+                                        int arraySizeOrMarker = dis.readInt();
+                                        logger.error("###   Marker for {} (when numPositions is 0): 0x{} ({})", arrayName, Integer.toHexString(arraySizeOrMarker), arraySizeOrMarker);
+                                        if(arraySizeOrMarker != 0) {
+                                            logger.error("###     Expected 0 marker for {} when numPositions is 0, but got {}. Halting inspection.", arrayName, arraySizeOrMarker);
+                                            break;
+                                        }
+                                        // For numPositions == 0, after reading the '0' marker for the array, there's nothing else for this array.
+                                        continue; // Move to the next array name
+                                    } else if (numPositionsReported == 0){
+                                         logger.error("###   numPositions is 0, but not enough bytes for array marker for {}.", arrayName);
+                                         break;
+                                    }
+
+                                    // Proceed if numPositionsReported > 0
+                                    if (dis.available() >= 4) {
+                                        int arraySizeOrMarker = dis.readInt();
+                                        logger.error("###   Marker for {}: 0x{} ({})", arrayName, Integer.toHexString(arraySizeOrMarker), arraySizeOrMarker);
+
+                                        if (arraySizeOrMarker == PositionListSoA.RLE_ENCODED_MARKER) {
+                                            if (dis.available() >=4) {
+                                                int rleValue = dis.readInt();
+                                                logger.error("###     RLE Value for {}: {}", arrayName, rleValue);
+                                            } else {
+                                                logger.error("###     RLE marker found for {} but not enough bytes for value. Remaining: {}", arrayName, dis.available());
+                                                break;
+                                            }
+                                        } else if (arraySizeOrMarker > 0 && arraySizeOrMarker < valueBytes.length && arraySizeOrMarker % 4 == 0) { // Plausible size
+                                            if (dis.available() >= arraySizeOrMarker) {
+                                                dis.skipBytes(arraySizeOrMarker);
+                                                logger.error("###     Successfully skipped {} bytes for {}", arraySizeOrMarker, arrayName);
+                                            } else {
+                                                logger.error("###     Declared size {} for {} exceeds remaining {} bytes in stream. Halting inspection.", arraySizeOrMarker, arrayName, dis.available());
+                                                break;
+                                            }
+                                        } else if (arraySizeOrMarker == 0 && numPositionsReported > 0) { // Valid for an empty array payload if numExpected > 0
+                                            logger.error("###     Marker for {} is 0 (empty payload).", arrayName);
+                                            // Nothing to skip.
+                                        }
+                                        else {
+                                           logger.error("###     Marker for {} (0x{}/ {}) is not RLE, 0 (for empty payload), or a plausible size. Halting inspection.", arrayName, Integer.toHexString(arraySizeOrMarker), arraySizeOrMarker);
+                                           break;
+                                        }
+                                    } else {
+                                        logger.error("###   Not enough bytes remaining to read marker for {}. Needed 4, available {}. Halting inspection.", arrayName, dis.available());
+                                        break;
+                                    }
+                                }
+                            } else { // numPositionsReported < 0 or too large
+                                logger.error("###   Reported numPositions ({}) is negative or seems excessively large. Halting inspection.", numPositionsReported);
+                            }
+                        } catch (IOException ioe) {
+                            logger.error("### IOException during manual blob inspection for key '{}': {}", IndexAccess.asString(keyBytes), ioe.getMessage(), ioe);
+                        }
+                    }
+                    // Re-throw the original exception to halt the process as before
+                    throw aioobe;
+                } catch (Exception e) { // Catch other potential exceptions during deserialization
+                    logger.error("### GENERIC EXCEPTION Deserializing PositionListSoA for key '{}', annotationType '{}'. Blob size: {} bytes. Message: {}",
+                                IndexAccess.asString(keyBytes), annotationTypeSource.getTypeIdentifier(), (valueBytes != null ? valueBytes.length : "null"), e.getMessage(), e);
+                    // Re-throw to halt
+                    throw e;
                 }
 
+                // Rest of the original loop logic for batching
                 if (sentenceBatch.size() >= SENTENCE_BATCH_SIZE) {
                     writeSentenceBatchToTempAnnotationDB(sentenceBatch, tempDb, annotationTypeSource.getTypeIdentifier());
                     sentenceBatch.clear();
                     batchCount++;
-                    if (batchCount % 10 == 0) {
-                        //logger.debug("Processed {} sentence batches for temp {} index", batchCount, annotationTypeSource.getTypeIdentifier());
-                    }
+                    // if (batchCount % 10 == 0) { // logger.debug(...) }
                 }
                 iterator.next();
-            }
+            } // End while (iterator.isValid())
             if (!sentenceBatch.isEmpty()) {
                 writeSentenceBatchToTempAnnotationDB(sentenceBatch, tempDb, annotationTypeSource.getTypeIdentifier());
             }
