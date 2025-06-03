@@ -239,6 +239,16 @@ public class IndexAccess implements IndexAccessInterface {
         return Optional.empty(); // Basic implementation
     }
 
+    /**
+     * Gets the root path of this index.
+     * Implements the interface method.
+     * @return The Path to the index directory.
+     */
+    @Override
+    public Path getIndexPath() {
+        return java.nio.file.Path.of(this.indexPath);
+    }
+
     private void checkOpen() throws IndexAccessException {
         if (!isOpen()) {
             throw new IndexAccessException(

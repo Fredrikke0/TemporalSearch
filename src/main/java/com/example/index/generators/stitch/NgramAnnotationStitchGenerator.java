@@ -51,14 +51,50 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
 
     private static final int DEFAULT_BATCH_WRITE_SIZE = 10000;
 
-    // Inner class TermOccurrenceInSentence remains the same for now
+    // Static inner class for N-gram occurrences in temporary N-gram index
+    public static record NgramInstance(String term, int beginChar, int endChar) {
+        public static byte[] serializeList(List<NgramInstance> list) throws IOException {
+            StringBuilder sb = new StringBuilder();
+            for (NgramInstance item : list) {
+                sb.append(item.term().replace("\n", "<NL>").replace("\t", "<TAB>"))
+                  .append("\t").append(item.beginChar())
+                  .append("\t").append(item.endChar()).append("\n");
+            }
+            return sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+        public static List<NgramInstance> deserializeList(byte[] bytes) throws IOException {
+            List<NgramInstance> list = new ArrayList<>();
+            if (bytes == null || bytes.length == 0) return list;
+            String fullString = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            if (fullString.isEmpty()) return list;
+            String[] lines = fullString.split("\\n");
+            for (String line : lines) {
+                if (!line.trim().isEmpty()) {
+                    String[] parts = line.split("\\t");
+                    if (parts.length == 3) {
+                        list.add(new NgramInstance(
+                            parts[0].replace("<NL>", "\n").replace("<TAB>", "\t"),
+                            Integer.parseInt(parts[1]),
+                            Integer.parseInt(parts[2]))
+                        );
+                    }
+                }
+            }
+            return list;
+        }
+    }
+
+    // Modified Inner class TermOccurrenceInSentence
     public static class TermOccurrenceInSentence {
-        public String term;
+        public String annotationTypeString; // e.g., "PERSON", "NOUN"
+        public int specificValueId;      // ID for "John Doe", "apple"
         public int beginChar;
         public int endChar;
 
-        public TermOccurrenceInSentence(String term, int beginChar, int endChar) {
-            this.term = term;
+        public TermOccurrenceInSentence(String annotationTypeString, int specificValueId, int beginChar, int endChar) {
+            this.annotationTypeString = annotationTypeString;
+            this.specificValueId = specificValueId;
             this.beginChar = beginChar;
             this.endChar = endChar;
         }
@@ -67,12 +103,14 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
         public static byte[] serializeList(List<TermOccurrenceInSentence> list) throws IOException {
             StringBuilder sb = new StringBuilder();
             for (TermOccurrenceInSentence item : list) {
-                sb.append(item.term.replace("\n", "<NL>").replace("\t", "<TAB>"))
+                sb.append(item.annotationTypeString.replace("\n", "<NL>").replace("\t", "<TAB>"))
+                  .append("\t").append(item.specificValueId)
                   .append("\t").append(item.beginChar)
                   .append("\t").append(item.endChar).append("\n");
             }
             return sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
+
         public static List<TermOccurrenceInSentence> deserializeList(byte[] bytes) throws IOException {
             List<TermOccurrenceInSentence> list = new ArrayList<>();
             if (bytes == null || bytes.length == 0) return list;
@@ -82,11 +120,12 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
             for (String line : lines) {
                 if (!line.trim().isEmpty()) {
                     String[] parts = line.split("\\t");
-                    if (parts.length == 3) {
+                    if (parts.length == 4) {
                         list.add(new TermOccurrenceInSentence(
                             parts[0].replace("<NL>", "\n").replace("<TAB>", "\t"),
                             Integer.parseInt(parts[1]),
-                            Integer.parseInt(parts[2]))
+                            Integer.parseInt(parts[2]),
+                            Integer.parseInt(parts[3]))
                         );
                     }
                 }
@@ -172,19 +211,21 @@ public class NgramAnnotationStitchGenerator implements AutoCloseable {
                 int sentId = Integer.parseInt(docSentParts[1]);
 
                 byte[] ngramOccurrencesBytes = ngramSentenceIterator.value();
-                List<TermOccurrenceInSentence> ngramsInSentence = TermOccurrenceInSentence.deserializeList(ngramOccurrencesBytes);
+                // Use NgramInstance.deserializeList for N-gram data
+                List<NgramInstance> ngramsInSentence = NgramInstance.deserializeList(ngramOccurrencesBytes);
 
                 java.util.Optional<byte[]> annotationOccurrencesBytesOpt = temporaryAnnotationBySentenceIA.getRaw(sentenceKeyBytes);
 
                 if (annotationOccurrencesBytesOpt.isPresent()) {
+                    // Use TermOccurrenceInSentence.deserializeList for Annotation data (already correct)
                     List<TermOccurrenceInSentence> annotationsInSentence = TermOccurrenceInSentence.deserializeList(annotationOccurrencesBytesOpt.get());
                     if (!ngramsInSentence.isEmpty() && !annotationsInSentence.isEmpty()) {
-                        for (TermOccurrenceInSentence ngramOcc : ngramsInSentence) {
+                        for (NgramInstance ngramOcc : ngramsInSentence) {
                             for (TermOccurrenceInSentence annotationOcc : annotationsInSentence) {
-                                String stitchKeyString = ngramOcc.term + IndexAccessInterface.DELIMITER + annotationOcc.term;
+                                String stitchKeyString = ngramOcc.term() + IndexAccessInterface.DELIMITER + annotationOcc.annotationTypeString;
                                 PositionListSoA posList = finalStitchAggregator
                                         .computeIfAbsent(stitchKeyString, k -> new PositionListSoA());
-                                posList.add(docId, sentId, ngramOcc.beginChar, ngramOcc.endChar);
+                                posList.add(docId, sentId, ngramOcc.beginChar(), ngramOcc.endChar(), annotationOcc.specificValueId);
                                 stitchEntriesGenerated++;
                             }
                         }

@@ -370,6 +370,16 @@ public class MockIndexAccess implements IndexAccessInterface {
         return Optional.ofNullable(this.metadata);
     }
 
+    @Override
+    public Path getIndexPath() {
+        // Return the path to the temporary directory used by this mock instance
+        if (this.mockRocksDbPath == null) {
+            // Should not happen if constructor completed successfully
+            throw new IllegalStateException("MockIndexAccess mockRocksDbPath is not initialized.");
+        }
+        return this.mockRocksDbPath;
+    }
+
     // --- Inner Mock Iterator Class ---
 
     private static class MockRocksIterator extends RocksIterator {

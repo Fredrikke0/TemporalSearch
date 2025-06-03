@@ -24,7 +24,7 @@ import com.google.common.io.RecursiveDeleteOption;
  * Handles database setup, cleanup, and common test data creation.
  */
 public abstract class BaseIndexTest {
-    private static final Logger logger = LoggerFactory.getLogger(BaseIndexTest.class);
+    protected static final Logger logger = LoggerFactory.getLogger(BaseIndexTest.class);
     protected Path tempDir;
     protected Path indexBaseDir;
     protected Connection sqliteConn;

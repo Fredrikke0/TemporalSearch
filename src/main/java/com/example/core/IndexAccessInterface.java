@@ -111,6 +111,14 @@ public interface IndexAccessInterface extends AutoCloseable {
     }
 
     /**
+     * Gets the root path of this index.
+     * This can be used by components like ValueLookupManager to store auxiliary data
+     * in a sub-directory relative to the main index data.
+     * @return The Path to the index directory.
+     */
+    java.nio.file.Path getIndexPath();
+
+    /**
      * Closes the index access, releasing any underlying resources.
      * Overrides AutoCloseable.close().
      */

@@ -3,21 +3,29 @@ package com.example.index.generators;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.rocksdb.Options;
+import org.rocksdb.RocksDBException;
 
 import com.example.core.IndexAccess;
-import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
+import com.example.index.util.ValueLookupManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 
@@ -25,39 +33,48 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-ner-general.txt";
     private NerIndexGenerator generator;
     private IndexAccess indexAccess;
+    private ValueLookupManager valueLookupManager;
+    private Path valueLookupManagerPath;
+
+    @TempDir
+    Path sharedTempDir;
 
     @BeforeEach
     @Override
     protected void setUp() throws Exception {
         super.setUp();
 
-        // Create test stopwords file
         try (PrintWriter writer = new PrintWriter(TEST_STOPWORDS_PATH)) {
             writer.println("the");
             writer.println("a");
             writer.println("is");
         }
 
-        // Create IndexAccess instance first
         try (Options options = createTestOptions()) {
             this.indexAccess = new IndexAccess(indexBaseDir.resolve("ner"), "ner", options);
         }
 
-        // Create generator
+        valueLookupManagerPath = sharedTempDir.resolve("ner_test_lookup.db");
+        try {
+            valueLookupManager = new ValueLookupManager(valueLookupManagerPath);
+        } catch (RocksDBException e) {
+            fail("Failed to initialize ValueLookupManager for testing: " + e.getMessage());
+        }
+
         generator = new NerIndexGenerator(
             this.indexAccess,
             TEST_STOPWORDS_PATH,
             sqliteConn,
             new ProgressTracker(),
-            1000
+            1000,
+            null,
+            valueLookupManager
         );
 
-        // Insert test data
         setupTestData();
     }
 
     private void setupTestData() throws SQLException {
-        // Insert documents with timestamps
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
                 "INSERT INTO documents (document_id, timestamp) VALUES (?, ?)")) {
             pstmt.setInt(1, 1);
@@ -65,16 +82,13 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
             pstmt.executeUpdate();
         }
 
-        // Insert test sentences with named entities
         String[][] testWords = {
-            // "John Smith works at Google in Mountain View"
             { "1", "0", "0", "10", "John Smith", "john smith", "NOUN", "PERSON", null },
             { "1", "0", "11", "16", "works", "work", "VERB", null, null },
             { "1", "0", "17", "19", "at", "at", "ADP", null, null },
             { "1", "0", "20", "26", "Google", "google", "NOUN", "ORGANIZATION", null },
             { "1", "0", "27", "29", "in", "in", "ADP", null, null },
             { "1", "0", "30", "43", "Mountain View", "mountain view", "NOUN", "LOCATION", null },
-            // "Microsoft announced a new product yesterday"
             { "1", "1", "44", "53", "Microsoft", "microsoft", "NOUN", "ORGANIZATION", null },
             { "1", "1", "54", "63", "announced", "announce", "VERB", null, null },
             { "1", "1", "64", "65", "a", "a", "DET", null, null },
@@ -104,48 +118,63 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
     @AfterEach
     @Override
     protected void tearDown() throws Exception {
+        if (valueLookupManager != null) {
+            try {
+                valueLookupManager.deleteDatabaseFiles();
+            } catch (IOException e) {
+                logger.error("Error tearing down ValueLookupManager: " + e.getMessage(), e);
+            }
+        }
         super.tearDown();
         new File(TEST_STOPWORDS_PATH).delete();
     }
 
     @Test
-    public void testEntityIndexing() throws Exception {
-        // Fetch first batch of entries
+    public void testEntityIndexing() throws Exception, RocksDBException {
         var entries = generator.fetchBatch(null);
+        assertEquals(4, entries.size(), "Should have fetched 4 distinct entity occurrences initially");
 
-        // Check entity count
-        assertEquals(4, entries.size(), "Should have fetched 4 entities");
-
-        // Process batch and verify results
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
 
-        // Verify person entity
-        String personKey = "PERSON" + IndexAccessInterface.DELIMITER + "john smith";
-        assertTrue(result.containsKey(personKey), "Should contain PERSON entity");
-        assertEquals(1, result.get(personKey).get(0).getNumPositions(),
-            "Should have one position for PERSON entity");
+        assertTrue(result.containsKey("PERSON"), "Should contain PERSON entity type key");
+        assertEquals(1, result.get("PERSON").size(), "Should be one PositionListSoA for PERSON type");
+        PositionListSoA personPositions = result.get("PERSON").get(0);
+        assertEquals(1, personPositions.getNumPositions(), "Should have one position in total for PERSON type");
+        int johnSmithId = valueLookupManager.getId("john smith");
+        assertEquals(johnSmithId, personPositions.getSynonymIdAt(0), "SynonymId should match ID for 'john smith'");
 
-        // Verify organization entities
-        String orgKey1 = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "google";
-        assertTrue(result.containsKey(orgKey1), "Should contain ORGANIZATION entity (Google)");
-        assertEquals(1, result.get(orgKey1).get(0).getNumPositions(),
-            "Should have one position for ORGANIZATION entity (Google)");
+        assertTrue(result.containsKey("ORGANIZATION"), "Should contain ORGANIZATION entity type key");
+        assertEquals(1, result.get("ORGANIZATION").size(), "Should be one PositionListSoA for ORGANIZATION type");
+        PositionListSoA orgPositions = result.get("ORGANIZATION").get(0);
+        assertEquals(2, orgPositions.getNumPositions(), "Should have two positions in total for ORGANIZATION type (Google, Microsoft)");
 
-        String orgKey2 = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "microsoft";
-        assertTrue(result.containsKey(orgKey2), "Should contain ORGANIZATION entity (Microsoft)");
-        assertEquals(1, result.get(orgKey2).get(0).getNumPositions(),
-            "Should have one position for ORGANIZATION entity (Microsoft)");
+        int googleId = valueLookupManager.getId("google");
+        int microsoftId = valueLookupManager.getId("microsoft");
 
-        // Verify location entity
-        String locKey = "LOCATION" + IndexAccessInterface.DELIMITER + "mountain view";
-        assertTrue(result.containsKey(locKey), "Should contain LOCATION entity");
-        assertEquals(1, result.get(locKey).get(0).getNumPositions(),
-            "Should have one position for LOCATION entity");
+        List<Integer> orgSynonymIds = orgPositions.getSynonymIds().intStream().boxed().collect(Collectors.toList());
+        assertTrue(orgSynonymIds.contains(googleId), "Synonym ID for 'google' should be present in ORGANIZATION positions");
+        assertTrue(orgSynonymIds.contains(microsoftId), "Synonym ID for 'microsoft' should be present in ORGANIZATION positions");
+
+        long googleCount = IntStream.range(0, orgPositions.getNumPositions())
+                                  .filter(i -> orgPositions.getSynonymIdAt(i) == googleId)
+                                  .count();
+        assertEquals(1, googleCount, "Should be one position entry for Google");
+
+        long microsoftCount = IntStream.range(0, orgPositions.getNumPositions())
+                                   .filter(i -> orgPositions.getSynonymIdAt(i) == microsoftId)
+                                   .count();
+        assertEquals(1, microsoftCount, "Should be one position entry for Microsoft");
+
+        assertTrue(result.containsKey("LOCATION"), "Should contain LOCATION entity type key");
+        assertEquals(1, result.get("LOCATION").size(), "Should be one PositionListSoA for LOCATION type");
+        PositionListSoA locPositions = result.get("LOCATION").get(0);
+        assertEquals(1, locPositions.getNumPositions(), "Should have one position in total for LOCATION type");
+        int mountainViewId = valueLookupManager.getId("mountain view");
+        assertEquals(mountainViewId, locPositions.getSynonymIdAt(0), "SynonymId should match ID for 'mountain view'");
     }
 
     @Test
     public void testDateExclusion() throws Exception {
-        // Add a DATE entity
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
                 "INSERT INTO documents (document_id, timestamp) VALUES (?, ?)")) {
             pstmt.setInt(1, 2);
@@ -154,7 +183,6 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         }
 
         String[][] dateEntity = {
-            // "The event happened on January 15, 2024"
             { "2", "0", "0", "24", "January 15, 2024", "2024-01-15", "DATE", "DATE", "2024-01-15" }
         };
 
@@ -175,21 +203,18 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
             }
         }
 
-        // Fetch and process entries
         var entries = generator.fetchBatch(null);
+        assertEquals(4, entries.size(), "Should still have 4 non-DATE entities fetched by fetchBatch (original test data)");
 
-        // Check that DATE entity is excluded
-        assertEquals(4, entries.size(), "Should still have 4 entities (DATE excluded)");
-
-        // Verify no DATE entity in results
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
-        String dateKey = "DATE" + IndexAccessInterface.DELIMITER + "january 15, 2024";
-        assertFalse(result.containsKey(dateKey), "Should not contain DATE entity");
+        assertFalse(result.containsKey("DATE"), "Should not contain DATE entity type key from NerIndexGenerator");
     }
 
     @Test
-    public void testEntityCaseNormalization() throws Exception {
-        // Add entities with varied casing
+    public void testEntityCaseNormalization() throws Exception, RocksDBException {
+        try (PreparedStatement pstmt = sqliteConn.prepareStatement("DELETE FROM annotations")) { pstmt.executeUpdate(); }
+        try (PreparedStatement pstmt = sqliteConn.prepareStatement("DELETE FROM documents")) { pstmt.executeUpdate(); }
+
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
                 "INSERT INTO documents (document_id, timestamp) VALUES (?, ?)")) {
             pstmt.setInt(1, 3);
@@ -198,9 +223,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         }
 
         String[][] caseEntities = {
-            // "APPLE announced new iPhones"
             { "3", "0", "0", "5", "APPLE", "apple", "NOUN", "ORGANIZATION", null },
-            // "Apple also released MacBooks"
             { "3", "1", "0", "5", "Apple", "apple", "NOUN", "ORGANIZATION", null }
         };
 
@@ -221,20 +244,28 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
             }
         }
 
-        // Fetch and process entries
         var entries = generator.fetchBatch(null);
+        assertEquals(2, entries.size(), "Should fetch 2 raw annotations for APPLE and Apple");
+
         var result = generator.processBatch(entries);
 
-        // Verify case normalization - both APPLE and Apple should be mapped to the same key
-        String appleKey = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "apple";
-        assertTrue(result.containsKey(appleKey), "Should contain normalized ORGANIZATION entity (apple)");
-        assertEquals(2, result.get(appleKey).get(0).getNumPositions(),
-            "Should have two positions for normalized ORGANIZATION entity (apple)");
+        assertTrue(result.containsKey("ORGANIZATION"), "Should contain ORGANIZATION entity type key for apple/APPLE");
+        assertEquals(1, result.get("ORGANIZATION").size(), "Should be one PositionListSoA for ORGANIZATION type");
+        PositionListSoA applePl = result.get("ORGANIZATION").get(0);
+
+        assertEquals(2, applePl.getNumPositions(), "Should have two positions for normalized ORGANIZATION entity (apple)");
+
+        int appleId = valueLookupManager.getId("apple");
+        boolean allMatchAppleId = IntStream.range(0, applePl.getNumPositions())
+                                           .allMatch(i -> applePl.getSynonymIdAt(i) == appleId);
+        assertTrue(allMatchAppleId, "All positions in the list should have synonymId for 'apple'");
     }
 
     @Test
-    public void testMultiTokenEntityContinuity() throws Exception {
-        // Add a multi-token entity spread across sequential annotations
+    public void testMultiTokenEntityContinuity() throws Exception, RocksDBException {
+        try (PreparedStatement pstmt = sqliteConn.prepareStatement("DELETE FROM annotations")) { pstmt.executeUpdate(); }
+        try (PreparedStatement pstmt = sqliteConn.prepareStatement("DELETE FROM documents")) { pstmt.executeUpdate(); }
+
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
                 "INSERT INTO documents (document_id, timestamp) VALUES (?, ?)")) {
             pstmt.setInt(1, 4);
@@ -243,15 +274,14 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         }
 
         String[][] multiTokenEntity = {
-            // "New Zealand Army Corps is a military organization"
             { "4", "0", "0", "3", "New", "new", "ADJ", "ORGANIZATION", null },
             { "4", "0", "4", "11", "Zealand", "zealand", "NOUN", "ORGANIZATION", null },
             { "4", "0", "12", "16", "Army", "army", "NOUN", "ORGANIZATION", null },
             { "4", "0", "17", "22", "Corps", "corps", "NOUN", "ORGANIZATION", null },
-            { "4", "0", "23", "25", "is", "be", "VERB", null, null },
+            { "4", "0", "23", "25", "is", "be", "AUX", null, null },
             { "4", "0", "26", "27", "a", "a", "DET", null, null },
             { "4", "0", "28", "36", "military", "military", "ADJ", null, null },
-            { "4", "0", "37", "48", "organization", "organization", "NOUN", null, null }
+            { "4", "0", "37", "49", "organization", "organization", "NOUN", null, null }
         };
 
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
@@ -270,24 +300,24 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
                 pstmt.executeUpdate();
             }
         }
-
-        // Fetch and process entries
         var entries = generator.fetchBatch(null);
-        ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
+        assertEquals(4, entries.size(), "Should fetch 4 raw annotations for the tokens of 'New Zealand Army Corps'");
 
-        // Verify multi-token entity
-        // The generator should concatenate "New", "Zealand", "Army", "Corps" into "new zealand army corps"
-        String expectedKey = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "new zealand army corps";
-        assertTrue(result.containsKey(expectedKey),
-            "Should contain the combined multi-token ORGANIZATION entity 'new zealand army corps'. Actual keys: " + result.keySet());
+        var result = generator.processBatch(entries);
 
-        if (result.containsKey(expectedKey)) {
-            assertEquals(1, result.get(expectedKey).size(), "Should be one PositionList for the entity.");
-            assertEquals(1, result.get(expectedKey).get(0).getNumPositions(),
-                "Should have one position for the combined entity 'new zealand army corps'");
-            Position pos = result.get(expectedKey).get(0).getPositionAt(0);
-            assertEquals(0, pos.getBeginPosition(), "Begin char of combined entity should be 0");
-            assertEquals(22, pos.getEndPosition(), "End char of combined entity should be 22"); // "Corps" ends at 22
-        }
+        String nzArmyKey = "ORGANIZATION";
+        assertTrue(result.containsKey(nzArmyKey), "Should contain ORGANIZATION key for multi-token");
+        assertEquals(1, result.get(nzArmyKey).size(), "Should be one PositionListSoA for ORGANIZATION type");
+
+        PositionListSoA nzArmyPositions = result.get(nzArmyKey).get(0);
+
+        assertEquals(1, nzArmyPositions.getNumPositions(), "Should have one position entry for the combined 'New Zealand Army Corps'");
+
+        int nzArmyId = valueLookupManager.getId("new zealand army corps");
+        Position pos = nzArmyPositions.getPositionAt(0);
+
+        assertEquals(nzArmyId, nzArmyPositions.getSynonymIdAt(0), "SynonymId should match ID for 'new zealand army corps'");
+        assertEquals(0, pos.getBeginPosition(), "Begin char for 'New Zealand Army Corps' should be 0");
+        assertEquals(22, pos.getEndPosition(), "End char for 'New Zealand Army Corps' should be 22");
     }
 }

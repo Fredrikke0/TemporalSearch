@@ -11,19 +11,23 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
+import com.example.index.util.ValueLookupManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming POS (Part-of-Speech) index from annotation entries.
- * Each entry maps a POS tag to its positions in the corpus.
+ * The primary key is the POS tag (e.g., "NOUN").
+ * Specific tokens (e.g., "apple") are mapped to integer IDs using a shared ValueLookupManager,
+ * and these IDs are stored in PositionListSoA.synonymId.
  * Uses streaming processing and external sorting for efficient memory usage.
  *
  * This implementation is now RocksDB-based (see IndexGenerator).
@@ -33,12 +37,20 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     // SQL query part to select POS tags to exclude. Example: ('PUNCT', 'SYM')
     public static final String POS_TAGS_TO_EXCLUDE_SQL = "('SYM', 'PUNCT', '_SP', 'NFP', 'ADD', 'GW', 'AFX')"; // Public for potential re-use
 
-    public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
+    private final ValueLookupManager valueLookupManager;
+
+    public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize,
+            ValueLookupManager sharedValueLookupManager) throws IOException {
+        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null, sharedValueLookupManager);
     }
 
-    public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+    public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath,
+            ValueLookupManager sharedValueLookupManager) throws IOException {
         super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+        if (sharedValueLookupManager == null) {
+            throw new IllegalArgumentException("Shared ValueLookupManager cannot be null.");
+        }
+        this.valueLookupManager = sharedValueLookupManager;
     }
 
     @Override
@@ -101,12 +113,18 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 continue;
             }
 
-            String posTag = entry.getPos().toUpperCase(); // Consistent casing with NER types
+            String posTag = entry.getPos().toUpperCase();
             String token = entry.getToken().toLowerCase();
-            String compositeKey = posTag + com.example.core.IndexAccessInterface.DELIMITER + token;
+            String indexKey = posTag;
 
-            PositionListSoA pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionListSoA());
-            pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
+            try {
+                int tokenId = valueLookupManager.getId(token);
+
+                PositionListSoA pl = tempAggregator.computeIfAbsent(indexKey, k -> new PositionListSoA());
+                pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar(), tokenId);
+            } catch (RocksDBException e) {
+                logger.error("RocksDBException while getting ID for token '{}' with POS tag '{}'. Error: {}", token, posTag, e.getMessage(), e);
+            }
         }
 
         for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
@@ -127,5 +145,10 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         // return 0;
         // Return 0 to indicate an indeterminate progress bar, as MAX(annotation_id) is not representative.
         return 0;
+    }
+
+    @Override
+    public void close() throws IOException {
+        super.close();
     }
 }

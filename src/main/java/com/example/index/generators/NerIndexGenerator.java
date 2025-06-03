@@ -11,12 +11,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
+import com.example.index.util.ValueLookupManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -24,7 +26,9 @@ import com.google.common.collect.ListMultimap;
 /**
  * Generates a streaming index for named entities from annotated text.
  * Processes all NER types except DATE (which has its own dedicated index).
- * Creates composite keys of the form "entityType\0entityValue" for efficient retrieval.
+ * The primary key is the entity type (e.g., "PERSON").
+ * Specific entity values (e.g., "John Doe") are mapped to integer IDs using a shared ValueLookupManager,
+ * and these IDs are stored in PositionListSoA.synonymId.
  * Uses streaming processing and external sorting for efficient memory usage.
  *
  * This implementation is now RocksDB-based (see IndexGenerator).
@@ -34,13 +38,21 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     public static final String NER_TAGS_TO_EXCLUDE_SQL = "('O', 'DATE')";
 
+    private final ValueLookupManager valueLookupManager;
+
     public NerIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
-            Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
-        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
+            Connection sqliteConn, ProgressTracker progress, int batchSize,
+            ValueLookupManager sharedValueLookupManager) throws IOException {
+        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null, sharedValueLookupManager);
     }
 
-    public NerIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+    public NerIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath,
+            ValueLookupManager sharedValueLookupManager) throws IOException {
         super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
+        if (sharedValueLookupManager == null) {
+            throw new IllegalArgumentException("Shared ValueLookupManager cannot be null.");
+        }
+        this.valueLookupManager = sharedValueLookupManager;
     }
 
     @Override
@@ -117,10 +129,14 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
             if (entityBreak) {
                 if (!currentEntityRawTokens.isEmpty() && prevEntry != null) {
-                    addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
-                                            currentEntityRawTokens,
-                                            currentEntityDocId, currentEntitySentId,
-                                            currentEntityBeginChar, prevEntry.getEndChar());
+                    try {
+                        addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
+                                                currentEntityRawTokens,
+                                                currentEntityDocId, currentEntitySentId,
+                                                currentEntityBeginChar, prevEntry.getEndChar());
+                    } catch (RocksDBException e) {
+                        logger.error("RocksDBException while processing entity for NerIndexGenerator. Entity type: {}, tokens: {}. Error: {}", currentEntityType, currentEntityRawTokens, e.getMessage(), e);
+                    }
                 }
                 currentEntityRawTokens.clear();
                 currentEntityType = null;
@@ -139,10 +155,14 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         }
 
         if (currentEntityType != null && !currentEntityRawTokens.isEmpty() && prevEntry != null) {
-             addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
-                                    currentEntityRawTokens,
-                                    currentEntityDocId, currentEntitySentId,
-                                    currentEntityBeginChar, prevEntry.getEndChar());
+            try {
+                addProcessedEntityToMap(currentBatchEntityPositions, currentEntityType,
+                                       currentEntityRawTokens,
+                                       currentEntityDocId, currentEntitySentId,
+                                       currentEntityBeginChar, prevEntry.getEndChar());
+            } catch (RocksDBException e) {
+                logger.error("RocksDBException while processing final entity for NerIndexGenerator. Entity type: {}, tokens: {}. Error: {}", currentEntityType, currentEntityRawTokens, e.getMessage(), e);
+            }
         }
 
         for (Map.Entry<String, PositionListSoA> mapEntry : currentBatchEntityPositions.entrySet()) {
@@ -154,7 +174,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private void addProcessedEntityToMap(Map<String, PositionListSoA> map,
                                          String entityType,
                                          List<String> rawTokens, int docId, int sentId,
-                                         int beginChar, int endChar) {
+                                         int beginChar, int endChar) throws RocksDBException {
         if (entityType == null || rawTokens.isEmpty() || beginChar == -1 || endChar == -1 || endChar < beginChar) {
             logger.warn("Skipping invalid entity: type={}, tokens={}, doc={}, sent={}, begin={}, end={}",
                         entityType, rawTokens, docId, sentId, beginChar, endChar);
@@ -162,10 +182,12 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         }
 
         String entityValue = String.join(" ", rawTokens).toLowerCase();
-        String compositeKey = entityType.toUpperCase() + IndexAccessInterface.DELIMITER + entityValue;
+        String indexKey = entityType.toUpperCase();
 
-        PositionListSoA pl = map.computeIfAbsent(compositeKey, k -> new PositionListSoA());
-        pl.add(docId, sentId, beginChar, endChar);
+        int entityValueId = valueLookupManager.getId(entityValue);
+
+        PositionListSoA pl = map.computeIfAbsent(indexKey, k -> new PositionListSoA());
+        pl.add(docId, sentId, beginChar, endChar, entityValueId);
     }
 
     @Override
@@ -175,14 +197,11 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE'";
-        // try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
-        //      ResultSet rs = stmt.executeQuery()) {
-        //     if (rs.next()) {
-        //         return rs.getLong(1);
-        //     }
-        // }
-        // Return 0 to indicate an indeterminate progress bar, as MAX(annotation_id) is not representative.
         return 0;
+    }
+
+    @Override
+    public void close() throws IOException {
+        super.close();
     }
 }

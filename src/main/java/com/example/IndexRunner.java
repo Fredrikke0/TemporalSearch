@@ -41,7 +41,9 @@ import com.example.index.generators.POSIndexGenerator;
 import com.example.index.generators.TrigramIndexGenerator;
 import com.example.index.generators.UnigramIndexGenerator;
 import com.example.index.generators.stitch.NgramAnnotationStitchGenerator;
+import com.example.index.generators.stitch.NgramAnnotationStitchGenerator.NgramInstance;
 import com.example.index.generators.stitch.NgramAnnotationStitchGenerator.TermOccurrenceInSentence;
+import com.example.index.util.ValueLookupManager;
 import com.example.logging.IndexingMetrics;
 import com.example.logging.ProgressTracker;
 import com.google.common.base.Stopwatch;
@@ -54,6 +56,7 @@ import net.sourceforge.argparse4j.inf.Namespace;
 
 public class IndexRunner {
     private static final Logger logger = LoggerFactory.getLogger(IndexRunner.class);
+    private static final String GLOBAL_VALUE_LOOKUP_DB_NAME = "global_values_lookup.db";
 
     public static void main(String[] args) {
         ArgumentParser parser = ArgumentParsers.newFor("IndexRunner").build()
@@ -141,8 +144,17 @@ public class IndexRunner {
         Path indexPath = Paths.get(indexDir);
         Files.createDirectories(indexPath);
 
+        // Initialize Shared ValueLookupManager
+        Path globalLookupDbPath = indexPath.resolve(GLOBAL_VALUE_LOOKUP_DB_NAME);
+        ValueLookupManager sharedValueLookupManager = null;
+
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
             try {
+                // Initialize sharedValueLookupManager here, after connection is successful
+                // and before any generators that need it are created.
+                sharedValueLookupManager = new ValueLookupManager(globalLookupDbPath);
+                logger.info("Shared ValueLookupManager initialized at: {}", globalLookupDbPath);
+
                 for (String type : indexTypesToProcess) {
                     if (type.equals("stitches")) continue;
 
@@ -244,7 +256,8 @@ public class IndexRunner {
                         if (type.equals("ner")) {
                             metrics.startBatch(batchSize, "ner");
                             try (NerIndexGenerator gen = new NerIndexGenerator(
-                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                    sharedValueLookupManager)) {
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -258,7 +271,8 @@ public class IndexRunner {
                         if (type.equals("pos")) {
                             metrics.startBatch(batchSize, "pos");
                             try (POSIndexGenerator gen = new POSIndexGenerator(
-                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                    sharedValueLookupManager)) {
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -374,7 +388,8 @@ public class IndexRunner {
                                                 NgramAnnotationStitchGenerator.cleanupDirectory(tempAnnotationBySentenceOutputPath.toFile()); // Clean if force implies regen
                                             }
                                             temporaryAnnotationBySentenceIA = generateTemporaryAnnotationBySentenceIndex(
-                                                indexDir, currentAnnotationType, sourceAnnotationIndexPath, tempAnnotationBySentenceOutputPath, indexPath
+                                                indexDir, currentAnnotationType, sourceAnnotationIndexPath, tempAnnotationBySentenceOutputPath, indexPath,
+                                                sharedValueLookupManager
                                             );
                                         } else {
                                             logger.debug("Reusing existing temporary Annotation-by-sentence index for {} from {}", currentAnnotationType.getTypeIdentifier(), tempAnnotationBySentenceOutputPath);
@@ -458,6 +473,15 @@ public class IndexRunner {
                 throw e;
             } finally {
                 metrics.logIndexingMetrics();
+                // Close shared ValueLookupManager here
+                if (sharedValueLookupManager != null) {
+                    try {
+                        sharedValueLookupManager.close();
+                        logger.info("Shared ValueLookupManager closed successfully.");
+                    } catch (Exception e) {
+                        logger.error("Error closing shared ValueLookupManager: {}", e.getMessage(), e);
+                    }
+                }
             }
         } catch (SQLException e) {
             logger.error("SQL error during indexing: {}", e.getMessage(), e);
@@ -567,7 +591,7 @@ public class IndexRunner {
         try {
             sourceNgramIA = new IndexAccess(sourceNgramIndexPath, ngramType.name().toLowerCase() + "_source_reader", sourceNgramOptions);
             iterator = sourceNgramIA.iterateFromFirst();
-            Map<String, List<TermOccurrenceInSentence>> sentenceBatch = new HashMap<>();
+            Map<String, List<NgramInstance>> sentenceBatch = new HashMap<>();
             int batchCount = 0;
             final int SENTENCE_BATCH_SIZE = 5000;
 
@@ -582,7 +606,7 @@ public class IndexRunner {
                     int beginChar = posList.getBeginCharAt(i);
                     int endChar = posList.getEndCharAt(i);
                     String sentenceKey = docId + "_" + sentenceId;
-                    sentenceBatch.computeIfAbsent(sentenceKey, k -> new ArrayList<>()).add(new TermOccurrenceInSentence(IndexAccess.asString(key), beginChar, endChar));
+                    sentenceBatch.computeIfAbsent(sentenceKey, k -> new ArrayList<>()).add(new NgramInstance(IndexAccess.asString(key), beginChar, endChar));
                 }
 
                 if (sentenceBatch.size() >= SENTENCE_BATCH_SIZE) {
@@ -614,12 +638,12 @@ public class IndexRunner {
         return tempDb;
     }
 
-    private static void writeSentenceBatchToTempNgramDB(Map<String, List<TermOccurrenceInSentence>> sentenceBatch,
+    private static void writeSentenceBatchToTempNgramDB(Map<String, List<NgramInstance>> sentenceBatch,
                                             IndexAccess tempDb, String ngramTypeForLog) throws IOException, IndexAccessException {
         try (org.rocksdb.WriteBatch batch = tempDb.createWriteBatch()) {
-            for (Map.Entry<String, List<TermOccurrenceInSentence>> entry : sentenceBatch.entrySet()) {
+            for (Map.Entry<String, List<NgramInstance>> entry : sentenceBatch.entrySet()) {
                 byte[] key = IndexAccess.bytes(entry.getKey());
-                byte[] value = TermOccurrenceInSentence.serializeList(entry.getValue());
+                byte[] value = NgramInstance.serializeList(entry.getValue());
                 try {
                 batch.put(key, value);
                 } catch (RocksDBException e) {
@@ -636,8 +660,9 @@ public class IndexRunner {
         AnnotationTypeSource annotationTypeSource,
         Path sourceAnnotationIndexPath,
         Path tempAnnotationBySentenceOutputPath,
-        Path mainIndexPath
-    ) throws IOException, IndexAccessException {
+        Path mainIndexPath,
+        ValueLookupManager valueLookupManager
+    ) throws IOException, IndexAccessException, RocksDBException {
 
         if (!Files.exists(sourceAnnotationIndexPath) || !Files.isDirectory(sourceAnnotationIndexPath)) {
             throw new FileNotFoundException("Source Annotation index directory not found: " + sourceAnnotationIndexPath);
@@ -677,9 +702,10 @@ public class IndexRunner {
             final int SENTENCE_BATCH_SIZE = 5000;
 
             while (iterator.isValid()) {
-                byte[] key = iterator.key();
-                byte[] value = iterator.value();
-                PositionListSoA posList = PositionListSoA.deserializeFromCompositeBlob(value);
+                byte[] keyBytes = iterator.key();
+                byte[] valueBytes = iterator.value();
+                PositionListSoA posList = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
+                String keyFromSourceIndex = IndexAccess.asString(keyBytes);
 
                 for (int i = 0; i < posList.getNumPositions(); i++) {
                     int docId = posList.getDocIdAt(i);
@@ -687,7 +713,34 @@ public class IndexRunner {
                     int beginChar = posList.getBeginCharAt(i);
                     int endChar = posList.getEndCharAt(i);
                     String sentenceKey = docId + "_" + sentenceId;
-                    sentenceBatch.computeIfAbsent(sentenceKey, k -> new ArrayList<>()).add(new TermOccurrenceInSentence(IndexAccess.asString(key), beginChar, endChar));
+
+                    String annotationTypeForTOS;
+                    int specificValueIdForTOS;
+
+                    if (annotationTypeSource == AnnotationTypeSource.NER || annotationTypeSource == AnnotationTypeSource.POS) {
+                        // For NER/POS, keyFromSourceIndex is the type ("PERSON", "NOUN")
+                        // and specificValueId is already in synonymId from their generators.
+                        annotationTypeForTOS = keyFromSourceIndex;
+                        specificValueIdForTOS = posList.getSynonymIdAt(i);
+                    } else if (annotationTypeSource == AnnotationTypeSource.NER_DATE) {
+                        // For NER_DATE, keyFromSourceIndex is the date string (e.g., "20230101")
+                        // The type string for TOS should be the type identifier (e.g., "NER_DATE")
+                        // The date string itself needs to be looked up in ValueLookupManager.
+                        annotationTypeForTOS = annotationTypeSource.getTypeIdentifier();
+                        String dateValue = keyFromSourceIndex; // This is the YYYYMMDD date string
+                        specificValueIdForTOS = valueLookupManager.getId(dateValue);
+                    } else {
+                        // Fallback for any other unforeseen AnnotationTypeSource values.
+                        // This could log an error or attempt a default behavior.
+                        logger.warn("Unhandled AnnotationTypeSource '{}' in generateTemporaryAnnotationBySentenceIndex. Attempting default ID lookup.", annotationTypeSource);
+                        annotationTypeForTOS = annotationTypeSource.getTypeIdentifier();
+                        String valueToLookup = keyFromSourceIndex;
+                        specificValueIdForTOS = valueLookupManager.getId(valueToLookup);
+                    }
+
+                    sentenceBatch.computeIfAbsent(sentenceKey, k -> new ArrayList<>()).add(
+                        new TermOccurrenceInSentence(annotationTypeForTOS, specificValueIdForTOS, beginChar, endChar)
+                    );
                 }
 
                 if (sentenceBatch.size() >= SENTENCE_BATCH_SIZE) {
