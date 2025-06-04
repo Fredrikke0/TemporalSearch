@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 
-import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,7 +25,6 @@ import it.unimi.dsi.fastutil.ints.IntArrayList;
  *   - Simple match: POS(tag) -> Finds sentences containing the specified tag. Value stored is the tag itself (e.g. "NN") with ValueType.POS_TAG_TYPE.
  *   - Match with term: POS(tag, term) -> Finds sentences where 'term' has the specified tag. Value stored is 'term' (e.g. "apple") with ValueType.POS_TERM.
  *   - Variable binding: POS(tag) BIND var -> Binds var to the 'term' (e.g. "apple") that has the tag. ValueType.POS_TERM.
- *   - Variable consumption: POS(tag, var) -> Filters sentences where 'var' (must be text) has the tag.
  */
 public final class PosExecutor implements ConditionExecutor<Pos> {
     private static final Logger logger = LoggerFactory.getLogger(PosExecutor.class);
@@ -69,13 +67,19 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                 QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION
             );
         }
+        if (termFromQuery != null && termFromQuery.contains("*")) {
+            throw new QueryExecutionException(
+                "Wildcard in target term ('" + termFromQuery + "') for POS condition is not supported.",
+                condition.toString(),
+                QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
+        }
 
         try {
             if (termFromQuery != null) {
-                logger.debug("POS path: Specific Term Search. Tag='{}', TermFromQuery='{}'", tagFromQuery, termFromQuery);
+                logger.debug("POS path: Specific Term Search. Tag='{}', TermFromQuery='{}', VarName='{}'", tagFromQuery, termFromQuery, variableName);
                 executeSpecificTermSearch(tagFromQuery, termFromQuery, variableName, posIndex, requirements, resultSoA);
             } else {
-                logger.debug("POS path: Tag-Only or Variable Binding to Term. Tag='{}'", tagFromQuery);
+                logger.debug("POS path: Tag-Only or Variable Binding to Term. Tag='{}', VarName='{}'", tagFromQuery, variableName);
                 executeTagOnlyOrVariableTermSearch(tagFromQuery, variableName, posIndex, requirements, resultSoA);
             }
         } catch (IOException e) {
@@ -86,6 +90,10 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
             logger.error("IndexAccessException during POS condition execution: {}", e.getMessage(), e);
             throw new QueryExecutionException("Unexpected index access error executing POS condition: " + e.getMessage(),
                                             e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+        } catch (org.rocksdb.RocksDBException rde) {
+            logger.error("RocksDBException during POS condition execution: {}", rde.getMessage(), rde);
+            throw new QueryExecutionException("RocksDB error executing POS condition: " + rde.getMessage(),
+                                            rde, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
         }
 
         logger.debug("POS condition execution produced {} conceptual rows, total SoA size: {}",
@@ -95,119 +103,155 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
 
     private void executeSpecificTermSearch(String tagFromQuery, String termFromQuery, String variableName, IndexAccessInterface index,
                                            AttributeRequirements requirements, QueryResultSoA resultSoA)
-            throws IOException, IndexAccessException {
+            throws IOException, IndexAccessException, org.rocksdb.RocksDBException {
 
-        String keyString = tagFromQuery + IndexAccessInterface.DELIMITER + termFromQuery.toLowerCase();
-        byte[] keyBytes = keyString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        logger.debug("executeSpecificTermSearch: Seeking key '{}' in index", keyString);
-
-        Optional<byte[]> optBlob = index.getRaw(keyBytes);
-
-        if (optBlob.isPresent()) {
-            byte[] blob = optBlob.get();
-            logger.debug("executeSpecificTermSearch: Blob found for key '{}'. Blob size: {}. Deserializing...", keyString, blob.length);
-
-            int conceptualRowIdForThisMatch = resultSoA.getNextConceptualRowId();
-            int numPositions = PositionListSoA.getNumPositionsFromBlob(blob);
-            if (numPositions > 0) {
-                IntArrayList docIds = PositionListSoA.decompressDocIds(blob);
-                IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(blob) : null;
-                IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(blob) : null;
-                IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(blob) : null;
-                IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(blob) : null;
-
-                for (int i = 0; i < numPositions; i++) {
-                    resultSoA.add(termFromQuery, ValueType.POS_TERM, variableName,
-                                  docIds.getInt(i),
-                                  sentIds != null ? sentIds.getInt(i) : -1,
-                                  beginChars != null ? beginChars.getInt(i) : -1,
-                                  endChars != null ? endChars.getInt(i) : -1,
-                                  synonymIds != null ? synonymIds.getInt(i) : -1,
-                                  conceptualRowIdForThisMatch);
-                }
-                logger.debug("executeSpecificTermSearch: Added {} bindings for key '{}' to QueryResultSoA with optimized deserialization", numPositions, keyString);
-            } else {
-                 logger.debug("executeSpecificTermSearch: numPositions is 0 from blob for key '{}'", keyString);
-            }
-        } else {
-            logger.debug("executeSpecificTermSearch: No blob found for key '{}'", keyString);
+        if (!requirements.needsSynonymIds && variableName == null) {
+            logger.warn("executeSpecificTermSearch called for Tag='{}', Term='{}' but AttributeRequirements.needsSynonymIds is false. Efficient filtering by synonym ID is not possible.",
+                        tagFromQuery, termFromQuery);
         }
+
+        String normalizedTargetTerm = termFromQuery.toLowerCase();
+        int targetSynonymId = synonymManager.getId(normalizedTargetTerm);
+
+        logger.debug("executeSpecificTermSearch: Tag='{}', TermValue='{}' (original), NormalizedTerm='{}', TargetSynonymID={}",
+            tagFromQuery, termFromQuery, normalizedTargetTerm, targetSynonymId);
+
+        byte[] keyForIndexLookup = tagFromQuery.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
+
+        if (!rawBlobOptional.isPresent() || rawBlobOptional.get().length == 0) {
+            logger.debug("executeSpecificTermSearch: No data found for POS tag '{}'", tagFromQuery);
+            return;
+        }
+
+        byte[] rawBlob = rawBlobOptional.get();
+        int numPositionsTotal = PositionListSoA.getNumPositionsFromBlob(rawBlob);
+        if (numPositionsTotal == 0) return;
+
+        IntArrayList synonymIds = PositionListSoA.decompressSynonymIds(rawBlob);
+        if (synonymIds == null || synonymIds.isEmpty()) {
+             logger.warn("executeSpecificTermSearch: No synonym IDs found in blob for tag '{}' despite {} positions. Inconsistent data?", tagFromQuery, numPositionsTotal);
+             return;
+        }
+
+        IntArrayList docIds = null;
+        IntArrayList sentIds = null;
+        IntArrayList beginChars = null;
+        IntArrayList endChars = null;
+
+        int conceptualRowId = -1;
+        int positionsAddedToSoa = 0;
+
+        for (int i = 0; i < numPositionsTotal; i++) {
+            if (synonymIds.getInt(i) == targetSynonymId) {
+                if (conceptualRowId == -1) {
+                    conceptualRowId = resultSoA.getNextConceptualRowId();
+                    docIds = PositionListSoA.decompressDocIds(rawBlob);
+                    sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
+                    beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
+                    endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
+                }
+                resultSoA.add(
+                    termFromQuery,
+                    ValueType.POS_TERM,
+                    variableName,
+                    docIds.getInt(i),
+                    sentIds != null ? sentIds.getInt(i) : -1,
+                    beginChars != null ? beginChars.getInt(i) : -1,
+                    endChars != null ? endChars.getInt(i) : -1,
+                    targetSynonymId,
+                    conceptualRowId
+                );
+                positionsAddedToSoa++;
+            }
+        }
+        logger.debug("executeSpecificTermSearch for Tag '{}', Term '{}' added {} positions to QueryResultSoA under conceptualRowId {}",
+            tagFromQuery, termFromQuery, positionsAddedToSoa, conceptualRowId != -1 ? conceptualRowId : "(none)");
     }
 
     private void executeTagOnlyOrVariableTermSearch(String tagFromQuery, String variableName, IndexAccessInterface index,
                                                     AttributeRequirements requirements, QueryResultSoA resultSoA)
-            throws IOException, IndexAccessException {
+            throws IOException, IndexAccessException, org.rocksdb.RocksDBException {
 
-        String prefixString = tagFromQuery + IndexAccessInterface.DELIMITER;
-        byte[] prefixBytes = prefixString.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        logger.debug("executeTagOnlyOrVariableTermSearch: Seeking prefix '{}' in index for tag '{}'", prefixString, tagFromQuery);
+        byte[] keyForIndexLookup = tagFromQuery.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
 
-        try (RocksIterator iterator = index.seek(prefixBytes)) {
-            logger.debug("executeTagOnlyOrVariableTermSearch: Iterator obtained. Initial isValid: {}", iterator.isValid());
+        if (!rawBlobOptional.isPresent() || rawBlobOptional.get().length == 0) {
+            logger.debug("executeTagOnlyOrVariableTermSearch: No data found for POS tag '{}'", tagFromQuery);
+            return;
+        }
 
-            int conceptualRowIdForTagItself = (variableName == null) ? resultSoA.getNextConceptualRowId() : -1;
+        byte[] rawBlob = rawBlobOptional.get();
+        int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
+        logger.debug("executeTagOnlyOrVariableTermSearch: Blob found for '{}'. numPositions from blob: {}", tagFromQuery, numPositions);
 
-            while (iterator.isValid()) {
-                byte[] currentKeyBytes = iterator.key();
-                String currentKeyString = new String(currentKeyBytes, java.nio.charset.StandardCharsets.UTF_8);
+        if (numPositions == 0) {
+            logger.debug("executeTagOnlyOrVariableTermSearch: numPositions is 0 for POS tag '{}', returning.", tagFromQuery);
+            return;
+        }
 
-                if (!currentKeyString.startsWith(prefixString)) {
-                    logger.debug("executeTagOnlyOrVariableTermSearch: Key '{}' does not match prefix '{}'. Breaking loop.", currentKeyString, prefixString);
-                    break;
-                }
+        IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
+        IntArrayList sentenceIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
+        IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
+        IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
+        IntArrayList synonymIdsFromBlob = PositionListSoA.decompressSynonymIds(rawBlob);
 
-                byte[] blob = iterator.value();
-                String termValueFromIndexKey = extractTermFromKey(currentKeyString, prefixString);
-                logger.trace("executeTagOnlyOrVariableTermSearch: Processing key '{}', extracted term '{}'", currentKeyString, termValueFromIndexKey);
+        if (variableName != null) {
+            Map<String, Integer> resolvedTermToConceptualRowId = new java.util.HashMap<>();
+            Map<Integer, String> resolvedSynonymIdToTermCache = new java.util.HashMap<>();
 
-                int conceptualIdForThisEntry;
-                String valueToStoreInSoa;
-                ValueType typeToStoreInSoa;
+            for (int i = 0; i < numPositions; i++) {
+                int currentSynonymId = synonymIdsFromBlob.getInt(i);
+                String termToBind;
 
-                if (variableName != null) {
-                    conceptualIdForThisEntry = resultSoA.getNextConceptualRowId();
-                    valueToStoreInSoa = termValueFromIndexKey;
-                    typeToStoreInSoa = ValueType.POS_TERM;
-                    logger.trace("Binding variable '{}' to term '{}'. ConceptualRowId={}", variableName, valueToStoreInSoa, conceptualIdForThisEntry);
+                if (resolvedSynonymIdToTermCache.containsKey(currentSynonymId)) {
+                    termToBind = resolvedSynonymIdToTermCache.get(currentSynonymId);
                 } else {
-                    conceptualIdForThisEntry = conceptualRowIdForTagItself;
-                    valueToStoreInSoa = tagFromQuery;
-                    typeToStoreInSoa = ValueType.POS_TAG_TYPE;
-                    logger.trace("Matching tag '{}'. ConceptualRowId={}", valueToStoreInSoa, conceptualIdForThisEntry);
-                }
-
-                int numPositions = PositionListSoA.getNumPositionsFromBlob(blob);
-                if (numPositions > 0) {
-                    IntArrayList docIds = PositionListSoA.decompressDocIds(blob);
-                    IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(blob) : null;
-                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(blob) : null;
-                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(blob) : null;
-                    IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(blob) : null;
-
-                    for (int i = 0; i < numPositions; i++) {
-                        resultSoA.add(valueToStoreInSoa, typeToStoreInSoa, variableName,
-                                      docIds.getInt(i),
-                                      sentIds != null ? sentIds.getInt(i) : -1,
-                                      beginChars != null ? beginChars.getInt(i) : -1,
-                                      endChars != null ? endChars.getInt(i) : -1,
-                                      synonymIds != null ? synonymIds.getInt(i) : -1,
-                                      conceptualIdForThisEntry);
+                    Optional<String> termOptional = synonymManager.getTerm(currentSynonymId);
+                    if (!termOptional.isPresent()) {
+                        logger.warn("executeTagOnlyOrVariableTermSearch: No term found for synonymId {} (tag: {}). Skipping.", currentSynonymId, tagFromQuery);
+                        continue;
                     }
-                    logger.trace("Added {} bindings for key '{}' (term '{}') to QueryResultSoA with optimized deserialization", numPositions, currentKeyString, termValueFromIndexKey);
-                } else {
-                    logger.trace("numPositions is 0 from blob for key '{}'", currentKeyString);
+                    termToBind = termOptional.get();
+                    resolvedSynonymIdToTermCache.put(currentSynonymId, termToBind);
                 }
-                iterator.next();
-            }
-            logger.debug("executeTagOnlyOrVariableTermSearch: Loop finished. Iterator isValid: {}", iterator.isValid());
-        }
-    }
 
-    private String extractTermFromKey(String key, String prefix) {
-        if (key.startsWith(prefix)) {
-            return key.substring(prefix.length());
+                int conceptualRowId = resolvedTermToConceptualRowId.computeIfAbsent(termToBind, k -> resultSoA.getNextConceptualRowId());
+
+                resultSoA.add(
+                    termToBind,
+                    ValueType.POS_TERM,
+                    variableName,
+                    docIds.getInt(i),
+                    sentenceIds != null ? sentenceIds.getInt(i) : -1,
+                    beginChars != null ? beginChars.getInt(i) : -1,
+                    endChars != null ? endChars.getInt(i) : -1,
+                    currentSynonymId,
+                    conceptualRowId
+                );
+            }
+            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' BIND '{}' added {} conceptual rows and {} total bindings.",
+                tagFromQuery, variableName, resolvedTermToConceptualRowId.size(), resultSoA.size());
+
+        } else {
+            int conceptualRowIdForTag = resultSoA.getNextConceptualRowId();
+            int positionsAddedToSoa = 0;
+            for (int i = 0; i < numPositions; i++) {
+                resultSoA.add(
+                    tagFromQuery,
+                    ValueType.POS_TAG_TYPE,
+                    null,
+                    docIds.getInt(i),
+                    sentenceIds != null ? sentenceIds.getInt(i) : -1,
+                    beginChars != null ? beginChars.getInt(i) : -1,
+                    endChars != null ? endChars.getInt(i) : -1,
+                    -1,
+                    conceptualRowIdForTag
+                );
+                positionsAddedToSoa++;
+            }
+            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' (no BIND) added {} positions to QueryResultSoA under conceptualRowId {}",
+                tagFromQuery, positionsAddedToSoa, conceptualRowIdForTag);
         }
-        logger.warn("Key '{}' did not start with expected prefix '{}' during term extraction.", key, prefix);
-        return "";
     }
 }

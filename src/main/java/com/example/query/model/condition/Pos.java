@@ -4,6 +4,9 @@ import java.util.Collections;
 import java.util.Objects;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
 
@@ -74,10 +77,15 @@ public record Pos(
     boolean isVariable
 ) implements Condition {
 
+    private static final Logger logger = LoggerFactory.getLogger(Pos.class);
+
     /**
      * Creates a condition with validation.
      */
     public Pos {
+        logger.trace("Primary Pos constructor invoked with: posTag='{}', term='{}', qualifiedVariableName='{}', isVariable={}",
+                     posTag, term, qualifiedVariableName, isVariable);
+
         Objects.requireNonNull(posTag, "posTag cannot be null");
 
         if (isVariable) {
@@ -111,6 +119,7 @@ public record Pos(
      */
     public Pos(String posTag, String term) {
         this(posTag, term, null, false);
+        logger.trace("Pos(String posTag, String term) constructor invoked with: posTag='{}', term='{}'. Delegates to primary.", posTag, term);
         // The canonical constructor will now validate based on the modified logic.
         // If term is null here, it's now allowed by canonical if qualifiedVariableName is also null and isVariable is false.
     }
@@ -122,6 +131,8 @@ public record Pos(
      */
     public Pos(String posTag, String term, String variableName) {
         this(posTag, term, variableName, true);
+        logger.trace("Pos(String posTag, String term, String variableName) constructor invoked with: posTag='{}', term='{}', variableName='{}'. Delegates to primary.",
+                     posTag, term, variableName);
     }
 
     /**

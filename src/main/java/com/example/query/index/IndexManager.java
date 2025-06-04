@@ -70,21 +70,11 @@ public class IndexManager implements AutoCloseable {
             );
         }
 
-        // Initialize SynonymManager
+        // Initialize SynonymManager. Shouldnt really be hardcoded.
         try {
             Path synonymManagerDbPath = this.indexBaseDir.resolve("global_values_lookup.db");
-            // Ensure parent directory for synonym manager DB exists
-            // For a file-like DB name, the parent is just indexBaseDir, which is already checked.
-            // If global_values_lookup.db is treated as a directory by RocksDB, then this check might be different
-            // or handled by RocksDB itself if setCreateIfMissing is true on write.
-            // For read-only, the path must exist.
-            // Let's assume global_values_lookup.db is the directory RocksDB uses.
             if (!Files.exists(synonymManagerDbPath)) {
-                 // This case might mean the DB was never created by IndexRunner or path is wrong.
-                 // Throwing an error here might be too strict if SynonymManager itself handles it.
-                 // However, for QueryCLI, we expect it to exist.
                  logger.warn("SynonymManager DB path does not exist: {}. Operations requiring synonyms may fail or SynonymManager will create it if in write mode (not typical for QueryCLI).", synonymManagerDbPath);
-                 // Forcing creation of parent is not needed if synonymManagerDbPath is directly under indexBaseDir
             }
             this.synonymManager = new SynonymManager(synonymManagerDbPath);
             logger.info("SynonymManager initialized at: {}", synonymManagerDbPath);
