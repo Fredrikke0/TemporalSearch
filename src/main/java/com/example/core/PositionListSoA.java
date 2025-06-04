@@ -425,7 +425,6 @@ public class PositionListSoA {
             // For non-delta arrays (that were not RLE), always write them uncompressed.
             // The `override` parameter does not affect this decision for non-delta arrays,
             // as FastPFOR is not suitable for them anyway.
-            // logger.debug("writeCompressedIntArray: Forcing uncompressed because !applyDelta and not RLE. NumElements={}", numElementsInArray);
             writeUncompressed = true;
         } else {
             // For delta-coded arrays (that were not RLE):
@@ -433,11 +432,6 @@ public class PositionListSoA {
             CompressionOverride effectiveOverride = (override == null) ? CompressionOverride.DEFAULT : override;
             writeUncompressed = (effectiveOverride == CompressionOverride.FORCE_UNCOMPRESSED) ||
                               (effectiveOverride == CompressionOverride.DEFAULT && numElementsInArray < UNCOMPRESSED_THRESHOLD);
-            // if (writeUncompressed) {
-            //     logger.debug("writeCompressedIntArray: Writing delta-array uncompressed due to override '{}' or threshold. NumElements={}", effectiveOverride, numElementsInArray);
-            // } else {
-            //     logger.debug("writeCompressedIntArray: Writing delta-array compressed (FastPFOR). NumElements={}", numElementsInArray);
-            // }
         }
 
         if (writeUncompressed) {
@@ -449,12 +443,10 @@ public class PositionListSoA {
             // COMPRESSED PATH (only for applyDelta = true, not RLE, not forced uncompressed, and exceeded threshold)
             // This implies applyDelta must have been true to reach here.
             IntegerCODEC chosenCodec = PositionListSoA.CODEC; // Default FastPFOR128 for delta-coded arrays
-            String codecName = "FastPFOR128";
 
             IntWrapper inpos = new IntWrapper(0);
             IntWrapper outpos = new IntWrapper(0);
             // For FastPFOR, data needs to be padded to block size if it's the chosen codec.
-            // VariableByte does not require this specific padding.
             int[] dataToCompress = dataToWrite;
             if (chosenCodec instanceof FastPFOR128) {
                 int originalLength = numElementsInArray;
@@ -463,26 +455,20 @@ public class PositionListSoA {
                 if (remainder != 0) {
                     int paddedLength = originalLength + (blockSize - remainder);
                     dataToCompress = Arrays.copyOf(dataToWrite, paddedLength);
-                    // logger.trace("Padded data from {} to {} for FastPFOR compression.", originalLength, paddedLength);
                 }
             }
 
-            // Use dataToCompress.length which will be padded length for FastPFOR, or original for VariableByte
+            // Use dataToCompress.length which will be the padded length for FastPFOR
             int[] compressedInts = new int[dataToCompress.length * 2 + 1024];
             chosenCodec.compress(dataToCompress, inpos, dataToCompress.length, compressedInts, outpos);
 
             int compressedSizeInInts = outpos.get();
-            byte[] compressedBytes = new byte[compressedSizeInInts * 4];
+            // No longer manually convert to byte[], write ints directly using DataOutputStream
+            // The stored size marker is in bytes, so it's compressedSizeInInts * 4
+            out.writeInt(compressedSizeInInts * 4);
             for (int i = 0; i < compressedSizeInInts; i++) {
-                compressedBytes[i * 4]     = (byte) (compressedInts[i] & 0xFF);
-                compressedBytes[i * 4 + 1] = (byte) ((compressedInts[i] >> 8) & 0xFF);
-                compressedBytes[i * 4 + 2] = (byte) ((compressedInts[i] >> 16) & 0xFF);
-                compressedBytes[i * 4 + 3] = (byte) ((compressedInts[i] >> 24) & 0xFF);
+                out.writeInt(compressedInts[i]);
             }
-            // logger.debug("writeCompressedIntArray (compressed with {}): numElements={}, original input elements {}, compressed data size={} bytes ({} ints)",
-            //         codecName, numElementsInArray, dataToCompress.length, compressedBytes.length, compressedSizeInInts);
-            out.writeInt(compressedBytes.length); // size of compressed data in BYTES
-            out.write(compressedBytes);
         }
     }
 
@@ -497,26 +483,21 @@ public class PositionListSoA {
      */
     public static PositionListSoA deserializeFromCompositeBlob(byte[] compositeBlob) throws IOException {
         if (compositeBlob == null || compositeBlob.length == 0) {
-            // logger.warn("deserializeFromCompositeBlob: input blob is null or empty.");
             return new PositionListSoA(); // Return empty if blob is null or empty
         }
-        // logger.debug("Deserializing PositionListSoA: blob size = {} bytes", compositeBlob.length);
 
         PositionListSoA instance = new PositionListSoA();
         try (ByteArrayInputStream bais = new ByteArrayInputStream(compositeBlob);
              DataInputStream dis = new DataInputStream(bais)) {
 
             int numPositionsRead = dis.readInt();
-            // logger.debug("Deserializing: Read numPositions = {}", numPositionsRead);
 
             if (numPositionsRead < 0) {
-                 // logger.error("deserializeFromCompositeBlob: Invalid numPositions ({}) read from blob.", numPositionsRead);
                  throw new IOException("Invalid numPositions: " + numPositionsRead);
             }
             instance.numPositions = numPositionsRead;
 
             if (instance.numPositions == 0) {
-                // logger.debug("Deserializing: numPositions is 0, returning empty instance.");
                 return instance;
             }
 
@@ -622,7 +603,6 @@ public class PositionListSoA {
             boolean wasWrittenUncompressedDueToThreshold = (numExpectedPositions < UNCOMPRESSED_THRESHOLD);
 
             if (wasWrittenUncompressedDueToThreshold) {
-                // logger.debug("readCompressedIntArray: Delta array (applyInverseDelta=true) reading as uncompressed (due to threshold). numExpectedPositions={}, arraySizeOrMarker={}", numExpectedPositions, arraySizeOrMarker);
                 if (arraySizeOrMarker != numExpectedPositions * 4) {
                     throw new IOException(String.format(
                         "Data format error (expected uncompressed based on threshold for delta array): numExpectedPositions=%d, expected byte size %d, but stream marker is %d.",
@@ -633,42 +613,33 @@ public class PositionListSoA {
                 for (int i = 0; i < numExpectedPositions; i++) {
                     dataPayload[i] = in.readInt();
                 }
-                // logger.debug("readCompressedIntArray: Interpreted as UNCOMPRESSED (due to threshold for delta array). numExpectedPositions={}, read {} ints.", numExpectedPositions, dataPayload.length);
             } else {
                 // COMPRESSED PATH (for delta arrays that exceeded threshold, were not RLE, and applyInverseDelta is true)
-                // logger.debug("readCompressedIntArray: Delta array (applyInverseDelta=true) reading as compressed. numExpectedPositions={}, arraySizeOrMarker={}", numExpectedPositions, arraySizeOrMarker);
                 if (arraySizeOrMarker <= 0 || arraySizeOrMarker % 4 != 0) {
                     throw new IOException("Invalid compressed data size marker: " + arraySizeOrMarker + " (must be >0 and multiple of 4).");
                 }
                 int numIntsInCompressedPayload = arraySizeOrMarker / 4;
-                byte[] compressedBytes = new byte[arraySizeOrMarker];
-                in.readFully(compressedBytes);
+                // No longer read into byte[] and manually convert. Read ints directly.
                 int[] compressedInts = new int[numIntsInCompressedPayload];
                 for (int i = 0; i < numIntsInCompressedPayload; i++) {
-                    compressedInts[i] = ((compressedBytes[i*4+3] & 0xFF) << 24) |
-                                        ((compressedBytes[i*4+2] & 0xFF) << 16) |
-                                        ((compressedBytes[i*4+1] & 0xFF) << 8)  |
-                                        (compressedBytes[i*4] & 0xFF);
+                    compressedInts[i] = in.readInt();
                 }
 
                 // For delta-coded arrays that are compressed, we use the default CODEC (FastPFOR128).
-                // The VariableByte path for !applyInverseDelta during decompression is removed,
-                // as that case is now handled by the raw uncompressed read path above.
                 IntegerCODEC chosenCodec = PositionListSoA.CODEC;
-                String codecName = "FastPFOR128";
-                // The logger.warn for "DIAGNOSTIC: Using VariableByte..." is removed.
 
-                int[] tempDecompressed = new int[numExpectedPositions + 128 + 1024]; // Sufficient buffer for FastPFOR padding too
+                // Sufficient buffer for FastPFOR padding too
+                int[] tempDecompressed = new int[numExpectedPositions + 128 + 1024];
                 IntWrapper inPos = new IntWrapper(0);
                 IntWrapper outPos = new IntWrapper(0);
 
                 if ((numExpectedPositions == 405888 && !applyInverseDelta) || logger.isDebugEnabled() && !applyInverseDelta) {
                      logger.debug("Before chosenCodec.uncompress ({} {}): compressedInts.length={}, numIntsInPayload={}, numExpectedPositions={}, tempDecompressed.length={}",
-                                  (numExpectedPositions == 405888 ? "TARGETED" : "DIAG"), codecName,
+                                  (numExpectedPositions == 405888 ? "TARGETED" : "DIAG"), chosenCodec.toString(),
                                   compressedInts.length, numIntsInCompressedPayload, numExpectedPositions, tempDecompressed.length);
                 } else if (logger.isTraceEnabled()){
                      logger.trace("Before chosenCodec.uncompress ({}): compressedInts.length={}, numIntsInPayload={}, numExpectedPositions={}, tempDecompressed.length={}",
-                                  codecName, compressedInts.length, numIntsInCompressedPayload, numExpectedPositions, tempDecompressed.length);
+                                  chosenCodec.toString(), compressedInts.length, numIntsInCompressedPayload, numExpectedPositions, tempDecompressed.length);
                 }
 
                 // For FastPFOR, the 'len' parameter to uncompress is the number of compressed ints in the input stream.
@@ -681,7 +652,7 @@ public class PositionListSoA {
                 if (actualDecompressedPaddedCount < numExpectedPositions) {
                     throw new IOException(String.format(
                         "Decompression error with %s: produced fewer elements (%d) than expected before truncation (%d). Compressed size was %d ints.",
-                        codecName, actualDecompressedPaddedCount, numExpectedPositions, numIntsInCompressedPayload
+                        chosenCodec.toString(), actualDecompressedPaddedCount, numExpectedPositions, numIntsInCompressedPayload
                     ));
                 }
                 // Truncate to the exact numExpectedPositions if FastPFOR produced more due to padding.

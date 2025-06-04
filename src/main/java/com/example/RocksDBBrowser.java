@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
@@ -458,37 +459,51 @@ public class RocksDBBrowser {
         System.out.println("----------");
 
         int count = 0;
-        int maxPositions = 100;
+        int maxPositionsToDisplay = 100; // Renamed for clarity
 
         for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
-            Position pos = positionsSoA.getPositionAt(i);
-            if (count >= maxPositions) {
-                System.out.printf("%nShowing first %d positions. Total positions: %d%n", maxPositions, positionsSoA.getNumPositions());
+            if (count >= maxPositionsToDisplay && maxPositionsToDisplay > 0) {
+                System.out.printf("%nShowing first %d positions. Total positions: %d%n", maxPositionsToDisplay, positionsSoA.getNumPositions());
                 break;
             }
 
-            if (pos instanceof StitchPosition stitchPos) {
-                String annotationType = stitchPos.getType().toString().toLowerCase();
-                int synonymId = stitchPos.getSynonymId();
-                String value = synonyms
-                    .getOrDefault(annotationType, Map.of())
-                    .getOrDefault(synonymId, "unknown");
+            Position pos = positionsSoA.getPositionAt(i);
+            int currentSynonymId = positionsSoA.getSynonymIdAt(i);
+            String synonymOutput = "";
 
-                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][%s:%s]%n",
-                    pos.getDocumentId(),
-                    pos.getSentenceId(),
-                    pos.getBeginPosition(),
-                    pos.getEndPosition(),
-                    annotationType,
-                    value);
+            if (indexType.startsWith("stitch_")) {
+                String[] keyParts = key.split(Pattern.quote(DELIMITER));
+                if (keyParts.length > 1) {
+                    String annotationTypeFromKey = keyParts[keyParts.length - 1]; // Last part is the type
+                    String lookedUpValue = synonyms
+                        .getOrDefault(annotationTypeFromKey.toLowerCase(), Collections.emptyMap())
+                        .getOrDefault(currentSynonymId, "id:" + currentSynonymId);
+                    synonymOutput = String.format("[%s:%s]", annotationTypeFromKey, lookedUpValue);
                 } else {
-                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d]%n",
-                    pos.getDocumentId(),
-                    pos.getSentenceId(),
-                    pos.getBeginPosition(),
-                    pos.getEndPosition());
+                    synonymOutput = String.format("[syn_id:%d]", currentSynonymId); // Fallback if key parsing fails
+                }
+            } else if (indexType.equals("pos")) {
+                // For POS index, the key is the POS tag. SynonymId is the token ID.
+                String tokenValue = synonyms
+                    .getOrDefault("pos", Collections.emptyMap())
+                    .getOrDefault(currentSynonymId, "id:" + currentSynonymId);
+                synonymOutput = String.format("[token:%s]", tokenValue);
+            } else if (currentSynonymId != -1) {
+                // For other generic indexes, if synonymId is present and not -1
+                synonymOutput = String.format("[syn_id:%d]", currentSynonymId);
             }
+
+            System.out.printf("  [doc:%d][sent:%d][chars:%d-%d]%s%n",
+                pos.getDocumentId(),
+                pos.getSentenceId(),
+                pos.getBeginPosition(),
+                pos.getEndPosition(),
+                synonymOutput); // Append synonym output string
+
             count++;
+        }
+        if (maxPositionsToDisplay == 0 && positionsSoA.getNumPositions() > 0) { // if limit was 0, indicate all shown
+             System.out.printf("%nShowing all %d positions.%n", positionsSoA.getNumPositions());
         }
     }
 }

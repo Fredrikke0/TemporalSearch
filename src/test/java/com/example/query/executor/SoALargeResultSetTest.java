@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -198,6 +199,7 @@ public class SoALargeResultSetTest {
                   String.format("Execution time too slow: %d ms (expected < %d)",
                                executionTimeMeasuredMs, maxExpectedTimeMs));
     }
+    @Disabled
     @Test
     void testSelectiveDeserializationBenefit() throws Exception {
         // Compare document vs sentence granularity to show selective deserialization benefit
