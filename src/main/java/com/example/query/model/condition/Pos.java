@@ -82,6 +82,9 @@ public record Pos(
 
         if (isVariable) {
             Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
+            if (qualifiedVariableName.isBlank()) {
+                throw new IllegalArgumentException("qualifiedVariableName cannot be blank when isVariable is true");
+            }
             // Term can be null (e.g. POS(tag) BIND ?var - term is irrelevant for binding value which is the tag)
             // or term could be a variable name if another executor type consumes it (e.g. POS(tag, ?textVar))
         } else {

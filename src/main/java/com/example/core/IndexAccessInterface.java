@@ -112,7 +112,7 @@ public interface IndexAccessInterface extends AutoCloseable {
 
     /**
      * Gets the root path of this index.
-     * This can be used by components like ValueLookupManager to store auxiliary data
+     * This can be used by components like SynonymManager to store auxiliary data
      * in a sub-directory relative to the main index data.
      * @return The Path to the index directory.
      */

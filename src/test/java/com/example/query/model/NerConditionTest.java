@@ -54,7 +54,7 @@ class NerConditionTest {
     @DisplayName("Constructor should not accept null type")
     void constructorShouldNotAcceptNullType() {
         assertThrows(NullPointerException.class,
-            () -> new Ner(null, "varName", true));
+            () -> new Ner(null, null, "varName", true));
     }
 
     @ParameterizedTest

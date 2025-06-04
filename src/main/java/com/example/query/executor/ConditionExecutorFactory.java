@@ -7,6 +7,7 @@ import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.index.util.SynonymManager;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
@@ -26,13 +27,14 @@ public class ConditionExecutorFactory {
 
     // Cache for singleton executors like TemporalExecutor
     private final Map<Class<? extends Condition>, ConditionExecutor<?>> executorCache = new ConcurrentHashMap<>();
+    private final SynonymManager synonymManager;
 
     // Configuration for TemporalExecutor strategy
     private String desiredTemporalStrategy = "naive"; // Default strategy
 
-    public ConditionExecutorFactory() {
-        // Pre-register common executors or initialize cache if needed
-        logger.debug("Initialized condition executor factory");
+    public ConditionExecutorFactory(SynonymManager synonymManager) {
+        this.synonymManager = synonymManager;
+        logger.debug("Initialized condition executor factory with SynonymManager.");
     }
 
     /**
@@ -109,13 +111,13 @@ public class ConditionExecutorFactory {
         if (condition instanceof Ner) {
              return (ConditionExecutor<T>) executorCache.computeIfAbsent(Ner.class, k -> {
                  logger.debug("Creating and caching NerExecutor instance.");
-                 return new NerExecutor();
+                 return new NerExecutor(this.synonymManager);
              });
         }
          if (condition instanceof Pos) {
               return (ConditionExecutor<T>) executorCache.computeIfAbsent(Pos.class, k -> {
                   logger.debug("Creating and caching PosExecutor instance.");
-                  return new PosExecutor();
+                  return new PosExecutor(this.synonymManager);
               });
          }
           if (condition instanceof Dependency) {

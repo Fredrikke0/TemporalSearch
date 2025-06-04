@@ -45,7 +45,7 @@ import com.example.index.generators.UnigramIndexGenerator;
 import com.example.index.generators.stitch.NgramAnnotationStitchGenerator;
 import com.example.index.generators.stitch.NgramAnnotationStitchGenerator.NgramInstance;
 import com.example.index.generators.stitch.NgramAnnotationStitchGenerator.TermOccurrenceInSentence;
-import com.example.index.util.ValueLookupManager;
+import com.example.index.util.SynonymManager;
 import com.example.logging.IndexingMetrics;
 import com.example.logging.ProgressTracker;
 import com.google.common.base.Stopwatch;
@@ -146,16 +146,16 @@ public class IndexRunner {
         Path indexPath = Paths.get(indexDir);
         Files.createDirectories(indexPath);
 
-        // Initialize Shared ValueLookupManager
+        // Initialize Shared SynonymManager
         Path globalLookupDbPath = indexPath.resolve(GLOBAL_VALUE_LOOKUP_DB_NAME);
-        ValueLookupManager sharedValueLookupManager = null;
+        SynonymManager sharedSynonymManager = null;
 
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
             try {
-                // Initialize sharedValueLookupManager here, after connection is successful
+                // Initialize sharedSynonymManager here, after connection is successful
                 // and before any generators that need it are created.
-                sharedValueLookupManager = new ValueLookupManager(globalLookupDbPath);
-                logger.info("Shared ValueLookupManager initialized at: {}", globalLookupDbPath);
+                sharedSynonymManager = new SynonymManager(globalLookupDbPath);
+                logger.info("Shared SynonymManager initialized at: {}", globalLookupDbPath);
 
                 for (String type : indexTypesToProcess) {
                     if (type.equals("stitches")) continue;
@@ -259,7 +259,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, "ner");
                             try (NerIndexGenerator gen = new NerIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
-                                    sharedValueLookupManager)) {
+                                    sharedSynonymManager)) {
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -274,7 +274,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, "pos");
                             try (POSIndexGenerator gen = new POSIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
-                                    sharedValueLookupManager)) {
+                                    sharedSynonymManager)) {
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -391,7 +391,7 @@ public class IndexRunner {
                                             }
                                             temporaryAnnotationBySentenceIA = generateTemporaryAnnotationBySentenceIndex(
                                                 indexDir, currentAnnotationType, sourceAnnotationIndexPath, tempAnnotationBySentenceOutputPath, indexPath,
-                                                sharedValueLookupManager
+                                                sharedSynonymManager
                                             );
                                         } else {
                                             logger.debug("Reusing existing temporary Annotation-by-sentence index for {} from {}", currentAnnotationType.getTypeIdentifier(), tempAnnotationBySentenceOutputPath);
@@ -475,13 +475,13 @@ public class IndexRunner {
                 throw e;
             } finally {
                 metrics.logIndexingMetrics();
-                // Close shared ValueLookupManager here
-                if (sharedValueLookupManager != null) {
+                // Close shared SynonymManager here
+                if (sharedSynonymManager != null) {
                     try {
-                        sharedValueLookupManager.close();
-                        logger.info("Shared ValueLookupManager closed successfully.");
+                        sharedSynonymManager.close();
+                        logger.info("Shared SynonymManager closed successfully.");
                     } catch (Exception e) {
-                        logger.error("Error closing shared ValueLookupManager: {}", e.getMessage(), e);
+                        logger.error("Error closing shared SynonymManager: {}", e.getMessage(), e);
                     }
                 }
             }
@@ -663,7 +663,7 @@ public class IndexRunner {
         Path sourceAnnotationIndexPath,
         Path tempAnnotationBySentenceOutputPath,
         Path mainIndexPath,
-        ValueLookupManager valueLookupManager
+        SynonymManager SynonymManager
     ) throws IOException, IndexAccessException, RocksDBException {
 
         if (!Files.exists(sourceAnnotationIndexPath) || !Files.isDirectory(sourceAnnotationIndexPath)) {
@@ -707,7 +707,7 @@ public class IndexRunner {
                 byte[] keyBytes = iterator.key();
                 byte[] valueBytes = iterator.value();
 
-                logger.debug("Attempting to deserialize PositionListSoA for key '{}' (annotation type {}). Blob size: {} bytes.", IndexAccess.asString(keyBytes), annotationTypeSource.getTypeIdentifier(), (valueBytes != null ? valueBytes.length : "null"));
+                //logger.debug("Attempting to deserialize PositionListSoA for key '{}' (annotation type {}). Blob size: {} bytes.", IndexAccess.asString(keyBytes), annotationTypeSource.getTypeIdentifier(), (valueBytes != null ? valueBytes.length : "null"));
 
                 try {
                     PositionListSoA posList = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
@@ -730,12 +730,12 @@ public class IndexRunner {
                         } else if (annotationTypeSource == AnnotationTypeSource.NER_DATE) {
                             annotationTypeForTOS = annotationTypeSource.getTypeIdentifier();
                             String dateValue = keyFromSourceIndex;
-                            specificValueIdForTOS = valueLookupManager.getId(dateValue);
+                            specificValueIdForTOS = SynonymManager.getId(dateValue);
                         } else {
                             logger.warn("Unhandled AnnotationTypeSource '{}' in generateTemporaryAnnotationBySentenceIndex. Attempting default ID lookup.", annotationTypeSource);
                             annotationTypeForTOS = annotationTypeSource.getTypeIdentifier();
                             String valueToLookup = keyFromSourceIndex;
-                            specificValueIdForTOS = valueLookupManager.getId(valueToLookup);
+                            specificValueIdForTOS = SynonymManager.getId(valueToLookup);
                         }
 
                         sentenceBatch.computeIfAbsent(sentenceKey, k -> new ArrayList<>()).add(

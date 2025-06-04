@@ -27,7 +27,6 @@ import com.example.core.Position;
 import com.example.core.PositionListSoA;
 import com.example.index.util.NashSerializationUtils;
 import com.example.query.binding.ValueType;
-import com.example.query.index.IndexManager;
 import com.example.query.model.Query;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.condition.Temporal;
@@ -116,16 +115,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     }
     // --- End Strategy Management ---
 
-    /**
-     * Initializes necessary resources for a specific corpus. No Nash-specific logic needed.
-     */
-    public boolean initializeForCorpus(String corpusName, IndexManager indexManager) {
-        logger.info("Initializing TemporalExecutor for corpus: {}", corpusName);
-        TemporalExecutionStrategy currentStrategy = getActiveStrategy();
-        logger.debug("Performing strategy-specific initialization for '{}' on corpus '{}'", currentStrategy.getName(), corpusName);
-        return currentStrategy.initializeForCorpus(corpusName, this);
-    }
-
     @Override
     public QueryResultSoA execute(Temporal condition, Map<String, IndexAccessInterface> indexes,
                                Query.Granularity granularity,
@@ -155,12 +144,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
         @Override
         public String getName() {
             return "nash";
-        }
-
-        @Override
-        public boolean initializeForCorpus(String corpusName, TemporalExecutor temporalExecutor) {
-            // Potentially pre-load idToDateLookup if it's static per corpus and index opening
-            return true;
         }
 
         @Override
@@ -435,12 +418,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
         @Override
         public String getName() {
             return "naive";
-        }
-
-        @Override
-        public boolean initializeForCorpus(String corpusName, TemporalExecutor temporalExecutor) {
-            strategyLogger.debug("NaiveTemporalStrategy requires no specific initialization for corpus: {}", corpusName);
-            return true; // Naive strategy requires no special setup
         }
 
         @Override

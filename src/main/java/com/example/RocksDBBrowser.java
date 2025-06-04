@@ -45,6 +45,7 @@ public class RocksDBBrowser {
     private static final String[] ANNOTATION_TYPES = {"date", "ner", "pos", "dependency"};
     private static final List<String> ALL_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
         "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash",
+        "synonym_manager_db",
         // Stitch indexes
         "stitch_unigram_date", "stitch_unigram_ner", "stitch_unigram_pos", "stitch_unigram_dependency",
         "stitch_bigram_date", "stitch_bigram_ner", "stitch_bigram_pos", "stitch_bigram_dependency",
@@ -64,7 +65,7 @@ public class RocksDBBrowser {
                 .choices(availableIndexChoices)
                 .metavar("INDEX_TYPE")
                 .required(true)
-                .help("Type of index to browse (e.g., unigram, stitch). Use 'all' to perform the operation on all known index types sequentially.");
+                .help("Type of index to browse (e.g., unigram, stitch, synonym_manager_db). Use 'all' to perform the operation on all known index types sequentially.");
 
         parser.addArgument("-d", "--db-path")
                 .metavar("DB_PATH")
@@ -120,18 +121,23 @@ public class RocksDBBrowser {
     }
 
     private static void processSingleIndex(String indexType, String basePath, String key, String prefix, int limit, boolean showStats, ArgumentParser parser) throws IOException {
-        String dbPath = basePath + "/" + indexType;
-        File dbFile = new File(dbPath);
+        Path dbPathActual;
+        if ("synonym_manager_db".equalsIgnoreCase(indexType)) {
+            dbPathActual = Paths.get(basePath, "global_values_lookup.db");
+        } else {
+            dbPathActual = Paths.get(basePath, indexType);
+        }
+
+        File dbFile = dbPathActual.toFile();
 
         if (!dbFile.exists() || !dbFile.isDirectory()) {
-            System.err.printf("Database path for index '%s' not found or not a directory: %s%n", indexType, dbPath);
+            System.err.printf("Database path for index '%s' not found or not a directory: %s%n", indexType, dbPathActual.toString());
             return;
         }
-        System.out.printf("Accessing database at: %s%n", dbPath);
+        System.out.printf("Accessing database at: %s%n", dbPathActual.toString());
 
         Map<String, Map<Integer, String>> annotationSynonyms = new HashMap<>();
         if (indexType.startsWith("stitch_") && (key != null || prefix != null)) {
-            // Pass the base path for indexes, not the specific stitch index path for synonyms
             annotationSynonyms = loadAnnotationSynonyms(basePath);
         }
 
@@ -141,7 +147,10 @@ public class RocksDBBrowser {
         try (RocksDB db = RocksDB.openReadOnly(options, dbFile.getAbsolutePath())) {
             if (showStats) {
                 displayStats(db, indexType);
-                if (key == null && prefix == null) {
+                if (key == null && prefix == null && !"synonym_manager_db".equalsIgnoreCase(indexType)) {
+                    options.close();
+                    return;
+                } else if (key == null && prefix == null && "synonym_manager_db".equalsIgnoreCase(indexType)) {
                     options.close();
                     return;
                 }
@@ -154,7 +163,7 @@ public class RocksDBBrowser {
                 listAllEntries(db, limit, indexType, annotationSynonyms);
             }
         } catch (RocksDBException e) {
-            System.err.printf("Error opening RocksDB database at %s: %s%n", dbPath, e.getMessage());
+            System.err.printf("Error opening RocksDB database at %s: %s%n", dbPathActual.toString(), e.getMessage());
             // e.printStackTrace(); // Uncomment for more detailed error
         } finally {
             if (options != null) {
@@ -168,6 +177,7 @@ public class RocksDBBrowser {
         long totalPositions = 0;
         long nashDateLookupCount = 0;
         boolean isNashIndex = "nash".equals(indexType);
+        boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
 
         try (RocksIterator iterator = db.newIterator()) {
             for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
@@ -181,7 +191,7 @@ public class RocksDBBrowser {
                             logger.warn("Could not deserialize Nash date lookup table during stats: {}", e.getMessage());
                         }
                     }
-                } else {
+                } else if (!isSynonymDb) {
                     try {
                         byte[] value = iterator.value();
                         totalPositions += PositionListSoA.getNumPositionsFromBlob(value);
@@ -195,7 +205,27 @@ public class RocksDBBrowser {
         System.out.println("Index Statistics");
         System.out.println("================");
         System.out.printf("Total entries: %,d%n", totalEntries);
-        if (isNashIndex) {
+
+        if (isSynonymDb) {
+            long termToIdCount = 0;
+            long idToTermCount = 0;
+            String nextIdVal = "N/A";
+            try (RocksIterator statsIterator = db.newIterator()) {
+                for (statsIterator.seekToFirst(); statsIterator.isValid(); statsIterator.next()) {
+                    String currentKey = asString(statsIterator.key());
+                    if (currentKey.startsWith("term:")) {
+                        termToIdCount++;
+                    } else if (currentKey.startsWith("id:")) {
+                        idToTermCount++;
+                    } else if (currentKey.equals("__NEXT_ID__")) {
+                        nextIdVal = asString(statsIterator.value());
+                    }
+                }
+            }
+            System.out.printf("  Term-to-ID mappings ('term:'): %,d%n", termToIdCount);
+            System.out.printf("  ID-to-Term mappings ('id:'): %,d%n", idToTermCount);
+            System.out.printf("  Next ID value ('__NEXT_ID__'): %s%n", nextIdVal);
+        } else if (isNashIndex) {
             if (nashDateLookupCount > 0) {
                 System.out.printf("Total dates in lookup table: %,d%n", nashDateLookupCount);
             }
@@ -223,6 +253,8 @@ public class RocksDBBrowser {
 
         if (indexType.equals("nash")) {
             displayNashEntry(bytes(key), data);
+        } else if ("synonym_manager_db".equalsIgnoreCase(indexType)) {
+            displaySynonymDbEntry(bytes(key), data);
         } else {
             PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(data);
             displayPositionsSoA(key, positionsSoA, indexType, synonyms);
@@ -231,6 +263,8 @@ public class RocksDBBrowser {
 
     private static void listEntriesByPrefix(RocksDB db, String prefix, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
         boolean isNash = indexType.equals("nash");
+        boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
+
         System.out.printf("Entries with prefix '%s':%n", prefix);
         System.out.println("=".repeat(20 + prefix.length()));
 
@@ -247,6 +281,8 @@ public class RocksDBBrowser {
 
                 if (isNash) {
                     displayNashEntry(keyBytes, valueBytes);
+                } else if (isSynonymDb) {
+                    displaySynonymDbEntry(keyBytes, valueBytes);
                 } else {
                     PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
                     displayPositionsSoA(currentKey, positionsSoA, indexType, synonyms);
@@ -263,8 +299,34 @@ public class RocksDBBrowser {
 
     private static void listAllEntries(RocksDB db, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
         boolean isNash = indexType.equals("nash");
-        System.out.println("All Entries Summary (Key and Position Count)");
+        boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
+
+        System.out.println("All Entries Summary");
         System.out.println("============================================");
+
+        if (isSynonymDb) {
+            System.out.println("(Synonym Manager DB Entries - Key: Value)");
+            int displayCount = 0;
+            long totalSynonymDbEntries = 0;
+            try (RocksIterator iterator = db.newIterator()) {
+                for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
+                    totalSynonymDbEntries++;
+                    if (limit > 0 && displayCount >= limit) {
+                        continue;
+                    }
+                    displaySynonymDbEntry(iterator.key(), iterator.value());
+                    displayCount++;
+                }
+            }
+            if (limit > 0 && displayCount == limit && totalSynonymDbEntries > limit) {
+                System.out.printf("%nShowing first %d entries. Total entries might be higher. Use --limit 0 to see all (and get accurate total).%n", limit);
+            } else if (totalSynonymDbEntries > 0) {
+                System.out.printf("%nShowing %s%d entries.%n", (limit == 0 ? "all " : ""), totalSynonymDbEntries);
+            } else {
+                System.out.println("No entries found in Synonym Manager DB.");
+            }
+            return;
+        }
 
         List<Map.Entry<String, Integer>> keyAndCountsList = new ArrayList<>();
         List<Map.Entry<byte[], byte[]>> nashEntriesList = new ArrayList<>();
@@ -505,5 +567,20 @@ public class RocksDBBrowser {
         if (maxPositionsToDisplay == 0 && positionsSoA.getNumPositions() > 0) { // if limit was 0, indicate all shown
              System.out.printf("%nShowing all %d positions.%n", positionsSoA.getNumPositions());
         }
+    }
+
+    private static void displaySynonymDbEntry(byte[] keyBytes, byte[] valueBytes) {
+        String keyStr = asString(keyBytes);
+        String valueStr = asString(valueBytes);
+        String typeHint = "";
+
+        if (keyStr.startsWith("term:")) {
+            typeHint = " (Term-to-ID)";
+        } else if (keyStr.startsWith("id:")) {
+            typeHint = " (ID-to-Term)";
+        } else if (keyStr.equals("__NEXT_ID__")) {
+            typeHint = " (Next ID Counter)";
+        }
+        System.out.printf("Key: %s%s, Value: %s%n", keyStr, typeHint, valueStr);
     }
 }

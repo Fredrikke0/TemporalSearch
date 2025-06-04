@@ -25,7 +25,7 @@ import org.rocksdb.RocksDBException;
 import com.example.core.IndexAccess;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
-import com.example.index.util.ValueLookupManager;
+import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 
@@ -33,8 +33,8 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-ner-general.txt";
     private NerIndexGenerator generator;
     private IndexAccess indexAccess;
-    private ValueLookupManager valueLookupManager;
-    private Path valueLookupManagerPath;
+    private SynonymManager SynonymManager;
+    private Path SynonymManagerPath;
 
     @TempDir
     Path sharedTempDir;
@@ -54,11 +54,11 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
             this.indexAccess = new IndexAccess(indexBaseDir.resolve("ner"), "ner", options);
         }
 
-        valueLookupManagerPath = sharedTempDir.resolve("ner_test_lookup.db");
+        SynonymManagerPath = sharedTempDir.resolve("ner_test_lookup.db");
         try {
-            valueLookupManager = new ValueLookupManager(valueLookupManagerPath);
+            SynonymManager = new SynonymManager(SynonymManagerPath);
         } catch (RocksDBException e) {
-            fail("Failed to initialize ValueLookupManager for testing: " + e.getMessage());
+            fail("Failed to initialize SynonymManager for testing: " + e.getMessage());
         }
 
         generator = new NerIndexGenerator(
@@ -68,7 +68,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
             new ProgressTracker(),
             1000,
             null,
-            valueLookupManager
+            SynonymManager
         );
 
         setupTestData();
@@ -118,11 +118,11 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
     @AfterEach
     @Override
     protected void tearDown() throws Exception {
-        if (valueLookupManager != null) {
+        if (SynonymManager != null) {
             try {
-                valueLookupManager.deleteDatabaseFiles();
+                SynonymManager.deleteDatabaseFiles();
             } catch (IOException e) {
-                logger.error("Error tearing down ValueLookupManager: " + e.getMessage(), e);
+                logger.error("Error tearing down SynonymManager: " + e.getMessage(), e);
             }
         }
         super.tearDown();
@@ -140,7 +140,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         assertEquals(1, result.get("PERSON").size(), "Should be one PositionListSoA for PERSON type");
         PositionListSoA personPositions = result.get("PERSON").get(0);
         assertEquals(1, personPositions.getNumPositions(), "Should have one position in total for PERSON type");
-        int johnSmithId = valueLookupManager.getId("john smith");
+        int johnSmithId = SynonymManager.getId("john smith");
         assertEquals(johnSmithId, personPositions.getSynonymIdAt(0), "SynonymId should match ID for 'john smith'");
 
         assertTrue(result.containsKey("ORGANIZATION"), "Should contain ORGANIZATION entity type key");
@@ -148,8 +148,8 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         PositionListSoA orgPositions = result.get("ORGANIZATION").get(0);
         assertEquals(2, orgPositions.getNumPositions(), "Should have two positions in total for ORGANIZATION type (Google, Microsoft)");
 
-        int googleId = valueLookupManager.getId("google");
-        int microsoftId = valueLookupManager.getId("microsoft");
+        int googleId = SynonymManager.getId("google");
+        int microsoftId = SynonymManager.getId("microsoft");
 
         List<Integer> orgSynonymIds = orgPositions.getSynonymIds().intStream().boxed().collect(Collectors.toList());
         assertTrue(orgSynonymIds.contains(googleId), "Synonym ID for 'google' should be present in ORGANIZATION positions");
@@ -169,7 +169,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         assertEquals(1, result.get("LOCATION").size(), "Should be one PositionListSoA for LOCATION type");
         PositionListSoA locPositions = result.get("LOCATION").get(0);
         assertEquals(1, locPositions.getNumPositions(), "Should have one position in total for LOCATION type");
-        int mountainViewId = valueLookupManager.getId("mountain view");
+        int mountainViewId = SynonymManager.getId("mountain view");
         assertEquals(mountainViewId, locPositions.getSynonymIdAt(0), "SynonymId should match ID for 'mountain view'");
     }
 
@@ -255,7 +255,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
 
         assertEquals(2, applePl.getNumPositions(), "Should have two positions for normalized ORGANIZATION entity (apple)");
 
-        int appleId = valueLookupManager.getId("apple");
+        int appleId = SynonymManager.getId("apple");
         boolean allMatchAppleId = IntStream.range(0, applePl.getNumPositions())
                                            .allMatch(i -> applePl.getSynonymIdAt(i) == appleId);
         assertTrue(allMatchAppleId, "All positions in the list should have synonymId for 'apple'");
@@ -313,7 +313,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
 
         assertEquals(1, nzArmyPositions.getNumPositions(), "Should have one position entry for the combined 'New Zealand Army Corps'");
 
-        int nzArmyId = valueLookupManager.getId("new zealand army corps");
+        int nzArmyId = SynonymManager.getId("new zealand army corps");
         Position pos = nzArmyPositions.getPositionAt(0);
 
         assertEquals(nzArmyId, nzArmyPositions.getSynonymIdAt(0), "SynonymId should match ID for 'new zealand army corps'");

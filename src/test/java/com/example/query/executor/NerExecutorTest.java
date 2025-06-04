@@ -8,19 +8,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.time.LocalDate;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,13 +28,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
 import com.example.core.PositionListSoA;
+import com.example.index.util.SynonymManager;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Ner;
@@ -48,6 +46,7 @@ class NerExecutorTest {
     @Mock private IndexAccess nerIndex;
     @Mock private IndexAccess nerDateIndex;
     @Mock private RocksIterator mockIterator;
+    @Mock private SynonymManager synonymManager;
     @InjectMocks private NerExecutor executor;
 
     private Map<String, IndexAccessInterface> indexes;
@@ -168,324 +167,313 @@ class NerExecutorTest {
 
     @Test
     void testExecuteSingleTypeDocument() throws Exception {
+        // Test NER(PERSON) - calls executeEntityTypeOnlySearch
         Ner condition = new Ner("PERSON");
-        String expectedKeyPrefix = "PERSON" + IndexAccessInterface.DELIMITER;
 
-        PositionListSoA posList1 = new PositionListSoA(); posList1.add(new Position(1, 1, 0, 5));
-        PositionListSoA posList2 = new PositionListSoA(); posList2.add(new Position(3, 1, 10, 15));
+        PositionListSoA posList = new PositionListSoA();
+        // Add positions. Synonym IDs are present in the blob but not directly used for ENTITY_TYPE value.
+        posList.add(1, 1, 0, 5, 101); // Doc 1, Sent 1, (e.g. "Alice")
+        posList.add(3, 1, 10, 15, 102); // Doc 3, Sent 1, (e.g. "Bob")
 
-        List<Map.Entry<byte[], PositionListSoA>> mockConceptualEntries = List.of(
-            Map.entry((expectedKeyPrefix + "Alice").getBytes(), posList1),
-            Map.entry((expectedKeyPrefix + "Bob").getBytes(), posList2)
-        );
-
-        RocksIterator specificMockIterator = mock(RocksIterator.class, "singleTypeIterator");
-        setupIteratorMockForSeek(specificMockIterator, nerIndex, expectedKeyPrefix, mockConceptualEntries);
+        byte[] personBlob = soaToBlob(posList); // numPositions will be 2
+        // Mock nerIndex.getRaw("PERSON") to return this blob
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(personBlob));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(2, result.getConceptualRowCount());
-        assertEquals(2, result.size());
+        // For NER(TYPE) queries, conceptualRowCount is 1 (for the type itself)
+        assertEquals(1, result.getConceptualRowCount(), "For type-only search, one conceptual row for 'PERSON'");
+        // Size is the number of actual occurrences/positions
+        assertEquals(2, result.size(), "Should find 2 occurrences of PERSON type");
 
         Set<Integer> docIds = new HashSet<>();
-        Set<Object> values = new HashSet<>();
-        Set<String> varNames = new HashSet<>();
         for (int i = 0; i < result.size(); i++) {
             docIds.add(result.getDocumentIdAt(i));
-            values.add(result.getValueAt(i));
-            varNames.add(result.getVariableNameAt(i));
-            assertEquals(ValueType.ENTITY, result.getValueTypeAt(i));
+            assertEquals("PERSON", result.getValueAt(i), "Value should be the entity type string 'PERSON'");
+            assertEquals(ValueType.ENTITY_TYPE, result.getValueTypeAt(i));
+            assertNull(result.getVariableNameAt(i));
+            assertEquals(-1, result.getSynonymIdAt(i)); // For ENTITY_TYPE, synonymId is -1
         }
         assertTrue(docIds.containsAll(Set.of(1, 3)), "Result should contain document IDs 1 and 3. Found: " + docIds);
-        assertTrue(values.containsAll(Set.of("Alice", "Bob")), "All values should be specific entities 'Alice', 'Bob'. Found: " + values);
-        assertTrue(varNames.stream().allMatch(Objects::isNull), "All variable names should be null. Found: " + varNames);
 
-        verify(nerIndex).seek(argThat(k -> Arrays.equals(k, expectedKeyPrefix.getBytes())));
+        verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
     }
 
     @Test
     void testExecuteWithMultipleTypes() throws Exception {
+        // Test NER(PERSON)
         Ner conditionPerson = new Ner("PERSON");
-        String personPrefix = "PERSON" + IndexAccessInterface.DELIMITER;
-        PositionListSoA personPos = new PositionListSoA(); personPos.add(new Position(1, 1, 0, 5));
-        List<Map.Entry<byte[], PositionListSoA>> personConceptualEntries = List.of(
-            Map.entry((personPrefix + "Alice").getBytes(), personPos)
-        );
-        RocksIterator personIterator = mock(RocksIterator.class, "personIterator");
-        setupIteratorMockForSeek(personIterator, nerIndex, personPrefix, personConceptualEntries);
+        PositionListSoA personSoa = new PositionListSoA();
+        personSoa.add(1, 1, 0, 5, 201); // Doc 1, "Alice" (synId 201)
+        byte[] personBlob = soaToBlob(personSoa);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(personBlob));
+
         QueryResultSoA resultPerson = executor.execute(conditionPerson, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
-
-        Ner conditionLocation = new Ner("LOCATION");
-        String locationPrefix = "LOCATION" + IndexAccessInterface.DELIMITER;
-        PositionListSoA locPos1 = new PositionListSoA(); locPos1.add(new Position(2, 1, 10, 15));
-        PositionListSoA locPos2 = new PositionListSoA(); locPos2.add(new Position(2, 2, 20, 25));
-        List<Map.Entry<byte[], PositionListSoA>> locationConceptualEntries = List.of(
-            Map.entry((locationPrefix + "Paris").getBytes(), locPos1),
-            Map.entry((locationPrefix + "London").getBytes(), locPos2)
-        );
-        RocksIterator locationIterator = mock(RocksIterator.class, "locationIterator");
-        setupIteratorMockForSeek(locationIterator, nerIndex, locationPrefix, locationConceptualEntries);
-        QueryResultSoA resultLocation = executor.execute(conditionLocation, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
-
-        assertEquals(1, resultPerson.size());
-        assertEquals("Alice", resultPerson.getValueAt(0));
+        assertNotNull(resultPerson);
+        assertEquals(1, resultPerson.getConceptualRowCount(), "Conceptual row count for PERSON type");
+        assertEquals(1, resultPerson.size(), "One occurrence of PERSON type");
+        assertEquals("PERSON", resultPerson.getValueAt(0));
+        assertEquals(ValueType.ENTITY_TYPE, resultPerson.getValueTypeAt(0));
         assertEquals(1, resultPerson.getDocumentIdAt(0));
 
-        assertEquals(2, resultLocation.getConceptualRowCount());
-        assertEquals(2, resultLocation.size());
-        Set<String> locValues = new HashSet<>();
-        for(int i=0; i < resultLocation.size(); i++){
-            assertEquals(2, resultLocation.getDocumentIdAt(i));
-            locValues.add((String)resultLocation.getValueAt(i));
-        }
-        assertTrue(locValues.containsAll(Set.of("Paris", "London")), "Expected location values Paris and London");
+        // Test NER(LOCATION)
+        Ner conditionLocation = new Ner("LOCATION");
+        PositionListSoA locSoa = new PositionListSoA();
+        locSoa.add(2, 1, 10, 15, 301); // Doc 2, "Paris" (synId 301)
+        locSoa.add(2, 2, 20, 25, 302); // Doc 2, "London" (synId 302)
+        byte[] locationBlob = soaToBlob(locSoa);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "LOCATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(locationBlob));
 
-        verify(nerIndex).seek(argThat(k -> Arrays.equals(k, personPrefix.getBytes())));
-        verify(nerIndex).seek(argThat(k -> Arrays.equals(k, locationPrefix.getBytes())));
+        QueryResultSoA resultLocation = executor.execute(conditionLocation, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        assertNotNull(resultLocation);
+        assertEquals(1, resultLocation.getConceptualRowCount(), "Conceptual row count for LOCATION type");
+        assertEquals(2, resultLocation.size(), "Two occurrences of LOCATION type");
+        Set<Integer> locDocIds = new HashSet<>();
+        for(int i=0; i < resultLocation.size(); i++){
+            locDocIds.add(resultLocation.getDocumentIdAt(i));
+            assertEquals("LOCATION", resultLocation.getValueAt(i));
+            assertEquals(ValueType.ENTITY_TYPE, resultLocation.getValueTypeAt(i));
+        }
+        assertTrue(locDocIds.stream().allMatch(id -> id == 2), "All LOCATION occurrences should be in Doc 2");
+
+
+        verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "LOCATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
     }
 
     @Test
     void testVariableBindingDocumentGranularity() throws Exception {
-        Ner condition = new Ner("ORGANIZATION", "?orgVar", true);
-        String expectedKeyPrefix = "ORGANIZATION" + IndexAccessInterface.DELIMITER;
+        // Test NER(PERSON) BIND ?p - calls executeVariableBindingSearch
+        Ner condition = new Ner("PERSON", null, "?p", true);
 
-        PositionListSoA posList1 = new PositionListSoA(); posList1.add(new Position(4, 1, 0, 10));
-        PositionListSoA posList2 = new PositionListSoA(); posList2.add(new Position(4, 2, 15, 25));
+        // Mock SynonymManager for term resolution
+        int acmeId = 1;
+        int globexId = 2;
+        when(synonymManager.getTerm(acmeId)).thenReturn(Optional.of("acmeinc")); // Lowercase
+        when(synonymManager.getTerm(globexId)).thenReturn(Optional.of("globexcorp")); // Lowercase
 
-        List<Map.Entry<byte[], PositionListSoA>> mockConceptualEntries = List.of(
-            Map.entry((expectedKeyPrefix + "AcmeInc").getBytes(), posList1),
-            Map.entry((expectedKeyPrefix + "GlobexCorp").getBytes(), posList2)
-        );
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(4, 1, 0, 10, acmeId);    // Doc 4, "AcmeInc"
+        positions.add(4, 2, 15, 25, globexId); // Doc 4, "GlobexCorp"
+        // Add another instance of AcmeInc to test conceptual grouping
+        positions.add(4, 3, 30, 40, acmeId);   // Doc 4, "AcmeInc" again
 
-        RocksIterator iterator = mock(RocksIterator.class, "orgIterator");
-        setupIteratorMockForSeek(iterator, nerIndex, expectedKeyPrefix, mockConceptualEntries);
+        byte[] personBlob = soaToBlob(positions); // numPositions will be 3
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(personBlob));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(2, result.getConceptualRowCount());
-        assertEquals(2, result.size());
+        // Two distinct entities: "acmeinc", "globexcorp"
+        assertEquals(2, result.getConceptualRowCount(), "Should be 2 conceptual rows for 'acmeinc', 'globexcorp'");
+        // Three actual occurrences
+        assertEquals(3, result.size(), "Should be 3 positions in total");
 
         Set<Integer> docIds = new HashSet<>();
-        Set<Object> values = new HashSet<>();
+        Set<Object> values = new HashSet<>(); // Will store lowercase resolved terms
         Set<String> varNames = new HashSet<>();
+        Map<String, Integer> valueCounts = new HashMap<>();
 
         for(int i=0; i < result.size(); i++) {
             docIds.add(result.getDocumentIdAt(i));
-            values.add(result.getValueAt(i));
+            String val = (String) result.getValueAt(i);
+            values.add(val);
+            valueCounts.put(val, valueCounts.getOrDefault(val, 0) + 1);
             varNames.add(result.getVariableNameAt(i));
             assertEquals(ValueType.ENTITY, result.getValueTypeAt(i));
+            assertTrue(result.getSynonymIdAt(i) == acmeId || result.getSynonymIdAt(i) == globexId);
         }
 
         assertTrue(docIds.stream().allMatch(d -> d == 4), "All matches should be from document 4. Found: " + docIds);
-        assertTrue(varNames.stream().allMatch(v -> "?orgVar".equals(v)), "Variable name should be '?orgVar'. Found: " + varNames);
-        assertTrue(values.containsAll(Set.of("AcmeInc", "GlobexCorp")), "Captured values should include 'AcmeInc' and 'GlobexCorp'. Found: " + values);
+        assertTrue(varNames.stream().allMatch(v -> "?p".equals(v)), "Variable name should be '?p'. Found: " + varNames);
+        assertTrue(values.containsAll(Set.of("acmeinc", "globexcorp")), "Captured values should include 'acmeinc' and 'globexcorp'. Found: " + values);
+        assertEquals(2, valueCounts.get("acmeinc").intValue(), "Count for 'acmeinc'");
+        assertEquals(1, valueCounts.get("globexcorp").intValue(), "Count for 'globexcorp'");
 
-        verify(nerIndex).seek(argThat(k -> Arrays.equals(k, expectedKeyPrefix.getBytes())));
+        verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        verify(synonymManager).getTerm(acmeId); // Called for each conceptual match
+        verify(synonymManager).getTerm(globexId);
     }
 
     @Test
-    void testExecuteEntityTypeSearch_allTypesWithVariable() throws QueryExecutionException, IndexAccessException, IOException {
-        Ner condition = new Ner("?_", "?anyEntityTerm", true);
+    void testExecuteEntityTypeSearch_allTypesWithVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        // Test NER(PERSON) BIND ?v
+        Ner condition = new Ner("PERSON", null, "?v", true);
 
-        RocksIterator allNerIterator = mock(RocksIterator.class, "allNerIterator");
+        int johnDoeId = 1;
+        when(synonymManager.getTerm(johnDoeId)).thenReturn(Optional.of("john doe"));
 
-        String personKey = "PERSON" + IndexAccessInterface.DELIMITER + "John Doe";
-        PositionListSoA personPositions = new PositionListSoA(); personPositions.add(new Position(1, 1, 0, 8));
+        PositionListSoA personPositions = new PositionListSoA();
+        personPositions.add(1, 1, 0, 8, johnDoeId);
 
-        String orgKey = "ORGANIZATION" + IndexAccessInterface.DELIMITER + "MegaCorp";
-        PositionListSoA orgPositions = new PositionListSoA(); orgPositions.add(new Position(2,1,5,12));
-
-        List<Map.Entry<byte[], PositionListSoA>> allConceptualEntries = List.of(
-            Map.entry(personKey.getBytes(), personPositions),
-            Map.entry(orgKey.getBytes(), orgPositions)
-        );
-        setupIteratorMockForIterateFromFirst(allNerIterator, nerIndex, allConceptualEntries);
+        byte[] personBlob = soaToBlob(personPositions);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(personBlob));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertEquals(2, result.getConceptualRowCount(), "Should find two distinct entities (John Doe, MegaCorp)");
-        assertEquals(2, result.size(), "Should have two binding entries");
-
-        Set<String> foundTerms = new HashSet<>();
-        Set<String> foundVarNames = new HashSet<>();
-        Set<ValueType> foundValueTypes = new HashSet<>();
-
-        for(int i=0; i<result.size(); i++) {
-            foundTerms.add((String) result.getValueAt(i));
-            foundVarNames.add(result.getVariableNameAt(i));
-            foundValueTypes.add(result.getValueTypeAt(i));
-        }
-
-        assertTrue(foundTerms.contains("John Doe"), "Expected term 'John Doe' to be bound. Found: " + foundTerms);
-        assertTrue(foundTerms.contains("MegaCorp"), "Expected term 'MegaCorp' to be bound. Found: " + foundTerms);
-        assertTrue(foundVarNames.stream().allMatch("?anyEntityTerm"::equals), "Variable name should be '?anyEntityTerm' for all. Found: " + foundVarNames);
-        assertTrue(foundValueTypes.stream().allMatch(ValueType.ENTITY::equals), "All value types should be ENTITY. Found: " + foundValueTypes);
-
-        verify(nerIndex).iterateFromFirst();
-    }
-
-    @Test
-    void testExecuteEntitySearchWithTarget_noVariable() throws QueryExecutionException, IndexAccessException, IOException {
-        Ner condition = new Ner("PERSON", "John Doe", false);
-
-        String key = "PERSON" + IndexAccessInterface.DELIMITER + "john doe";
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(new Position(4, 1, 0, 8));
-        positions.add(new Position(4, 3, 5, 12));
-
-        when(nerIndex.getRaw(key.getBytes())).thenReturn(Optional.of(soaToBlob(positions)));
-
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
-
-        assertNotNull(result);
-        assertEquals(1, result.getConceptualRowCount());
-        assertEquals(2, result.size());
-
-        for(int i=0; i < result.size(); i++) {
-            assertEquals("John Doe", result.getValueAt(i));
-            assertEquals(ValueType.ENTITY, result.getValueTypeAt(i));
-            assertNull(result.getVariableNameAt(i));
-            assertEquals(4, result.getDocumentIdAt(i));
-        }
-        verify(nerIndex).getRaw(key.getBytes());
-    }
-
-    @Test
-    void testExecuteEntityTypeSearch_noVariable() throws QueryExecutionException, IndexAccessException, IOException {
-        Ner condition = new Ner("PERSON", null, false);
-
-        String keyPrefix = "PERSON" + IndexAccessInterface.DELIMITER;
-        PositionListSoA positions = new PositionListSoA(); positions.add(new Position(1, 1, 0, 8));
-
-        List<Map.Entry<byte[], PositionListSoA>> conceptualEntries = Collections.singletonList(
-            Map.entry((keyPrefix + "John Doe").getBytes(), positions)
-        );
-        RocksIterator specificMockIterator = mock(RocksIterator.class, "entityTypeNoVarIterator");
-        setupIteratorMockForSeek(specificMockIterator, nerIndex, keyPrefix, conceptualEntries);
-
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
-
-        assertNotNull(result);
-        assertEquals(1, result.getConceptualRowCount());
+        assertEquals(1, result.getConceptualRowCount(), "Should find one distinct PERSON entity");
         assertEquals(1, result.size());
+        assertEquals("john doe", result.getValueAt(0));
+        assertEquals("?v", result.getVariableNameAt(0));
+        assertEquals(ValueType.ENTITY, result.getValueTypeAt(0));
+        assertEquals(johnDoeId, result.getSynonymIdAt(0));
+    }
+
+    @Test
+    void testExecuteEntitySearchWithTarget_noVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        Ner condition = new Ner("PERSON", "John Doe");
+
+        int johnDoeId = 1;
+        when(synonymManager.getId("john doe")).thenReturn(johnDoeId);
+
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(1, 1, 10, 18, johnDoeId);
+        positions.add(1, 2, 5, 12, 99);
+
+        byte[] blob = soaToBlob(positions);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(blob));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+
+        assertNotNull(result);
+        assertEquals(1, result.getConceptualRowCount(), "Should find one conceptual row for 'John Doe'");
+        assertEquals(1, result.size(), "Should find one occurrence of 'John Doe'");
+
         assertEquals("John Doe", result.getValueAt(0));
         assertEquals(ValueType.ENTITY, result.getValueTypeAt(0));
         assertNull(result.getVariableNameAt(0));
         assertEquals(1, result.getDocumentIdAt(0));
-        verify(nerIndex).seek(argThat(k -> Arrays.equals(k, keyPrefix.getBytes())));
+        assertEquals(johnDoeId, result.getSynonymIdAt(0));
+
+        verify(synonymManager).getId("john doe");
+        verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
     }
 
     @Test
-    void testExecuteEntityTypeSearch_withVariable() throws QueryExecutionException, IndexAccessException, IOException {
-        Ner condition = new Ner("LOCATION", "?loc", true);
+    void testExecuteEntityTypeSearch_noVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        Ner condition = new Ner("ORGANIZATION");
 
-        String keyPrefix = "LOCATION" + IndexAccessInterface.DELIMITER;
-        PositionListSoA positions = new PositionListSoA(); positions.add(new Position(2, 1, 10, 18));
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(1, 1, 0, 10, 123);
+        positions.add(2, 1, 5, 15, 456);
 
-        List<Map.Entry<byte[], PositionListSoA>> conceptualEntries = Collections.singletonList(
-            Map.entry((keyPrefix + "New York").getBytes(), positions)
-        );
-        RocksIterator specificMockIterator = mock(RocksIterator.class, "entityTypeVarIterator");
-        setupIteratorMockForSeek(specificMockIterator, nerIndex, keyPrefix, conceptualEntries);
+        byte[] blob = soaToBlob(positions);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "ORGANIZATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(blob));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertEquals(1, result.getConceptualRowCount());
-        assertEquals(1, result.size());
-        assertEquals("New York", result.getValueAt(0));
-        assertEquals(ValueType.ENTITY, result.getValueTypeAt(0));
-        assertEquals("?loc", result.getVariableNameAt(0));
-        assertEquals(2, result.getDocumentIdAt(0));
-        verify(nerIndex).seek(argThat(k -> Arrays.equals(k, keyPrefix.getBytes())));
-    }
+        assertEquals(1, result.getConceptualRowCount(), "Should be 1 conceptual row for the type itself");
+        assertEquals(2, result.size(), "Should find 2 occurrences of the type");
 
-    @Test
-    void testExecuteDateSearch_withVariable() throws QueryExecutionException, IndexAccessException, IOException {
-        Ner condition = new Ner("DATE", "?actualDate", true);
-
-        RocksIterator dateIterator = mock(RocksIterator.class, "dateIterator");
-
-        PositionListSoA posListDate1 = new PositionListSoA(); posListDate1.add(new Position(10, 1, 0, 5));
-        PositionListSoA posListDate2 = new PositionListSoA(); posListDate2.add(new Position(11, 1, 0, 5));
-
-        String dateIndexKey1 = "20230115";
-        String dateIndexKey2 = "20240220";
-
-        String expectedFormattedDate1 = "2023-01-15";
-        String expectedFormattedDate2 = "2024-02-20";
-
-        List<Map.Entry<byte[], PositionListSoA>> dateConceptualEntries = List.of(
-            Map.entry(dateIndexKey1.getBytes(), posListDate1),
-            Map.entry(dateIndexKey2.getBytes(), posListDate2)
-        );
-
-        setupIteratorMockForIterateFromFirst(dateIterator, nerDateIndex, dateConceptualEntries);
-
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
-
-        assertNotNull(result);
-        assertEquals(2, result.getConceptualRowCount(), "Should find two date entities");
-        assertEquals(2, result.size());
-
-        Set<String> foundDateStringValues = new HashSet<>();
-        Set<LocalDate> foundDateObjects = new HashSet<>();
-
-        for(int i=0; i < result.size(); i++) {
-            assertEquals(ValueType.DATE, result.getValueTypeAt(i), "ValueType should be DATE");
-            assertEquals("?actualDate", result.getVariableNameAt(i), "Variable name should be ?actualDate");
-            String storedDateString = (String)result.getValueAt(i);
-            foundDateStringValues.add(storedDateString);
-
-            if (defaultTestRequirements.needsDateValues) {
-                 try {
-                    foundDateObjects.add(LocalDate.parse(storedDateString));
-                 } catch (Exception e) {
-                    throw new AssertionError("Failed to parse date string '"+ storedDateString +"' from result (expected yyyy-MM-dd format)", e);
-                 }
-            }
+        for (int i = 0; i < result.size(); i++) {
+            assertEquals("ORGANIZATION", result.getValueAt(i));
+            assertEquals(ValueType.ENTITY_TYPE, result.getValueTypeAt(i));
+            assertNull(result.getVariableNameAt(i));
         }
-        assertTrue(foundDateStringValues.contains(expectedFormattedDate1), "Result should contain formatted date string: " + expectedFormattedDate1 + ". Found: " + foundDateStringValues);
-        assertTrue(foundDateStringValues.contains(expectedFormattedDate2), "Result should contain formatted date string: " + expectedFormattedDate2 + ". Found: " + foundDateStringValues);
+        Set<Integer> docIds = new HashSet<>();
+        for(int i=0; i<result.size(); i++) docIds.add(result.getDocumentIdAt(i));
+        assertTrue(docIds.containsAll(Set.of(1,2)), "Doc IDs 1 and 2 should be present");
 
-        if (defaultTestRequirements.needsDateValues) {
-            assertTrue(foundDateObjects.contains(LocalDate.of(2023,1,15)), "Parsed LocalDate objects should contain 2023-01-15. Found: " + foundDateObjects);
-            assertTrue(foundDateObjects.contains(LocalDate.of(2024,2,20)), "Parsed LocalDate objects should contain 2024-02-20. Found: " + foundDateObjects);
+        verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "ORGANIZATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+    }
+
+    @Test
+    void testExecuteEntityTypeSearch_withVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        // Simulates NER(LOCATION) BIND ?locVar
+        Ner condition = new Ner("LOCATION", null, "?locVar", true);
+
+        int parisId = 10;
+        int londonId = 11;
+        when(synonymManager.getTerm(parisId)).thenReturn(Optional.of("paris"));
+        when(synonymManager.getTerm(londonId)).thenReturn(Optional.of("london"));
+
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(1, 1, 0, 5, parisId);
+        positions.add(1, 2, 10, 16, londonId);
+        positions.add(2, 1, 0, 6, parisId);
+
+        byte[] blob = soaToBlob(positions);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "LOCATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(blob));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+
+        assertNotNull(result);
+        assertEquals(2, result.getConceptualRowCount(), "Should find two distinct entities: paris, london");
+        assertEquals(3, result.size(), "Should find 3 occurrences in total");
+
+        Set<String> foundValues = new HashSet<>();
+        for (int i = 0; i < result.size(); i++) {
+            assertEquals("?locVar", result.getVariableNameAt(i));
+            assertEquals(ValueType.ENTITY, result.getValueTypeAt(i));
+            foundValues.add((String) result.getValueAt(i));
+            assertTrue(result.getSynonymIdAt(i) == parisId || result.getSynonymIdAt(i) == londonId);
         }
-        verify(nerDateIndex).iterateFromFirst();
+        assertTrue(foundValues.containsAll(Set.of("paris", "london")), "Expected values 'paris' and 'london'. Found: " + foundValues);
+
+        verify(synonymManager).getTerm(parisId);
+        verify(synonymManager).getTerm(londonId);
+        verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "LOCATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
     }
 
     @Test
-    void testExecute_noMatchFound_iterator() throws QueryExecutionException, IndexAccessException, IOException {
-        Ner condition = new Ner("PERSON", null, false);
-        String expectedKeyPrefix = "PERSON" + IndexAccessInterface.DELIMITER;
+    void testExecuteDateSearch_withVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        Ner condition = new Ner("DATE", "?d");
 
-        RocksIterator specificMockIterator = mock(RocksIterator.class, "noMatchIterator");
-        setupIteratorMockForSeek(specificMockIterator, nerIndex, expectedKeyPrefix, Collections.emptyList());
+        QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
+            executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        });
+        assertEquals(QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION, exception.getErrorType());
+        assertTrue(exception.getMessage().contains("NER(DATE) queries should be handled by TemporalExecutor"));
+    }
+
+    @Test
+    void testExecute_noMatchFound_iterator() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        Ner condition = new Ner("PERSON", "NonExistentPerson");
+
+        int nonExistentId = 12345;
+        when(synonymManager.getId("nonexistentperson")).thenReturn(nonExistentId);
+
+        PositionListSoA emptyPositions = new PositionListSoA();
+        byte[] emptyBlob = soaToBlob(emptyPositions);
+
+        PositionListSoA positionsWithOtherEntities = new PositionListSoA();
+        positionsWithOtherEntities.add(1,1,0,5, 1);
+        byte[] blobWithOtherEntities = soaToBlob(positionsWithOtherEntities);
+
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(blobWithOtherEntities));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertTrue(result.isEmpty());
-        verify(nerIndex).seek(argThat(k -> Arrays.equals(k, expectedKeyPrefix.getBytes())));
+        assertEquals(0, result.getConceptualRowCount());
+        assertEquals(0, result.size());
+
+        verify(synonymManager).getId("nonexistentperson");
+        verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
     }
 
     @Test
-    void testExecute_noMatchFound_get() throws QueryExecutionException, IndexAccessException, IOException {
-        Ner condition = new Ner("PERSON", "NonExistentPerson", false);
-        String searchKey = "PERSON" + IndexAccessInterface.DELIMITER + "nonexistentperson";
-        lenient().when(nerIndex.getRaw(searchKey.getBytes())).thenReturn(Optional.empty());
+    void testExecute_noMatchFound_get() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        Ner condition = new Ner("PERSON", "ReallyNonExistent");
+
+        int reallyNonExistentId = 67890;
+        when(synonymManager.getId("reallynonexistent")).thenReturn(reallyNonExistentId);
+
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.empty());
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertTrue(result.isEmpty());
-        verify(nerIndex).getRaw(searchKey.getBytes());
+        assertEquals(0, result.getConceptualRowCount());
+        assertEquals(0, result.size());
+
+        verify(synonymManager).getId("reallynonexistent");
+        verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
     }
 
     @Test
@@ -504,22 +492,18 @@ class NerExecutorTest {
     @Test
     void testExecute_missingNerDateIndex() {
         Ner condition = new Ner("DATE");
-        Map<String, IndexAccessInterface> incompleteIndexes = new HashMap<>(indexes);
-        incompleteIndexes.remove(NER_DATE_INDEX_NAME);
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
-            executor.execute(condition, incompleteIndexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+            executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
         });
-        assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
-        assertTrue(exception.getMessage().contains(NER_DATE_INDEX_NAME));
+        assertEquals(QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION, exception.getErrorType());
+        assertTrue(exception.getMessage().contains("NER(DATE) queries should be handled by TemporalExecutor"));
     }
 
-    // @Test // Commented out as per user request
     void testExecute_wildcardNotSupportedForTarget() {
         // ... existing code ...
     }
 
-    // @Test // Commented out as per user request
     void testExecute_wildcardNotSupportedForType() {
         // ... existing code ...
     }

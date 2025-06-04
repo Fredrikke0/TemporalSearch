@@ -17,8 +17,8 @@ import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class ValueLookupManager implements AutoCloseable {
-    private static final Logger logger = LoggerFactory.getLogger(ValueLookupManager.class);
+public class SynonymManager implements AutoCloseable {
+    private static final Logger logger = LoggerFactory.getLogger(SynonymManager.class);
 
     private final RocksDB db;
     private final Path dbPath;
@@ -28,7 +28,7 @@ public class ValueLookupManager implements AutoCloseable {
 
     private static final byte[] NEXT_ID_KEY = "__NEXT_ID__".getBytes(StandardCharsets.UTF_8);
 
-    public ValueLookupManager(Path dbPath) throws RocksDBException {
+    public SynonymManager(Path dbPath) throws RocksDBException {
         this.dbPath = dbPath;
         RocksDB.loadLibrary();
         final Options options = new Options().setCreateIfMissing(true);
@@ -71,7 +71,7 @@ public class ValueLookupManager implements AutoCloseable {
                 // Key format: "term:<term>" or "id:<id>"
                 String[] parts = keyString.split(":", 2);
                 if (parts.length < 2) {
-                    logger.warn("Skipping malformed key in ValueLookupManager: {}", keyString);
+                    logger.warn("Skipping malformed key in SynonymManager: {}", keyString);
                     continue;
                 }
                 String prefix = parts[0];

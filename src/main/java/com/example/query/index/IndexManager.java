@@ -14,6 +14,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.rocksdb.Options;
+import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,6 +22,7 @@ import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.index.RocksDBConfig;
+import com.example.index.util.SynonymManager;
 import com.example.query.model.Query;
 import com.example.query.model.SubquerySpec;
 import com.example.query.model.condition.Condition;
@@ -42,30 +44,59 @@ public class IndexManager implements AutoCloseable {
     private final Map<String, IndexAccessInterface> indexes;
     private final Path indexBaseDir;
     private final String indexSetName;
+    private SynonymManager synonymManager;
     private boolean isClosed = false;
 
     /**
      * Creates a new IndexManager for a specific index set and query.
      * Initializes only the indexes required by the query and temporal strategy.
      *
-     * @param projectBaseDir The base directory for all index sets (e.g., project root)
-     * @param indexSetName The name of the index set to use (from FROM clause)
+     * @param actualIndexDir The direct path to the directory containing the various index type subdirectories (e.g., unigram, ner_date).
+     * @param indexSetName The name of the index set to use (from FROM clause), used for logging and identification.
      * @param query The parsed query object
      * @param temporalStrategy The name of the temporal strategy ("nash" or "naive")
-     * @throws IndexAccessException if the base index directory doesn't exist
+     * @throws IndexAccessException if the base index directory doesn't exist or synonym manager fails to initialize
      */
-    public IndexManager(Path projectBaseDir, String indexSetName, Query query, String temporalStrategy) throws IndexAccessException {
-        this.indexBaseDir = projectBaseDir.resolve("indexes");
+    public IndexManager(Path actualIndexDir, String indexSetName, Query query, String temporalStrategy) throws IndexAccessException {
+        this.indexBaseDir = actualIndexDir;
         this.indexSetName = indexSetName;
         this.indexes = new HashMap<>();
 
         if (!Files.exists(this.indexBaseDir)) {
             throw new IndexAccessException(
-                "Base index directory does not exist within the project: " + this.indexBaseDir,
+                "Provided index directory does not exist: " + this.indexBaseDir,
                 "index_manager",
                 IndexAccessException.ErrorType.INITIALIZATION_ERROR
             );
         }
+
+        // Initialize SynonymManager
+        try {
+            Path synonymManagerDbPath = this.indexBaseDir.resolve("global_values_lookup.db");
+            // Ensure parent directory for synonym manager DB exists
+            // For a file-like DB name, the parent is just indexBaseDir, which is already checked.
+            // If global_values_lookup.db is treated as a directory by RocksDB, then this check might be different
+            // or handled by RocksDB itself if setCreateIfMissing is true on write.
+            // For read-only, the path must exist.
+            // Let's assume global_values_lookup.db is the directory RocksDB uses.
+            if (!Files.exists(synonymManagerDbPath)) {
+                 // This case might mean the DB was never created by IndexRunner or path is wrong.
+                 // Throwing an error here might be too strict if SynonymManager itself handles it.
+                 // However, for QueryCLI, we expect it to exist.
+                 logger.warn("SynonymManager DB path does not exist: {}. Operations requiring synonyms may fail or SynonymManager will create it if in write mode (not typical for QueryCLI).", synonymManagerDbPath);
+                 // Forcing creation of parent is not needed if synonymManagerDbPath is directly under indexBaseDir
+            }
+            this.synonymManager = new SynonymManager(synonymManagerDbPath);
+            logger.info("SynonymManager initialized at: {}", synonymManagerDbPath);
+        } catch (RocksDBException e) {
+            logger.error("Failed to initialize SynonymManager for index set '{}' at {}: {}", indexSetName, this.indexBaseDir.resolve("global_values_lookup.db"), e.getMessage(), e);
+            throw new IndexAccessException(
+                "Failed to initialize SynonymManager for index set '" + indexSetName + "' at " + this.indexBaseDir.resolve("global_values_lookup.db") + ". Cause: " + e.getMessage(),
+                "synonym_manager",
+                IndexAccessException.ErrorType.INITIALIZATION_ERROR
+            );
+        }
+
         initializeRequiredIndexes(query, temporalStrategy);
     }
 
@@ -329,6 +360,20 @@ public class IndexManager implements AutoCloseable {
      }
 
     /**
+     * Gets the SynonymManager associated with this IndexManager.
+     * @return The SynonymManager instance.
+     * @throws IllegalStateException if the IndexManager is closed.
+     */
+    public SynonymManager getSynonymManager() {
+        checkClosed();
+        if (this.synonymManager == null) {
+            // This should not happen if constructor succeeded and not closed yet
+            throw new IllegalStateException("SynonymManager is not initialized or has been closed.");
+        }
+        return this.synonymManager;
+    }
+
+    /**
      * Gets the appropriate index for a condition type.
      * Assumes the required indexes were already initialized.
      *
@@ -414,6 +459,19 @@ public class IndexManager implements AutoCloseable {
         isClosed = true;
         logger.info("Closing IndexManager for index set: {}", indexSetName);
         List<String> failedToClose = new ArrayList<>();
+
+        // Close SynonymManager first
+        if (this.synonymManager != null) {
+            try {
+                this.synonymManager.close();
+                logger.debug("Closed SynonymManager for index set: {}", indexSetName);
+                this.synonymManager = null;
+            } catch (Exception e) { // SynonymManager.close() might throw generic Exception or specific ones
+                logger.error("Failed to close SynonymManager for set {}: {}", indexSetName, e.getMessage(), e);
+                failedToClose.add("SynonymManager (" + e.getClass().getSimpleName() + ")");
+            }
+        }
+
         for (Map.Entry<String, IndexAccessInterface> entry : indexes.entrySet()) {
             try {
                 entry.getValue().close();

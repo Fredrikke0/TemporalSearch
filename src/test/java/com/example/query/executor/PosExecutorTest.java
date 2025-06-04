@@ -36,6 +36,7 @@ import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
+import com.example.index.util.SynonymManager;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Pos;
@@ -45,6 +46,7 @@ public class PosExecutorTest {
 
     @Mock private IndexAccessInterface mockPosIndex;
     @Mock private RocksIterator mockIterator;
+    @Mock private SynonymManager mockSynonymManager;
 
     private PosExecutor executor;
     private Map<String, IndexAccessInterface> indexes;
@@ -53,7 +55,7 @@ public class PosExecutorTest {
 
     @BeforeEach
     void setUp() {
-        executor = new PosExecutor();
+        executor = new PosExecutor(mockSynonymManager);
         indexes = Map.of(POS_INDEX_NAME, mockPosIndex);
         defaultTestRequirements = new AttributeRequirements();
         defaultTestRequirements.needsConceptualRowIds = true;
@@ -268,36 +270,68 @@ public class PosExecutorTest {
 
     @Test
     void testExecuteVariableSearch_NoSpecificTerm() throws QueryExecutionException, IndexAccessException, IOException {
-        Pos condition = new Pos("RB", null, "?advVar", true);
-        List<Map.Entry<String, PositionListSoA>> termEntries = new ArrayList<>();
-        PositionListSoA positions1 = new PositionListSoA(); positions1.add(new Position(1,1,1,2));
-        PositionListSoA positions2 = new PositionListSoA(); positions2.add(new Position(2,1,3,4));
-        PositionListSoA positions3 = new PositionListSoA(); positions3.add(new Position(1,2,5,6));
-        termEntries.add(Map.entry("fast", positions1));
-        termEntries.add(Map.entry("quick", positions2));
-        termEntries.add(Map.entry("speedy", positions3));
-        setupIteratorMock("RB", termEntries);
+        Pos condition = new Pos("VB", null, "?verb", true);
+        String tagPrefix = "VB";
+        String fullPrefix = tagPrefix.toUpperCase() + String.valueOf(IndexAccessInterface.DELIMITER);
+        byte[] prefixBytes = fullPrefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        PositionListSoA positions1 = new PositionListSoA(); positions1.add(new Position(1, 1, 0, 5));
+        PositionListSoA positions2 = new PositionListSoA(); positions2.add(new Position(1, 2, 10, 15));
+        PositionListSoA positions3 = new PositionListSoA(); positions3.add(new Position(2, 1, 20, 25));
+
+        RocksIterator specificTestIterator = org.mockito.Mockito.mock(RocksIterator.class, "specificTestIteratorFor_testExecuteVariableSearch_NoSpecificTerm");
+        // Crucially, ensure this more specific stubbing with eq() overrides the lenient any() in setUp.
+        when(mockPosIndex.seek(eq(prefixBytes))).thenReturn(specificTestIterator);
+
+        final List<Map.Entry<byte[], byte[]>> entries = List.of(
+            Map.entry((fullPrefix + "run").getBytes(java.nio.charset.StandardCharsets.UTF_8), positions1.serializeToCompositeBlob()),
+            Map.entry((fullPrefix + "jump").getBytes(java.nio.charset.StandardCharsets.UTF_8), positions2.serializeToCompositeBlob()),
+            Map.entry((fullPrefix + "swim").getBytes(java.nio.charset.StandardCharsets.UTF_8), positions3.serializeToCompositeBlob())
+        );
+
+        final AtomicInteger positionTracker = new AtomicInteger(0); // Start at 0, valid indices are 0, 1, 2
+        final int totalItems = entries.size();
+
+        // Mocking a stateful iterator
+        // isValid() is true if current position is < totalItems. PosExecutor calls this 6 times for 3 items.
+        when(specificTestIterator.isValid()).thenAnswer(inv -> positionTracker.get() < totalItems);
+
+        // key() and value() return data at current positionTracker. Called 3 times each.
+        when(specificTestIterator.key()).thenAnswer(inv -> {
+            if (positionTracker.get() >= totalItems) throw new IllegalStateException("key() called out of bounds. Index: " + positionTracker.get() + ", Total: " + totalItems);
+            return entries.get(positionTracker.get()).getKey();
+        });
+        when(specificTestIterator.value()).thenAnswer(inv -> {
+            if (positionTracker.get() >= totalItems) throw new IllegalStateException("value() called out of bounds. Index: " + positionTracker.get() + ", Total: " + totalItems);
+            return entries.get(positionTracker.get()).getValue();
+        });
+
+        // next() advances the positionTracker. Called 3 times.
+        org.mockito.Mockito.doAnswer(inv -> {
+            positionTracker.incrementAndGet();
+            return null;
+        }).when(specificTestIterator).next();
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertEquals(3, result.getConceptualRowCount()); // Each term is a conceptual row
-        assertEquals(3, result.size()); // Each position becomes a binding
-
-        Set<String> foundTerms = new HashSet<>();
+        assertEquals(3, result.size());
+        Set<String> foundVerbs = new HashSet<>();
+        Set<Integer> foundDocIds = new HashSet<>();
         for (int i = 0; i < result.size(); i++) {
-            assertEquals("?advVar", result.getVariableNameAt(i));
+            assertEquals("?verb", result.getVariableNameAt(i));
             assertEquals(ValueType.POS_TERM, result.getValueTypeAt(i));
-            foundTerms.add((String) result.getValueAt(i));
+            foundVerbs.add((String)result.getValueAt(i));
+            foundDocIds.add(result.getDocumentIdAt(i));
         }
-        assertEquals(Set.of("fast", "quick", "speedy"), foundTerms);
+        assertEquals(Set.of("run", "jump", "swim"), foundVerbs);
+        assertEquals(Set.of(1, 2), foundDocIds);
 
-        String expectedKeyPrefix = "RB" + String.valueOf(IndexAccessInterface.DELIMITER);
-        verify(mockPosIndex).seek(argThat(k -> Arrays.equals(k, expectedKeyPrefix.getBytes(java.nio.charset.StandardCharsets.UTF_8))));
-        verify(mockIterator, times(9)).isValid(); // Corrected from 4
-        verify(mockIterator, times(3)).key();     // Added verification
-        verify(mockIterator, times(3)).value();   // Added verification
-        verify(mockIterator, times(3)).next();
+        verify(mockPosIndex).seek(eq(prefixBytes)); // Verify with eq()
+        verify(specificTestIterator, times(6)).isValid();
+        verify(specificTestIterator, times(3)).key();
+        verify(specificTestIterator, times(3)).value();
+        verify(specificTestIterator, times(3)).next();
     }
 
     @Test

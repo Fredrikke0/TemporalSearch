@@ -35,6 +35,13 @@ public record Dependency(
 
         if (isVariable) {
             Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
+            if (qualifiedVariableName.isBlank()) {
+                throw new IllegalArgumentException("qualifiedVariableName cannot be blank when isVariable is true");
+            }
+        } else {
+            if (qualifiedVariableName != null) {
+                throw new IllegalArgumentException("qualifiedVariableName must be null when isVariable is false");
+            }
         }
     }
 

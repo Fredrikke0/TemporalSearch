@@ -14,6 +14,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
+import com.example.index.util.SynonymManager;
+import com.example.query.index.IndexManager;
 import com.example.query.model.JoinCondition;
 import com.example.query.model.Query;
 import com.example.query.model.SubquerySpec;
@@ -38,78 +40,52 @@ public class QueryExecutor {
 
     private final ConditionExecutorFactory executorFactory;
     private TableResultService tableResultService;
-    private boolean nashInitialized = false;
     private JoinOptimizationStrategy joinStrategy = JoinOptimizationStrategy.INDEPENDENT;
     private final String stitchStrategy;
     private Query currentQuery;
+    private final SynonymManager synonymManager;
 
     /**
-     * Creates a new QueryExecutor with the provided executor factory and stitch strategy.
+     * Creates a new QueryExecutor.
      *
-     * @param executorFactory Factory for creating condition executors
+     * @param executorFactory The factory to use for obtaining condition executors.
      * @param stitchStrategy The stitch execution strategy ("none" or "optimized")
+     * @param synonymManager The SynonymManager instance for this query execution context.
      */
-    public QueryExecutor(ConditionExecutorFactory executorFactory, String stitchStrategy) {
-        this(executorFactory, new TableResultService(), stitchStrategy);
+    public QueryExecutor(ConditionExecutorFactory executorFactory, String stitchStrategy, SynonymManager synonymManager) {
+        this(executorFactory, new TableResultService(), stitchStrategy, synonymManager);
     }
 
     /**
-     * Constructor for testing purposes, allowing injection of mocks.
+     * Constructor for testing purposes, allowing injection of mocks and specific SynonymManager.
      *
-     * @param executorFactory Factory for creating condition executors
-     * @param tableResultService Mocked TableResultService
+     * @param executorFactory The factory to use for obtaining condition executors.
+     * @param tableResultService Mocked TableResultService or actual instance.
      * @param stitchStrategy The stitch execution strategy ("none" or "optimized")
+     * @param synonymManager The SynonymManager instance.
      */
-    public QueryExecutor(ConditionExecutorFactory executorFactory, TableResultService tableResultService, String stitchStrategy) {
+    public QueryExecutor(ConditionExecutorFactory executorFactory, TableResultService tableResultService, String stitchStrategy, SynonymManager synonymManager) {
         this.executorFactory = executorFactory;
+        this.synonymManager = synonymManager;
         this.tableResultService = tableResultService;
         this.stitchStrategy = (stitchStrategy == null || stitchStrategy.isBlank()) ? "none" : stitchStrategy;
-        logger.debug("Initialized QueryExecutor with stitch strategy: {}", this.stitchStrategy);
+        logger.debug("Initialized QueryExecutor with stitch strategy: {} and provided SynonymManager and ExecutorFactory", this.stitchStrategy);
     }
 
     /**
-     * Initializes the Nash temporal index for a specific corpus.
-     * This should be called before executing queries with temporal conditions.
-     *
-     * @param corpusName The corpus/source name to initialize Nash index for
-     * @param indexManager The index manager for accessing indexes
-     */
-    public void initializeNashIndex(String corpusName, com.example.query.index.IndexManager indexManager) {
-        if (nashInitialized) {
-            logger.debug("Nash index already initialized, skipping");
-            return;
-        }
-
-        try {
-            // Get the configured TemporalExecutor instance directly from the factory
-            TemporalExecutor temporalExecutor = executorFactory.getTemporalExecutorInstance();
-
-            // Let the TemporalExecutor handle the Nash initialization with the index manager
-            boolean success = temporalExecutor.initializeForCorpus(corpusName, indexManager);
-            if (success) {
-                nashInitialized = true;
-                logger.info("Nash index successfully initialized for corpus: {}", corpusName);
-            } else {
-                logger.warn("Failed to initialize Nash index for corpus: {}", corpusName);
-            }
-        } catch (Exception e) {
-            logger.error("Failed to initialize Nash index: {}", e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Executes a query against the provided indexes
+     * Executes a query using the provided IndexManager.
      *
      * @param query The query to execute
-     * @param indexes Map of index name to IndexAccessInterface
+     * @param indexManager The IndexManager providing access to indexes and SynonymManager
      * @return QueryResultSoA representing the result of the query
      * @throws QueryExecutionException if execution fails
      */
-    public QueryResultSoA execute(Query query, Map<String, IndexAccessInterface> indexes)
+    public QueryResultSoA execute(Query query, IndexManager indexManager)
             throws QueryExecutionException {
 
         long startTime = System.nanoTime();
         this.currentQuery = query;
+        Map<String, IndexAccessInterface> indexes = indexManager.getAllIndexes();
 
         // Analyze query to determine attribute requirements for SoA optimization
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
@@ -125,7 +101,6 @@ public class QueryExecutor {
             logger.info("=== Query Execution Completed Successfully ===");
             logger.info("Total execution time: {} ms", executionTime / 1_000_000.0);
 
-            // Log result summary
             logger.info("Result type: QueryResultSoA, matches: {}, granularity: {}",
                            result.size(), result.getGranularity());
 
@@ -143,6 +118,7 @@ public class QueryExecutor {
     /**
      * Executes a query with an existing subquery context.
      * This allows for recursive execution of subqueries.
+     * The SynonymManager is taken from the instance field.
      *
      * @param query The query to execute
      * @param indexes Map of index name to IndexAccessInterface
@@ -152,16 +128,15 @@ public class QueryExecutor {
      */
     public QueryResultSoA executeWithContext(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext)
             throws QueryExecutionException {
-        // Analyze query to determine attribute requirements for SoA optimization
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
         logger.debug("Query requires attributes: {}", requirements.getRequiredSoAAttributes());
-
         return executeWithContext(query, indexes, subqueryContext, requirements);
     }
 
     /**
      * Executes a query with an existing subquery context and attribute requirements.
      * This is the core execution method that supports SoA optimization.
+     * The SynonymManager is taken from the instance field.
      *
      * @param query The query to execute
      * @param indexes Map of index name to IndexAccessInterface

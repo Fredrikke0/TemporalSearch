@@ -5,8 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -18,21 +17,26 @@ import java.util.Optional;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
+import com.example.index.util.SynonymManager;
 import com.example.query.QueryParseException;
 import com.example.query.QueryParser;
+import com.example.query.index.IndexManager;
 import com.example.query.model.Query;
 
 /**
  * Tests focusing on sentence granularity and windowing.
  */
+@ExtendWith(MockitoExtension.class)
 public class SentenceGranularityTest {
 
     @TempDir
@@ -40,13 +44,22 @@ public class SentenceGranularityTest {
 
     private static QueryExecutor queryExecutor;
     private static QueryParser queryParser;
+    private static ConditionExecutorFactory factory;
 
     @Mock
-    private IndexAccess unigramIndex;
+    private static IndexAccess unigramIndex;
+
+    @Mock
+    private static SynonymManager mockSynonymManager;
+
+    @Mock
+    private static IndexManager mockIndexManager;
 
     @BeforeAll
     public static void setUp() throws IOException, IndexAccessException {
-        queryExecutor = new QueryExecutor(new ConditionExecutorFactory(), "none");
+        // Static mocks (unigramIndex, mockSynonymManager, mockIndexManager) are injected by MockitoExtension
+        factory = new ConditionExecutorFactory(mockSynonymManager);
+        queryExecutor = new QueryExecutor(factory, "none", mockSynonymManager);
         queryParser = new QueryParser();
         System.out.println("Sentence Granularity Test Setup Complete.");
     }
@@ -57,25 +70,24 @@ public class SentenceGranularityTest {
     }
 
     private IndexAccess setupMockIndexBehavior(Map<String, PositionListSoA> mockData) throws IndexAccessException {
-        IndexAccess mockIndex = mock(IndexAccess.class);
         for (Map.Entry<String, PositionListSoA> entry : mockData.entrySet()) {
-            when(mockIndex.get(eq(entry.getKey().getBytes()))).thenReturn(Optional.ofNullable(entry.getValue()));
+            lenient().when(unigramIndex.get(eq(entry.getKey().getBytes()))).thenReturn(Optional.ofNullable(entry.getValue()));
             if (entry.getValue() != null) {
                 try {
                     byte[] serializedData = entry.getValue().serializeToCompositeBlob();
-                    when(mockIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.of(serializedData));
+                    lenient().when(unigramIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.of(serializedData));
                 } catch (Exception e) {
-                    when(mockIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.empty());
+                    lenient().when(unigramIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.empty());
                 }
             } else {
-                when(mockIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.empty());
+                lenient().when(unigramIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.empty());
             }
         }
-        when(mockIndex.get(argThat(k -> mockData.keySet().stream().noneMatch(key -> Arrays.equals(k, key.getBytes())))))
+        lenient().when(unigramIndex.get(argThat(k -> mockData.keySet().stream().noneMatch(key -> Arrays.equals(k, key.getBytes())))))
             .thenReturn(Optional.empty());
-        when(mockIndex.getRaw(argThat(k -> mockData.keySet().stream().noneMatch(key -> Arrays.equals(k, key.getBytes())))))
+        lenient().when(unigramIndex.getRaw(argThat(k -> mockData.keySet().stream().noneMatch(key -> Arrays.equals(k, key.getBytes())))))
             .thenReturn(Optional.empty());
-        return mockIndex;
+        return unigramIndex;
     }
 
     private QueryResultSoA executeSentenceQuery(String queryString, Map<String, IndexAccessInterface> testIndexes)
@@ -83,7 +95,11 @@ public class SentenceGranularityTest {
         Query query = queryParser.parse(queryString);
         assertTrue(query.granularity() == Query.Granularity.SENTENCE || query.granularitySize().isPresent(),
                    "Query granularity should be SENTENCE or have a window size");
-        return queryExecutor.execute(query, testIndexes);
+
+        lenient().when(mockIndexManager.getAllIndexes()).thenReturn(testIndexes);
+        lenient().when(mockIndexManager.getSynonymManager()).thenReturn(mockSynonymManager);
+
+        return queryExecutor.execute(query, mockIndexManager);
     }
 
     private boolean soaContainsMatch(QueryResultSoA soa, int docId, int sentId) {
@@ -105,8 +121,8 @@ public class SentenceGranularityTest {
         testPositions.add(new Position(0, 0, 0, 4));
         testPositions.add(new Position(1, 1, 0, 4));
         mockData.put("test", testPositions);
-        IndexAccess mockIndex = setupMockIndexBehavior(mockData);
-        Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndex);
+        IndexAccess mockIndexImpl = setupMockIndexBehavior(mockData);
+        Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndexImpl);
 
         QueryResultSoA results = executeSentenceQuery(queryString, testIndexes);
 
@@ -126,8 +142,8 @@ public class SentenceGranularityTest {
         windowPositions.add(new Position(0, 1, 0, 6));
         windowPositions.add(new Position(0, 3, 0, 6));
         mockData.put("window", windowPositions);
-        IndexAccess mockIndex = setupMockIndexBehavior(mockData);
-        Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndex);
+        IndexAccess mockIndexImpl = setupMockIndexBehavior(mockData);
+        Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndexImpl);
 
         QueryResultSoA results = executeSentenceQuery(queryString, testIndexes);
 
@@ -149,8 +165,8 @@ public class SentenceGranularityTest {
         windowPositions.add(new Position(0, 1, 0, 6));
         windowPositions.add(new Position(0, 3, 0, 6));
         mockData.put("window", windowPositions);
-        IndexAccess mockIndex = setupMockIndexBehavior(mockData);
-        Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndex);
+        IndexAccess mockIndexImpl = setupMockIndexBehavior(mockData);
+        Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndexImpl);
 
         QueryResultSoA results = executeSentenceQuery(queryString, testIndexes);
 

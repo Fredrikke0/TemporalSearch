@@ -18,7 +18,7 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
-import com.example.index.util.ValueLookupManager;
+import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -26,7 +26,7 @@ import com.google.common.collect.ListMultimap;
 /**
  * Generates a streaming POS (Part-of-Speech) index from annotation entries.
  * The primary key is the POS tag (e.g., "NOUN").
- * Specific tokens (e.g., "apple") are mapped to integer IDs using a shared ValueLookupManager,
+ * Specific tokens (e.g., "apple") are mapped to integer IDs using a shared SynonymManager,
  * and these IDs are stored in PositionListSoA.synonymId.
  * Uses streaming processing and external sorting for efficient memory usage.
  *
@@ -35,21 +35,21 @@ import com.google.common.collect.ListMultimap;
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(POSIndexGenerator.class);
 
-    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '\'\'','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-')";
-    private final ValueLookupManager valueLookupManager;
+    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '''','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-')";
+    private final SynonymManager synonymManager;
 
     public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize,
-            ValueLookupManager sharedValueLookupManager) throws IOException {
-        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null, sharedValueLookupManager);
+            SynonymManager sharedSynonymManager) throws IOException {
+        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null, sharedSynonymManager);
     }
 
     public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath,
-            ValueLookupManager sharedValueLookupManager) throws IOException {
+            SynonymManager sharedSynonymManager) throws IOException {
         super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
-        if (sharedValueLookupManager == null) {
-            throw new IllegalArgumentException("Shared ValueLookupManager cannot be null.");
+        if (sharedSynonymManager == null) {
+            throw new IllegalArgumentException("Shared SynonymManager cannot be null.");
         }
-        this.valueLookupManager = sharedValueLookupManager;
+        this.synonymManager = sharedSynonymManager;
     }
 
     @Override
@@ -117,7 +117,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
             String indexKey = posTag;
 
             try {
-                int tokenId = valueLookupManager.getId(token);
+                int tokenId = synonymManager.getId(token);
 
                 PositionListSoA pl = tempAggregator.computeIfAbsent(indexKey, k -> new PositionListSoA());
                 pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar(), tokenId);

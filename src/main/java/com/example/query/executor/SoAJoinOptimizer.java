@@ -224,27 +224,33 @@ public class SoAJoinOptimizer {
 
         List<SoAJoinKeyMatch> results = new ArrayList<>();
 
-        // Actual join logic depends on the predicate
-        // Example for "BEFORE": For each leftPair, find all rightPairs that are AFTER it.
-        // This is a naive N*M, can be optimized with sweep-line or interval tree approaches if performance critical.
-        // For now, a clear, correct nested loop is prioritized.
-
         switch (predicate.toUpperCase()) {
-            case "BEFORE": // left occurs before right
+            case "BEFORE": // left occurs before right; left.date < right.date
+                int rightPtrBefore = 0;
                 for (TemporalConceptualPair left : leftPairs) {
-                    for (TemporalConceptualPair right : rightPairs) {
-                        if (left.date().isBefore(right.date())) {
-                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId(), left.date()));
-                        }
+                    // Advance rightPtrBefore to find the first element R[rightPtrBefore] such that left.date < R[rightPtrBefore].date
+                    while (rightPtrBefore < rightPairs.size() && !left.date().isBefore(rightPairs.get(rightPtrBefore).date())) {
+                        // This means left.date >= rightPairs.get(rightPtrBefore).date(), so R[rightPtrBefore] is too early or same.
+                        rightPtrBefore++;
+                    }
+                    // All elements in rightPairs from rightPtrBefore onwards are matches for the current left pair
+                    for (int k = rightPtrBefore; k < rightPairs.size(); k++) {
+                        results.add(new SoAJoinKeyMatch(left.conceptualId(), rightPairs.get(k).conceptualId(), left.date()));
                     }
                 }
                 break;
-            case "AFTER": // left occurs after right
-                for (TemporalConceptualPair left : leftPairs) {
-                    for (TemporalConceptualPair right : rightPairs) {
-                        if (left.date().isAfter(right.date())) {
-                            results.add(new SoAJoinKeyMatch(left.conceptualId(), right.conceptualId(), left.date()));
-                        }
+            case "AFTER": // left occurs after right; left.date > right.date
+                int leftPtrAfter = 0;
+                for (TemporalConceptualPair right : rightPairs) {
+                    // Advance leftPtrAfter to find the first element L[leftPtrAfter] such that L[leftPtrAfter].date > right.date
+                    while (leftPtrAfter < leftPairs.size() && !leftPairs.get(leftPtrAfter).date().isAfter(right.date())) {
+                        // This means leftPairs.get(leftPtrAfter).date <= right.date(), so L[leftPtrAfter] is too early or same.
+                        leftPtrAfter++;
+                    }
+                    // All elements in leftPairs from leftPtrAfter onwards are matches for the current right pair
+                    // The join key value comes from the left side (leftPairs.get(k).date())
+                    for (int k = leftPtrAfter; k < leftPairs.size(); k++) {
+                        results.add(new SoAJoinKeyMatch(leftPairs.get(k).conceptualId(), right.conceptualId(), leftPairs.get(k).date()));
                     }
                 }
                 break;
@@ -257,13 +263,7 @@ public class SoAJoinOptimizer {
                     }
                 }
                 break;
-            // Other cases like OVERLAPS, DURING, STARTS, FINISHES would require interval data (start/end dates)
-            // which QueryResultSoA currently doesn't explicitly store per entry for temporal values.
-            // We assume temporal values are single LocalDate points.
-            // INTERSECT, CONTAINS, CONTAINED_BY, PROXIMITY from grammar might need specific handling here if they apply to single date points.
             default:
-                // For predicates like CONTAINS, CONTAINED_BY, OVERLAPS etc., that are not
-                // directly applicable to two single LocalDate points or are not yet implemented.
                 logger.warn("Unsupported or not yet implemented temporal predicate: '{}' for single date point comparison.", predicate);
                 throw new QueryExecutionException(
                     "Unsupported temporal predicate for SoA join: " + predicate,

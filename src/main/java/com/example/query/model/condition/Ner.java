@@ -44,6 +44,13 @@ public record Ner(
 
         if (isVariable) {
             java.util.Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
+            if (qualifiedVariableName.isBlank()) {
+                throw new IllegalArgumentException("qualifiedVariableName cannot be blank when isVariable is true");
+            }
+        } else {
+            if (qualifiedVariableName != null) {
+                throw new IllegalArgumentException("qualifiedVariableName must be null when isVariable is false");
+            }
         }
     }
 
@@ -67,50 +74,14 @@ public record Ner(
     }
 
     /**
-     * Creates a new NER condition.
-     * This constructor intelligently assigns targetOrVariable to either target or qualifiedVariableName
-     * based on the isVariable flag. It also handles the case where entityType itself is a variable (e.g., "?type").
-     *
-     * @param entityType The entity type (e.g., "PERSON", or "?type" if variable)
-     * @param targetOrVariable If isVariable is false, this is the target entity text.
-     *                         If isVariable is true, this is the variable name (e.g., "?person", or null if entityType is the variable like "?type").
-     * @param isVariable True if this condition binds a variable.
-     */
-    public Ner(String entityType, String targetOrVariable, boolean isVariable) {
-        this(
-            entityType,
-            (!isVariable && targetOrVariable != null) ? targetOrVariable : null, // target
-            isVariable ? (targetOrVariable != null ? targetOrVariable : (entityType != null && entityType.startsWith("?") ? entityType : null)) : null, // qualifiedVariableName
-            isVariable
-        );
-    }
-
-    /**
      * Creates a new NER condition without variable binding.
-     * This is a static factory method for backward compatibility.
+     * This is a static factory method for backward compatibility or simple cases.
      *
      * @param entityType The entity type to match
      * @return A new NER condition
      */
     public static Ner of(String entityType) {
         return new Ner(entityType);
-    }
-
-    /**
-     * Creates a new NER condition with variable binding.
-     * This is a static factory method for backward compatibility.
-     *
-     * @param entityType The entity type to match
-     * @param variableName The variable name to bind entities to (with ? prefix)
-     * @return A new NER condition
-     */
-    @Deprecated // Use builder which handles qualification
-    public static Ner withVariable(String entityType, String variableName) {
-        if (!variableName.startsWith("?")) {
-            throw new IllegalArgumentException("Variable name must start with ?");
-        }
-        // This method is deprecated as qualification ($main.var) should happen in builder
-        return new Ner(entityType, null, "$main." + variableName.substring(1), true);
     }
 
     @Override

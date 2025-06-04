@@ -99,6 +99,10 @@ public record Temporal(
         Objects.requireNonNull(range, "Range Optional cannot be null");
         Objects.requireNonNull(temporalType, "Temporal type cannot be null");
 
+        if (qualifiedVariableName.isPresent() && qualifiedVariableName.get().isBlank()) {
+            throw new IllegalArgumentException("Qualified variable name cannot be blank when present");
+        }
+
         // Calculate effective end date for validation if type is EQUAL and original endDate is empty
         Optional<LocalDateTime> calculatedEndDateOpt = endDate;
         if (temporalType == TemporalPredicate.EQUAL && startDate.isPresent() && endDate.isEmpty()) {

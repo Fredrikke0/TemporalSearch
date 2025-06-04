@@ -18,14 +18,6 @@ public interface TemporalExecutionStrategy {
     String getName();
 
     /**
-     * Performs any necessary initialization for this strategy for a specific corpus.
-     * @param corpusName The name of the corpus being initialized.
-     * @param temporalExecutor The parent TemporalExecutor instance (provides access to shared resources like Nash index).
-     * @return true if initialization was successful, false otherwise.
-     */
-    boolean initializeForCorpus(String corpusName, TemporalExecutor temporalExecutor);
-
-    /**
      * Executes the temporal condition using this strategy.
      *
      * @param condition The temporal condition to execute.

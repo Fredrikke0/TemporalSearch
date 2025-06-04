@@ -21,7 +21,7 @@ import org.rocksdb.RocksDBException;
 
 import com.example.core.IndexAccess;
 import com.example.core.PositionListSoA;
-import com.example.index.util.ValueLookupManager;
+import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 
@@ -29,8 +29,8 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-pos.txt";
     private POSIndexGenerator generator;
     private IndexAccess indexAccess;
-    private ValueLookupManager valueLookupManager;
-    private Path valueLookupManagerPath;
+    private SynonymManager SynonymManager;
+    private Path SynonymManagerPath;
 
     @TempDir
     Path sharedTempDir;
@@ -50,11 +50,11 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
             this.indexAccess = new IndexAccess(indexBaseDir.resolve("pos"), "pos", options);
         }
 
-        valueLookupManagerPath = sharedTempDir.resolve("pos_test_lookup.db");
+        SynonymManagerPath = sharedTempDir.resolve("pos_test_lookup.db");
         try {
-            valueLookupManager = new ValueLookupManager(valueLookupManagerPath);
+            SynonymManager = new SynonymManager(SynonymManagerPath);
         } catch (RocksDBException e) {
-            fail("Failed to initialize ValueLookupManager for POS testing: " + e.getMessage());
+            fail("Failed to initialize SynonymManager for POS testing: " + e.getMessage());
         }
 
         generator = new POSIndexGenerator(
@@ -64,7 +64,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
             new ProgressTracker(),
             1000,
             null,
-            valueLookupManager
+            SynonymManager
         );
 
         setupTestData();
@@ -118,11 +118,11 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
     @AfterEach
     @Override
     protected void tearDown() throws Exception {
-        if (valueLookupManager != null) {
+        if (SynonymManager != null) {
             try {
-                valueLookupManager.deleteDatabaseFiles();
+                SynonymManager.deleteDatabaseFiles();
             } catch (IOException e) {
-                logger.error("Error tearing down ValueLookupManager for POS: " + e.getMessage(), e);
+                logger.error("Error tearing down SynonymManager for POS: " + e.getMessage(), e);
             }
         }
         super.tearDown();
@@ -145,9 +145,9 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         PositionListSoA nounPositions = result.get("NOUN").get(0);
         assertEquals(3, nounPositions.getNumPositions(), "Should have 3 positions in total for NOUN type (fox, dog, night)");
 
-        int foxId = valueLookupManager.getId("fox");
-        int dogId = valueLookupManager.getId("dog");
-        int nightId = valueLookupManager.getId("night");
+        int foxId = SynonymManager.getId("fox");
+        int dogId = SynonymManager.getId("dog");
+        int nightId = SynonymManager.getId("night");
 
         assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == foxId).count(), "Count for 'fox' should be 1");
         assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == dogId).count(), "Count for 'dog' should be 1");
@@ -156,8 +156,8 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         PositionListSoA detPositions = result.get("DET").get(0);
         assertEquals(3, detPositions.getNumPositions(), "Should have 3 positions in total for DET type (the, the, a)");
 
-        int theId = valueLookupManager.getId("the");
-        int aId = valueLookupManager.getId("a");
+        int theId = SynonymManager.getId("the");
+        int aId = SynonymManager.getId("a");
 
         long countThe = IntStream.range(0, detPositions.getNumPositions()).filter(i -> detPositions.getSynonymIdAt(i) == theId).count();
         long countA = IntStream.range(0, detPositions.getNumPositions()).filter(i -> detPositions.getSynonymIdAt(i) == aId).count();
@@ -210,8 +210,8 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         PositionListSoA nounPositions = result.get("NOUN").get(0);
         assertEquals(2, nounPositions.getNumPositions(), "Should have 2 positions in total for NOUN type (test, word)");
 
-        int testId = valueLookupManager.getId("test");
-        int wordId = valueLookupManager.getId("word");
+        int testId = SynonymManager.getId("test");
+        int wordId = SynonymManager.getId("word");
 
         assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == testId).count(), "Count for 'test' (NOUN) should be 1");
         assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == wordId).count(), "Count for 'word' (NOUN) should be 1");
@@ -221,8 +221,8 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         PositionListSoA verbPositions = result.get("VERB").get(0);
         assertEquals(2, verbPositions.getNumPositions(), "Should have 2 positions in total for VERB type (run, fast)");
 
-        int runId = valueLookupManager.getId("run");
-        int fastId = valueLookupManager.getId("fast");
+        int runId = SynonymManager.getId("run");
+        int fastId = SynonymManager.getId("fast");
 
         assertEquals(1, IntStream.range(0, verbPositions.getNumPositions()).filter(i -> verbPositions.getSynonymIdAt(i) == runId).count(), "Count for 'run' (VERB) should be 1");
         assertEquals(1, IntStream.range(0, verbPositions.getNumPositions()).filter(i -> verbPositions.getSynonymIdAt(i) == fastId).count(), "Count for 'fast' (VERB) should be 1");

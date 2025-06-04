@@ -18,7 +18,7 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
-import com.example.index.util.ValueLookupManager;
+import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -27,7 +27,7 @@ import com.google.common.collect.ListMultimap;
  * Generates a streaming index for named entities from annotated text.
  * Processes all NER types except DATE (which has its own dedicated index).
  * The primary key is the entity type (e.g., "PERSON").
- * Specific entity values (e.g., "John Doe") are mapped to integer IDs using a shared ValueLookupManager,
+ * Specific entity values (e.g., "John Doe") are mapped to integer IDs using a shared SynonymManager,
  * and these IDs are stored in PositionListSoA.synonymId.
  * Uses streaming processing and external sorting for efficient memory usage.
  *
@@ -38,21 +38,21 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     public static final String NER_TAGS_TO_EXCLUDE_SQL = "('O', 'DATE')";
 
-    private final ValueLookupManager valueLookupManager;
+    private final SynonymManager synonymManager;
 
     public NerIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize,
-            ValueLookupManager sharedValueLookupManager) throws IOException {
-        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null, sharedValueLookupManager);
+            SynonymManager sharedSynonymManager) throws IOException {
+        this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null, sharedSynonymManager);
     }
 
     public NerIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath,
-            ValueLookupManager sharedValueLookupManager) throws IOException {
+            SynonymManager sharedSynonymManager) throws IOException {
         super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
-        if (sharedValueLookupManager == null) {
-            throw new IllegalArgumentException("Shared ValueLookupManager cannot be null.");
+        if (sharedSynonymManager == null) {
+            throw new IllegalArgumentException("Shared SynonymManager cannot be null.");
         }
-        this.valueLookupManager = sharedValueLookupManager;
+        this.synonymManager = sharedSynonymManager;
     }
 
     @Override
@@ -184,7 +184,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         String entityValue = String.join(" ", rawTokens).toLowerCase();
         String indexKey = entityType.toUpperCase();
 
-        int entityValueId = valueLookupManager.getId(entityValue);
+        int entityValueId = synonymManager.getId(entityValue);
 
         PositionListSoA pl = map.computeIfAbsent(indexKey, k -> new PositionListSoA());
         pl.add(docId, sentId, beginChar, endChar, entityValueId);

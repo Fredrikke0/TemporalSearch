@@ -2,12 +2,15 @@ package com.example;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Scanner;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.core.IndexAccessInterface;
+import com.example.index.util.SynonymManager;
 import com.example.query.QueryParseException;
 import com.example.query.QueryParser;
 import com.example.query.QuerySemanticValidator;
@@ -32,37 +35,39 @@ import tech.tablesaw.api.Table;
  */
 public class QueryCLI {
     private static final Logger logger = LoggerFactory.getLogger(QueryCLI.class);
-    private final Path projectsDir;
+    private final String dbFilePath;
+    private final Path indexDirPath;
 
     // Core components
     private final QueryParser parser;
     private final QuerySemanticValidator validator;
-    private final ConditionExecutorFactory executorFactory;
-    private final QueryExecutor executor;
-    private final JoinOptimizationStrategy joinStrategy;
-    private final String stitchStrategy;
+    // executorFactory and executor are now created per-query execution
+
+    private final String temporalStrategyName; // Stored from constructor
+    private final JoinOptimizationStrategy joinOptimizationStrategy; // Stored from constructor
+    private final String stitchStrategyName; // Stored from constructor
 
     /**
      * Creates a new QueryCLI instance.
      *
-     * @param projectsDir The base directory containing project folders.
-     * @param temporalStrategy The desired temporal execution strategy ("nash" or "naive")
-     * @param joinStrategy The desired join execution strategy ("independent" or "dependent")
-     * @param stitchStrategy The desired stitch execution strategy ("none" or "optimized")
+     * @param dbFilePath The path to the project's SQLite database file.
+     * @param indexDirPath The path to the directory containing project indexes.
+     * @param temporalStrategyName The desired temporal execution strategy ("nash" or "naive")
+     * @param joinOptStrategy The desired join execution strategy
+     * @param stitchStrategyName The desired stitch execution strategy ("none" or "optimized")
      */
-    public QueryCLI(Path projectsDir, String temporalStrategy, JoinOptimizationStrategy joinStrategy, String stitchStrategy) {
-        this.projectsDir = projectsDir;
+    public QueryCLI(String dbFilePath, Path indexDirPath, String temporalStrategyName, JoinOptimizationStrategy joinOptStrategy, String stitchStrategyName) {
+        this.dbFilePath = dbFilePath;
+        this.indexDirPath = indexDirPath;
         this.parser = new QueryParser();
         this.validator = new QuerySemanticValidator();
-        this.executorFactory = new ConditionExecutorFactory();
-        this.executorFactory.setTemporalStrategy(temporalStrategy);
-        this.executor = new QueryExecutor(this.executorFactory, stitchStrategy);
-        this.executor.setJoinOptimizationStrategy(joinStrategy);
-        this.joinStrategy = joinStrategy;
-        this.stitchStrategy = stitchStrategy;
-        logger.info("Initialized QueryCLI with base projects directory: {}", projectsDir);
-        logger.info("Project structure expected: {}/[PROJECT_NAME]/[PROJECT_NAME].db and {}/[PROJECT_NAME]/indexes/", projectsDir, projectsDir);
-        logger.info("Temporal Strategy: {}, Join Strategy: {}, Stitch Strategy: {}", temporalStrategy, joinStrategy, stitchStrategy);
+
+        this.temporalStrategyName = temporalStrategyName;
+        this.joinOptimizationStrategy = joinOptStrategy;
+        this.stitchStrategyName = stitchStrategyName;
+
+        logger.info("Initialized QueryCLI with DB file: {} and Index directory: {}", dbFilePath, indexDirPath);
+        logger.info("Temporal Strategy: {}, Join Strategy: {}, Stitch Strategy: {}", temporalStrategyName, joinOptStrategy, stitchStrategyName);
     }
 
     /**
@@ -75,78 +80,57 @@ public class QueryCLI {
     public void executeQuery(String queryStr, Optional<String> exportFormat, Optional<String> exportFilename) {
         long startTimeNs = System.nanoTime(); // Start timing
         try {
-            // 1. Parse query string into Query object
             logger.debug("Parsing query: {}", queryStr);
             Query query = parser.parse(queryStr);
 
-            // 2. Validate query semantics
             logger.debug("Validating query: {}", query);
             validator.validate(query);
 
-            // Check for date queries and display helpful information
             checkAndDisplayDateQueryHelp(queryStr, query);
 
-            // 3. Get project name from FROM clause
             String projectName = query.source();
             logger.debug("Using project name from FROM clause: {}", projectName);
+            logger.debug("Using database file: {}", this.dbFilePath);
+            logger.debug("Using index base directory: {}", this.indexDirPath);
 
-            // Construct paths based on projectsDir and projectName
-            Path projectPath = projectsDir.resolve(projectName);
-            String corpusDbPath = projectPath.resolve(projectName + ".db").toString();
-            Path indexBasePath = projectPath.resolve("indexes"); // Path object for IndexManager
-
-            logger.debug("Resolved project path: {}", projectPath);
-            logger.debug("Using database path for project '{}': {}", projectName, corpusDbPath);
-            logger.debug("Using index base path for project '{}': {}", projectName, indexBasePath);
-
-            // Check if project-specific database exists
-            if (!new java.io.File(corpusDbPath).exists()) {
-                String errorMessage = String.format(
-                    "Database file not found for project '%s': %s. Expected location: %s/%s/%s.db",
-                    projectName, corpusDbPath, projectsDir, projectName, projectName);
+            if (!new java.io.File(this.dbFilePath).exists()) {
+                String errorMessage = String.format("Database file not found: %s.", this.dbFilePath);
                 logger.error(errorMessage);
                 System.err.println("Error: " + errorMessage);
-                System.err.println("Ensure the project directory and its corresponding database exist.");
-                return; // Early return
+                System.err.println("Ensure the specified database file exists.");
+                return;
             }
 
-            // Initialize SqliteAccessor for this specific database *before* TableResultService or IndexManager might need it.
-            // This assumes SqliteAccessor needs initialization per DB. If it's truly global or managed differently, adjust this.
-            SqliteAccessor.initialize(corpusDbPath);
-            logger.debug("Initialized SqliteAccessor for database: {}", corpusDbPath);
-
-            // Initialize Nash temporal index for this corpus (project) - conceptually the same
+            SqliteAccessor.initialize(this.dbFilePath);
+            logger.debug("Initialized SqliteAccessor for database: {}", this.dbFilePath);
             logger.debug("Initializing Nash temporal index (if applicable) for project: {}", projectName);
 
-            // Create a new TableResultService with the project-specific database path
-            TableResultService tableResultService = new TableResultService(corpusDbPath);
-            logger.info("Using project-specific database at: {}", corpusDbPath);
+            TableResultService tableResultService = new TableResultService(this.dbFilePath);
+            logger.info("Using database at: {}", this.dbFilePath);
 
-            // 4. Create IndexManager for the resolved paths, passing the query and strategy
-            // Pass the projectPath, IndexManager will resolve its own indexBaseDir
-            try (IndexManager indexManager = new IndexManager(projectPath, projectName, query, this.executorFactory.getTemporalStrategy())) {
-                logger.debug("Created IndexManager for project: {} using project path: {}", projectName, projectPath);
+            try (IndexManager indexManager = new IndexManager(this.indexDirPath, projectName, query, this.temporalStrategyName)) {
+                logger.debug("Created IndexManager for project: {} using index directory: {}", projectName, this.indexDirPath);
 
-                // Initialize Nash index with the index manager
-                executor.initializeNashIndex(projectName, indexManager); // Pass projectName
+                SynonymManager synonymManager = indexManager.getSynonymManager();
+                ConditionExecutorFactory executorFactory = new ConditionExecutorFactory(synonymManager);
+                executorFactory.setTemporalStrategy(this.temporalStrategyName); // Set strategy on the factory
 
-                // 5. Execute query using QueryExecutor
+                QueryExecutor queryExecutor = new QueryExecutor(executorFactory, this.stitchStrategyName, synonymManager);
+                queryExecutor.setJoinOptimizationStrategy(this.joinOptimizationStrategy); // Set strategy on the executor
+
                 logger.debug("Executing query against project: {}", projectName);
                 Query.Granularity granularity = query.granularity();
-                int windowSize = query.granularitySize().orElse(0); // Use 0 if not present
+                int windowSize = query.granularitySize().orElse(0);
                 logger.info("Query granularity: {} with size: {}", granularity, windowSize);
 
-                // QueryExecutor now consistently returns QueryResultSoA
-                QueryResultSoA execResult = executor.execute(query, indexManager.getAllIndexes());
+                QueryResultSoA execResult = queryExecutor.execute(query, indexManager); // Pass IndexManager
 
                 Table resultTable;
                 int matchCount;
                 String matchUnit;
 
-                // Simplified result handling: execResult is always QueryResultSoA
                 if (execResult != null) {
                     matchCount = execResult.size();
-                    // Determine match unit based on whether it was a join (by checking query structure) or simple query
                     if (query.joinCondition().isPresent()) {
                         matchUnit = "conceptual joined rows";
                     } else {
@@ -155,13 +139,13 @@ public class QueryCLI {
                     logger.info("Query executed, found {} matching {} (granularity for base parts: {})", matchCount, matchUnit, granularity);
 
                     logger.debug("Generating result table from QueryResultSoA");
+                    Map<String, IndexAccessInterface> allIndexes = indexManager.getAllIndexes(); // Get the map here
                     resultTable = tableResultService.generateTable(
                         query,
                         execResult,
-                        indexManager.getAllIndexes()
+                        allIndexes // Pass the map
                     );
                 } else {
-                    // This case should ideally not happen if QueryExecutor guarantees a non-null QueryResultSoA (even if empty)
                     logger.error("Query execution returned a null QueryResultSoA.");
                     System.err.println("Error: Query execution resulted in an unexpected null result.");
                     // Create an empty table or handle error appropriately
@@ -253,9 +237,13 @@ public class QueryCLI {
                 .defaultHelp(true)
                 .description("Execute queries against indexed projects. Queries specify the project via the FROM clause.");
 
-        parser.addArgument("-pd", "--projects-dir")
-                .setDefault("projects")
-                .help("Base directory containing project folders (default: projects)");
+        parser.addArgument("--db-file")
+                .required(true)
+                .help("Path to the project's SQLite database file.");
+
+        parser.addArgument("--index-dir")
+                .required(true)
+                .help("Path to the directory containing project indexes.");
 
         parser.addArgument("--export")
                 .help("Export results to a file in the specified format: csv:filename.csv, json:filename.json, or html:filename.html");
@@ -285,17 +273,18 @@ public class QueryCLI {
         try {
             // Parse arguments
             Namespace ns = parser.parseArgs(args);
-            String projectsDirStr = ns.getString("projects_dir");
+            String dbFileStr = ns.getString("db_file");
+            Path indexDirPath = Path.of(ns.getString("index_dir"));
             String query = ns.getString("query");
             String exportArg = ns.getString("export");
             String temporalStrategy = ns.getString("temporal_strategy"); // Get the strategy name
             String joinStrategyStr = ns.getString("join_strategy");
             String stitchStrategy = ns.getString("stitch_strategy"); // Get stitch strategy
-            JoinOptimizationStrategy joinStrategy;
+            JoinOptimizationStrategy joinStrategyEnum;
             if ("dependent".equalsIgnoreCase(joinStrategyStr)) {
-                joinStrategy = JoinOptimizationStrategy.DEPENDENT;
+                joinStrategyEnum = JoinOptimizationStrategy.DEPENDENT;
             } else {
-                joinStrategy = JoinOptimizationStrategy.INDEPENDENT;
+                joinStrategyEnum = JoinOptimizationStrategy.INDEPENDENT;
             }
 
             // Parse export argument if provided
@@ -315,9 +304,9 @@ public class QueryCLI {
 
             // Create and run CLI, passing the chosen strategies
             logger.info("Configuring temporal strategy: {}", temporalStrategy);
-            logger.info("Configuring join strategy: {}", joinStrategy);
+            logger.info("Configuring join strategy: {}", joinStrategyEnum);
             logger.info("Configuring stitch strategy: {}", stitchStrategy);
-            QueryCLI cli = new QueryCLI(Path.of(projectsDirStr), temporalStrategy, joinStrategy, stitchStrategy);
+            QueryCLI cli = new QueryCLI(dbFileStr, indexDirPath, temporalStrategy, joinStrategyEnum, stitchStrategy);
 
             if (query != null) {
                 // Execute the provided query
@@ -326,12 +315,11 @@ public class QueryCLI {
                 // Interactive mode
                 Scanner scanner = new Scanner(System.in);
                 System.out.println("Query CLI - Enter queries or 'exit' to quit");
-                System.out.println("Using base projects directory: " + projectsDirStr);
-                System.out.println("Project structure expected: " + projectsDirStr + "/[PROJECT_NAME]/[PROJECT_NAME].db");
-                System.out.println("Index structure expected: " + projectsDirStr + "/[PROJECT_NAME]/indexes/");
+                System.out.println("Using DB file: " + dbFileStr);
+                System.out.println("Using Index directory: " + indexDirPath.toString());
                 System.out.println("Specify project in query using: FROM [PROJECT_NAME]");
                 System.out.println("Temporal Strategy: " + temporalStrategy + " (Use --temporal-strategy nash|naive to change at startup)");
-                System.out.println("Join Strategy: " + joinStrategy.name().toLowerCase() + " (Use --join-strategy independent|dependent to change at startup)");
+                System.out.println("Join Strategy: " + joinStrategyEnum.name().toLowerCase() + " (Use --join-strategy independent|dependent to change at startup)");
                 System.out.println("Stitch Strategy: " + stitchStrategy + " (Use --stitch-strategy none|optimized to change at startup)");
                 System.out.println("Snippet support is enabled. Use SNIPPET(variable) in SELECT clause to show text context.");
                 System.out.println("Export support: Add --export=format:filename to export results (formats: csv, json, html)");
