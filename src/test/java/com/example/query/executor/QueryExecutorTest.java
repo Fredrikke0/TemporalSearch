@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,7 +64,6 @@ class QueryExecutorTest {
     @Mock private LogicalExecutor logicalExecutor;
     @Mock private NotExecutor notExecutor; // Added for completeness if used
     @Mock private TemporalExecutor temporalExecutor;
-    @Mock private StitchContainsNerExecutor stitchContainsNerExecutor; // Added
     @Mock private IndexManager mockIndexManager; // Added
     @Mock private SynonymManager mockSynonymManager; // Added
 
@@ -241,78 +239,6 @@ class QueryExecutorTest {
         verify(logicalExecutor).execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class));
     }
 
-    @Test
-    void execute_stitchOptimization_callsStitchExecutor() throws QueryExecutionException {
-        queryExecutor = new QueryExecutor(factory, mockTableResultService, "optimized", mockSynonymManager); // Enable stitch
-        lenient().when(mockQuery.granularity()).thenReturn(Query.Granularity.SENTENCE); // Stitch needs sentence granularity
-
-        Contains containsCond = new Contains(List.of("unigram"));
-        Ner nerCond = Ner.of("PERSON");
-        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(containsCond, nerCond));
-        when(mockQuery.conditions()).thenReturn(List.of(andCondition));
-
-        QueryResultSoA mockStitchResult = new QueryResultSoA(Query.Granularity.SENTENCE, 0, testRequirements);
-        mockStitchResult.add("unigram", ValueType.TERM, null, 1,1,1,5,-1, 0);
-        mockStitchResult.add("PersonX", ValueType.ENTITY, "?v", 1,1,10,15,1, 0);
-
-        // We need to ensure the LogicalExecutor, when it tries to execute the AND, will delegate to Stitch
-        // This requires a bit more: the LogicalExecutor itself needs to be the one making the decision.
-        // For this test, we'll assume the factory correctly gives a LogicalExecutor that can trigger stitch.
-        // And QueryExecutor has the stitch strategy enabled.
-        // The QueryExecutor should call the LogicalExecutor for the AND condition.
-        // The test for stitch strategy is more about QueryExecutor correctly setting up conditions for StitchableAndExecutor
-        // or having the LogicalExecutor handle it internally. The QueryExecutor itself does not directly call StitchContainsNerExecutor.
-        // The current QueryExecutor logic for stitch is: if stitchStrategy is "optimized" AND granularity is SENTENCE AND condition is AND ...
-        // it will call StitchContainsNerExecutor DIRECTLY if conditions match (1 Contains, 1 Ner).
-        // This means factory.getExecutor(andCondition) should NOT be called for the stitch path.
-
-        // Re-wire for stitch: factory should NOT be asked for Logical in this specific stitch case.
-        // Instead, QueryExecutor will directly instantiate/use StitchContainsNerExecutor.
-        // So, we mock the StitchContainsNerExecutor execute method if we want to control its output.
-        // However, the current design of QueryExecutor is: it gets LogicalExecutor first, then LogicalExecutor makes the stitch decision.
-        // Correction: QueryExecutor line 296: if (this.stitchStrategy.equals("optimized") && ... it creates StitchContainsNerExecutor and calls it.
-        // So, factory *is not* called for the AND condition if stitch conditions are met.
-
-        // Let's verify factory is NOT called for the AND, and Stitch... is called.
-        // To do this, we cannot mock StitchContainsNerExecutor directly if it's newed up in QueryExecutor.
-        // The test should verify the *outcome* of the stitch logic.
-        // The current QueryExecutor will *replace* the call to factory.getExecutor(andCondition) with a call to stitchExecutor.execute(...)
-
-        // For this test, we will assume the internal stitch logic of QueryExecutor will work.
-        // We cannot easily mock `new StitchContainsNerExecutor()` from here.
-        // So we test the non-stitch path if the factory IS called for the AND.
-
-        // If we want to test the STITCH PATH, the factory will NOT be called for the `andCondition`.
-        // Instead, `QueryExecutor` itself will try to execute it using `StitchContainsNerExecutor`.
-        // This is an integration point more than a unit test of `QueryExecutor` cleanly using `factory`.
-
-        // Let's adjust the test to assume the default (non-stitch) path for LogicalExecutor if factory is called.
-        // And then have a separate test for the stitch scenario if possible, or accept this as an integration aspect.
-
-        // Test that if stitch conditions ARE MET, the LogicalExecutor from factory is NOT called for the top AND.
-        // Instead, the optimized path is taken.
-        // This test is tricky because QueryExecutor NEWS UP StitchContainsNerExecutor.
-        // For now, let's verify that IF QueryExecutor decides to use stitch, the factory isn't called for the `andCondition`
-
-        // This test setup will now allow the internal StitchContainsNerExecutor to run.
-        // We can't easily mock its output if it's `new`-ed up inside QueryExecutor.
-        // So, we can either:
-        // 1. Expect the execute to go through, and it might fail if indexes are not set up for a real stitch.
-        // 2. Refactor QueryExecutor to get StitchContainsNerExecutor from the factory (better for testing).
-
-        // Given current QueryExecutor structure: it will `new StitchContainsNerExecutor()`, then call execute on it.
-        // We cannot mock this `new` call easily without PowerMock or DI for StitchContainsNerExecutor.
-        // So, this test will effectively be an integration test of that small piece of stitch logic in QueryExecutor.
-        // We will mock the *inputs* to that internal StitchContainsNerExecutor if possible.
-
-        queryExecutor.execute(mockQuery, mockIndexManager); // Execute the query
-
-        // Verify that the factory was NOT called to get an executor for the `andCondition` because stitch path was taken.
-        verify(factory, times(0)).getExecutor(eq(andCondition));
-        // We can't easily verify StitchContainsNerExecutor was called and what it returned without refactoring QueryExecutor
-        // to get StitchContainsNerExecutor from the factory, or making it a spyable dependency.
-        // For now, this test confirms the factory bypass for the top-level AND when stitch is active.
-    }
 
     // Test for dependent join (more complex, might need more specific mocks)
     @Test

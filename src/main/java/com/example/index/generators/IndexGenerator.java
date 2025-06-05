@@ -42,6 +42,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     private static final Logger logger = LoggerFactory.getLogger(IndexGenerator.class);
     public static final String DELIMITER = "\0";
     public static final char ESCAPE_CHAR = '\u001F';
+    private static final int MAX_POSITIONS_PER_SEGMENT = 50_000_000; // Max positions per term segment
 
     protected final IndexAccessInterface indexAccess;
     protected final Connection sqliteConn;
@@ -280,19 +281,20 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     protected long writeToLevelDB(File sortedFile) throws IOException {
         logger.info("Starting to write to RocksDB from sorted file: {}", sortedFile.getAbsolutePath());
         String currentTerm = null;
-        long totalTermsWritten = 0;
+        long totalTermsWritten = 0; // Counts unique base terms written
+        long totalSegmentsWritten = 0; // Counts total segments (including non-segmented terms as 1 segment)
         final long TARGET_BATCH_BYTES = 8 * 1024 * 1024; // 8MB target batch size
         long currentBatchSizeBytes = 0;
-        int termsInCurrentBatch = 0;
+        int termsInCurrentBatch = 0; // Number of physical RocksDB puts in the current WriteBatch
 
-        // Use IntArrayLists to accumulate integers for each attribute for the current term
         IntArrayList termDocIdsList = new IntArrayList();
         IntArrayList termSentIdsList = new IntArrayList();
         IntArrayList termBeginCharsList = new IntArrayList();
         IntArrayList termEndCharsList = new IntArrayList();
         IntArrayList termSynonymIdsList = new IntArrayList();
 
-        int numPositionsForCurrentTerm = 0;
+        int numPositionsForCurrentTermSegment = 0; // Positions for the current segment of currentTerm
+        int segmentCounter = 0; // For term#0, term#1, etc.
 
         org.rocksdb.WriteBatch batch = null;
         try {
@@ -313,21 +315,12 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                         currentTerm = termFromFile;
                     }
 
+                    // If term changes, write out the previous term's data (or its last segment)
                     if (!termFromFile.equals(currentTerm)) {
-                        if (numPositionsForCurrentTerm > 0) {
-                            ByteArrayOutputStream finalCompositeBlobStream = new ByteArrayOutputStream();
-                            try (DataOutputStream dosFinal = new DataOutputStream(finalCompositeBlobStream)) {
-                                dosFinal.writeInt(numPositionsForCurrentTerm);
-
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdsList.elements(), termDocIdsList.size(), true);
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdsList.elements(), termSentIdsList.size(), true);
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharsList.elements(), termBeginCharsList.size(), true);
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharsList.elements(), termEndCharsList.size(), true);
-                                PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdsList.elements(), termSynonymIdsList.size(), false); // No delta coding for synonym IDs
-                            }
-
-                            byte[] termKeyBytes = bytes(currentTerm);
-                            byte[] termValueBytes = finalCompositeBlobStream.toByteArray();
+                        if (numPositionsForCurrentTermSegment > 0) {
+                            String keyToWrite = (segmentCounter == 0) ? currentTerm : currentTerm + "#" + segmentCounter;
+                            byte[] termKeyBytes = bytes(keyToWrite);
+                            byte[] termValueBytes = serializeTermDataToBlob(numPositionsForCurrentTermSegment, termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
 
                             if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES)) {
                                 writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
@@ -338,27 +331,55 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                             }
                             try {
                                 batch.put(termKeyBytes, termValueBytes);
+                                termsInCurrentBatch++;
+                                currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length;
+                                totalSegmentsWritten++;
                             } catch (org.rocksdb.RocksDBException e) {
-                                throw new IOException("Failed to put to WriteBatch for term: " + currentTerm, e);
+                                throw new IOException("Failed to put to WriteBatch for term segment: " + keyToWrite, e);
                             }
-                            termsInCurrentBatch++;
-                            currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length;
+                        }
+                        if (segmentCounter > 0 || numPositionsForCurrentTermSegment > 0) { // Only count if something was written for this term
                             totalTermsWritten++;
                         }
 
                         currentTerm = termFromFile;
-                        // Reset lists for the new term
-                        termDocIdsList.clear();
-                        termSentIdsList.clear();
-                        termBeginCharsList.clear();
-                        termEndCharsList.clear();
-                        termSynonymIdsList.clear();
-                        numPositionsForCurrentTerm = 0;
+                        clearAccumulators(termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
+                        numPositionsForCurrentTermSegment = 0;
+                        segmentCounter = 0;
                     }
 
+                    // Process current line's data
                     try (DataInputStream disChunk = new DataInputStream(new ByteArrayInputStream(lineCompositeBlob))) {
                         int chunkNumPositions = disChunk.readInt();
                         if (chunkNumPositions > 0) {
+                            if (numPositionsForCurrentTermSegment + chunkNumPositions > MAX_POSITIONS_PER_SEGMENT && numPositionsForCurrentTermSegment > 0) {
+                                // Current segment is full, write it out before adding this new chunk
+                                String keyToWrite = currentTerm + "#" + segmentCounter; // Must be a segment if it's full
+                                byte[] termKeyBytes = bytes(keyToWrite);
+                                byte[] termValueBytes = serializeTermDataToBlob(numPositionsForCurrentTermSegment, termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
+
+                                if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES)) {
+                                    writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
+                                    batch.close();
+                                    batch = indexAccess.createWriteBatch();
+                                    termsInCurrentBatch = 0;
+                                    currentBatchSizeBytes = 0;
+                                }
+                                try {
+                                    batch.put(termKeyBytes, termValueBytes);
+                                    termsInCurrentBatch++;
+                                    currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length;
+                                    totalSegmentsWritten++;
+                                } catch (org.rocksdb.RocksDBException e) {
+                                    throw new IOException("Failed to put to WriteBatch for term segment: " + keyToWrite, e);
+                                }
+
+                                clearAccumulators(termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
+                                numPositionsForCurrentTermSegment = 0;
+                                segmentCounter++;
+                            }
+
+                            // Add current chunk data to accumulators
                             IntArrayList tempChunkDocIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             termDocIdsList.addAll(tempChunkDocIds);
 
@@ -371,68 +392,87 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                             IntArrayList tempChunkEndChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
                             termEndCharsList.addAll(tempChunkEndChars);
 
-                            IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, false);
+                            IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, false); // original for chunk
                             termSynonymIdsList.addAll(tempChunkSynonymIds);
+
+                            numPositionsForCurrentTermSegment += chunkNumPositions;
                         }
-                        numPositionsForCurrentTerm += chunkNumPositions;
                     }
-                }
+                } // End of while loop over lines
             } // End of try-with-resources for BufferedReader
 
-            // Write the last term's data
-            if (currentTerm != null && numPositionsForCurrentTerm > 0) {
-                ByteArrayOutputStream finalCompositeBlobStream = new ByteArrayOutputStream();
-                try (DataOutputStream dosFinal = new DataOutputStream(finalCompositeBlobStream)) {
-                    dosFinal.writeInt(numPositionsForCurrentTerm);
-
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termDocIdsList.elements(), termDocIdsList.size(), true);
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termSentIdsList.elements(), termSentIdsList.size(), true);
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termBeginCharsList.elements(), termBeginCharsList.size(), true);
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termEndCharsList.elements(), termEndCharsList.size(), true);
-                    PositionListSoA.writeCompressedIntArray(dosFinal, termSynonymIdsList.elements(), termSynonymIdsList.size(), false);
-                }
-
-                byte[] termKeyBytes = bytes(currentTerm);
-                byte[] termValueBytes = finalCompositeBlobStream.toByteArray();
+            // Write the last term's data or its last segment
+            if (currentTerm != null && numPositionsForCurrentTermSegment > 0) {
+                String keyToWrite = (segmentCounter == 0) ? currentTerm : currentTerm + "#" + segmentCounter;
+                byte[] termKeyBytes = bytes(keyToWrite);
+                byte[] termValueBytes = serializeTermDataToBlob(numPositionsForCurrentTermSegment, termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
 
                 if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES) && termsInCurrentBatch > 0) {
                     writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
                     batch.close();
                     batch = indexAccess.createWriteBatch();
-                    logger.info("Written batch of {} terms (approx {:.2f} MB) to RocksDB before adding final term. Total terms written: {}.",
-                                termsInCurrentBatch, currentBatchSizeBytes / (1024.0 * 1024.0), totalTermsWritten);
+                    logger.info("Written batch of {} DB entries (approx {:.2f} MB) to RocksDB before adding final term segment. Total unique terms written: {}, total segments: {}.",
+                                termsInCurrentBatch, currentBatchSizeBytes / (1024.0 * 1024.0), totalTermsWritten, totalSegmentsWritten);
                     termsInCurrentBatch = 0;
                     currentBatchSizeBytes = 0;
                 }
                 try {
                     batch.put(termKeyBytes, termValueBytes);
+                    termsInCurrentBatch++;
+                    totalSegmentsWritten++;
                 } catch (org.rocksdb.RocksDBException e) {
-                    throw new IOException("Failed to put to WriteBatch for final term: " + currentTerm, e);
+                    throw new IOException("Failed to put to WriteBatch for final term segment: " + keyToWrite, e);
                 }
-                termsInCurrentBatch++;
-                totalTermsWritten++;
+                totalTermsWritten++; // Count the last base term
             }
 
             if (termsInCurrentBatch > 0) {
                  writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
-                logger.info("Written final batch of {} terms to RocksDB. Total terms written: {}", termsInCurrentBatch, totalTermsWritten);
+                logger.info("Written final batch of {} DB entries to RocksDB. Total unique terms written: {}, total segments: {}", termsInCurrentBatch, totalTermsWritten, totalSegmentsWritten);
             }
 
         } catch (IOException e) {
-            logger.error("IOException during writeToRocksDB. Last term processed: {}. Total terms written: {}. Error: {}",
-                    currentTerm, totalTermsWritten, e.getMessage(), e);
+            logger.error("IOException during writeToRocksDB. Last term processed: {}. Total unique terms written: {}, total segments: {}. Error: {}",
+                    currentTerm, totalTermsWritten, totalSegmentsWritten, e.getMessage(), e);
             throw e;
         } catch (IndexAccessException e) {
-            logger.error("IndexAccessException during writeToRocksDB. Last term processed: {}. Total terms written: {}. Error: {}",
-                    currentTerm, totalTermsWritten, e.getMessage(), e);
+            logger.error("IndexAccessException during writeToRocksDB. Last term processed: {}. Total unique terms written: {}, total segments: {}. Error: {}",
+                    currentTerm, totalTermsWritten, totalSegmentsWritten, e.getMessage(), e);
             throw new IOException("Database access error during writeToRocksDB: " + e.getMessage(), e);
         } finally {
             if (batch != null) {
                 batch.close();
             }
-            logger.info("Finished writing to RocksDB. Total terms written: {}. Total n-grams generated: {}", totalTermsWritten, getTotalNGramsGenerated());
+            logger.info("Finished writing to RocksDB. Total unique base terms written: {}. Total segments written: {}. Total n-grams generated: {}",
+                totalTermsWritten, totalSegmentsWritten, getTotalNGramsGenerated());
         }
-        return totalTermsWritten;
+        return totalTermsWritten; // Return count of unique base terms
+    }
+
+    /**
+     * Helper method to serialize the current term's accumulated data to a byte blob.
+     */
+    private byte[] serializeTermDataToBlob(int numPositions, IntArrayList docIds, IntArrayList sentIds,
+                                           IntArrayList beginChars, IntArrayList endChars, IntArrayList synonymIds) throws IOException {
+        ByteArrayOutputStream finalCompositeBlobStream = new ByteArrayOutputStream();
+        try (DataOutputStream dosFinal = new DataOutputStream(finalCompositeBlobStream)) {
+            dosFinal.writeInt(numPositions);
+            PositionListSoA.writeCompressedIntArray(dosFinal, docIds.elements(), docIds.size(), true);
+            PositionListSoA.writeCompressedIntArray(dosFinal, sentIds.elements(), sentIds.size(), true);
+            PositionListSoA.writeCompressedIntArray(dosFinal, beginChars.elements(), beginChars.size(), true);
+            PositionListSoA.writeCompressedIntArray(dosFinal, endChars.elements(), endChars.size(), true);
+            PositionListSoA.writeCompressedIntArray(dosFinal, synonymIds.elements(), synonymIds.size(), false); // Still false for synonymIds as per original
+        }
+        return finalCompositeBlobStream.toByteArray();
+    }
+
+    /**
+     * Helper method to clear accumulator lists.
+     */
+    private void clearAccumulators(IntArrayList... lists) {
+        for (IntArrayList list : lists) {
+            list.clear();
+        }
     }
 
     /**

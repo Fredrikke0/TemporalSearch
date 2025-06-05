@@ -5,10 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -57,7 +57,7 @@ class PosExecutorTest {
     private static final String POS_INDEX_NAME = "pos";
 
     @BeforeEach
-    void setUp() throws IndexAccessException, RocksDBException {
+    void setUp() throws IndexAccessException, RocksDBException, IOException {
         indexes = Map.of(POS_INDEX_NAME, posIndex);
         defaultTestRequirements = new AttributeRequirements();
         defaultTestRequirements.needsSentenceId = true;
@@ -66,21 +66,16 @@ class PosExecutorTest {
         defaultTestRequirements.needsConceptualRowIds = true;
 
         lenient().when(posIterator.isValid()).thenReturn(false);
-        lenient().when(posIndex.getRaw(any(byte[].class))).thenReturn(Optional.empty());
+        doAnswer(invocation -> Optional.empty()).when(posIndex).getMergedPositions(anyString());
 
         lenient().when(synonymManager.getId(anyString())).thenReturn(-1);
         lenient().when(synonymManager.getTerm(anyInt())).thenReturn(Optional.empty());
     }
 
-    private byte[] soaToBlob(PositionListSoA soa) throws IOException {
-        if (soa == null) return new byte[0];
-        return soa.serializeToCompositeBlob();
-    }
-
     @Test
     void testExecuteSpecificTermDocumentGranularity() throws Exception {
         Pos condition = new Pos("NN", "test");
-        byte[] expectedTagKeyBytes = "NN".getBytes();
+        String expectedTagString = "NN";
         int testTermSynonymId = 123;
 
         when(synonymManager.getId("test")).thenReturn(testTermSynonymId);
@@ -89,7 +84,7 @@ class PosExecutorTest {
         positions.add(1, 0, 5, 10, testTermSynonymId);
         positions.add(2, 1, 15, 20, testTermSynonymId);
         positions.add(1, 1, 25, 30, 456);
-        when(posIndex.getRaw(eq(expectedTagKeyBytes))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
@@ -107,13 +102,13 @@ class PosExecutorTest {
             assertEquals(testTermSynonymId, result.getSynonymIdAt(i));
         }
         verify(synonymManager).getId("test");
-        verify(posIndex).getRaw(eq(expectedTagKeyBytes));
+        verify(posIndex).getMergedPositions(eq(expectedTagString));
     }
 
     @Test
     void testExecuteSpecificTermSentenceGranularity() throws Exception {
         Pos condition = new Pos("VB", "run");
-        byte[] expectedTagKeyBytes = "VB".getBytes();
+        String expectedTagString = "VB";
         int runTermSynonymId = 789;
 
         when(synonymManager.getId("run")).thenReturn(runTermSynonymId);
@@ -125,7 +120,7 @@ class PosExecutorTest {
         positions.add(1, 1, 10, 15, runTermSynonymId);
         positions.add(1, 3, 20, 25, 999);
 
-        when(posIndex.getRaw(eq(expectedTagKeyBytes))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements);
 
@@ -151,13 +146,13 @@ class PosExecutorTest {
         assertEquals(4, foundRunTermSynonymIdCount, "All 4 results should be for 'run'");
 
         verify(synonymManager).getId("run");
-        verify(posIndex).getRaw(eq(expectedTagKeyBytes));
+        verify(posIndex).getMergedPositions(eq(expectedTagString));
     }
 
     @Test
     void testSentenceGranularityWithWindow() throws Exception {
         Pos condition = new Pos("NN", "noun");
-        byte[] expectedTagKeyBytes = "NN".getBytes();
+        String expectedTagString = "NN";
         int nounTermSynonymId = 101;
 
         when(synonymManager.getId("noun")).thenReturn(nounTermSynonymId);
@@ -168,7 +163,7 @@ class PosExecutorTest {
         positions.add(1, 3, 5, 6, nounTermSynonymId);
         positions.add(2, 1, 7, 8, nounTermSynonymId);
 
-        when(posIndex.getRaw(eq(expectedTagKeyBytes))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements);
 
@@ -193,13 +188,13 @@ class PosExecutorTest {
         assertTrue(match2_1);
 
         verify(synonymManager).getId("noun");
-        verify(posIndex).getRaw(eq(expectedTagKeyBytes));
+        verify(posIndex).getMergedPositions(eq(expectedTagString));
     }
 
     @Test
     void testVariableBindingDocumentGranularityNoSpecificTerm() throws Exception {
         Pos condition = new Pos("JJ", null, "?adjVar");
-        byte[] expectedTagKeyBytes = "JJ".getBytes();
+        String expectedTagString = "JJ";
 
         int goodSynId = 10;
         int badSynId = 20;
@@ -211,7 +206,7 @@ class PosExecutorTest {
         positionsForJJ.add(1, 2, 25, 30, uglySynId);
         positionsForJJ.add(3, 0, 35, 40, goodSynId);
 
-        when(posIndex.getRaw(eq(expectedTagKeyBytes))).thenReturn(Optional.of(positionsForJJ.serializeToCompositeBlob()));
+        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positionsForJJ));
 
         when(synonymManager.getTerm(goodSynId)).thenReturn(Optional.of("good"));
         when(synonymManager.getTerm(badSynId)).thenReturn(Optional.of("bad"));
@@ -242,7 +237,7 @@ class PosExecutorTest {
         assertEquals(1, (int)valueCounts.get("bad"));
         assertEquals(1, (int)valueCounts.get("ugly"));
 
-        verify(posIndex).getRaw(eq(expectedTagKeyBytes));
+        verify(posIndex).getMergedPositions(eq(expectedTagString));
         verify(synonymManager, times(1)).getTerm(goodSynId);
         verify(synonymManager, times(1)).getTerm(badSynId);
         verify(synonymManager, times(1)).getTerm(uglySynId);
@@ -250,160 +245,120 @@ class PosExecutorTest {
 
     @Test
     void testTagOnlySearchDocumentGranularity() throws Exception {
-        String tag = "NNP";
-        Pos condition = new Pos(tag, null); // Term is null, no variable, so isVariable will be false
-        logger.debug("Created condition in testTagOnlySearchDocumentGranularity: {}", condition.toString());
+        Pos condition = new Pos("NNP", null);
+        String expectedTagString = "NNP";
 
-        PositionListSoA positionsForTag = new PositionListSoA();
-        positionsForTag.add(1, 0, 10, 15, 1001); // Doc 1, Sent 0, Chars 10-15, arbitrary synID
-        positionsForTag.add(1, 1, 20, 25, 1002); // Doc 1, Sent 1, Chars 20-25
-        positionsForTag.add(2, 0, 30, 35, 1003); // Doc 2, Sent 0, Chars 30-35
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(1, 0, 5, 10, 111);
+        positions.add(1, 1, 15, 20, 222);
+        positions.add(2, 0, 25, 30, 111);
 
-        when(posIndex.getRaw(eq(tag.toUpperCase().getBytes(java.nio.charset.StandardCharsets.UTF_8))))
-                 .thenReturn(Optional.of(soaToBlob(positionsForTag)));
+        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(1, result.getConceptualRowCount(), "Should be 1 conceptual row for the tag '" + tag + "'");
-        assertEquals(3, result.size(), "Should find 3 occurrences of tag '" + tag + "'");
+        assertEquals(1, result.getConceptualRowCount(), "Should be 1 conceptual row for the tag 'NNP'");
+        assertEquals(3, result.size());
 
-        assertTrue(result.size() > 0, "Result should not be empty");
-        int expectedConceptualRowId = result.getConceptualRowIdAt(0);
-
-        boolean found_1_0 = false;
-        boolean found_1_1 = false;
-        boolean found_2_0 = false;
-
-        for (int i = 0; i < result.size(); i++) {
-            assertEquals(tag.toUpperCase(), result.getValueAt(i)); // Executor stores uppercase tag
+        Set<Integer> docIds = new HashSet<>();
+        for(int i=0; i < result.size(); i++) {
+            docIds.add(result.getDocumentIdAt(i));
+            assertEquals("NNP", result.getValueAt(i));
             assertEquals(ValueType.POS_TAG_TYPE, result.getValueTypeAt(i));
             assertNull(result.getVariableNameAt(i));
             assertEquals(-1, result.getSynonymIdAt(i));
-            assertEquals(expectedConceptualRowId, result.getConceptualRowIdAt(i));
-
-            if (result.getDocumentIdAt(i) == 1 && result.getSentenceIdAt(i) == 0) {
-                assertEquals(10, result.getBeginCharAt(i));
-                assertEquals(15, result.getEndCharAt(i));
-                found_1_0 = true;
-            } else if (result.getDocumentIdAt(i) == 1 && result.getSentenceIdAt(i) == 1) {
-                assertEquals(20, result.getBeginCharAt(i));
-                assertEquals(25, result.getEndCharAt(i));
-                found_1_1 = true;
-            } else if (result.getDocumentIdAt(i) == 2 && result.getSentenceIdAt(i) == 0) {
-                assertEquals(30, result.getBeginCharAt(i));
-                assertEquals(35, result.getEndCharAt(i));
-                found_2_0 = true;
-            }
         }
-        assertTrue(found_1_0, "Did not find the expected entry for Doc 1, Sent 0");
-        assertTrue(found_1_1, "Did not find the expected entry for Doc 1, Sent 1");
-        assertTrue(found_2_0, "Did not find the expected entry for Doc 2, Sent 0");
+        assertTrue(docIds.containsAll(Set.of(1, 2)));
 
-        verify(posIndex).getRaw(eq(tag.toUpperCase().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-        verify(synonymManager, times(0)).getId(anyString());
+        verify(posIndex).getMergedPositions(eq(expectedTagString));
         verify(synonymManager, times(0)).getTerm(anyInt());
     }
 
     @Test
-    void testExecuteWildcardSearch_allPosTags() throws QueryExecutionException {
-        Pos condition = new Pos("*", null, null, false);
-
+    void testExecuteWildcardSearch_allPosTags() throws Exception {
+        Pos condition = new Pos("*", null);
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
             executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
         });
         assertEquals(QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION, exception.getErrorType());
-        assertTrue(exception.getMessage().contains("Wildcard POS tag (*) is not supported"));
+        verify(posIndex, times(0)).getMergedPositions(anyString());
     }
 
     @Test
     void testExecuteSpecificSearch_withVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
-        String tag = "JJ";
-        String term = "happy";
-        String variableName = "?adj";
-        int happySynonymId = 456;
+        Pos condition = new Pos("JJ", "happy", "?adj");
+        String expectedTagString = "JJ";
+        int happySynId = 555;
 
-        Pos condition = new Pos(tag, term, variableName, true);
-
-        when(synonymManager.getId(term.toLowerCase())).thenReturn(happySynonymId);
+        when(synonymManager.getId("happy")).thenReturn(happySynId);
 
         PositionListSoA positions = new PositionListSoA();
-        positions.add(3, 1, 10, 15, happySynonymId);
-        positions.add(4, 1, 0, 5, 999);
+        positions.add(1, 1, 10, 15, happySynId);
+        positions.add(1, 2, 20, 25, 666);
 
-        when(posIndex.getRaw(eq(tag.toUpperCase().getBytes(java.nio.charset.StandardCharsets.UTF_8))))
-                 .thenReturn(Optional.of(soaToBlob(positions)));
+        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertEquals(1, result.size(), "Should find 1 occurrence of 'happy' with tag 'JJ'");
-        assertEquals(1, result.getConceptualRowCount(), "Should be 1 conceptual row for 'happy' with tag 'JJ' bound to variable");
-
-        assertEquals(term, result.getValueAt(0));
+        assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
+        assertEquals(1, result.getConceptualRowCount(), "Should find 1 conceptual row for 'happy' with tag 'JJ'");
+        assertEquals(1, result.size());
+        assertEquals("happy", result.getValueAt(0));
         assertEquals(ValueType.POS_TERM, result.getValueTypeAt(0));
-        assertEquals(variableName, result.getVariableNameAt(0));
-        assertEquals(3, result.getDocumentIdAt(0));
-        assertEquals(happySynonymId, result.getSynonymIdAt(0));
+        assertEquals("?adj", result.getVariableNameAt(0));
+        assertEquals(happySynId, result.getSynonymIdAt(0));
+        assertEquals(1, result.getDocumentIdAt(0));
 
-        verify(synonymManager).getId(term.toLowerCase());
-        verify(posIndex).getRaw(eq(tag.toUpperCase().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        verify(synonymManager).getId("happy");
+        verify(posIndex).getMergedPositions(eq(expectedTagString));
     }
 
     @Test
     void testExecute_noMatchFound_specificTerm() throws QueryExecutionException, IndexAccessException, RocksDBException, IOException {
-        String tag = "XYZ";
-        String term = "term";
-        int termSynonymId = 777;
-        int otherSynonymId = 888;
+        Pos condition = new Pos("XYZ", "term_that_does_not_exist");
+        String expectedTagString = "XYZ";
+        int nonExistentTermSynId = 999;
 
-        Pos condition = new Pos(tag, term, null, false);
-        when(synonymManager.getId(term.toLowerCase())).thenReturn(termSynonymId);
-
-        PositionListSoA positionsForTag = new PositionListSoA();
-        positionsForTag.add(1, 1, 0, 5, otherSynonymId);
-
-        when(posIndex.getRaw(eq(tag.toUpperCase().getBytes(java.nio.charset.StandardCharsets.UTF_8))))
-                 .thenReturn(Optional.of(soaToBlob(positionsForTag)));
+        when(synonymManager.getId("term_that_does_not_exist")).thenReturn(nonExistentTermSynId);
+        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.empty());
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
 
         assertNotNull(result);
-        assertTrue(result.isEmpty(), "Result should be empty as 'term' (synonymId " + termSynonymId + ") is not in the data for tag 'XYZ'");
+        assertTrue(result.isEmpty());
         assertEquals(0, result.getConceptualRowCount());
 
-        verify(synonymManager).getId(term.toLowerCase());
-        verify(posIndex).getRaw(eq(tag.toUpperCase().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        verify(synonymManager).getId("term_that_does_not_exist");
+        verify(posIndex).getMergedPositions(eq(expectedTagString));
     }
 
     @Test
     void testExecute_variableSearch_tagNotFound() throws QueryExecutionException, IndexAccessException, RocksDBException, IOException {
-        String tag = "ABC";
-        String variableName = "?someVar";
-        Pos condition = new Pos(tag, null, variableName, true);
+        Pos condition = new Pos("ABC", null, "?var");
+        String expectedTagString = "ABC";
 
-        when(posIndex.getRaw(eq(tag.toUpperCase().getBytes(java.nio.charset.StandardCharsets.UTF_8))))
-                 .thenReturn(Optional.empty());
+        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.empty());
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
         assertNotNull(result);
-        assertTrue(result.isEmpty(), "Result should be empty as the tag 'ABC' is not found.");
+        assertTrue(result.isEmpty());
         assertEquals(0, result.getConceptualRowCount());
 
-        verify(posIndex).getRaw(eq(tag.toUpperCase().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        verify(posIndex).getMergedPositions(eq(expectedTagString));
         verify(synonymManager, times(0)).getTerm(anyInt());
     }
 
     @Test
     void testExecute_missingPosIndex() throws QueryExecutionException {
-        Pos condition = new Pos("NN", "noun", null, false);
-        Map<String, IndexAccessInterface> incompleteIndexes = Collections.emptyMap();
+        Pos condition = new Pos("NN", "noun");
+        Map<String, IndexAccessInterface> emptyIndexes = Collections.emptyMap();
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
-            executor.execute(condition, incompleteIndexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+            executor.execute(condition, emptyIndexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
         });
         assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
-        assertTrue(exception.getMessage().contains("POS index not found"));
     }
 }

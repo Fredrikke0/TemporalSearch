@@ -15,8 +15,6 @@ import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Pos;
 
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-
 /**
  * Executor for POS conditions.
  * Handles matching POS tags against indexed data.
@@ -116,50 +114,37 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         logger.debug("executeSpecificTermSearch: Tag='{}', TermValue='{}' (original), NormalizedTerm='{}', TargetSynonymID={}",
             tagFromQuery, termFromQuery, normalizedTargetTerm, targetSynonymId);
 
-        byte[] keyForIndexLookup = tagFromQuery.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery);
 
-        if (!rawBlobOptional.isPresent() || rawBlobOptional.get().length == 0) {
-            logger.debug("executeSpecificTermSearch: No data found for POS tag '{}'", tagFromQuery);
+        if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
+            logger.debug("executeSpecificTermSearch: No data found for POS tag '{}' after getMergedPositions", tagFromQuery);
             return;
         }
 
-        byte[] rawBlob = rawBlobOptional.get();
-        int numPositionsTotal = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-        if (numPositionsTotal == 0) return;
+        PositionListSoA positions = positionsOptional.get();
+        int numPositionsTotal = positions.getNumPositions();
+        if (numPositionsTotal == 0) return; // Should be caught by positions.isEmpty() but defensive check.
 
-        IntArrayList synonymIds = PositionListSoA.decompressSynonymIds(rawBlob);
-        if (synonymIds == null || synonymIds.isEmpty()) {
-             logger.warn("executeSpecificTermSearch: No synonym IDs found in blob for tag '{}' despite {} positions. Inconsistent data?", tagFromQuery, numPositionsTotal);
-             return;
-        }
-
-        IntArrayList docIds = null;
-        IntArrayList sentIds = null;
-        IntArrayList beginChars = null;
-        IntArrayList endChars = null;
+        // Note: We don't need to decompress attribute by attribute anymore.
+        // We have the full PositionListSoA object.
 
         int conceptualRowId = -1;
         int positionsAddedToSoa = 0;
 
         for (int i = 0; i < numPositionsTotal; i++) {
-            if (synonymIds.getInt(i) == targetSynonymId) {
-                if (conceptualRowId == -1) {
+            if (positions.getSynonymIdAt(i) == targetSynonymId) {
+                if (conceptualRowId == -1) { // First match for this specific term
                     conceptualRowId = resultSoA.getNextConceptualRowId();
-                    docIds = PositionListSoA.decompressDocIds(rawBlob);
-                    sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
-                    beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
-                    endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
                 }
                 resultSoA.add(
                     termFromQuery,
                     ValueType.POS_TERM,
                     variableName,
-                    docIds.getInt(i),
-                    sentIds != null ? sentIds.getInt(i) : -1,
-                    beginChars != null ? beginChars.getInt(i) : -1,
-                    endChars != null ? endChars.getInt(i) : -1,
-                    targetSynonymId,
+                    positions.getDocIdAt(i),
+                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                    targetSynonymId, // This is the synonym ID we filtered by
                     conceptualRowId
                 );
                 positionsAddedToSoa++;
@@ -173,35 +158,25 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                                                     AttributeRequirements requirements, QueryResultSoA resultSoA)
             throws IOException, IndexAccessException, org.rocksdb.RocksDBException {
 
-        byte[] keyForIndexLookup = tagFromQuery.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery);
 
-        if (!rawBlobOptional.isPresent() || rawBlobOptional.get().length == 0) {
-            logger.debug("executeTagOnlyOrVariableTermSearch: No data found for POS tag '{}'", tagFromQuery);
+        if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
+            logger.debug("executeTagOnlyOrVariableTermSearch: No data found for POS tag '{}' after getMergedPositions", tagFromQuery);
             return;
         }
 
-        byte[] rawBlob = rawBlobOptional.get();
-        int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-        logger.debug("executeTagOnlyOrVariableTermSearch: Blob found for '{}'. numPositions from blob: {}", tagFromQuery, numPositions);
+        PositionListSoA positions = positionsOptional.get();
+        int numPositions = positions.getNumPositions();
+        logger.debug("executeTagOnlyOrVariableTermSearch: Positions found for '{}'. numPositions: {}", tagFromQuery, numPositions);
 
-        if (numPositions == 0) {
-            logger.debug("executeTagOnlyOrVariableTermSearch: numPositions is 0 for POS tag '{}', returning.", tagFromQuery);
-            return;
-        }
-
-        IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
-        IntArrayList sentenceIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
-        IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
-        IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
-        IntArrayList synonymIdsFromBlob = PositionListSoA.decompressSynonymIds(rawBlob);
+        if (numPositions == 0) return;
 
         if (variableName != null) {
             Map<String, Integer> resolvedTermToConceptualRowId = new java.util.HashMap<>();
             Map<Integer, String> resolvedSynonymIdToTermCache = new java.util.HashMap<>();
 
             for (int i = 0; i < numPositions; i++) {
-                int currentSynonymId = synonymIdsFromBlob.getInt(i);
+                int currentSynonymId = positions.getSynonymIdAt(i);
                 String termToBind;
 
                 if (resolvedSynonymIdToTermCache.containsKey(currentSynonymId)) {
@@ -222,10 +197,10 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                     termToBind,
                     ValueType.POS_TERM,
                     variableName,
-                    docIds.getInt(i),
-                    sentenceIds != null ? sentenceIds.getInt(i) : -1,
-                    beginChars != null ? beginChars.getInt(i) : -1,
-                    endChars != null ? endChars.getInt(i) : -1,
+                    positions.getDocIdAt(i),
+                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                     currentSynonymId,
                     conceptualRowId
                 );
@@ -233,19 +208,19 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
             logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' BIND '{}' added {} conceptual rows and {} total bindings.",
                 tagFromQuery, variableName, resolvedTermToConceptualRowId.size(), resultSoA.size());
 
-        } else {
+        } else { // Tag-only search, no variable binding for the term itself
             int conceptualRowIdForTag = resultSoA.getNextConceptualRowId();
             int positionsAddedToSoa = 0;
             for (int i = 0; i < numPositions; i++) {
                 resultSoA.add(
-                    tagFromQuery,
+                    tagFromQuery, // Value is the tag itself
                     ValueType.POS_TAG_TYPE,
-                    null,
-                    docIds.getInt(i),
-                    sentenceIds != null ? sentenceIds.getInt(i) : -1,
-                    beginChars != null ? beginChars.getInt(i) : -1,
-                    endChars != null ? endChars.getInt(i) : -1,
-                    -1,
+                    null, // No variable name for the tag value
+                    positions.getDocIdAt(i),
+                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                    -1, // No specific synonym ID is relevant when just matching the tag
                     conceptualRowIdForTag
                 );
                 positionsAddedToSoa++;

@@ -35,7 +35,7 @@ import com.google.common.collect.ListMultimap;
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(POSIndexGenerator.class);
 
-    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '''','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-')";
+    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '''','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-', 'FW')";
     private final SynonymManager synonymManager;
 
     public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize,
@@ -113,11 +113,17 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
             }
 
             String posTag = entry.getPos().toUpperCase();
-            String token = entry.getToken().toLowerCase();
+            String token = entry.getToken();
+
+            if (token.trim().length() <= 1) {
+                continue;
+            }
+            String lowerCaseToken = token.toLowerCase();
+
             String indexKey = posTag;
 
             try {
-                int tokenId = synonymManager.getId(token);
+                int tokenId = synonymManager.getId(lowerCaseToken);
 
                 PositionListSoA pl = tempAggregator.computeIfAbsent(indexKey, k -> new PositionListSoA());
                 pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar(), tokenId);

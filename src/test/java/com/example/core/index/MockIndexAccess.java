@@ -372,12 +372,66 @@ public class MockIndexAccess implements IndexAccessInterface {
 
     @Override
     public Path getIndexPath() {
-        // Return the path to the temporary directory used by this mock instance
-        if (this.mockRocksDbPath == null) {
-            // Should not happen if constructor completed successfully
-            throw new IllegalStateException("MockIndexAccess mockRocksDbPath is not initialized.");
+        // Return a dummy path or a path to a temporary directory if needed for tests
+        return Path.of("/tmp/mockindex/" + this.indexType);
+    }
+
+    @Override
+    public Optional<PositionListSoA> getMergedPositions(String baseTerm) throws IOException, IndexAccessException {
+        if (this.closed) {
+            throw new IndexAccessException("MockIndexAccess is closed", this.indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         }
-        return this.mockRocksDbPath;
+        byte[] baseTermBytes = baseTerm.getBytes(StandardCharsets.UTF_8);
+        ByteArrayWrapper baseKeyWrapper = new ByteArrayWrapper(baseTermBytes);
+
+        if (this.dataStore.containsKey(baseKeyWrapper)) {
+            byte[] blob = this.dataStore.get(baseKeyWrapper);
+            if (blob == null || blob.length == 0) { // Should ideally not happen if key exists but good practice
+                logger.warn("Base term key '{}' found in MockIndexAccess but has null or empty data.", baseTerm);
+                return Optional.empty();
+            }
+            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(blob));
+        }
+
+        // If base term not found, look for segments term#0, term#1, ...
+        PositionListSoA mergedSoA = null;
+        int segmentNum = 0;
+        boolean segmentFoundInLoop = false; // Tracks if any segment (e.g. term#0) was found
+
+        while (true) {
+            String segmentKeyString = baseTerm + "#" + segmentNum;
+            byte[] segmentKeyBytes = segmentKeyString.getBytes(StandardCharsets.UTF_8);
+            ByteArrayWrapper keyWrapper = new ByteArrayWrapper(segmentKeyBytes);
+
+            if (this.dataStore.containsKey(keyWrapper)) {
+                segmentFoundInLoop = true;
+                byte[] segmentBlob = this.dataStore.get(keyWrapper);
+                if (segmentBlob != null && segmentBlob.length > 0) {
+                    PositionListSoA segmentSoA = PositionListSoA.deserializeFromCompositeBlob(segmentBlob);
+                    if (mergedSoA == null) {
+                        mergedSoA = segmentSoA;
+                    } else {
+                        mergedSoA.addAll(segmentSoA);
+                    }
+                } else {
+                    logger.warn("Segment key '{}' found in MockIndexAccess but has null or empty data.", segmentKeyString);
+                    // Continue to next segment, effectively treating this one as non-existent for merging.
+                }
+            } else {
+                // No data for current segmentKeyBytes
+                if (segmentNum == 0 && !segmentFoundInLoop) {
+                    // Base term was not found (checked earlier), AND term#0 was not found.
+                    // This means the term (segmented or not) does not exist.
+                    return Optional.empty();
+                }
+                // If segmentNum > 0, then not finding a segment means we've processed all available ones.
+                // If segmentNum == 0 BUT segmentFoundInLoop is true (this case should not be hit due to above check,
+                // but as a safeguard), it would mean term#0 existed, so mergedSoA wouldn't be null.
+                break; // Exit loop, all available segments have been processed or none were found.
+            }
+            segmentNum++;
+        }
+        return Optional.ofNullable(mergedSoA);
     }
 
     // --- Inner Mock Iterator Class ---

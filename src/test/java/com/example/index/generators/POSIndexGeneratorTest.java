@@ -154,16 +154,11 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == nightId).count(), "Count for 'night' should be 1");
 
         PositionListSoA detPositions = result.get("DET").get(0);
-        assertEquals(3, detPositions.getNumPositions(), "Should have 3 positions in total for DET type (the, the, a)");
+        assertEquals(2, detPositions.getNumPositions(), "Should have 2 positions in total for DET type (the, the)");
 
         int theId = SynonymManager.getId("the");
-        int aId = SynonymManager.getId("a");
 
-        long countThe = IntStream.range(0, detPositions.getNumPositions()).filter(i -> detPositions.getSynonymIdAt(i) == theId).count();
-        long countA = IntStream.range(0, detPositions.getNumPositions()).filter(i -> detPositions.getSynonymIdAt(i) == aId).count();
-
-        assertEquals(2, countThe, "Term 'the' (DET) should have 2 positions");
-        assertEquals(1, countA, "Term 'a' (DET) should have 1 position");
+        assertEquals(2, IntStream.range(0, detPositions.getNumPositions()).filter(i -> detPositions.getSynonymIdAt(i) == theId).count(), "Term 'the' (DET) should have 2 positions");
     }
 
     @Test

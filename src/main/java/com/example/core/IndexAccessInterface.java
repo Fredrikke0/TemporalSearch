@@ -1,5 +1,6 @@
 package com.example.core;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 
@@ -117,6 +118,19 @@ public interface IndexAccessInterface extends AutoCloseable {
      * @return The Path to the index directory.
      */
     java.nio.file.Path getIndexPath();
+
+    /**
+     * Retrieves all segments for a given base term and merges them into a single PositionListSoA.
+     * If the term is not segmented (i.e., it was small enough to be stored under its base name),
+     * this method will retrieve that single entry.
+     *
+     * @param baseTerm The base term to look up (e.g., "apple", "NOUN").
+     * @return An Optional containing the merged PositionListSoA for the term. If the base term
+     *         and no segments (e.g., term#0, term#1) are found, returns Optional.empty().
+     * @throws IOException If an I/O error occurs during deserialization or reading from the index.
+     * @throws IndexAccessException If an error occurs accessing the underlying index storage.
+     */
+    Optional<PositionListSoA> getMergedPositions(String baseTerm) throws IOException, IndexAccessException;
 
     /**
      * Closes the index access, releasing any underlying resources.

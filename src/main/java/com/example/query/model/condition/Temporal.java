@@ -2,6 +2,7 @@ package com.example.query.model.condition;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.Objects;
@@ -531,5 +532,64 @@ public record Temporal(
             this.range(),                 // Preserve original range
             TemporalPredicate.INTERSECT
         ));
+    }
+
+    /**
+     * Checks if a given document date/time matches this temporal condition.
+     * The documentDateTime is typically the start of the day for date-only comparisons from stitch index.
+     *
+     * @param documentDateTime The date/time from the document/index to check.
+     * @return true if the condition is met, false otherwise.
+     */
+    public boolean matches(LocalDateTime documentDateTime) {
+        // For stitch index, documentDateTime is often just a LocalDate.atStartOfDay().
+        // We represent it as a one-day interval for comparison.
+        LocalDateTime docStart = documentDateTime;
+        LocalDateTime docEnd = documentDateTime.toLocalDate().atTime(LocalTime.MAX);
+
+        // Use this condition's startDate, endDate, and temporalType (which are from the query)
+        Optional<LocalDateTime> queryStartOpt = this.startDate();
+        Optional<LocalDateTime> queryEndOpt = this.endDate(); // This endDate is already effectively calculated in constructor for EQUAL
+        TemporalPredicate type = this.temporalType();
+
+        // Ensure query interval is valid if both are present (should be guaranteed by constructor)
+        if (queryStartOpt.isPresent() && queryEndOpt.isPresent() && queryStartOpt.get().isAfter(queryEndOpt.get())) {
+            // This should not happen due to constructor validation
+            return false;
+        }
+
+        return switch (type) {
+            case CONTAINS -> queryStartOpt.isPresent() && queryEndOpt.isPresent() &&
+                             !queryStartOpt.get().isAfter(docStart) && !queryEndOpt.get().isBefore(docEnd);
+            case CONTAINED_BY -> queryStartOpt.isPresent() && queryEndOpt.isPresent() &&
+                                 !docStart.isAfter(queryStartOpt.get()) && !docEnd.isBefore(queryEndOpt.get());
+            case INTERSECT -> queryStartOpt.isPresent() && queryEndOpt.isPresent() &&
+                              !queryStartOpt.get().isAfter(docEnd) && !queryEndOpt.get().isBefore(docStart);
+            case BEFORE -> queryStartOpt.isPresent() && docEnd.isBefore(queryStartOpt.get());
+            case AFTER -> queryStartOpt.isPresent() && docStart.isAfter(queryStartOpt.get());
+            case BEFORE_EQUAL -> queryStartOpt.isPresent() && !docStart.isAfter(queryStartOpt.get()); // queryStartOpt is the reference point from query
+            case AFTER_EQUAL -> queryStartOpt.isPresent() && !docEnd.isBefore(queryStartOpt.get());   // queryStartOpt is the reference point from query
+            case EQUAL -> {
+                if (queryStartOpt.isEmpty()) yield false; // EQUAL requires a query date
+                // Query interval for EQUAL is [queryStartOpt.toLocalDate(), effectiveQueryEnd.toLocalDate()]
+                // This was already handled by constructor setting this.endDate() for equality checks.
+                LocalDate queryDate = queryStartOpt.get().toLocalDate();
+                LocalDate effectiveQueryEndDate = this.endDate().map(LocalDateTime::toLocalDate).orElse(queryDate); // Use already processed endDate
+
+                yield !docStart.toLocalDate().isBefore(queryDate) &&
+                      !docEnd.toLocalDate().isAfter(effectiveQueryEndDate);
+            }
+            case PROXIMITY -> {
+                // PROXIMITY is complex and usually involves range calculation based on radius.
+                // For a simple true/false based on a single doc date, it's tricky without more context.
+                // This might be better handled if PROXIMITY implies an INTERSECT test against a pre-calculated range.
+                // For now, treating as INTERSECT if query has a range, otherwise false.
+                if (queryStartOpt.isPresent() && queryEndOpt.isPresent()) {
+                    yield !queryStartOpt.get().isAfter(docEnd) && !queryEndOpt.get().isBefore(docStart); // Intersect
+                }
+                yield false;
+            }
+            default -> false;
+        };
     }
 }

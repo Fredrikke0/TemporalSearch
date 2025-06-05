@@ -299,30 +299,48 @@ public class QueryExecutor {
             logicalCondition.operator() == Logical.LogicalOperator.AND) {
 
             List<Condition> childConditions = logicalCondition.conditions();
-            // For Phase 1, we simplify: look for exactly two conditions: one CONTAINS (unigram) and one NER.
             if (childConditions.size() == 2) {
-                Condition c1 = childConditions.get(0);
-                Condition c2 = childConditions.get(1);
+                Condition child1 = childConditions.get(0);
+                Condition child2 = childConditions.get(1);
 
                 Contains containsCond = null;
-                Ner nerCond = null;
+                Condition annotationCond = null;
 
-                if (c1 instanceof Contains && ((Contains)c1).terms().size() == 1 && c2 instanceof Ner) {
-                    containsCond = (Contains) c1;
-                    nerCond = (Ner) c2;
-                } else if (c2 instanceof Contains && ((Contains)c2).terms().size() == 1 && c1 instanceof Ner) {
-                    containsCond = (Contains) c2;
-                    nerCond = (Ner) c1;
+                if (child1 instanceof Contains && ((Contains) child1).terms().size() == 1) {
+                    containsCond = (Contains) child1;
+                    if (child2 instanceof Ner || child2 instanceof com.example.query.model.condition.Pos || child2 instanceof com.example.query.model.condition.Temporal) {
+                        annotationCond = child2;
+                    }
+                } else if (child2 instanceof Contains && ((Contains) child2).terms().size() == 1) {
+                    containsCond = (Contains) child2;
+                    if (child1 instanceof Ner || child1 instanceof com.example.query.model.condition.Pos || child1 instanceof com.example.query.model.condition.Temporal) {
+                        annotationCond = child1;
+                    }
                 }
 
-                if (containsCond != null && nerCond != null) {
-                    logger.info("Attempting optimized stitch execution for CONTAINS (unigram) AND NER.");
-                    StitchContainsNerExecutor stitchExecutor = new StitchContainsNerExecutor();
+                if (containsCond != null && annotationCond != null) {
+                    logger.info("Attempting optimized stitch execution for CONTAINS (unigram) AND {}", annotationCond.getType());
                     try {
-                        return stitchExecutor.execute(containsCond, nerCond, indexes, granularity, granularitySize, source, requirements);
+                        StitchIntersectionExecutor stitchExecutor = new StitchIntersectionExecutor();
+                        QueryResultSoA stitchResult = stitchExecutor.execute(
+                            containsCond,
+                            annotationCond,
+                            indexes,
+                            granularity,
+                            granularitySize,
+                            source,
+                            requirements,
+                            this.currentQuery); // Pass currentQuery for context if needed by Temporal
+
+                        if (stitchResult != null) { // stitchResult is null if stitch optimization decided not to run or found nothing deterministically.
+                            logger.info("Stitch execution successful, {} conceptual rows found.", stitchResult.getConceptualRowCount());
+                            return stitchResult;
+                        } else {
+                            logger.warn("Stitch execution did not complete or apply for CONTAINS + {}. Falling back to standard AND execution.", annotationCond.getType());
+                        }
                     } catch (QueryExecutionException e) {
-                        logger.warn("StitchContainsNerExecutor execution failed: {}. Falling back to standard AND execution.", e.getMessage());
-                        // Fall through to standard execution if stitch execution fails
+                        logger.warn("StitchIntersectionExecutor execution failed: {}. Falling back to standard AND execution.", e.getMessage());
+                        // Fall through to standard execution
                     } catch (Exception e) {
                         logger.error("Unexpected error during stitch execution: {}. Falling back to standard AND execution.", e.getMessage(), e);
                         // Fall through for unexpected errors too

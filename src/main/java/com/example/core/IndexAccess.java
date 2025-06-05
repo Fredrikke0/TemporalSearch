@@ -249,6 +249,53 @@ public class IndexAccess implements IndexAccessInterface {
         return java.nio.file.Path.of(this.indexPath);
     }
 
+    @Override
+    public Optional<PositionListSoA> getMergedPositions(String baseTerm) throws IOException, IndexAccessException {
+        checkOpen();
+        byte[] baseTermBytes = bytes(baseTerm);
+        Optional<byte[]> rawBaseData = getRaw(baseTermBytes);
+
+        if (rawBaseData.isPresent()) {
+            // Term was not segmented or this is the only part
+            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(rawBaseData.get()));
+        }
+
+        // If base term not found, look for segments term#0, term#1, ...
+        PositionListSoA mergedSoA = null;
+        int segmentNum = 0;
+        boolean segmentFoundInLoop = false;
+
+        while (true) {
+            String segmentKeyString = baseTerm + "#" + segmentNum;
+            byte[] segmentKeyBytes = bytes(segmentKeyString);
+            Optional<byte[]> rawSegmentData = getRaw(segmentKeyBytes);
+
+            if (rawSegmentData.isPresent()) {
+                segmentFoundInLoop = true;
+                PositionListSoA segmentSoA = PositionListSoA.deserializeFromCompositeBlob(rawSegmentData.get());
+                if (mergedSoA == null) {
+                    mergedSoA = segmentSoA;
+                } else {
+                    mergedSoA.addAll(segmentSoA); // Ensure PositionListSoA.addAll is robust
+                }
+            } else {
+                // No data for current segmentKeyBytes
+                if (segmentNum == 0 && !segmentFoundInLoop) {
+                    // Neither baseTerm nor term#0 found, so term doesn't exist in segmented form either.
+                    return Optional.empty();
+                }
+                // If segmentNum > 0 and this segment is not found, means we have found all previous segments.
+                // Or, if segmentNum == 0 but segmentFoundInLoop was false (from baseTerm check earlier),
+                // and now term#0 also not found, then the term doesn't exist at all.
+                break; // Exit loop, all available segments have been processed or none were found after base check.
+            }
+            segmentNum++;
+        }
+        // If mergedSoA is still null here, it means neither base term nor any segments were found.
+        // However, the logic above (break conditions) should ensure Optional.empty() is returned earlier if segmentNum=0 and no segment is found.
+        return Optional.ofNullable(mergedSoA);
+    }
+
     private void checkOpen() throws IndexAccessException {
         if (!isOpen()) {
             throw new IndexAccessException(
