@@ -1,9 +1,8 @@
 package com.example;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.ObjectInputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDate;
@@ -11,7 +10,6 @@ import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -23,11 +21,11 @@ import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionList;
 import com.example.core.PositionListSoA;
-import com.example.index.StitchPosition;
 import com.example.index.util.NashSerializationUtils;
+import com.example.index.util.SynonymManager;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
@@ -39,10 +37,10 @@ import net.sourceforge.argparse4j.inf.Namespace;
  * This class allows browsing contents of RocksDB index databases.
  */
 public class RocksDBBrowser {
-    private static final String DELIMITER = "\\0";
+    private static final char ACTUAL_DELIMITER_CHAR = IndexAccessInterface.DELIMITER;
+    private static final String DELIMITER_REGEX = "\\0";
     private static final Logger logger = LoggerFactory.getLogger(RocksDBBrowser.class);
-    private static final String ANNOTATION_SYNONYMS_PREFIX = "%s_synonyms.ser";
-    private static final String[] ANNOTATION_TYPES = {"date", "ner", "pos", "dependency"};
+    private static SynonymManager globalSynonymManager;
     private static final List<String> ALL_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
         "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash",
         "synonym_manager_db",
@@ -96,6 +94,20 @@ public class RocksDBBrowser {
             int limit = ns.getInt("limit");
             boolean showStats = ns.getBoolean("stats");
 
+            Path synonymManagerDbPath = Paths.get(basePath, "global_values_lookup.db");
+            try {
+                if (Files.exists(synonymManagerDbPath)) {
+                    logger.info("Attempting to initialize SynonymManager from: {}", synonymManagerDbPath);
+                    globalSynonymManager = new SynonymManager(synonymManagerDbPath);
+                    logger.info("SynonymManager initialized successfully.");
+                } else {
+                    logger.warn("SynonymManager database not found at: {}. Synonym lookups will not be available.", synonymManagerDbPath);
+                }
+            } catch (RocksDBException e) {
+                logger.error("Failed to initialize SynonymManager from {}: {}. Synonym lookups will not be available.", synonymManagerDbPath, e.getMessage());
+                // globalSynonymManager will remain null
+            }
+
             if ("all".equalsIgnoreCase(indexType)) {
                 for (String singleIndexType : ALL_INDEX_TYPES) {
                     System.out.printf("\n--- Processing Index: %s ---\n", singleIndexType);
@@ -117,6 +129,11 @@ public class RocksDBBrowser {
             System.err.println("Error in RocksDBBrowser setup: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
+        } finally {
+            if (globalSynonymManager != null) {
+                logger.info("Closing global SynonymManager.");
+                globalSynonymManager.close();
+            }
         }
     }
 
@@ -136,11 +153,6 @@ public class RocksDBBrowser {
         }
         System.out.printf("Accessing database at: %s%n", dbPathActual.toString());
 
-        Map<String, Map<Integer, String>> annotationSynonyms = new HashMap<>();
-        if (indexType.startsWith("stitch_") && (key != null || prefix != null)) {
-            annotationSynonyms = loadAnnotationSynonyms(basePath);
-        }
-
         Options options = new Options();
         options.setCreateIfMissing(false);
 
@@ -156,11 +168,11 @@ public class RocksDBBrowser {
                 }
             }
             if (key != null) {
-                displayEntry(db, key, indexType, annotationSynonyms);
+                displayEntry(db, key, indexType);
             } else if (prefix != null) {
-                listEntriesByPrefix(db, prefix, limit, indexType, annotationSynonyms);
+                listEntriesByPrefix(db, prefix, limit, indexType);
             } else {
-                listAllEntries(db, limit, indexType, annotationSynonyms);
+                listAllEntries(db, limit, indexType);
             }
         } catch (RocksDBException e) {
             System.err.printf("Error opening RocksDB database at %s: %s%n", dbPathActual.toString(), e.getMessage());
@@ -237,7 +249,7 @@ public class RocksDBBrowser {
         System.out.println();
     }
 
-    private static void displayEntry(RocksDB db, String key, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
+    private static void displayEntry(RocksDB db, String key, String indexType) throws IOException {
         byte[] data = null;
         try {
             data = db.get(bytes(key));
@@ -257,11 +269,11 @@ public class RocksDBBrowser {
             displaySynonymDbEntry(bytes(key), data);
         } else {
             PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(data);
-            displayPositionsSoA(key, positionsSoA, indexType, synonyms);
+            displayPositionsSoA(key, positionsSoA, indexType);
         }
     }
 
-    private static void listEntriesByPrefix(RocksDB db, String prefix, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
+    private static void listEntriesByPrefix(RocksDB db, String prefix, int limit, String indexType) throws IOException {
         boolean isNash = indexType.equals("nash");
         boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
 
@@ -285,7 +297,7 @@ public class RocksDBBrowser {
                     displaySynonymDbEntry(keyBytes, valueBytes);
                 } else {
                     PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
-                    displayPositionsSoA(currentKey, positionsSoA, indexType, synonyms);
+                    displayPositionsSoA(currentKey, positionsSoA, indexType);
                 }
                 count++;
                 iterator.next();
@@ -297,7 +309,7 @@ public class RocksDBBrowser {
         }
     }
 
-    private static void listAllEntries(RocksDB db, int limit, String indexType, Map<String, Map<Integer, String>> synonyms) throws IOException {
+    private static void listAllEntries(RocksDB db, int limit, String indexType) throws IOException {
         boolean isNash = indexType.equals("nash");
         boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
 
@@ -388,81 +400,91 @@ public class RocksDBBrowser {
         }
     }
 
-    private static void displayPositions(String key, PositionList positions, String indexType, Map<String, Map<Integer, String>> synonyms) {
+    private static void displayPositionsSoA(String key, PositionListSoA positionsSoA, String indexType) {
         System.out.printf("%nKey: %s%n", formatKey(key, indexType));
-        System.out.printf("Positions: %d%n", positions.size());
+        System.out.printf("Positions: %d%n", positionsSoA.getNumPositions());
         System.out.println("----------");
 
         int count = 0;
-        int maxPositions = 100;
+        int maxPositionsToDisplay = 100;
 
-        for (Position pos : positions.getPositions()) {
-            if (count >= maxPositions) {
-                System.out.printf("%nShowing first %d positions. Total positions: %d%n", maxPositions, positions.size());
+        for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
+            if (count >= maxPositionsToDisplay && maxPositionsToDisplay > 0) {
+                System.out.printf("%nShowing first %d positions. Total positions: %d%n", maxPositionsToDisplay, positionsSoA.getNumPositions());
                 break;
             }
 
-            if (pos instanceof StitchPosition stitchPos) {
-                String annotationType = stitchPos.getType().toString().toLowerCase();
-                int synonymId = stitchPos.getSynonymId();
-                String value = synonyms
-                    .getOrDefault(annotationType, Map.of())
-                    .getOrDefault(synonymId, "unknown");
+            Position pos = positionsSoA.getPositionAt(i);
+            int currentSynonymId = positionsSoA.getSynonymIdAt(i);
+            String synonymOutput = "";
 
-                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d][%s:%s]%n",
-                    pos.getDocumentId(),
-                    pos.getSentenceId(),
-                    pos.getBeginPosition(),
-                    pos.getEndPosition(),
-                    annotationType,
-                    value);
-                } else {
-                System.out.printf("  [doc:%d][sent:%d][chars:%d-%d]%n",
-                    pos.getDocumentId(),
-                    pos.getSentenceId(),
-                    pos.getBeginPosition(),
-                    pos.getEndPosition());
-            }
+            if (currentSynonymId != -1) { // Only attempt lookup if synonymId is valid (not -1)
+                if (globalSynonymManager != null) {
+                    String lookedUpValue; // Declared here to be used in all branches
+                    try {
+                        // Attempt to get the term from SynonymManager first
+                        termFromManagerLoop: do { // Label for breaking out of the loop after first match
+                            lookedUpValue = globalSynonymManager.getTerm(currentSynonymId)
+                                                                .orElse("id:" + currentSynonymId + "(not_found_in_SM)");
+
+                            if (indexType.startsWith("stitch_")) {
+                                // Use Pattern.quote for literal splitting on the delimiter character
+                                String[] keyParts = key.split(Pattern.quote(String.valueOf(ACTUAL_DELIMITER_CHAR)));
+                                if (keyParts.length > 1) {
+                                    String annotationTypeFromKey = keyParts[keyParts.length - 1];
+                                    synonymOutput = String.format("[%s:%s]", annotationTypeFromKey, lookedUpValue);
+                                } else {
+                                    // Even if key parsing fails, show the looked up value if ID was valid
+                                    synonymOutput = String.format("[syn_id:%d(%s)(key_parse_err)]", currentSynonymId, lookedUpValue);
+                                }
+                                break termFromManagerLoop;
+                            } else if (indexType.equals("pos")) {
+                                synonymOutput = String.format("[token_value:%s]", lookedUpValue);
+                                break termFromManagerLoop;
+                            } else if (indexType.equals("ner")) {
+                                synonymOutput = String.format("[entity_value:%s]", lookedUpValue);
+                                break termFromManagerLoop;
+                            } else if (indexType.equals("ner_date")) {
+                                // For ner_date, key is the date. If synonymId is present and not -1, it's unexpected.
+                                synonymOutput = String.format("[unexpected_syn_id_for_ner_date:%d]", currentSynonymId);
+                                break termFromManagerLoop;
+                            } else { // Generic case for other index types
+                                synonymOutput = String.format("[value_id:%d (%s)]", currentSynonymId, lookedUpValue);
+                                break termFromManagerLoop;
+                            }
+                        } while(false); // Ensures the block runs once
+
+                    } catch (RocksDBException e) {
+                        synonymOutput = String.format("[id:%d(db_error_SM)]", currentSynonymId);
+                        logger.warn("RocksDBException looking up synonym ID {} for key '{}' in index type '{}': {}",
+                                    currentSynonymId, key, indexType, e.getMessage());
+                    }
+                } else { // globalSynonymManager is null (e.g., DB not found)
+                    synonymOutput = String.format("[id:%d(SM_unavailable)]", currentSynonymId);
+                }
+            } // If currentSynonymId is -1, synonymOutput remains empty, which is correct.
+
+            System.out.printf("  [doc:%d][sent:%d][chars:%d-%d]%s%n",
+                pos.getDocumentId(),
+                pos.getSentenceId(),
+                pos.getBeginPosition(),
+                pos.getEndPosition(),
+                synonymOutput);
             count++;
+        }
+        if (maxPositionsToDisplay == 0 && positionsSoA.getNumPositions() > 0) {
+             System.out.printf("%nShowing all %d positions.%n", positionsSoA.getNumPositions());
         }
     }
 
     private static String formatKey(String key, String indexType) {
         if (indexType.equals("dependency")) {
-            String[] parts = key.split(DELIMITER);
+            String[] parts = key.split(DELIMITER_REGEX);
             return parts.length == 3 ? String.format("%s-%s->%s", parts[0], parts[1], parts[2]) : key;
         } else if (indexType.startsWith("stitch_") || indexType.equals("bigram") || indexType.equals("trigram")) {
-            return key.replace(DELIMITER, " <STITCH> ");
+            return key.replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " <DELIM> ");
         }
         return key;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Map<Integer, String>> loadAnnotationSynonyms(String basePath) {
-        Map<String, Map<Integer, String>> allSynonyms = new HashMap<>();
-
-        for (String annotationType : ANNOTATION_TYPES) {
-            String synonymsFileName = String.format(ANNOTATION_SYNONYMS_PREFIX, annotationType);
-            Path synonymsPath = Paths.get(basePath, "stitch-" + annotationType, synonymsFileName);
-            File synonymsFile = synonymsPath.toFile();
-
-            if (!synonymsFile.exists()) {
-                logger.warn("Synonym file not found for type '{}' at path: {}", annotationType, synonymsPath);
-                continue;
-            }
-
-            try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(synonymsFile))) {
-                Map<String, Integer> valueToId = (Map<String, Integer>) ois.readObject();
-                Map<Integer, String> idToValue = new HashMap<>();
-                valueToId.forEach((value, id) -> idToValue.put(id, value));
-                allSynonyms.put(annotationType, idToValue);
-                logger.info("Successfully loaded {} synonyms for type '{}' from {}", idToValue.size(), annotationType, synonymsPath);
-            } catch (Exception e) {
-                logger.error("Error loading {} synonyms from {}: {}", annotationType, synonymsPath, e.getMessage());
-            }
-        }
-
-        return allSynonyms;
     }
 
     private static byte[] bytes(String str) {
@@ -512,60 +534,6 @@ public class RocksDBBrowser {
             } catch (IOException e) {
                 System.out.println("  Error deserializing Nash prefix data (PositionListSoA): " + e.getMessage());
             }
-        }
-    }
-
-    private static void displayPositionsSoA(String key, PositionListSoA positionsSoA, String indexType, Map<String, Map<Integer, String>> synonyms) {
-        System.out.printf("%nKey: %s%n", formatKey(key, indexType));
-        System.out.printf("Positions: %d%n", positionsSoA.getNumPositions());
-        System.out.println("----------");
-
-        int count = 0;
-        int maxPositionsToDisplay = 100; // Renamed for clarity
-
-        for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
-            if (count >= maxPositionsToDisplay && maxPositionsToDisplay > 0) {
-                System.out.printf("%nShowing first %d positions. Total positions: %d%n", maxPositionsToDisplay, positionsSoA.getNumPositions());
-                break;
-            }
-
-            Position pos = positionsSoA.getPositionAt(i);
-            int currentSynonymId = positionsSoA.getSynonymIdAt(i);
-            String synonymOutput = "";
-
-            if (indexType.startsWith("stitch_")) {
-                String[] keyParts = key.split(Pattern.quote(DELIMITER));
-                if (keyParts.length > 1) {
-                    String annotationTypeFromKey = keyParts[keyParts.length - 1]; // Last part is the type
-                    String lookedUpValue = synonyms
-                        .getOrDefault(annotationTypeFromKey.toLowerCase(), Collections.emptyMap())
-                        .getOrDefault(currentSynonymId, "id:" + currentSynonymId);
-                    synonymOutput = String.format("[%s:%s]", annotationTypeFromKey, lookedUpValue);
-                } else {
-                    synonymOutput = String.format("[syn_id:%d]", currentSynonymId); // Fallback if key parsing fails
-                }
-            } else if (indexType.equals("pos")) {
-                // For POS index, the key is the POS tag. SynonymId is the token ID.
-                String tokenValue = synonyms
-                    .getOrDefault("pos", Collections.emptyMap())
-                    .getOrDefault(currentSynonymId, "id:" + currentSynonymId);
-                synonymOutput = String.format("[token:%s]", tokenValue);
-            } else if (currentSynonymId != -1) {
-                // For other generic indexes, if synonymId is present and not -1
-                synonymOutput = String.format("[syn_id:%d]", currentSynonymId);
-            }
-
-            System.out.printf("  [doc:%d][sent:%d][chars:%d-%d]%s%n",
-                pos.getDocumentId(),
-                pos.getSentenceId(),
-                pos.getBeginPosition(),
-                pos.getEndPosition(),
-                synonymOutput); // Append synonym output string
-
-            count++;
-        }
-        if (maxPositionsToDisplay == 0 && positionsSoA.getNumPositions() > 0) { // if limit was 0, indicate all shown
-             System.out.printf("%nShowing all %d positions.%n", positionsSoA.getNumPositions());
         }
     }
 

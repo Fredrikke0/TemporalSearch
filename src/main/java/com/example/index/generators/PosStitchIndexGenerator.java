@@ -10,22 +10,30 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.core.IndexAccessInterface;
 import com.example.index.AnnotationType;
+import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 
 public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(PosStitchIndexGenerator.class);
-    public static final String MY_INDEX_NAME = "stitch-pos";
+    public static final String MY_INDEX_NAME = "stitch_unigram_pos";
     private static final String POS_TAGS_TO_EXCLUDE_SQL = POSIndexGenerator.POS_TAGS_TO_EXCLUDE_SQL;
 
-    public PosStitchIndexGenerator(String indexBaseDir, String stopwordsPath, Connection sqliteConn,
-                                 ProgressTracker progressTracker, int batchSize, Path customSortTempPath) throws IOException {
-        super(indexBaseDir, MY_INDEX_NAME,
-              stopwordsPath, sqliteConn, progressTracker, batchSize, customSortTempPath,
-              AnnotationType.POS
+    public PosStitchIndexGenerator(
+            IndexAccessInterface indexAccess,
+            String stopwordsPath,
+            Connection sqliteConn,
+            ProgressTracker progress,
+            int batchSize,
+            Path customTempPath,
+            SynonymManager sharedSynonymManager) throws IOException {
+        super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath,
+              AnnotationType.POS, sharedSynonymManager
         );
     }
 
@@ -53,10 +61,13 @@ public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
                 if (posTag != null && !posTag.isEmpty() && token != null && !token.isEmpty()) {
                     String compositeSynonym = posTag.toUpperCase() + com.example.core.IndexAccessInterface.DELIMITER + token.toLowerCase();
                     try {
-                        annotationSynonyms.getOrCreateId(compositeSynonym);
+                        synonymManager.getId(compositeSynonym);
                         count++;
                     } catch (IllegalArgumentException e) {
                         logger.debug("Filtered out invalid POS composite synonym during population: {} ({})", compositeSynonym, e.getMessage());
+                        skipped++;
+                    } catch (RocksDBException e) {
+                        logger.error("RocksDB error getting ID for POS composite synonym '{}' during population: {}", compositeSynonym, e.getMessage(), e);
                         skipped++;
                     }
                 }
@@ -67,7 +78,6 @@ public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
         } else {
             logger.info("Populated {} POS composite synonyms", count);
         }
-        annotationSynonyms.validateSynonyms();
     }
 
     @Override

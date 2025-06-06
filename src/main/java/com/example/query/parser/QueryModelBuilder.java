@@ -14,17 +14,7 @@ import org.slf4j.LoggerFactory;
 
 import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
-import com.example.query.model.CountColumn;
-import com.example.query.model.JoinCondition;
-import com.example.query.model.Query;
-import com.example.query.model.SelectColumn;
-import com.example.query.model.SnippetColumn;
-import com.example.query.model.SnippetNode;
-import com.example.query.model.StructuralColumn;
-import com.example.query.model.SubquerySpec;
-import com.example.query.model.TemporalPredicate;
-import com.example.query.model.TemporalRange;
-import com.example.query.model.VariableColumn;
+import com.example.query.model.*;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Dependency;
@@ -172,7 +162,14 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
         // Then handle other specific types
         else if (ctx instanceof QueryLangParser.QualifiedIdentifierColumnContext qicc) {
-            return visitQualifiedIdentifier(qicc.qualifiedIdentifier());
+            Object resolvedColumn = visitQualifiedIdentifier(qicc.qualifiedIdentifier());
+            if (resolvedColumn instanceof VariableColumn vc) {
+                // This VariableColumn was created by visitQualifiedIdentifier for a qualified name (e.g., alias.field)
+                // Since it's being used as a select column, register it as a consumer.
+                variableRegistry.registerConsumer(vc.getColumnName(), VariableType.ANY, "SELECT_QUALIFIED_VARIABLE");
+                logger.debug("Registered SELECT qualified variable '{}' as consumer (from QualifiedIdentifierColumnContext).", vc.getColumnName());
+            }
+            return resolvedColumn; // This will be either the (now registered) VariableColumn or a StructuralColumn
         } else if (ctx instanceof QueryLangParser.SnippetColumnContext scc) {
             return visitSnippetColumn(scc, qualificationRequired);
         } else if (ctx instanceof QueryLangParser.StructColumnContext scc) {
@@ -183,7 +180,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         // THEN handle the generic VariableColumn as a fallback
         else if (ctx instanceof QueryLangParser.VariableColumnContext vcc) {
             logger.trace("Dispatching to visitVariableColumn for: {}", vcc.getText());
-            return visitVariableColumn(vcc, qualificationRequired);
+            return visitVariableColumn(vcc, qualificationRequired); // This method now handles its own registration
         }
         // If none of the above match
         else {
@@ -203,59 +200,77 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             logger.trace("Identified StructuralColumn from qualifiedIdentifier: {}", fullQualifiedName);
             return new com.example.query.model.StructuralColumn(alias, fieldName);
         } else {
-            // Otherwise, assume it's a variable reference
-            logger.trace("Identified VariableColumn from qualifiedIdentifier: {}", fullQualifiedName);
+            // Otherwise, assume it's a variable reference.
+            // This method just identifies and creates the VariableColumn.
+            // Registration as a consumer happens in the calling context if it's for SELECT.
+            logger.trace("Identified VariableColumn from qualifiedIdentifier: {}. Registration will be handled by SELECT-specific visitors.", fullQualifiedName);
             return new VariableColumn(fullQualifiedName);
         }
     }
 
     // Overload visitVariableColumn
     public Object visitVariableColumn(QueryLangParser.VariableColumnContext ctx, boolean qualificationRequired) {
-        String variableName = ctx.variable().getText(); // FIX: Use ctx here, not vCtx
-        logger.debug("Visiting VariableColumnContext for: {}", variableName);
+        String variableName = ctx.variable().getText();
+        logger.debug("Visiting VariableColumnContext for: {}, qualificationRequired: {}", variableName, qualificationRequired);
 
-        // *** CORRECTION LOGIC ***
-        // Check if a keyword was mistakenly parsed as a variable.
-        // If so, create the correct StructuralColumn instead.
+        // *** CORRECTION LOGIC for keywords parsed as variables ***
         String upperVarName = variableName.toUpperCase();
         if (Set.of("DOCUMENT_ID", "SENTENCE_ID", "TIMESTAMP", "TITLE").contains(upperVarName)) {
-             logger.warn("Keyword '{}' was parsed as a variable. Correcting to StructuralColumn.", variableName);
+             logger.warn("Keyword '{}' was parsed as an unqualified variable. Correcting to StructuralColumn with default alias.", variableName);
              if (qualificationRequired) {
-                 // This case shouldn't happen if grammar/dispatch is correct, but handle defensively.
+                 // This specific path (unqualified keyword mistaken as variable where qualification is required)
+                 // is an edge case. Typically, qualified keywords would be handled by visitQualifiedIdentifier.
+                 // If it reaches here, it means an unqualified keyword was used where a qualified one was expected.
                  throw new IllegalStateException(
-                     String.format("Unqualified structural keyword '%s' used where qualification is required. Use 'alias.%s'.",
+                     String.format("Unqualified structural keyword '%s' used where qualification (e.g. 'alias.%s') is required.",
                                    variableName, variableName));
              }
-             // Create the correct StructuralColumn using the default alias
              return new StructuralColumn(DEFAULT_MAIN_ALIAS, upperVarName);
         }
         // *** END CORRECTION LOGIC ***
 
-        // If it wasn't a keyword, proceed as a normal variable
+        String qualifiedName;
         if (qualificationRequired) {
-            throw new IllegalStateException(
-                String.format("Unqualified variable '%s' used in SELECT where qualification is required (due to ALIAS or JOIN). Use 'alias.%s'.",
-                              variableName, variableName)
-                // TODO: Consider adding line/pos info to exception message
-            );
+            // If qualification is required, the variableName *must* already be in alias.var form.
+            // This typically happens if a QualifiedIdentifierColumnContext was routed here,
+            // or if the grammar/parsing logic leads an already-qualified name to this visitor.
+            // For robust handling, we check if it contains '.' as an indicator of qualification.
+            if (!variableName.contains(".")) {
+                // This case should ideally be caught by grammar or earlier validation if an unqualified variable
+                // (e.g. "date") is used in a context that strictly requires a qualified one (e.g. "q1.date").
+                // If it still reaches here, it's an error.
+                throw new IllegalStateException(
+                    String.format("Unqualified variable '%s' used in SELECT where a qualified name (e.g., 'alias.%s') is strictly required by context.",
+                                  variableName, variableName)
+                );
+            }
+            qualifiedName = variableName; // Assume variableName is already qualified
+            logger.debug("Processing already qualified variable for SELECT: {}", qualifiedName);
+        } else {
+            // If qualification is not required, implicitly qualify with the default main alias.
+            qualifiedName = DEFAULT_MAIN_ALIAS + "." + variableName;
+            logger.debug("Implicitly qualifying variable for SELECT: {} -> {}", variableName, qualifiedName);
         }
-        // If qualification is not required, implicitly qualify with default alias
-        String qualifiedName = DEFAULT_MAIN_ALIAS + "." + variableName;
-        logger.debug("Creating VariableColumn for implicitly qualified variable: {}", qualifiedName);
+
+        // Register this variable as a consumer because it's being used in a SELECT clause.
+        variableRegistry.registerConsumer(qualifiedName, VariableType.ANY, "SELECT_VARIABLE");
+        logger.debug("Registered SELECT variable '{}' as consumer.", qualifiedName);
+
         return new VariableColumn(qualifiedName);
     }
 
     // Overload visitSnippetColumn
     public Object visitSnippetColumn(QueryLangParser.SnippetColumnContext ctx, boolean qualificationRequired) {
-         // Visit the expression first to get the SnippetNode (which contains the qualified name)
         SnippetNode snippetNode = (SnippetNode) visitSnippetExpression(ctx.snippetExpression(), qualificationRequired);
-
-        // Extract windowSize and qualified variableName from the node
+        String qualifiedVariableName = snippetNode.variableName();
         int windowSize = snippetNode.windowSize();
-        String qualifiedVariableName = snippetNode.variableName(); // Use variableName() getter
 
-        // Use qualifiedVariableName and windowSize to create SnippetColumn
-        // Assuming SnippetColumn constructor takes qualified name and window size
+        logger.debug("Processing SnippetColumn for variable: {}, window: {}, qualificationRequired: {}", qualifiedVariableName, windowSize, qualificationRequired);
+
+        // Register the variable used in SNIPPET as a consumer.
+        variableRegistry.registerConsumer(qualifiedVariableName, VariableType.TEXT_SPAN, "SELECT_SNIPPET");
+        logger.debug("Registered SELECT SNIPPET variable '{}' as consumer.", qualifiedVariableName);
+
         return new SnippetColumn(qualifiedVariableName, windowSize);
     }
 

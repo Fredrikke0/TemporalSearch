@@ -114,11 +114,11 @@ public class QueryAttributeAnalyzer {
      * Analyzes a single condition to determine attribute requirements.
      */
     private static void analyzeCondition(Condition condition, AttributeRequirements requirements) {
-        if (condition instanceof Ner ner && ner.isVariable()) {
-            logger.trace("Found NER variable condition, requiring synonym IDs for stitch operations");
+        if (condition instanceof Ner ner && (ner.isVariable() || ner.target() != null)) {
+            logger.trace("Found NER condition with variable or target, requiring synonym IDs");
             requirements.needsSynonymIds = true;
-        } else if (condition instanceof Pos pos && pos.isVariable()) {
-            logger.trace("Found POS variable condition, requiring synonym IDs for stitch operations");
+        } else if (condition instanceof Pos pos && (pos.isVariable() || pos.term() != null)) {
+            logger.trace("Found POS condition with variable or target, requiring synonym IDs");
             requirements.needsSynonymIds = true;
         } else if (condition instanceof Logical logical) {
             // Recursively analyze logical conditions

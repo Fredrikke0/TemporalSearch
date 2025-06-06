@@ -198,7 +198,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                     }
                 }
 
-                logger.info("Processing Nash prefix: '{}'. Maps to {} unique dates. Aggregating a total of ~{} NashDateEntryWithId objects.",
+                logger.trace("Processing Nash prefix: '{}'. Maps to {} unique dates. Aggregating a total of ~{} NashDateEntryWithId objects.",
                             nashPrefix, dateIdsForThisPrefix.size(), potentialAggregatedEntryCount);
 
                 if (potentialAggregatedEntryCount > 50_000_000) { // Log a strong warning if it's very large

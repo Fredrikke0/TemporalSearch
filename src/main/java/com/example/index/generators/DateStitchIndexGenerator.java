@@ -14,26 +14,30 @@ import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
 
+import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.core.IndexAccessInterface;
 import com.example.index.AnnotationType;
+import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 
 public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(DateStitchIndexGenerator.class);
     private static final Pattern DATE_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
-    public static final String MY_INDEX_NAME = "stitch-date";
+    public static final String MY_INDEX_NAME = "stitch_unigram_date";
 
     public DateStitchIndexGenerator(
-            String indexBaseDir,
+            IndexAccessInterface indexAccess,
             String stopwordsPath,
             Connection sqliteConn,
             ProgressTracker progress,
             int batchSize,
-            Path customTempPath) throws IOException {
-        super(indexBaseDir, MY_INDEX_NAME, stopwordsPath, sqliteConn, progress, batchSize, customTempPath,
-              AnnotationType.DATE
+            Path customTempPath,
+            SynonymManager sharedSynonymManager) throws IOException {
+        super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath,
+              AnnotationType.DATE, sharedSynonymManager
         );
     }
 
@@ -60,13 +64,16 @@ public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
                 if (dateValue != null && DATE_PATTERN.matcher(dateValue).matches()) {
                     try {
                         LocalDate.parse(dateValue); // Validate date string
-                        annotationSynonyms.getOrCreateId(dateValue);
+                        synonymManager.getId(dateValue);
                         count++;
                     } catch (DateTimeParseException e) {
                         logger.debug("Filtered out invalid date format: {} (not a valid date)", dateValue);
                         skipped++;
                     } catch (IllegalArgumentException e) {
                         logger.warn("Skipping invalid DATE annotation during synonym population: {}", e.getMessage());
+                        skipped++;
+                    } catch (RocksDBException e) {
+                        logger.error("RocksDB error getting ID for date value '{}' during synonym population: {}", dateValue, e.getMessage(), e);
                         skipped++;
                     }
                 } else if (dateValue != null) {
@@ -80,7 +87,6 @@ public class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
         } else {
             logger.info("Populated {} DATE synonyms", count);
         }
-        annotationSynonyms.validateSynonyms();
     }
 
     @Override

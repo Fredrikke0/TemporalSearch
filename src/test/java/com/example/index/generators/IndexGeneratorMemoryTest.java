@@ -245,7 +245,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         Files.createDirectories(generatorTempDir);
 
         ProgressTracker mockProgressTracker = Mockito.mock(ProgressTracker.class);
-        MockIndexAccess mockIndexAccess = new MockIndexAccess("streaming-test-index", null, null, null);
+        MockIndexAccess mockIndexAccess = new MockIndexAccess("streaming-test-index", com.example.index.AnnotationType.UNKNOWN, new java.util.HashMap<>());
 
         testGenerator = new StreamingTestIndexGenerator(
             mockIndexAccess,

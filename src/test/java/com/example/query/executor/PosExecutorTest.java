@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -66,7 +65,6 @@ class PosExecutorTest {
         defaultTestRequirements.needsConceptualRowIds = true;
 
         lenient().when(posIterator.isValid()).thenReturn(false);
-        doAnswer(invocation -> Optional.empty()).when(posIndex).getMergedPositions(anyString());
 
         lenient().when(synonymManager.getId(anyString())).thenReturn(-1);
         lenient().when(synonymManager.getTerm(anyInt())).thenReturn(Optional.empty());

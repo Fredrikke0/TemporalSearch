@@ -390,7 +390,10 @@ class QueryParserTest {
 
         // Parser should now accept this, as 'not_real_column' is a valid IDENTIFIER.
         // Semantic validation will catch that it's not bound.
-        assertDoesNotThrow(() -> parser.parse(queryStr));
+        // Update: Validation now happens during parsing, so we expect an exception.
+        QueryParseException exception = assertThrows(QueryParseException.class, () -> parser.parse(queryStr));
+        assertTrue(exception.getMessage().contains("Variable $main.not_real_column is consumed but never produced"),
+                   "Exception message should indicate that 'not_real_column' was not produced. Actual: " + exception.getMessage());
     }
 
     @ParameterizedTest

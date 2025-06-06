@@ -3,7 +3,6 @@ package com.example.index.generators;
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -23,78 +22,50 @@ import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationType;
 import com.example.index.StitchEntry;
-import com.example.index.TypedAnnotationSynonymStore;
+import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 
 public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<StitchEntry> {
     private static final Logger logger = LoggerFactory.getLogger(AbstractUnigramStitchGenerator.class);
-    // protected static final int MAX_OPEN_FILES = 1000; // No longer directly managing DB options here
-    // protected static final long LEVELDB_CACHE_SIZE_BYTES = 100 * 1024 * 1024; // 100MB
-    // protected static final int LEVELDB_WRITE_BUFFER_SIZE_BYTES = 16 * 1024 * 1024; // 16MB
 
-    protected final TypedAnnotationSynonymStore annotationSynonyms;
+
+    protected final SynonymManager synonymManager;
     private Integer lastProcessedDocumentId = null;
-    // protected final int batchSize; // Already in parent
-    protected final Path indexDBPath; // Path for synonyms, specific to this stitch index
-    // protected DB db; // Will use indexAccess from parent
-    protected final String resolvedIndexName;
 
     public Path getIndexDBPath() {
-        return indexDBPath;
+        // return indexDBPath;
+        return null; // No longer needed
     }
 
-    @SuppressWarnings("this-escape") // Suppress warning: populateSpecificAnnotationSynonyms is an abstract method
-                                     // called from constructor. Implementations are verified to only use
-                                     // superclass fields initialized prior to this call, or their own parameters.
-    protected AbstractUnigramStitchGenerator(IndexAccessInterface indexAccess, String indexNameParam,
+    @SuppressWarnings("this-escape")
+    protected AbstractUnigramStitchGenerator(IndexAccessInterface indexAccess,
                                            String stopwordsPathString, Connection sqliteConnParam,
                                            ProgressTracker progressTrackerParam, int batchSizeParam, Path customSortTempParam,
-                                           AnnotationType managedAnnotationType) throws IOException {
-        // Call the modified IndexGenerator constructor:
-        // - actualIndexDbPath: The full specific path for this stitch index's LevelDB files.
-        // - indexName: The logical name for this stitch index.
-        // The calculation for specificStitchIndexPath must happen *inside* the super call.
-        super(Path.of(indexAccess.getIndexPath(), indexNameParam).toString(), // actualIndexDbPath
-              indexNameParam,                                 // indexName
+                                           AnnotationType managedAnnotationType, SynonymManager sharedSynonymManager) throws IOException {
+
+        super(indexAccess, // Pass IndexAccessInterface directly
               stopwordsPathString,
               sqliteConnParam,
               progressTrackerParam,
               batchSizeParam,
               customSortTempParam);
 
-        this.resolvedIndexName = indexNameParam; // For synonym store path and local getIndexName()
-
-        // The indexDBPath for TypedAnnotationSynonymStore needs the specific path.
-        // It's derived from the same inputs as what super() used.
-        this.indexDBPath = Path.of(indexAccess.getIndexPath(), this.resolvedIndexName); // TODO: This is not correct.
-        if (!Files.exists(this.indexDBPath)) {
-            Files.createDirectories(this.indexDBPath); // Ensure it exists for synonym store
+        if (sharedSynonymManager == null) {
+            throw new IllegalArgumentException("SynonymManager cannot be null for AbstractUnigramStitchGenerator");
         }
-
-        // Construct the specific path for the synonym file for this stitch index
-        Path synonymFilePath = this.indexDBPath.resolve("synonyms.dat");
-        this.annotationSynonyms = new TypedAnnotationSynonymStore(synonymFilePath, managedAnnotationType);
+        this.synonymManager = sharedSynonymManager;
 
         try {
-            logger.info("Initializing annotation synonyms for {} stitch index using inherited sqliteConn. Synonym file: {}", managedAnnotationType, synonymFilePath.toAbsolutePath());
-            populateSpecificAnnotationSynonyms(managedAnnotationType);
-            logger.info("Successfully initialized {} annotation synonyms with {} entries for type {}",
-                    managedAnnotationType, annotationSynonyms.size(), managedAnnotationType);
+            logger.info("Initializing specific annotation synonyms for {} stitch index using inherited sqliteConn and shared SynonymManager.", managedAnnotationType);
+            populateSpecificAnnotationSynonyms(managedAnnotationType); // This will now use this.synonymManager
+            // logger.info("Successfully initialized {} annotation synonyms with {} entries for type {}",
+            //         managedAnnotationType, synonymManager.size(), managedAnnotationType); // SynonymManager might not have a simple size() for a specific type
+            logger.info("Finished populating specific annotation synonyms for {} of type {}.", getIndexName(), managedAnnotationType);
         } catch (SQLException | IOException e) {
-            closeSynonymsOnError();
-            throw new UncheckedIOException("Failed to populate " + managedAnnotationType + " annotation synonyms for " + this.resolvedIndexName, e instanceof IOException ? (IOException)e : new IOException(e));
-        }
-    }
-
-    private void closeSynonymsOnError() {
-        try {
-            if (annotationSynonyms != null) {
-                annotationSynonyms.close();
-            }
-        } catch (Exception ex) {
-            logger.warn("Failed to close annotation synonyms after initialization error for {}", this.resolvedIndexName, ex);
+            // closeSynonymsOnError(); // SynonymManager is shared, should not be closed here on error
+            throw new UncheckedIOException("Failed to populate " + managedAnnotationType + " annotation synonyms for " + getIndexName(), e instanceof IOException ? (IOException)e : new IOException(e));
         }
     }
 
@@ -174,9 +145,12 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         for (AnnotationData annotation : annotations) {
             int synonymId;
             try {
-                 synonymId = annotationSynonyms.getOrCreateId(annotation.normalizedValue());
+                 synonymId = synonymManager.getId(annotation.normalizedValue());
             } catch (IllegalArgumentException e) {
                 logger.debug("Skipping annotation due to invalid value for type {}: {} - {}", currentType, annotation.normalizedValue(), e.getMessage());
+                continue;
+            } catch (org.rocksdb.RocksDBException e) {
+                logger.error("RocksDB error getting ID for annotation value '{}' of type {}: {}", annotation.normalizedValue(), currentType, e.getMessage(), e);
                 continue;
             }
 
@@ -272,7 +246,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
             logger.trace("Processing unigram: '{}' from entry: {}", unigram, entry);
 
             // Key for LevelDB will just be the unigram.
-            // The AnnotationType is inherent to the specific index (e.g., "stitch/date")
+            // The AnnotationType is inherent to the specific index
             // and also stored within StitchPosition.
             String key = unigram;
 
@@ -313,8 +287,6 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // Instead of counting or using MAX which would be slow,
-        // just return -1 to indicate indeterminate progress
         return -1;
     }
 
@@ -327,7 +299,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
 
     @Override
     protected long writeToLevelDB(File sortedFile) throws IOException {
-        logger.info("Starting custom writeToLevelDB for {} from sorted file: {}", this.resolvedIndexName, sortedFile.getAbsolutePath());
+        logger.info("Starting custom writeToLevelDB for {} from sorted file: {}", getIndexName(), sortedFile.getAbsolutePath());
         long startTime = System.currentTimeMillis();
         long localTotalNGramsGenerated = 0;
         WriteBatch batch = null;
@@ -418,7 +390,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         // Now, delegate to the parent's writeToLevelDB method
         long totalTermsWritten = super.writeToLevelDB(sortedFile);
         localTotalNGramsGenerated = totalTermsWritten;
-        logger.info("Delegated writeToLevelDB for {} to parent IndexGenerator.", this.resolvedIndexName);
+        logger.info("Delegated writeToLevelDB for {} to parent IndexGenerator.", getIndexName());
         return localTotalNGramsGenerated;
     }
 
@@ -431,16 +403,17 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
     public void close() throws IOException {
         super.close(); // Closes indexAccess (LevelDB) and other resources from parent
 
-        if (annotationSynonyms != null) {
-            try {
-                logger.info("Closing annotation synonym store for index {}...", getIndexName());
-                annotationSynonyms.close(); // This will save if modified
-                logger.info("Annotation synonym store for index {} closed successfully.", getIndexName());
-            } catch (IOException e) {
-                logger.error("Failed to close annotation synonym store for index {}: {}", getIndexName(), e.getMessage(), e);
-                // Decide if this should re-throw or just log
-            }
-        }
+        // Do not close synonymManager here as it's shared and managed by IndexRunner
+        // if (synonymManager != null) { // was annotationSynonyms
+        //     try {
+        //         logger.info("Closing annotation synonym store for index {}...", getIndexName());
+        //         // synonymManager.close(); // This will save if modified // DO NOT CLOSE SHARED MANAGER
+        //         logger.info("Annotation synonym store for index {} closed successfully.", getIndexName());
+        //     } catch (IOException e) {
+        //         logger.error("Failed to close annotation synonym store for index {}: {}", getIndexName(), e.getMessage(), e);
+        //         // Decide if this should re-throw or just log
+        //     }
+        // }
         // Any other specific cleanup for AbstractUnigramStitchGenerator can go here
     }
 
@@ -457,7 +430,8 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
      */
     @Override
     public String getIndexName() {
-        return this.resolvedIndexName;
+        // return this.resolvedIndexName; // Use the name from IndexAccess
+        return this.indexAccess.getIndexType();
     }
 
     // Method to allow tests to access the DB instance via IndexAccess
@@ -466,8 +440,8 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
     }
 
     // Method to allow tests to access the generator's internal synonym store instance
-    public TypedAnnotationSynonymStore getAnnotationSynonyms() {
-        return this.annotationSynonyms;
+    public SynonymManager getSynonymManager() {
+        return this.synonymManager;
     }
 
 }

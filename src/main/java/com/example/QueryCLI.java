@@ -108,7 +108,7 @@ public class QueryCLI {
             TableResultService tableResultService = new TableResultService(this.dbFilePath);
             logger.info("Using database at: {}", this.dbFilePath);
 
-            try (IndexManager indexManager = new IndexManager(this.indexDirPath, projectName, query, this.temporalStrategyName)) {
+            try (IndexManager indexManager = new IndexManager(this.indexDirPath, projectName, query, this.temporalStrategyName, this.stitchStrategyName)) {
                 logger.debug("Created IndexManager for project: {} using index directory: {}", projectName, this.indexDirPath);
 
                 SynonymManager synonymManager = indexManager.getSynonymManager();

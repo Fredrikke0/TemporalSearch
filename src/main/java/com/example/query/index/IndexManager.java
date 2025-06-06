@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import org.rocksdb.Options;
 import org.rocksdb.RocksDBException;
@@ -46,6 +47,7 @@ public class IndexManager implements AutoCloseable {
     private final String indexSetName;
     private SynonymManager synonymManager;
     private boolean isClosed = false;
+    private final String stitchStrategy;
 
     /**
      * Creates a new IndexManager for a specific index set and query.
@@ -55,12 +57,14 @@ public class IndexManager implements AutoCloseable {
      * @param indexSetName The name of the index set to use (from FROM clause), used for logging and identification.
      * @param query The parsed query object
      * @param temporalStrategy The name of the temporal strategy ("nash" or "naive")
+     * @param stitchStrategy The name of the stitch strategy (e.g., "optimized", "none")
      * @throws IndexAccessException if the base index directory doesn't exist or synonym manager fails to initialize
      */
-    public IndexManager(Path actualIndexDir, String indexSetName, Query query, String temporalStrategy) throws IndexAccessException {
+    public IndexManager(Path actualIndexDir, String indexSetName, Query query, String temporalStrategy, String stitchStrategy) throws IndexAccessException {
         this.indexBaseDir = actualIndexDir;
         this.indexSetName = indexSetName;
         this.indexes = new HashMap<>();
+        this.stitchStrategy = stitchStrategy;
 
         if (!Files.exists(this.indexBaseDir)) {
             throw new IndexAccessException(
@@ -98,7 +102,7 @@ public class IndexManager implements AutoCloseable {
      * @throws IndexAccessException if no required indexes could be initialized
      */
     private void initializeRequiredIndexes(Query query, String temporalStrategy) throws IndexAccessException {
-        Set<String> requiredIndexNames = determineRequiredIndexes(query, temporalStrategy);
+        Set<String> requiredIndexNames = determineRequiredIndexes(query, temporalStrategy, this.stitchStrategy);
         logger.info("Query requires the following indexes: {}", requiredIndexNames);
 
         List<Options> createdOptionsList = new ArrayList<>();
@@ -171,7 +175,7 @@ public class IndexManager implements AutoCloseable {
      * @param temporalStrategy The temporal strategy name
      * @return A set of required index names (e.g., "unigram", "ner_date", "nash")
      */
-    private Set<String> determineRequiredIndexes(Query query, String temporalStrategy) {
+    private Set<String> determineRequiredIndexes(Query query, String temporalStrategy, String stitchStrategy) {
         Set<String> required = new HashSet<>();
 
         // 1. Analyze main query conditions
@@ -205,6 +209,54 @@ public class IndexManager implements AutoCloseable {
         if(queryHasNerDateCondition(query)) {
             required.add("ner_date");
             logger.debug("Explicit NER(DATE) condition found, ensuring 'ner_date' index is required.");
+        }
+
+        // 4. Add stitch indexes if strategy is optimized and relevant conditions are present
+        if ("optimized".equalsIgnoreCase(stitchStrategy)) {
+            boolean hasContains = hasCondition(query, c -> c instanceof Contains);
+            if (hasContains) {
+                logger.debug("Optimized stitch strategy active and CONTAINS condition found. Checking for stitchable pairs.");
+
+                // Determine the N-gram levels present in CONTAINS conditions
+                Set<Integer> ngramLevels = new HashSet<>();
+                collectContainsNgramLevels(query.conditions(), ngramLevels);
+                if (!query.subqueries().isEmpty()) {
+                    for (SubquerySpec subSpec : query.subqueries()) {
+                        if (subSpec.subquery().conditions() != null) {
+                            collectContainsNgramLevels(subSpec.subquery().conditions(), ngramLevels);
+                        }
+                    }
+                }
+                logger.debug("N-gram levels found in CONTAINS conditions: {}", ngramLevels);
+
+                for (int level : ngramLevels) {
+                    String ngramPrefix = switch (level) {
+                        case 1 -> "unigram";
+                        case 2 -> "bigram";
+                        default -> "trigram"; // Covers 3 or more
+                    };
+
+                    if (hasCondition(query, c -> c instanceof Pos)) {
+                        String stitchIndexName = "stitch_" + ngramPrefix + "_pos";
+                        required.add(stitchIndexName);
+                        logger.debug("Added '{}' due to CONTAINS ({}-gram) and POS conditions.", stitchIndexName, level);
+                    }
+                    // Add stitch_ngram_ner if NER (non-DATE) is present
+                    if (hasCondition(query, c -> c instanceof Ner && !"DATE".equalsIgnoreCase(((Ner)c).entityType()))) {
+                        String stitchIndexName = "stitch_" + ngramPrefix + "_ner";
+                        required.add(stitchIndexName);
+                        logger.debug("Added '{}' due to CONTAINS ({}-gram) and NER (non-DATE) conditions.", stitchIndexName, level);
+                    }
+                    // Add stitch_ngram_date if Temporal or NER(DATE) is present
+                    if (hasCondition(query, c -> c instanceof Temporal || (c instanceof Ner && "DATE".equalsIgnoreCase(((Ner)c).entityType())))) {
+                        String stitchIndexName = "stitch_" + ngramPrefix + "_date";
+                        required.add(stitchIndexName);
+                        logger.debug("Added '{}' due to CONTAINS ({}-gram) and (Temporal or NER(DATE)) conditions.", stitchIndexName, level);
+                    }
+                }
+            } else {
+                 logger.debug("Optimized stitch strategy active, but no CONTAINS condition found. No stitch indexes added based on this rule.");
+            }
         }
 
         return required;
@@ -319,6 +371,58 @@ public class IndexManager implements AutoCloseable {
           return false;
       }
 
+    /**
+     * Helper to recursively collect N-gram levels from CONTAINS conditions.
+     */
+    private void collectContainsNgramLevels(List<Condition> conditions, Set<Integer> ngramLevels) {
+        for (Condition condition : conditions) {
+            if (condition instanceof Contains contains) {
+                int numTerms = contains.terms().size();
+                if (numTerms == 1) ngramLevels.add(1);
+                else if (numTerms == 2) ngramLevels.add(2);
+                else if (numTerms >= 3) ngramLevels.add(3); // Treat 3+ as trigram for stitch index naming
+            } else if (condition instanceof Logical logical) {
+                collectContainsNgramLevels(logical.conditions(), ngramLevels);
+            } else if (condition instanceof Not notCond) {
+                collectContainsNgramLevels(Collections.singletonList(notCond.condition()), ngramLevels);
+            }
+        }
+    }
+
+    /**
+     * Helper to recursively check conditions in a query (main and subqueries) against a predicate.
+     */
+    private boolean hasCondition(Query query, Predicate<Condition> predicate) {
+        if (query.conditions() != null && checkConditionList(query.conditions(), predicate)) {
+            return true;
+        }
+        // Check subqueries
+        if (!query.subqueries().isEmpty()) {
+            for (SubquerySpec subSpec : query.subqueries()) {
+                Query subquery = subSpec.subquery();
+                if (subquery.conditions() != null && checkConditionList(subquery.conditions(), predicate)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Helper to check a list of conditions against a predicate, including nested logical conditions.
+     */
+    private boolean checkConditionList(List<Condition> conditions, Predicate<Condition> predicate) {
+        for (Condition condition : conditions) {
+            if (predicate.test(condition)) return true;
+            if (condition instanceof Logical logical) {
+                if (checkConditionList(logical.conditions(), predicate)) return true;
+            }
+            if (condition instanceof Not notCond) {
+                 if (checkConditionList(Collections.singletonList(notCond.condition()), predicate)) return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * Gets an index by name. Throws exception if requested index wasn't required/initialized.

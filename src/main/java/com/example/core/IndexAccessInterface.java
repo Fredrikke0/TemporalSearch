@@ -7,7 +7,6 @@ import java.util.Optional;
 import org.rocksdb.RocksIterator;
 
 import com.example.index.AnnotationType;
-import com.example.index.TypedAnnotationSynonymStore;
 
 /**
  * Interface defining the core access methods for indexes.
@@ -100,15 +99,6 @@ public interface IndexAccessInterface extends AutoCloseable {
      */
     default AnnotationType getAnnotationType() {
         return AnnotationType.UNKNOWN;
-    }
-
-    /**
-     * Gets the synonym store associated with this index, if any.
-     * This is primarily used by stitch indexes to resolve synonym IDs for stitched annotations.
-     * @return An Optional containing the TypedAnnotationSynonymStore, or an empty Optional if none exists.
-     */
-    default Optional<TypedAnnotationSynonymStore> getSynonymStore() {
-        return Optional.empty();
     }
 
     /**

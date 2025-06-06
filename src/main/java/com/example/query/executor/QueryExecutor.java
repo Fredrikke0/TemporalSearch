@@ -319,21 +319,24 @@ public class QueryExecutor {
                 }
 
                 if (containsCond != null && annotationCond != null) {
-                    logger.info("Attempting optimized stitch execution for CONTAINS (unigram) AND {}", annotationCond.getType());
+                    logger.debug("Attempting stitch optimization for CONTAINS ({}) AND {} ({})",
+                                 containsCond.terms(), annotationCond.getType(), annotationCond);
+                    StitchIntersectionExecutor stitchExecutor = new StitchIntersectionExecutor();
                     try {
-                        StitchIntersectionExecutor stitchExecutor = new StitchIntersectionExecutor();
                         QueryResultSoA stitchResult = stitchExecutor.execute(
                             containsCond,
                             annotationCond,
                             indexes,
+                            this.synonymManager,
                             granularity,
                             granularitySize,
                             source,
                             requirements,
-                            this.currentQuery); // Pass currentQuery for context if needed by Temporal
-
-                        if (stitchResult != null) { // stitchResult is null if stitch optimization decided not to run or found nothing deterministically.
-                            logger.info("Stitch execution successful, {} conceptual rows found.", stitchResult.getConceptualRowCount());
+                            this.currentQuery
+                        );
+                        if (stitchResult != null) {
+                            logger.info("Stitch optimization successful for CONTAINS + {}. Result count: {}",
+                                        containsCond.terms(), stitchResult.size());
                             return stitchResult;
                         } else {
                             logger.warn("Stitch execution did not complete or apply for CONTAINS + {}. Falling back to standard AND execution.", annotationCond.getType());

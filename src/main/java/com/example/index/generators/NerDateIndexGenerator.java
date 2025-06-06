@@ -250,19 +250,6 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // Count documents that have at least one 'DATE' entity with a valid normalized_ner.
-        // This might be slow if many dates don't match the pattern.
-        // A simpler count from annotations might be acceptable if performance is an issue.
-        // String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL AND normalized_ner LIKE '____-__-__'";
-        // long count = 0;
-        // try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql)) {
-        //     try (ResultSet rs = stmt.executeQuery()) {
-        //         if (rs.next()) {
-        //             count = rs.getLong(1);
-        //         }
-        //     }
-        // }
-        // return count;
         // Return 0 to indicate an indeterminate progress bar, as MAX(annotation_id) is not representative.
         return 0;
     }

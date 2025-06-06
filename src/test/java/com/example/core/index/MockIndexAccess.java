@@ -33,7 +33,6 @@ import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationType;
-import com.example.index.TypedAnnotationSynonymStore;
 
 /**
  * A mock implementation providing an IndexAccess-like API for testing purposes.
@@ -48,7 +47,6 @@ public class MockIndexAccess implements IndexAccessInterface {
     private final NavigableMap<ByteArrayWrapper, byte[]> dataStore;
     private boolean closed = false;
     private final AnnotationType annotationType;
-    private final TypedAnnotationSynonymStore synonymStore;
     private final Map<String, String> metadata;
 
     private RocksDB mockRocksDbInstance;
@@ -122,10 +120,9 @@ public class MockIndexAccess implements IndexAccessInterface {
         }
     }
 
-    public MockIndexAccess(String indexType, AnnotationType annotationType, TypedAnnotationSynonymStore synonymStore, Map<String, String> metadata) {
+    public MockIndexAccess(String indexType, AnnotationType annotationType, Map<String, String> metadata) {
         this.indexType = indexType;
         this.annotationType = annotationType;
-        this.synonymStore = synonymStore;
         this.dataStore = new ConcurrentSkipListMap<>();
         this.metadata = metadata;
         RocksDB.loadLibrary();
@@ -142,7 +139,7 @@ public class MockIndexAccess implements IndexAccessInterface {
 
     // Convenience constructor for common "unigram" type
     public MockIndexAccess() {
-        this("mock", AnnotationType.UNKNOWN, null, new HashMap<>());
+        this("mock", AnnotationType.UNKNOWN, new HashMap<>());
     }
 
     /**
@@ -361,12 +358,8 @@ public class MockIndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public Optional<TypedAnnotationSynonymStore> getSynonymStore() {
-        return Optional.ofNullable(this.synonymStore);
-    }
-
-    @Override
     public Optional<Map<String, String>> getIndexMetadata() {
+        if (closed) throw new IllegalStateException("Index is closed");
         return Optional.ofNullable(this.metadata);
     }
 

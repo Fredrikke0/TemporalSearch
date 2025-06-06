@@ -140,7 +140,7 @@ public class QueryEndToEndTest {
         staticMockSynonymManager = org.mockito.Mockito.mock(SynonymManager.class);
         mockIndexManager = org.mockito.Mockito.mock(IndexManager.class);
 
-        mockUnigramIndex = new MockIndexAccess("unigram", null, null, null);
+        mockUnigramIndex = new MockIndexAccess("unigram", com.example.index.AnnotationType.UNKNOWN, new java.util.HashMap<>());
         mockUnigramIndex.addTestData("apple", 1, 1, 0, 5);
         mockUnigramIndex.addTestData("apple", 2, 1, 10, 15);
         mockUnigramIndex.addTestData("banana", 2, 2, 20, 25);
@@ -188,7 +188,7 @@ public class QueryEndToEndTest {
         }
         // --- End New NER Mock Data Population ---
 
-        mockNerDateIndex = new MockIndexAccess("ner_date", null, null, null);
+        mockNerDateIndex = new MockIndexAccess("ner_date", com.example.index.AnnotationType.DATE, new java.util.HashMap<>());
         mockNerDateIndex.addTestData("20230115", 2, 1, 0, 10);
         mockNerDateIndex.addTestData("20230320", 1, 1, 30, 40);
         mockNerDateIndex.addTestData("20240101", 3, 1, 50, 60);

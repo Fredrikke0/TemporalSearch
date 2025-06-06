@@ -87,7 +87,7 @@ public class IndexGeneratorWriteTest extends BaseIndexTest { // Renamed class
         ProgressTracker mockProgressTracker = Mockito.mock(ProgressTracker.class);
         // Create MockIndexAccess for the TestIndexGenerator
         // The indexType for MockIndexAccess should match what TestIndexGenerator.getIndexName() returns
-        MockIndexAccess mockIndexAccess = new MockIndexAccess("test-index", null, null, null);
+        MockIndexAccess mockIndexAccess = new MockIndexAccess("test-index", com.example.index.AnnotationType.UNKNOWN, new java.util.HashMap<>());
         testGenerator = new TestIndexGenerator(mockIndexAccess, sqliteConn, mockProgressTracker, generatorTempDir);
 
         PositionListSoA emptyList = new PositionListSoA();
