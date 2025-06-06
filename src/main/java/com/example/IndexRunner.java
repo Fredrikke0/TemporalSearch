@@ -350,7 +350,7 @@ public class IndexRunner {
             logger.error("SQL error during indexing: {}", e.getMessage(), e);
             throw e;
         }
-        logger.info("Indexing process completed. Total time: {}", totalTime.stop().elapsed(TimeUnit.MILLISECONDS));
+        logger.info("Indexing process completed. Total time: {}s", totalTime.stop().elapsed(TimeUnit.SECONDS));
     }
 
     private static long getDocumentCountForType(Connection conn, String indexType) {
