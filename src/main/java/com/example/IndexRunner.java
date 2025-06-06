@@ -303,13 +303,13 @@ public class IndexRunner {
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
-                            } catch (Exception e) {
+                                            } catch (Exception e) {
                                 metrics.recordBatchFailure();
                                 logger.error("Error generating {} index: {}", type, e.getMessage(), e);
-                            } finally {
-                                progress.completeIndex();
-                            }
-                        }
+                                            } finally {
+                                                progress.completeIndex();
+                                            }
+                                        }
 
                         if (type.equals(PosStitchIndexGenerator.MY_INDEX_NAME)) {
                             metrics.startBatch(batchSize, type);

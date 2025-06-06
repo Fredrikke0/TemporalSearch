@@ -7,10 +7,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
-import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,12 +18,21 @@ import com.example.core.IndexAccessInterface;
 import com.example.index.AnnotationType;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
+import com.google.common.collect.ImmutableSet;
 
-public class NerStitchIndexGenerator extends AbstractUnigramStitchGenerator {
+public final class NerStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(NerStitchIndexGenerator.class);
-    // NER types to exclude, as they are handled by dedicated generators or are too broad/noisy
-    private static final List<String> EXCLUDED_NER_TYPES = List.of("DATE", "NUMBER", "ORDINAL", "DURATION", "SET", "MONEY", "PERCENT");
     public static final String MY_INDEX_NAME = "stitch_unigram_ner";
+
+    // Define which NER types to exclude from the stitch index
+    // These are typically noisy or less useful for unigram stitching, e.g., numerical types, misc.
+    private static final Set<String> EXCLUDED_NER_TYPES = ImmutableSet.of(
+        "NUMBER", "ORDINAL", "PERCENT", "MONEY", "DURATION", "SET", "MISC", "CAUSE_OF_DEATH", "CRIMINAL_CHARGE", "IDEOLOGY", "HANDLE"
+    );
+
+    // SQL fragment for excluding NER types
+    private static final String NER_TYPES_TO_EXCLUDE_SQL_FRAGMENT = EXCLUDED_NER_TYPES.isEmpty() ? "1=1" :
+        "ner NOT IN (" + EXCLUDED_NER_TYPES.stream().map(s -> "'" + s + "'").collect(Collectors.joining(", ")) + ")";
 
     public NerStitchIndexGenerator(
             IndexAccessInterface indexAccess,
@@ -34,166 +43,78 @@ public class NerStitchIndexGenerator extends AbstractUnigramStitchGenerator {
             Path customTempPath,
             SynonymManager sharedSynonymManager) throws IOException {
         super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath,
-              AnnotationType.NER, sharedSynonymManager
-        );
+              AnnotationType.NER, sharedSynonymManager);
+        logger.info("NerStitchIndexGenerator initialized for index type: {}. Stopwords path: '{}'", MY_INDEX_NAME, stopwordsPath);
+        logger.debug("Excluding NER types: {}", EXCLUDED_NER_TYPES);
     }
 
     @Override
     protected void populateSpecificAnnotationSynonyms(AnnotationType type) throws SQLException, IOException {
+        // No-op for NER.
+        // The SynonymManager (shared) is used by the abstract class to get IDs for the normalized_ner values (specificValueForSynonym).
+        // NER tags themselves (annotationKeyComponent) are not stored in the SynonymManager and don't need pre-loading here.
         if (type != AnnotationType.NER) {
-            throw new IllegalArgumentException("NerStitchIndexGenerator can only populate NER synonyms.");
+            throw new IllegalArgumentException("NerStitchIndexGenerator's populateSpecificAnnotationSynonyms called with incorrect type: " + type);
         }
-
-        StringBuilder queryBuilder = new StringBuilder("""
-            SELECT DISTINCT normalized_ner
-            FROM annotations
-            WHERE ner IS NOT NULL AND normalized_ner IS NOT NULL
-        """);
-        if (!EXCLUDED_NER_TYPES.isEmpty()) {
-            queryBuilder.append(" AND ner NOT IN (");
-            for (int i = 0; i < EXCLUDED_NER_TYPES.size(); i++) {
-                queryBuilder.append("?");
-                if (i < EXCLUDED_NER_TYPES.size() - 1) {
-                    queryBuilder.append(", ");
-                }
-            }
-            queryBuilder.append(")");
-        }
-        queryBuilder.append(" ORDER BY normalized_ner");
-
-        String query = queryBuilder.toString();
-        int count = 0;
-        int skipped = 0;
-
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
-            if (!EXCLUDED_NER_TYPES.isEmpty()) {
-                for (int i = 0; i < EXCLUDED_NER_TYPES.size(); i++) {
-                    stmt.setString(i + 1, EXCLUDED_NER_TYPES.get(i));
-                }
-            }
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    String nerValue = rs.getString(1);
-                    if (nerValue != null && !nerValue.trim().isEmpty()) {
-                        try {
-                            synonymManager.getId(nerValue);
-                            count++;
-                        } catch (IllegalArgumentException e) {
-                            logger.warn("Skipping invalid NER annotation during synonym population: {}", e.getMessage());
-                            skipped++;
-                        } catch (RocksDBException e) {
-                            logger.error("RocksDB error getting ID for NER value '{}' during synonym population: {}", nerValue, e.getMessage(), e);
-                            skipped++;
-                        }
-                    } else {
-                        skipped++;
-                    }
-                }
-            }
-        }
-        if (skipped > 0) {
-            logger.info("Populated {} NER synonyms (excluding {} types), filtered out {} invalid/empty values", count, EXCLUDED_NER_TYPES.size(), skipped);
-        } else {
-            logger.info("Populated {} NER synonyms (excluding {} types)", count, EXCLUDED_NER_TYPES.size());
-        }
+        logger.debug("populateSpecificAnnotationSynonyms is a no-op for NerStitchIndexGenerator as NER tags are not stored in SynonymManager and normalized_ner IDs are handled by the parent.");
     }
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
-        List<AnnotationData> mergedAnnotations = new ArrayList<>();
-        List<AnnotationData> rawAnnotations = new ArrayList<>();
-
-        StringBuilder sqlBuilder = new StringBuilder("""
-            SELECT sentence_id, begin_char, end_char, normalized_ner, ner
+        List<AnnotationData> annotations = new ArrayList<>();
+        // Fetch NER types and their corresponding normalized_ner values for the given document.
+        String sql = String.format("""
+            SELECT sentence_id, begin_char, end_char, ner, normalized_ner
             FROM annotations
             WHERE document_id = ?
-                AND ner IS NOT NULL
-                AND normalized_ner IS NOT NULL
-        """);
+                AND ner IS NOT NULL AND ner != ''
+                AND normalized_ner IS NOT NULL AND normalized_ner != ''
+                AND %s
+            ORDER BY sentence_id, begin_char
+        """, NER_TYPES_TO_EXCLUDE_SQL_FRAGMENT);
 
-        if (!EXCLUDED_NER_TYPES.isEmpty()) {
-            sqlBuilder.append(" AND ner NOT IN (");
-            for (int i = 0; i < EXCLUDED_NER_TYPES.size(); i++) {
-                sqlBuilder.append("?"); // Use placeholders for PreparedStatement
-                if (i < EXCLUDED_NER_TYPES.size() - 1) {
-                    sqlBuilder.append(", ");
-                }
-            }
-            sqlBuilder.append(")");
-        }
-        sqlBuilder.append(" ORDER BY sentence_id, begin_char");
-
-        try (PreparedStatement stmt = sqliteConn.prepareStatement(sqlBuilder.toString())) {
-            int paramIndex = 1;
-            stmt.setInt(paramIndex++, documentId);
-            if (!EXCLUDED_NER_TYPES.isEmpty()) {
-                for (String excludedType : EXCLUDED_NER_TYPES) {
-                    stmt.setString(paramIndex++, excludedType);
-                }
-            }
-
+        try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
+            stmt.setInt(1, documentId);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    // We are fetching normalized_ner directly as the value for AnnotationData
-                    String nerValue = rs.getString("normalized_ner");
-                    // String nerTag = rs.getString("ner"); // nerTag is used for filtering via SQL
+                    String nerTag = rs.getString("ner");
+                    String normalizedNer = rs.getString("normalized_ner");
 
-                    if (nerValue != null && !nerValue.trim().isEmpty()) {
-                         rawAnnotations.add(new AnnotationData(
-                                rs.getInt("sentence_id"),
-                                rs.getInt("begin_char"),
-                                rs.getInt("end_char"),
-                                nerValue // This is already the normalized entity value
-                        ));
+                    // Defensive checks, though SQL should handle most of this.
+                    if (normalizedNer == null || normalizedNer.isEmpty() || nerTag == null || nerTag.isEmpty()) {
+                        logger.trace("Skipping NER annotation due to null/empty normalized_ner or nerTag. Doc ID: {}, NER: '{}', Normalized: '{}'", documentId, nerTag, normalizedNer);
+                        continue;
                     }
+
+                    // For NER stitch:
+                    // annotationKeyComponent IS the NER tag (e.g., "PERSON")
+                    // specificValueForSynonym IS the normalized NER text (e.g., "john smith")
+                    // The ID for "john smith" will be fetched by the parent class using synonymManager.
+                    annotations.add(new AnnotationData(
+                        rs.getInt("sentence_id"),
+                        rs.getInt("begin_char"),
+                        rs.getInt("end_char"),
+                        nerTag.toUpperCase(),       // annotationKeyComponent (e.g., "PERSON")
+                        normalizedNer.toLowerCase() // specificValueForSynonym (e.g., "john smith")
+                    ));
                 }
             }
+        } catch (SQLException e) {
+            logger.error("SQLException in fetchAnnotationsForDocument for NER stitch, doc ID {}: {}", documentId, e.getMessage(), e);
+            throw e; // Re-throw
         }
-
-        if (rawAnnotations.isEmpty()) {
-            return Collections.emptyList();
+        if (annotations.isEmpty()) {
+            logger.trace("No NER annotations found or all filtered for document ID {} for {} index.", documentId, MY_INDEX_NAME);
+        } else {
+            logger.trace("Fetched {} NER annotations for document ID {} for {} index.", annotations.size(), documentId, MY_INDEX_NAME);
         }
+        return annotations;
+    }
 
-        // Merging logic for consecutive annotations of the SAME normalized_ner value
-        List<AnnotationData> currentMergeCandidates = new ArrayList<>();
-        for (AnnotationData currentAnnotation : rawAnnotations) {
-            if (currentMergeCandidates.isEmpty()) {
-                currentMergeCandidates.add(currentAnnotation);
-            } else {
-                AnnotationData prevAnnotation = currentMergeCandidates.get(currentMergeCandidates.size() - 1);
-
-                if (!currentAnnotation.normalizedValue().equals(prevAnnotation.normalizedValue()) ||
-                    currentAnnotation.sentenceId() != prevAnnotation.sentenceId() ||
-                    currentAnnotation.beginChar() > prevAnnotation.endChar() + 2) { // Allow small gap for spaces etc.
-
-                    if (!currentMergeCandidates.isEmpty()) {
-                        AnnotationData firstToken = currentMergeCandidates.get(0);
-                        AnnotationData lastToken = currentMergeCandidates.get(currentMergeCandidates.size() - 1);
-                        mergedAnnotations.add(new AnnotationData(
-                                firstToken.sentenceId(),
-                                firstToken.beginChar(),
-                                lastToken.endChar(),
-                                firstToken.normalizedValue()));
-                    }
-                    currentMergeCandidates.clear();
-                    currentMergeCandidates.add(currentAnnotation);
-                } else {
-                    currentMergeCandidates.add(currentAnnotation);
-                }
-            }
-        }
-
-        if (!currentMergeCandidates.isEmpty()) {
-            AnnotationData firstToken = currentMergeCandidates.get(0);
-            AnnotationData lastToken = currentMergeCandidates.get(currentMergeCandidates.size() - 1);
-            mergedAnnotations.add(new AnnotationData(
-                    firstToken.sentenceId(),
-                    firstToken.beginChar(),
-                    lastToken.endChar(),
-                    firstToken.normalizedValue()));
-        }
-
-        return mergedAnnotations;
+    @Override
+    protected String getSpecificAnnotationTypeDBCondition() {
+        // Used if parent class needs a generic filter for the annotation type.
+        return "ner IS NOT NULL AND ner != '' AND normalized_ner IS NOT NULL AND normalized_ner != '' AND " + NER_TYPES_TO_EXCLUDE_SQL_FRAGMENT;
     }
 
     @Override
@@ -204,21 +125,5 @@ public class NerStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     @Override
     public String getIndexName() {
         return MY_INDEX_NAME;
-    }
-
-    @Override
-    protected String getSpecificAnnotationTypeDBCondition() {
-        StringBuilder conditionBuilder = new StringBuilder("ner IS NOT NULL AND normalized_ner IS NOT NULL");
-        if (!EXCLUDED_NER_TYPES.isEmpty()) {
-            conditionBuilder.append(" AND ner NOT IN (");
-            for (int i = 0; i < EXCLUDED_NER_TYPES.size(); i++) {
-                conditionBuilder.append("'").append(EXCLUDED_NER_TYPES.get(i).replace("'", "''")).append("'");
-                if (i < EXCLUDED_NER_TYPES.size() - 1) {
-                    conditionBuilder.append(", ");
-                }
-            }
-            conditionBuilder.append(")");
-        }
-        return conditionBuilder.toString();
     }
 }

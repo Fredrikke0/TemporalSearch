@@ -6,11 +6,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,10 +17,13 @@ import com.example.index.AnnotationType;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 
-public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
+public final class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(PosStitchIndexGenerator.class);
     public static final String MY_INDEX_NAME = "stitch_unigram_pos";
-    private static final String POS_TAGS_TO_EXCLUDE_SQL = POSIndexGenerator.POS_TAGS_TO_EXCLUDE_SQL;
+
+    // SQL fragment to exclude common punctuation and symbols for POS.
+    // Now directly references the list from POSIndexGenerator for consistency.
+    public static final String POS_TAGS_TO_EXCLUDE_SQL_FRAGMENT = "pos NOT IN " + POSIndexGenerator.POS_TAGS_TO_EXCLUDE_SQL;
 
     public PosStitchIndexGenerator(
             IndexAccessInterface indexAccess,
@@ -35,63 +36,34 @@ public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
         super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath,
               AnnotationType.POS, sharedSynonymManager
         );
+        logger.info("PosStitchIndexGenerator initialized for index type: {}. Stopwords path: '{}'", MY_INDEX_NAME, stopwordsPath);
     }
 
     @Override
     protected void populateSpecificAnnotationSynonyms(AnnotationType type) throws SQLException, IOException {
+        // No-op for POS.
+        // The SynonymManager (shared) is used by the abstract class to get IDs for the actual tokens (specificValueForSynonym).
+        // POS tags themselves (annotationKeyComponent) are not stored in the SynonymManager and don't need pre-loading here.
         if (type != AnnotationType.POS) {
-            throw new IllegalArgumentException("PosStitchIndexGenerator can only populate POS synonyms.");
+            // This check is more of a safeguard, as the constructor passes AnnotationType.POS.
+            throw new IllegalArgumentException("PosStitchIndexGenerator's populateSpecificAnnotationSynonyms called with incorrect type: " + type);
         }
-        String query = String.format("""
-            SELECT DISTINCT pos, token
-            FROM annotations
-            WHERE pos IS NOT NULL AND pos != ''
-                AND token IS NOT NULL AND token != ''
-                AND pos NOT IN %s
-            ORDER BY pos, token
-        """, POS_TAGS_TO_EXCLUDE_SQL);
-
-        int count = 0;
-        int skipped = 0;
-        try (Statement stmt = sqliteConn.createStatement();
-             ResultSet rs = stmt.executeQuery(query)) {
-            while (rs.next()) {
-                String posTag = rs.getString("pos");
-                String token = rs.getString("token");
-                if (posTag != null && !posTag.isEmpty() && token != null && !token.isEmpty()) {
-                    String compositeSynonym = posTag.toUpperCase() + com.example.core.IndexAccessInterface.DELIMITER + token.toLowerCase();
-                    try {
-                        synonymManager.getId(compositeSynonym);
-                        count++;
-                    } catch (IllegalArgumentException e) {
-                        logger.debug("Filtered out invalid POS composite synonym during population: {} ({})", compositeSynonym, e.getMessage());
-                        skipped++;
-                    } catch (RocksDBException e) {
-                        logger.error("RocksDB error getting ID for POS composite synonym '{}' during population: {}", compositeSynonym, e.getMessage(), e);
-                        skipped++;
-                    }
-                }
-            }
-        }
-        if (skipped > 0) {
-            logger.info("Populated {} POS composite synonyms, filtered out {} invalid values", count, skipped);
-        } else {
-            logger.info("Populated {} POS composite synonyms", count);
-        }
+        logger.debug("populateSpecificAnnotationSynonyms is a no-op for PosStitchIndexGenerator as POS tags are not stored in SynonymManager and token IDs are handled by the parent.");
     }
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
         List<AnnotationData> annotations = new ArrayList<>();
+        // Fetch POS tags and their corresponding tokens for the given document.
         String sql = String.format("""
-            SELECT sentence_id, begin_char, end_char, pos, token
+            SELECT sentence_id, begin_char, end_char, token, pos
             FROM annotations
             WHERE document_id = ?
                 AND pos IS NOT NULL AND pos != ''
                 AND token IS NOT NULL AND token != ''
-                AND pos NOT IN %s
+                AND %s
             ORDER BY sentence_id, begin_char
-        """, POS_TAGS_TO_EXCLUDE_SQL);
+        """, POS_TAGS_TO_EXCLUDE_SQL_FRAGMENT); // Use the local constant
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
             stmt.setInt(1, documentId);
@@ -100,24 +72,42 @@ public class PosStitchIndexGenerator extends AbstractUnigramStitchGenerator {
                     String posTag = rs.getString("pos");
                     String token = rs.getString("token");
 
-                    if (posTag != null && !posTag.isEmpty() && token != null && !token.isEmpty()) {
-                        String compositeValue = posTag.toUpperCase() + com.example.core.IndexAccessInterface.DELIMITER + token.toLowerCase();
-                        annotations.add(new AnnotationData(
-                                rs.getInt("sentence_id"),
-                                rs.getInt("begin_char"),
-                                rs.getInt("end_char"),
-                                compositeValue
-                        ));
+                    // Basic null/empty checks already in SQL, but good to have defense here too.
+                    if (token == null || token.isEmpty() || posTag == null || posTag.isEmpty()) {
+                        logger.trace("Skipping annotation due to null/empty token or posTag after SQL query. Doc ID: {}, Token: '{}', POS: '{}'", documentId, token, posTag);
+                        continue;
                     }
+
+                    // For POS stitch:
+                    // annotationKeyComponent IS the POS tag (e.g., "NNP")
+                    // specificValueForSynonym IS the actual token (e.g., "smith")
+                    // The ID for "smith" will be fetched by the parent class using synonymManager.
+                    annotations.add(new AnnotationData(
+                        rs.getInt("sentence_id"),
+                        rs.getInt("begin_char"),
+                        rs.getInt("end_char"),
+                        posTag.toUpperCase(),    // annotationKeyComponent (e.g., "NNP")
+                        token.toLowerCase()      // specificValueForSynonym (e.g., "smith")
+                    ));
                 }
             }
+        } catch (SQLException e) {
+            logger.error("SQLException in fetchAnnotationsForDocument for POS stitch, doc ID {}: {}", documentId, e.getMessage(), e);
+            throw e; // Re-throw to allow parent class to handle if necessary
+        }
+        if (annotations.isEmpty()) {
+            logger.trace("No POS annotations found or all filtered for document ID {} for {} index.", documentId, MY_INDEX_NAME);
+        } else {
+            logger.trace("Fetched {} POS annotations for document ID {} for {} index.", annotations.size(), documentId, MY_INDEX_NAME);
         }
         return annotations;
     }
 
     @Override
     protected String getSpecificAnnotationTypeDBCondition() {
-        return "pos IS NOT NULL AND pos != '' AND pos NOT IN " + POS_TAGS_TO_EXCLUDE_SQL;
+        // This condition is used if the parent class needs a generic filter for the annotation type.
+        // For fetchAnnotationsForDocument, the query is self-contained.
+        return "pos IS NOT NULL AND pos != '' AND " + POS_TAGS_TO_EXCLUDE_SQL_FRAGMENT;
     }
 
     @Override

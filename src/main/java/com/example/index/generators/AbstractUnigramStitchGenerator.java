@@ -14,29 +14,71 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.rocksdb.WriteBatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationType;
-import com.example.index.StitchEntry;
+import com.example.index.IndexEntry;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 
-public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<StitchEntry> {
+public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<AbstractUnigramStitchGenerator.StitchEntry> {
     private static final Logger logger = LoggerFactory.getLogger(AbstractUnigramStitchGenerator.class);
-
 
     protected final SynonymManager synonymManager;
     private Integer lastProcessedDocumentId = null;
 
-    public Path getIndexDBPath() {
-        // return indexDBPath;
-        return null; // No longer needed
+    // New Record Definitions
+    protected record AnnotationData(
+        int sentenceId,
+        int beginChar,
+        int endChar,
+        String annotationKeyComponent, // e.g., "NNP", "PERSON", "2023-01-01"
+        String specificValueForSynonym // e.g., "castro", "john doe", "2023-01-01"
+    ) {}
+
+    // StitchEntry now defined as an inner record and implements IndexEntry
+    protected record StitchEntry(
+        int documentId,
+        int sentenceId,
+        int unigramBeginChar,
+        int unigramEndChar,
+        String unigramToken,
+        String annotationKeyComponent, // This will be part of the RocksDB key
+        int specificValueSynonymId,  // This will be the synonymId in PositionListSoA
+        int annotationBeginChar,
+        int annotationEndChar
+    ) implements IndexEntry {
+
+        // Explicitly implement methods required by IndexEntry
+        @Override
+        public int getDocumentId() { return this.documentId; }
+
+        @Override
+        public int getSentenceId() { return this.sentenceId; }
+
+        @Override
+        public int getBeginChar() { return this.unigramBeginChar; } // Use unigram's span
+
+        @Override
+        public int getEndChar() { return this.unigramEndChar; }   // Use unigram's span
+
+        // Method for sorting, used by IndexGenerator (e.g. in its writeBatchToTempFile).
+        // Removed @Override as per linter error (implies IndexEntry interface doesn't have this signature).
+        public String value() {
+            return unigramToken + IndexAccessInterface.DELIMITER + annotationKeyComponent;
+        }
+
+        // Required by IndexEntry (if it was an abstract method there, @Override would be fine).
+        // Removed @Override as per linter error (implies IndexEntry interface doesn't have this signature,
+        // or StitchEntry was trying to override a non-existent/differently-signed method).
+        public long getAnnotationId() {
+            return -1;
+        }
     }
 
     @SuppressWarnings("this-escape")
@@ -44,8 +86,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
                                            String stopwordsPathString, Connection sqliteConnParam,
                                            ProgressTracker progressTrackerParam, int batchSizeParam, Path customSortTempParam,
                                            AnnotationType managedAnnotationType, SynonymManager sharedSynonymManager) throws IOException {
-
-        super(indexAccess, // Pass IndexAccessInterface directly
+        super(indexAccess,
               stopwordsPathString,
               sqliteConnParam,
               progressTrackerParam,
@@ -59,39 +100,47 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
 
         try {
             logger.info("Initializing specific annotation synonyms for {} stitch index using inherited sqliteConn and shared SynonymManager.", managedAnnotationType);
-            populateSpecificAnnotationSynonyms(managedAnnotationType); // This will now use this.synonymManager
-            // logger.info("Successfully initialized {} annotation synonyms with {} entries for type {}",
-            //         managedAnnotationType, synonymManager.size(), managedAnnotationType); // SynonymManager might not have a simple size() for a specific type
+            populateSpecificAnnotationSynonyms(managedAnnotationType);
             logger.info("Finished populating specific annotation synonyms for {} of type {}.", getIndexName(), managedAnnotationType);
         } catch (SQLException | IOException e) {
-            // closeSynonymsOnError(); // SynonymManager is shared, should not be closed here on error
             throw new UncheckedIOException("Failed to populate " + managedAnnotationType + " annotation synonyms for " + getIndexName(), e instanceof IOException ? (IOException)e : new IOException(e));
         }
     }
 
     protected abstract void populateSpecificAnnotationSynonyms(AnnotationType type) throws SQLException, IOException;
     protected abstract List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException;
-    protected abstract AnnotationType getManagedAnnotationType();
+    protected abstract AnnotationType getManagedAnnotationType(); // May become less relevant if StitchEntry carries all info
+
+    /**
+     * Determines if the specific value from AnnotationData (annotation.specificValueForSynonym())
+     * should be resolved to an ID via the SynonymManager.
+     * Subclasses can override this to return false if the specific value itself (or its derivative)
+     * should be part of the key directly, and no synonym ID is needed for it in PositionListSoA.
+     * @return true if a synonym ID should be looked up, false otherwise.
+     */
+    protected boolean requiresSynonymIdForAnnotationValue() {
+        return true; // Default behavior is to use synonym manager
+    }
 
     @Override
     protected List<StitchEntry> fetchBatch(StitchEntry lastStitchEntryFromPreviousOverallBatch) throws SQLException {
         List<StitchEntry> currentStitchEntriesForBatch = new ArrayList<>();
 
+        // The pagination for stitch entries is based on document ID, not the last StitchEntry's composite value.
+        // So, lastStitchEntryFromPreviousOverallBatch is not directly used for query conditions here,
+        // but this.lastProcessedDocumentId handles the document-level pagination.
+
         while (currentStitchEntriesForBatch.size() < this.batchSize) {
             Integer currentDocumentId = getNextDocumentId();
             if (currentDocumentId == null) {
-                logger.info("No more documents to process for {} stitch index.", getManagedAnnotationType());
+                logger.info("No more documents to process for {} stitch index.", getIndexName());
                 break; // No more documents
             }
 
             processDocument(currentDocumentId, currentStitchEntriesForBatch);
-
-            // if (currentStitchEntriesForBatch.size() >= this.batchSize) {
-            //     logger.debug("Batch size {} reached for {} after processing document {}", this.batchSize, getManagedAnnotationType(), currentDocumentId);
-            // }
         }
         if (currentStitchEntriesForBatch.isEmpty() && lastProcessedDocumentId != null && !hasMoreDocuments(lastProcessedDocumentId)) {
-             logger.info("FetchBatch for {} is returning an empty list because all documents have been processed.", getManagedAnnotationType());
+             logger.info("FetchBatch for {} is returning an empty list because all documents have been processed.", getIndexName());
         }
         return currentStitchEntriesForBatch;
     }
@@ -128,47 +177,52 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         }
     }
 
-
     protected void processDocument(int documentId, List<StitchEntry> entries) throws SQLException {
         Map<Integer, List<UnigramData>> unigramsBySentence = fetchUnigramsForDocument(documentId);
         if (unigramsBySentence.isEmpty()) {
             return; // No unigrams to process for this document
         }
 
-        List<AnnotationData> annotations = fetchAnnotationsForDocument(documentId);
+        List<AnnotationData> annotations = fetchAnnotationsForDocument(documentId); // Fetches new AnnotationData structure
         if (annotations.isEmpty()) {
             return; // No relevant annotations to process for this document
         }
 
-        AnnotationType currentType = getManagedAnnotationType();
+        // AnnotationType currentTypeEnum = getManagedAnnotationType(); // May not be needed if StitchEntry has all info
 
         for (AnnotationData annotation : annotations) {
-            int synonymId;
-            try {
-                 synonymId = synonymManager.getId(annotation.normalizedValue());
-            } catch (IllegalArgumentException e) {
-                logger.debug("Skipping annotation due to invalid value for type {}: {} - {}", currentType, annotation.normalizedValue(), e.getMessage());
-                continue;
-            } catch (org.rocksdb.RocksDBException e) {
-                logger.error("RocksDB error getting ID for annotation value '{}' of type {}: {}", annotation.normalizedValue(), currentType, e.getMessage(), e);
-                continue;
+            int specificValueId = -1; // Default to -1 (no synonym or not applicable)
+
+            if (requiresSynonymIdForAnnotationValue()) {
+                try {
+                    // Get ID for the specific value part of the annotation (e.g., for "castro", "john doe")
+                    specificValueId = synonymManager.getId(annotation.specificValueForSynonym());
+                } catch (IllegalArgumentException e) {
+                    logger.debug("Skipping annotation due to invalid specific value for synonym: {} - {} (for index {})", annotation.specificValueForSynonym(), e.getMessage(), getIndexName());
+                    continue;
+                } catch (org.rocksdb.RocksDBException e) {
+                    logger.error("RocksDB error getting ID for specific value synonym '{}' (for index {}): {}", annotation.specificValueForSynonym(), getIndexName(), e.getMessage(), e);
+                    continue;
+                }
+            } else {
+                // If synonym ID is not required, specificValueId remains -1.
+                // The annotation.annotationKeyComponent() is expected to contain the actual value (e.g., YYYYMMDD date string)
+                // that will be part of the RocksDB key.
+                logger.trace("Synonym ID lookup skipped for specific value from AnnotationData.specificValueForSynonym() ('{}') as per requiresSynonymIdForAnnotationValue() for index type {}. StitchEntry will use specificValueId: {}", annotation.specificValueForSynonym(), getIndexName(), specificValueId);
             }
 
             List<UnigramData> unigramsInSentence = unigramsBySentence.getOrDefault(annotation.sentenceId(), Collections.emptyList());
             for (UnigramData unigram : unigramsInSentence) {
-                // TODO: Consider if duplicate checks for unigram-annotation pairs per sentence are needed here.
-                // The original StitchIndexGenerator had some complex logic for DATEs.
-                // For now, we simplify and add one entry per co-occurring unigram in the same sentence.
                 entries.add(new StitchEntry(
                         documentId,
                         annotation.sentenceId(),
-                        unigram.beginChar,    // Unigram's begin char
-                        unigram.endChar,      // Unigram's end char
-                        unigram.token,        // Unigram token
-                        currentType,          // AnnotationType
-                        synonymId,            // Annotation's synonymId
-                        annotation.beginChar(), // Annotation's begin char
-                        annotation.endChar()    // Annotation's end char
+                        unigram.beginChar,
+                        unigram.endChar,
+                        unigram.token,                         // unigramToken
+                        annotation.annotationKeyComponent(), // e.g., "NNP", "PERSON", "2023-01-01"
+                        specificValueId,                   // ID for "castro", "john doe", "2023-01-01"
+                        annotation.beginChar(),            // Annotation's begin char from AnnotationData
+                        annotation.endChar()               // Annotation's end char from AnnotationData
                 ));
             }
         }
@@ -181,7 +235,7 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
             FROM annotations
             WHERE document_id = ? AND token IS NOT NULL AND LENGTH(token) > 0
             ORDER BY sentence_id, begin_char
-        """; // Ensure tokens are ordered for consistent processing if needed later
+        """;
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
             stmt.setInt(1, documentId);
@@ -215,48 +269,47 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
     protected ListMultimap<String, PositionListSoA> processBatch(List<StitchEntry> batch) {
         ListMultimap<String, PositionListSoA> indexData = ArrayListMultimap.create();
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
-        AnnotationType currentType = getManagedAnnotationType(); // Get type once
+        // AnnotationType currentType = getManagedAnnotationType(); // No longer needed for key/value logic here
         int filteredCount = 0;
 
         for (StitchEntry entry : batch) {
-            String unigram = entry.value();
+            // The key for sorting and for RocksDB is now the composite key from StitchEntry.value()
+            String compositeKey = entry.value(); // e.g., "fidel<DELIM>NNP"
+            String unigramForFiltering = entry.unigramToken(); // For stopword checks, etc.
+
             boolean isFiltered = false;
             String filterReason = "";
 
-            if (unigram == null) {
+            if (unigramForFiltering == null) {
                 isFiltered = true;
-                filterReason = "null unigram";
-            } else if (unigram.isEmpty()) {
+                filterReason = "null unigram part";
+            } else if (unigramForFiltering.isEmpty()) {
                 isFiltered = true;
-                filterReason = "empty unigram";
-            } else if (isStopword(unigram)) {
+                filterReason = "empty unigram part";
+            } else if (isStopword(unigramForFiltering)) {
                 isFiltered = true;
-                filterReason = "stopword";
-            } else if (!unigram.chars().anyMatch(Character::isLetterOrDigit)) {
+                filterReason = "unigram part is stopword";
+            } else if (!unigramForFiltering.chars().anyMatch(Character::isLetterOrDigit)) {
                 isFiltered = true;
-                filterReason = "no letter/digit";
+                filterReason = "unigram part has no letter/digit";
             }
+            // Potentially add filtering for entry.annotationKeyComponent() if needed.
 
             if (isFiltered) {
-                logger.trace("Filtered unigram: '{}' from entry: {}. Reason: {}", unigram, entry, filterReason);
+                logger.trace("Filtered entry based on unigram part: '{}' from composite key: {}. Reason: {}", unigramForFiltering, compositeKey, filterReason);
                 filteredCount++;
                 continue;
             }
 
-            logger.trace("Processing unigram: '{}' from entry: {}", unigram, entry);
+            logger.trace("Processing entry with composite key: '{}'", compositeKey);
 
-            // Key for LevelDB will just be the unigram.
-            // The AnnotationType is inherent to the specific index
-            // and also stored within StitchPosition.
-            String key = unigram;
-
-            PositionListSoA pl = tempAggregator.computeIfAbsent(key, k -> new PositionListSoA());
+            PositionListSoA pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionListSoA());
             pl.add(
                 entry.documentId(),
                 entry.sentenceId(),
-                entry.beginChar(),        // Unigram's begin char from StitchEntry
-                entry.endChar(),          // Unigram's end char from StitchEntry
-                entry.synonymId()         // Annotation's synonymId from StitchEntry
+                entry.unigramBeginChar(),        // Unigram's begin char from StitchEntry
+                entry.unigramEndChar(),          // Unigram's end char from StitchEntry
+                entry.specificValueSynonymId() // ID of specific annotation value (e.g., for "castro", "john doe")
             );
         }
 
@@ -265,183 +318,62 @@ public abstract class AbstractUnigramStitchGenerator extends IndexGenerator<Stit
         }
 
         if (!batch.isEmpty()) {
-            // logger.debug("ProcessBatch for {} input {} entries, produced {} unique unigram keys, filtered out {} entries.",
-            //     getManagedAnnotationType(), batch.size(), indexData.keySet().size(), filteredCount);
+            // Adjust logging for new structure
+            // logger.debug("ProcessBatch for {} input {} StitchEntry items, produced {} unique composite keys, filtered out {} entries.",
+            // getIndexName(), batch.size(), indexData.keySet().size(), filteredCount);
         }
 
         if (indexData.isEmpty() && !batch.isEmpty()){
-            logger.warn("ProcessBatch for {} produced no indexable data from a batch of {} entries. First entry: {}", getManagedAnnotationType(), batch.size(), batch.get(0));
+            logger.warn("ProcessBatch for {} produced no indexable data from a batch of {} StitchEntry items. First entry original unigram: {}",
+                         getIndexName(), batch.size(), batch.get(0).unigramToken());
         } else if (!indexData.isEmpty()) {
-             //logger.debug("Processed batch for {} with {} unique unigrams, total {} StitchEntry items.", getManagedAnnotationType(), indexData.keySet().size(), batch.size());
+             //logger.debug("Processed batch for {} with {} unique composite keys, total {} StitchEntry items input.",
+             //              getIndexName(), indexData.keySet().size(), batch.size());
         }
         return indexData;
     }
 
     @Override
     protected String getTableName() {
-        // This is somewhat misleading now as we query 'documents' for IDs
-        // and 'annotations' for actual content.
-        // The individual generators might need more specific table names if we optimize queries.
-        return "annotations";
+        return "annotations"; // For fetching unigrams and annotations primarily
     }
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        return -1;
+        return -1; // Indicates indeterminate progress for stitch indexes
     }
 
-    /**
-     * Provides the SQL condition specific to the annotation type this generator handles.
-     * Example: "ner = 'DATE' AND normalized_ner IS NOT NULL"
-     */
-    protected abstract String getSpecificAnnotationTypeDBCondition();
-
+    protected abstract String getSpecificAnnotationTypeDBCondition(); // Still needed for fetching raw annotations
 
     @Override
     protected long writeToLevelDB(File sortedFile) throws IOException {
-        logger.info("Starting custom writeToLevelDB for {} from sorted file: {}", getIndexName(), sortedFile.getAbsolutePath());
-        long startTime = System.currentTimeMillis();
-        long localTotalNGramsGenerated = 0;
-        WriteBatch batch = null;
-        int batchCounter = 0;
-
-        // try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
-        //     String line;
-        //     String currentTerm = null;
-        //     PositionListSoA mergedPositions = null;
-        //     final int MAX_RETRIES = 3;
-        //     final long RETRY_DELAY_MS = 1000;
-
-        //     batch = this.db.createWriteBatch(); // Use this.db instead of indexAccess
-
-        //     while ((line = reader.readLine()) != null) {
-        //         String[] parts = line.split("	", 2);
-        //         if (parts.length != 2) continue;
-        //         String term = parts[0];
-        //         byte[] lineCompositeBlob = Base64.getDecoder().decode(parts[1]);
-        //         PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(lineCompositeBlob);
-
-        //         if (currentTerm == null) {
-        //             currentTerm = term;
-        //             mergedPositions = positions;
-        //             continue;
-        //         }
-
-        //         if (!currentTerm.equals(term)) {
-        //             // Write the current term
-        //             if (mergedPositions.getNumPositions() > 1_000_000) {
-        //                 logger.warn("Serializing very large PositionListSoA for key: '{}', size: {}", currentTerm, mergedPositions.getNumPositions());
-        //             }
-        //             byte[] keyBytes = bytes(currentTerm);
-        //             byte[] valueBytes = mergedPositions.serializeToCompositeBlob();
-        //             batch.put(keyBytes, valueBytes);
-        //             batchCounter++;
-        //             localTotalNGramsGenerated++;
-
-        //             if (batchCounter >= LevelDBConfig.BATCH_SIZE) {
-        //                 writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
-        //                 batch.close();
-        //                 batch = this.db.createWriteBatch();
-        //                 batchCounter = 0;
-        //             }
-
-        //             if (localTotalNGramsGenerated % 100000 == 0) {
-        //                 long elapsed = System.currentTimeMillis() - startTime;
-        //                 logger.info("Custom writeToLevelDB progress for {}: {} terms, {} terms/sec",
-        //                     getIndexName(), localTotalNGramsGenerated,
-        //                     String.format("%.2f", localTotalNGramsGenerated * 1000.0 / elapsed));
-        //             }
-
-        //             currentTerm = term;
-        //             mergedPositions = positions;
-        //         } else {
-        //             // Same term, merge positions
-        //             mergedPositions.addAll(positions);
-        //         }
-        //     }
-
-        //     // Write the last term
-        //     if (currentTerm != null && mergedPositions != null) {
-        //         if (mergedPositions.getNumPositions() > 1_000_000) {
-        //             logger.warn("Serializing very large PositionListSoA for key: '{}', size: {}", currentTerm, mergedPositions.getNumPositions());
-        //         }
-        //         byte[] keyBytes = bytes(currentTerm);
-        //         byte[] valueBytes = mergedPositions.serializeToCompositeBlob();
-        //         batch.put(keyBytes, valueBytes);
-        //         batchCounter++;
-        //         localTotalNGramsGenerated++;
-        //     }
-
-        //     if (batchCounter > 0) {
-        //         writeDbBatchWithRetry(batch, MAX_RETRIES, RETRY_DELAY_MS, batchCounter);
-        //     }
-
-        //     logger.info("Custom writeToLevelDB finished for {}: {} unique terms written", getIndexName(), localTotalNGramsGenerated);
-
-        // } finally {
-        //     if (batch != null) {
-        //         try {
-        //             batch.close();
-        //         } catch (IOException e) {
-        //             logger.warn("Failed to close write batch for index [{}]: {}", getIndexName(), e.getMessage());
-        //         }
-        //     }
-        // }
-        // Now, delegate to the parent's writeToLevelDB method
-        long totalTermsWritten = super.writeToLevelDB(sortedFile);
-        localTotalNGramsGenerated = totalTermsWritten;
-        logger.info("Delegated writeToLevelDB for {} to parent IndexGenerator.", getIndexName());
-        return localTotalNGramsGenerated;
+        // The parent IndexGenerator.writeToLevelDB should work correctly now,
+        // as the sortedFile will contain lines with the composite key:
+        // "unigram<DELIM>annotationKeyComponent	tBase64(PositionListSoA)"
+        // where PositionListSoA.synonymId is the ID of the specific annotation value.
+        logger.info("Using parent IndexGenerator.writeToLevelDB for {} from sorted file: {}", getIndexName(), sortedFile.getAbsolutePath());
+        return super.writeToLevelDB(sortedFile);
     }
-
-    /**
-     * Attempts to write a batch to this.db, retrying on specific failures.
-     */
-    // private void writeDbBatchWithRetry(WriteBatch batch, int maxRetries, long delayMs, int numEntries) throws IOException { ... } // No longer needed
 
     @Override
     public void close() throws IOException {
-        super.close(); // Closes indexAccess (LevelDB) and other resources from parent
-
-        // Do not close synonymManager here as it's shared and managed by IndexRunner
-        // if (synonymManager != null) { // was annotationSynonyms
-        //     try {
-        //         logger.info("Closing annotation synonym store for index {}...", getIndexName());
-        //         // synonymManager.close(); // This will save if modified // DO NOT CLOSE SHARED MANAGER
-        //         logger.info("Annotation synonym store for index {} closed successfully.", getIndexName());
-        //     } catch (IOException e) {
-        //         logger.error("Failed to close annotation synonym store for index {}: {}", getIndexName(), e.getMessage(), e);
-        //         // Decide if this should re-throw or just log
-        //     }
-        // }
-        // Any other specific cleanup for AbstractUnigramStitchGenerator can go here
+        super.close();
+        // SynonymManager is shared, not closed here.
     }
 
-    // Helper record for unigram data
+    // Helper record for unigram data (used in fetchUnigramsForDocument)
     protected record UnigramData(int beginChar, int endChar, String token) {}
 
-    // Helper record for annotation data fetched from DB
-    protected record AnnotationData(int sentenceId, int beginChar, int endChar, String normalizedValue) {}
-
-    /**
-     * Gets the name of the specific index, which will be used as a subdirectory name.
-     * Example: "unigram", "stitch/date".
-     * @return The name of the index.
-     */
     @Override
     public String getIndexName() {
-        // return this.resolvedIndexName; // Use the name from IndexAccess
         return this.indexAccess.getIndexType();
     }
 
-    // Method to allow tests to access the DB instance via IndexAccess
     public IndexAccessInterface getIndexAccess() {
         return this.indexAccess;
     }
 
-    // Method to allow tests to access the generator's internal synonym store instance
     public SynonymManager getSynonymManager() {
         return this.synonymManager;
     }
-
 }
