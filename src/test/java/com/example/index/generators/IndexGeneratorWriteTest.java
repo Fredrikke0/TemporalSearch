@@ -68,8 +68,8 @@ public class IndexGeneratorWriteTest extends BaseIndexTest { // Renamed class
         public long getDocumentCountForIndex() { return 0; }
 
         @Override
-        public long writeToLevelDB(File sortedFile) throws IOException {
-            return super.writeToLevelDB(sortedFile);
+        public void writeToLevelDB(File sortedFile) throws IOException {
+            super.writeToLevelDB(sortedFile);
         }
 
         public IndexAccessInterface getIndexAccessInstance() {

@@ -66,6 +66,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         private final AtomicInteger maxConcurrentArrays = new AtomicInteger(0);
         private final AtomicLong totalDecompressions = new AtomicLong(0);
         private final List<String> decompressionLog = Collections.synchronizedList(new ArrayList<>());
+        private long totalTermsWrittenInTest = 0; // Added field to store terms written
 
         public StreamingTestIndexGenerator(IndexAccessInterface indexAccess, Connection sqliteConn,
                                          ProgressTracker progress, Path customTempPath) throws IOException {
@@ -98,10 +99,10 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
          * Override writeToLevelDB to instrument the decompression process
          */
         @Override
-        public long writeToLevelDB(File sortedFile) throws IOException {
+        public void writeToLevelDB(File sortedFile) throws IOException {
             logger.info("Starting instrumented writeToLevelDB from sorted file: {}", sortedFile.getAbsolutePath());
             String currentTerm = null;
-            long totalTermsWritten = 0;
+            this.totalTermsWrittenInTest = 0;
 
             // Use IntArrayLists to accumulate integers for each attribute for the current term
             it.unimi.dsi.fastutil.ints.IntArrayList termDocIdsList = new it.unimi.dsi.fastutil.ints.IntArrayList();
@@ -131,7 +132,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                     if (!termFromFile.equals(currentTerm)) {
                         if (numPositionsForCurrentTerm > 0) {
                             // Write current term to database (simplified for test)
-                            totalTermsWritten++;
+                            this.totalTermsWrittenInTest++;
                         }
 
                         currentTerm = termFromFile;
@@ -192,11 +193,10 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
 
             // Write the last term's data
             if (currentTerm != null && numPositionsForCurrentTerm > 0) {
-                totalTermsWritten++;
+                this.totalTermsWrittenInTest++;
             }
 
-            logger.info("Finished instrumented writeToLevelDB. Total terms written: {}", totalTermsWritten);
-            return totalTermsWritten;
+            logger.info("Finished instrumented writeToLevelDB. Total terms written: {}", this.totalTermsWrittenInTest);
         }
 
         private void recordArrayAllocation(String arrayType, int size) {
@@ -227,6 +227,10 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         public int getMaxConcurrentArrays() { return maxConcurrentArrays.get(); }
         public long getTotalDecompressions() { return totalDecompressions.get(); }
         public List<String> getDecompressionLog() { return new ArrayList<>(decompressionLog); }
+
+        public long getTotalTermsWrittenInTest() {
+            return this.totalTermsWrittenInTest;
+        }
 
         public void resetCounters() {
             currentActiveArrays.set(0);
@@ -324,7 +328,8 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         testGenerator.resetCounters();
 
         // Execute writeToLevelDB with instrumentation
-        long termsWritten = testGenerator.writeToLevelDB(sortedFile);
+        testGenerator.writeToLevelDB(sortedFile);
+        long termsWritten = testGenerator.getTotalTermsWrittenInTest();
 
         // Verify that terms were actually written
         assertEquals(NUM_TERMS, termsWritten, "Should have written all terms");
@@ -419,7 +424,8 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         testGenerator.resetCounters();
 
         // Execute writeToLevelDB
-        long termsWritten = testGenerator.writeToLevelDB(sortedFile);
+        testGenerator.writeToLevelDB(sortedFile);
+        long termsWritten = testGenerator.getTotalTermsWrittenInTest();
         assertEquals(1, termsWritten, "Should have written exactly one term");
 
         // Verify streaming behavior even with large single term
