@@ -324,7 +324,7 @@ public class IndexAccess implements IndexAccessInterface {
                 if (options != null) {
                     options.close();
                 }
-                logger.info("Successfully closed RocksDB and associated options for index: {}", indexType);
+                //logger.info("Successfully closed RocksDB and associated options for index: {}", indexType);
             }
         } else {
             logger.warn("IndexAccess for type {} at {} was already closed or never fully opened.", indexType, indexPath);

@@ -235,6 +235,12 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         if (date == null || !date.matches("\\d{4}-\\d{2}-\\d{2}")) {
             return null;
         }
+        // Extract year and check if it's "0000"
+        String year = date.substring(0, 4);
+        if ("0000".equals(year)) {
+            logger.warn("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", date);
+            return null;
+        }
         try {
             LocalDate parsed = LocalDate.parse(date, INPUT_FORMAT);
             return parsed.format(KEY_FORMAT);

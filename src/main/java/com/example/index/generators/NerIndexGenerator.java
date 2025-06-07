@@ -61,11 +61,11 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         String sql;
         if (lastProcessedEntry == null) {
             sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
-                  "FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE' " +
+                  "FROM annotations WHERE ner != 'O' AND ner != 'DATE' " +
                   "ORDER BY annotation_id LIMIT ?";
         } else {
             sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
-                  "FROM annotations WHERE ner IS NOT NULL AND ner != 'O' AND ner != 'DATE' AND annotation_id > ? " +
+                  "FROM annotations WHERE ner != 'O' AND ner != 'DATE' AND annotation_id > ? " +
                   "ORDER BY annotation_id LIMIT ?";
         }
 

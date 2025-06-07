@@ -431,8 +431,7 @@ public class RocksDBBrowser {
                                 // Use Pattern.quote for literal splitting on the delimiter character
                                 String[] keyParts = key.split(Pattern.quote(String.valueOf(ACTUAL_DELIMITER_CHAR)));
                                 if (keyParts.length > 1) {
-                                    String annotationTypeFromKey = keyParts[keyParts.length - 1];
-                                    synonymOutput = String.format("[%s:%s]", annotationTypeFromKey, lookedUpValue);
+                                    synonymOutput = String.format("[%s]", lookedUpValue);
                                 } else {
                                     // Even if key parsing fails, show the looked up value if ID was valid
                                     synonymOutput = String.format("[syn_id:%d(%s)(key_parse_err)]", currentSynonymId, lookedUpValue);

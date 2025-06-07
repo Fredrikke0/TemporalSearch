@@ -1,4 +1,4 @@
-package com.example.index.generators;
+package com.example.index.generators.stitch;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -21,8 +21,8 @@ import com.example.index.AnnotationType;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 
-public final class DateStitchIndexGenerator extends AbstractUnigramStitchGenerator {
-    private static final Logger logger = LoggerFactory.getLogger(DateStitchIndexGenerator.class);
+public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGenerator {
+    private static final Logger logger = LoggerFactory.getLogger(UnigramDateStitchIndexGenerator.class);
     public static final String MY_INDEX_NAME = "stitch_unigram_date";
 
     // For parsing normalized_ner (YYYY-MM-DD) and formatting to key (YYYYMMDD)
@@ -30,7 +30,7 @@ public final class DateStitchIndexGenerator extends AbstractUnigramStitchGenerat
     private static final DateTimeFormatter KEY_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final Pattern DATE_INPUT_PATTERN = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
 
-    public DateStitchIndexGenerator(
+    public UnigramDateStitchIndexGenerator(
             IndexAccessInterface indexAccess,
             String stopwordsPath,
             Connection sqliteConn,
@@ -38,10 +38,16 @@ public final class DateStitchIndexGenerator extends AbstractUnigramStitchGenerat
             int batchSize,
             Path customTempPath,
             SynonymManager sharedSynonymManager) throws IOException {
-        super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath,
-              AnnotationType.DATE,
-              sharedSynonymManager);
-        logger.info("DateStitchIndexGenerator initialized for index type: {}. Stopwords path: '{}'", MY_INDEX_NAME, stopwordsPath);
+        super(1,
+              indexAccess,
+              stopwordsPath,
+              sqliteConn,
+              progress,
+              batchSize,
+              customTempPath,
+              sharedSynonymManager,
+              AnnotationType.DATE);
+        logger.info("UnigramDateStitchIndexGenerator initialized for index type: {}. Stopwords path: '{}'", MY_INDEX_NAME, stopwordsPath);
     }
 
     @Override
@@ -52,6 +58,12 @@ public final class DateStitchIndexGenerator extends AbstractUnigramStitchGenerat
     private String normalizeDateToKeyFormat(String yyyyDashMmDashDd) {
         if (yyyyDashMmDashDd == null || !DATE_INPUT_PATTERN.matcher(yyyyDashMmDashDd).matches()) {
             logger.trace("Input date string '{}' does not match YYYY-MM-DD pattern for normalization to key format.", yyyyDashMmDashDd);
+            return null;
+        }
+        // Extract year and check if it's "0000"
+        String year = yyyyDashMmDashDd.substring(0, 4);
+        if ("0000".equals(year)) {
+            logger.warn("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", yyyyDashMmDashDd);
             return null;
         }
         try {
@@ -103,9 +115,6 @@ public final class DateStitchIndexGenerator extends AbstractUnigramStitchGenerat
                         continue;
                     }
 
-                    // For DATE stitch with direct date in key:
-                    // annotationKeyComponent IS the YYYYMMDD string.
-                    // specificValueForSynonym IS also the YYYYMMDD string (for consistency in AnnotationData, though not used for synonym lookup).
                     annotations.add(new AnnotationData(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
@@ -125,11 +134,6 @@ public final class DateStitchIndexGenerator extends AbstractUnigramStitchGenerat
             logger.trace("Fetched {} valid DATE annotations for document ID {} for {} index.", annotations.size(), documentId, MY_INDEX_NAME);
         }
         return annotations;
-    }
-
-    @Override
-    protected String getSpecificAnnotationTypeDBCondition() {
-        return "ner = 'DATE' AND normalized_ner IS NOT NULL AND normalized_ner != ''";
     }
 
     @Override

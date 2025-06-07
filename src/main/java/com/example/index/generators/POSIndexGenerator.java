@@ -35,7 +35,7 @@ import com.google.common.collect.ListMultimap;
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(POSIndexGenerator.class);
 
-    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '''','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-', 'FW', '')";
+    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '''','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-', 'FW', '', ':')";
     private final SynonymManager synonymManager;
 
     public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize,
@@ -67,10 +67,10 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
         if (isFirstBatch) {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
-                    "FROM annotations WHERE pos IS NOT NULL AND pos != ''" + notInClause + " ORDER BY annotation_id LIMIT ?";
+                    "FROM annotations WHERE pos != ''" + notInClause + " ORDER BY annotation_id LIMIT ?";
         } else {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
-                    "FROM annotations WHERE annotation_id > ? AND pos IS NOT NULL AND pos != ''" + notInClause + " ORDER BY annotation_id LIMIT ?";
+                    "FROM annotations WHERE annotation_id > ? AND pos != ''" + notInClause + " ORDER BY annotation_id LIMIT ?";
         }
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
@@ -140,7 +140,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE pos IS NOT NULL AND pos != ''";
+        // String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE pos != ''";
         // try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
         //      ResultSet rs = stmt.executeQuery()) {
         //     if (rs.next()) {
