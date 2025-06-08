@@ -35,7 +35,7 @@ import com.google.common.collect.ListMultimap;
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(POSIndexGenerator.class);
 
-    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '''','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-', 'FW', '', ':')";
+    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '''','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-', 'FW', '', '''''', 'DT', 'WDT', 'CC', 'PRP$', 'POS', '``', 'EX', 'UH', 'IN')";
     private final SynonymManager synonymManager;
 
     public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize,

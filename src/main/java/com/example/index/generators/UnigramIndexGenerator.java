@@ -20,7 +20,7 @@ import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming unigram index from annotation entries.
- * Each entry maps a single lemmatized token to its positions in the corpus.
+ * Each entry maps a single token to its positions in the corpus.
  * Uses streaming processing and external sorting for efficient memory usage.
  */
 public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry> {

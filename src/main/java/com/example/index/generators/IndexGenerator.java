@@ -17,6 +17,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +49,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     protected final Connection sqliteConn;
     protected final ProgressTracker progress;
     private final Path tempDir;
-    private long totalNGramsGenerated = 0;
+    protected long totalNGramsGenerated = 0;
     protected final int batchSize;
     protected final String effectiveIndexName;
     protected final Path tempFilePathForSorting;
@@ -95,7 +96,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     // Primary constructor that all IndexGenerator implementations should use.
     @SuppressWarnings("this-escape") // For getDocumentCountForIndex and getIndexType in constructor
     protected IndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
-                             Connection sqliteConn, ProgressTracker progressTracker, int batchSizeNum, Path customTempPath) throws IOException {
+                             Connection sqliteConn, ProgressTracker progressTracker, int batchSizeNum, Path customBaseTempDir) throws IOException {
         this.indexAccess = indexAccess;
         this.effectiveIndexName = indexAccess.getIndexType(); // Get name from IndexAccess
         this.sqliteConn = sqliteConn;
@@ -105,19 +106,12 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         // Load stopwords first as it only depends on effectiveIndexName for logging
         this.stopwords = loadStopwords(stopwordsPath);
 
-        // Initialize tempDir, which also uses effectiveIndexName for logging and path creation
-        this.tempDir = initializeTempDir(this.effectiveIndexName, customTempPath);
+        // Initialize tempDir: a unique directory for this generator instance.
+        // It will be created under customBaseTempDir if provided, or system temp otherwise.
+        this.tempDir = initializeInstanceTempDir(this.effectiveIndexName, customBaseTempDir);
 
-        // Initialize tempFilePathForSorting, which might depend on tempDir or be a custom path
-        if (customTempPath != null) {
-            this.tempFilePathForSorting = customTempPath;
-            Path parentDir = customTempPath.getParent();
-            if (parentDir != null && !Files.exists(parentDir)) {
-                Files.createDirectories(parentDir);
-            }
-        } else {
-            this.tempFilePathForSorting = this.tempDir.resolve("sorted.tmp");
-        }
+        // tempFilePathForSorting is now always inside this specific generator's tempDir
+        this.tempFilePathForSorting = this.tempDir.resolve("sorted.tmp");
 
         try {
             long totalDocs = getDocumentCountForIndex(); // `this` is used here before constructor finishes
@@ -125,57 +119,51 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         } catch (SQLException e) {
             throw new IOException("Failed to get document count for index: " + this.effectiveIndexName, e);
         }
-        logger.debug("IndexGenerator for [{}] initialized. IndexAccess provided. Temp dir: {}, Batch size: {}",
+        logger.debug("IndexGenerator for [{}] initialized. IndexAccess provided. Instance temp dir: {}, Batch size: {}",
                      this.effectiveIndexName, this.tempDir.toAbsolutePath(), this.batchSize);
-        registerShutdownHook();
     }
 
-    // Slim constructor that delegates to the primary one, providing null for customTempPath.
+    // Slim constructor that delegates to the primary one, providing null for customBaseTempDir.
     protected IndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    private Path initializeTempDir(String indexNameForTempDir, Path customTempPath) throws IOException {
-        Path resolvedTempDir;
-        if (customTempPath != null) {
-            try {
-                if (!Files.exists(customTempPath)) Files.createDirectories(customTempPath);
-                if (!Files.isDirectory(customTempPath) || !Files.isWritable(customTempPath))
-                    throw new IOException("Custom temporary path is not a writable directory: " + customTempPath);
-                resolvedTempDir = Files.createTempDirectory(customTempPath, indexNameForTempDir + "-index-temp-");
-                logger.info("IndexGenerator for [{}] using custom temp directory: {}", indexNameForTempDir, resolvedTempDir.toAbsolutePath());
-            } catch (IOException e) {
-                logger.warn("Failed to create or use custom temp directory '{}' for [{}]. Falling back to system default.", customTempPath, indexNameForTempDir, e);
-                resolvedTempDir = Files.createTempDirectory(indexNameForTempDir + "-index-temp-");
-                logger.info("IndexGenerator for [{}] using system default temp directory: {}", indexNameForTempDir, resolvedTempDir.toAbsolutePath());
-            }
-        } else {
-            resolvedTempDir = Files.createTempDirectory(indexNameForTempDir + "-index-temp-");
-            logger.info("IndexGenerator for [{}] using system default temp directory: {}", indexNameForTempDir, resolvedTempDir.toAbsolutePath());
-        }
-        return resolvedTempDir;
-    }
+    private Path initializeInstanceTempDir(String indexNameForTempDir, Path customBaseTempDir) throws IOException {
+        Path baseLocationToCreateIn;
+        String logMessagePrefix;
 
-    private void registerShutdownHook() {
-         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+        if (customBaseTempDir != null) {
             try {
-                if (Files.exists(tempDir)) {
-                    Files.walk(tempDir)
-                         .sorted((a, b) -> b.compareTo(a))
-                         .forEach(path -> {
-                             try {
-                                 Files.deleteIfExists(path);
-                             } catch (IOException e) {
-                                 logger.debug("Could not delete temporary file: {} ({})", path, e.getMessage());
-                             }
-                         });
+                if (!Files.exists(customBaseTempDir)) {
+                    Files.createDirectories(customBaseTempDir);
+                    logger.info("Created custom base temporary directory: {}", customBaseTempDir.toAbsolutePath());
+                }
+                if (!Files.isDirectory(customBaseTempDir) || !Files.isWritable(customBaseTempDir)) {
+                    logger.warn("Custom base temporary directory '{}' for index [{}] is not a writable directory. Falling back to system default.", customBaseTempDir, indexNameForTempDir);
+                    baseLocationToCreateIn = null; // Fallback to system default
                 } else {
-                    logger.debug("Temporary directory already cleaned up: {}", tempDir);
+                    baseLocationToCreateIn = customBaseTempDir;
                 }
             } catch (IOException e) {
-                logger.debug("Failed to cleanup temporary directory: {} ({})", tempDir, e.getMessage());
+                logger.warn("Failed to create or use custom base temporary directory '{}' for index [{}]. Falling back to system default. Error: {}", customBaseTempDir, indexNameForTempDir, e.getMessage());
+                baseLocationToCreateIn = null; // Fallback to system default
             }
-        }));
+        } else {
+            baseLocationToCreateIn = null; // Use system default
+        }
+
+        Path uniqueTempDirForThisInstance;
+        String instancePrefix = indexNameForTempDir + "-instance-";
+        if (baseLocationToCreateIn != null) {
+            uniqueTempDirForThisInstance = Files.createTempDirectory(baseLocationToCreateIn, instancePrefix);
+            logMessagePrefix = "IndexGenerator for [" + indexNameForTempDir + "] using instance temp dir inside custom base '{}': {}";
+            logger.info(logMessagePrefix, baseLocationToCreateIn.toAbsolutePath(), uniqueTempDirForThisInstance.toAbsolutePath());
+        } else { // System default
+            uniqueTempDirForThisInstance = Files.createTempDirectory(instancePrefix);
+            logMessagePrefix = "IndexGenerator for [" + indexNameForTempDir + "] using instance temp dir in system default location: {}";
+            logger.info(logMessagePrefix, uniqueTempDirForThisInstance.toAbsolutePath());
+        }
+        return uniqueTempDirForThisInstance;
     }
 
     private Set<String> loadStopwords(String stopwordsPath) throws IOException {
@@ -575,35 +563,37 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 return;
             }
 
-            File outputFile = new File(tempDir.toFile(), "sorted.tmp");
-            logger.info("Merging {} temporary files...", tempFiles.size());
+            // File outputFile = new File(tempDir.toFile(), "sorted.tmp"); // This is now this.tempFilePathForSorting
+            logger.info("Merging {} temporary files into {} for index [{}]...", tempFiles.size(), this.tempFilePathForSorting.toAbsolutePath(), getIndexName());
             long totalTempFilesSize = 0;
             for (File f : tempFiles) {
                 if (f.exists()) totalTempFilesSize += f.length();
             }
-            logger.info("Total size of {} temp files to be merged: {} MB", tempFiles.size(), totalTempFilesSize / (1024*1024));
+            logger.info("Total size of {} temp files to be merged: {} MB for index [{}]", tempFiles.size(), totalTempFilesSize / (1024*1024), getIndexName());
 
-            ExternalSort.mergeSortedFiles(tempFiles, outputFile, new PositionListComparator(), Charset.defaultCharset(), false);
+            ExternalSort.mergeSortedFiles(tempFiles, this.tempFilePathForSorting.toFile(), new PositionListComparator(), Charset.defaultCharset(), false);
 
-            logger.info("Writing merged entries to RocksDB index...");
+            logger.info("Writing merged entries from {} to RocksDB index [{}]...", this.tempFilePathForSorting.toAbsolutePath(), getIndexName());
             // --- Start Progress for writeToRocksDB ---
             progress.startIndex(getIndexName() + " - Writing to DB", 0); // 0 or -1 for indeterminate
-            writeToLevelDB(outputFile);
+            writeToLevelDB(this.tempFilePathForSorting.toFile());
             progress.completeIndex(); // Complete this sub-stage
             // --- End Progress for writeToRocksDB ---
 
             metrics.logIndexingMetrics();
 
         } finally {
-            logger.debug("Cleaning up {} temporary files for index [{}]...", tempFiles.size(), getIndexName());
+            logger.debug("Cleaning up {} temporary batch files for index [{}] from directory {}...", tempFiles.size(), getIndexName(), this.tempDir.toAbsolutePath());
             for (File file : tempFiles) {
                 try {
                     Files.deleteIfExists(file.toPath());
                 } catch (IOException e) {
-                    logger.debug("Could not delete temp file: {} ({})", file, e.getMessage());
+                    logger.debug("Could not delete temp batch file: {} for index [{}]. Error: {}", file.getAbsolutePath(), getIndexName(), e.getMessage());
                 }
             }
-            logger.debug("Temporary file cleanup complete.");
+            // The main sorted.tmp (this.tempFilePathForSorting) will be cleaned by the close() method
+            // when this.tempDir is recursively deleted.
+            logger.debug("Temporary batch file cleanup complete for index [{}]. Main sorted file and instance temp dir will be cleaned by close().", getIndexName());
         }
     }
 
@@ -633,28 +623,31 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         // The caller is responsible for its lifecycle (e.g., closing it).
         // This generator should not close an externally managed IndexAccessInterface.
 
-        // Clean up the main temporary sorted file if it was created and path is known.
-        if (this.tempFilePathForSorting != null) {
-            // Check if tempFilePathForSorting is inside the auto-managed tempDir.
-            // The shutdown hook for tempDir will handle its contents if so.
-            // Only explicitly delete if it's NOT inside tempDir (i.e., a custom path was given).
-            boolean isInsideAutoTempDir = this.tempDir != null && this.tempFilePathForSorting.startsWith(this.tempDir);
-
-            if (!isInsideAutoTempDir) { // Only delete if it's a custom path outside the auto-managed tempDir
-                try {
-                    boolean deleted = Files.deleteIfExists(this.tempFilePathForSorting);
-                    if (deleted) {
-                        logger.debug("Successfully deleted custom temporary sort file: {}", this.tempFilePathForSorting);
-                    } else {
-                        logger.debug("Custom temporary sort file did not exist or could not be deleted: {}", this.tempFilePathForSorting);
-                    }
-                } catch (IOException e) {
-                    logger.warn("Failed to delete custom temporary sort file: {}. Error: {}", this.tempFilePathForSorting, e.getMessage());
-                }
+        // Clean up the unique temporary directory created by this generator instance.
+        // This directory contains all temporary files, including any remaining batch files
+        // and the final sorted.tmp (this.tempFilePathForSorting).
+        if (this.tempDir != null && Files.exists(this.tempDir)) {
+            logger.info("Cleaning up instance temporary directory for index [{}]: {}", getIndexName(), this.tempDir.toAbsolutePath());
+            try (Stream<Path> walk = Files.walk(this.tempDir)) {
+                walk.sorted(Comparator.reverseOrder()) // Delete contents before the directory itself
+                    .forEach(path -> {
+                        try {
+                            Files.delete(path);
+                        } catch (IOException e) {
+                            // Log as warn, as this might indicate a lock or permission issue
+                            logger.warn("Failed to delete temporary path {} during cleanup of {} for index [{}]. Error: {}",
+                                        path.toAbsolutePath(), this.tempDir.toAbsolutePath(), getIndexName(), e.getMessage());
+                        }
+                    });
+                // logger.info("Successfully cleaned up instance temporary directory for index [{}]: {}", getIndexName(), this.tempDir.toAbsolutePath());
+            } catch (IOException e) {
+                // Log an error if walking the directory fails, as files might be left over.
+                logger.error("Error during recursive deletion of instance temporary directory {} for index [{}]. Some temporary files may remain. Error: {}",
+                             this.tempDir.toAbsolutePath(), getIndexName(), e.getMessage(), e);
             }
+        } else {
+            logger.debug("Instance temporary directory for index [{}] was null, did not exist, or was already cleaned up: {}",
+                         getIndexName(), this.tempDir == null ? "null" : this.tempDir.toAbsolutePath());
         }
-        // The auto-created tempDir (this.tempDir) and its contents (including sorted.tmp if default path was used)
-        // are cleaned up by the shutdown hook registered in initializeTempDir.
-        // Individual batch files within tempDir are cleaned up in generateIndex() finally block.
     }
 }

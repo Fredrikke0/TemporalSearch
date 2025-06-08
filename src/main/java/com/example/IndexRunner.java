@@ -173,9 +173,6 @@ public class IndexRunner {
                         continue;
                     }
 
-                    long documentCountForType = getDocumentCountForType(conn, type);
-                    progress.startIndex(type, documentCountForType);
-
                     try (Options options = RocksDBConfig.createOptimizedOptions();
                          IndexAccessInterface indexAccess = new IndexAccess(specificIndexDir, type, options)) {
 
@@ -183,6 +180,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, "unigram");
                             try (UnigramIndexGenerator gen = new UnigramIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -196,6 +194,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, "bigram");
                             try (BigramIndexGenerator gen = new BigramIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -210,6 +209,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, "trigram");
                             try (TrigramIndexGenerator gen = new TrigramIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -224,6 +224,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, "dependency");
                             try (DependencyIndexGenerator gen = new DependencyIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -238,6 +239,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, "ner_date");
                             try (NerDateIndexGenerator gen = new NerDateIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -253,6 +255,7 @@ public class IndexRunner {
                             try (NerIndexGenerator gen = new NerIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
                                     sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -268,6 +271,7 @@ public class IndexRunner {
                             try (POSIndexGenerator gen = new POSIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
                                     sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -282,6 +286,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, "hypernym");
                             try (HypernymIndexGenerator gen = new HypernymIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -296,6 +301,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, "nash");
                             try (NashIndexGenerator gen = new NashIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -310,6 +316,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, type);
                             try (UnigramDateStitchIndexGenerator gen = new UnigramDateStitchIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -324,6 +331,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, type);
                             try (UnigramNerStitchIndexGenerator gen = new UnigramNerStitchIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -338,6 +346,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, type);
                             try (UnigramPosStitchIndexGenerator gen = new UnigramPosStitchIndexGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -353,6 +362,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, type);
                             try (BigramPosStitchGenerator gen = new BigramPosStitchGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -366,6 +376,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, type);
                             try (TrigramPosStitchGenerator gen = new TrigramPosStitchGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -381,6 +392,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, type);
                             try (BigramNerStitchGenerator gen = new BigramNerStitchGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -394,6 +406,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, type);
                             try (TrigramNerStitchGenerator gen = new TrigramNerStitchGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -409,6 +422,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, type);
                             try (BigramDateStitchGenerator gen = new BigramDateStitchGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -422,6 +436,7 @@ public class IndexRunner {
                             metrics.startBatch(batchSize, type);
                             try (TrigramDateStitchGenerator gen = new TrigramDateStitchGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
                             } catch (Exception e) {
@@ -458,26 +473,6 @@ public class IndexRunner {
             throw e;
         }
         logger.info("Indexing process completed. Total time: {}s", totalTime.stop().elapsed(TimeUnit.SECONDS));
-    }
-
-    private static long getDocumentCountForType(Connection conn, String indexType) {
-        if (UnigramDateStitchIndexGenerator.MY_INDEX_NAME.equals(indexType) ||
-            UnigramNerStitchIndexGenerator.MY_INDEX_NAME.equals(indexType) ||
-            UnigramPosStitchIndexGenerator.MY_INDEX_NAME.equals(indexType) ||
-            BigramPosStitchGenerator.MY_INDEX_NAME.equals(indexType) ||
-            TrigramPosStitchGenerator.MY_INDEX_NAME.equals(indexType) ||
-            BigramNerStitchGenerator.MY_INDEX_NAME.equals(indexType) ||
-            TrigramNerStitchGenerator.MY_INDEX_NAME.equals(indexType) ||
-            BigramDateStitchGenerator.MY_INDEX_NAME.equals(indexType) ||
-            TrigramDateStitchGenerator.MY_INDEX_NAME.equals(indexType)) {
-            return 0; // Stitch indexes have indeterminate progress tracking from document count
-        }
-        if ("unigram".equals(indexType) || "bigram".equals(indexType) || "trigram".equals(indexType)) {
-            try (var stmt = conn.createStatement(); var rs = stmt.executeQuery("SELECT COUNT(DISTINCT document_id) FROM sentences")) {
-                if (rs.next()) return rs.getLong(1);
-            } catch (SQLException e) { logger.warn("Could not get doc count for {}", indexType); }
-        }
-        return 1000;
     }
 
     private static void setupIndexDirectories(String indexBaseDirStr, List<String> indexTypesToEnsure, boolean force) throws IOException {
