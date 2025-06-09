@@ -95,4 +95,36 @@ public record Logical(
         sb.append(")");
         return sb.toString();
     }
+
+    /**
+     * Creates a new Logical condition with all nested conditions having their variables requalified.
+     * This is used during subquery processing when variable names need to be updated
+     * from one alias scope to another (e.g., from "$main.*" to "q2.*").
+     *
+     * @param oldPrefix The old prefix to replace (e.g., "$main.")
+     * @param newPrefix The new prefix to use (e.g., "q2.")
+     * @return A new Logical condition with requalified nested conditions
+     */
+    public Logical requalifyVariables(String oldPrefix, String newPrefix) {
+        List<Condition> requalifiedConditions = conditions.stream()
+            .map(condition -> requalifyCondition(condition, oldPrefix, newPrefix))
+            .toList();
+
+        return new Logical(this.operator, requalifiedConditions);
+    }
+
+    /**
+     * Helper method to requalify a single condition based on its type.
+     */
+    private static Condition requalifyCondition(Condition condition, String oldPrefix, String newPrefix) {
+        return switch (condition) {
+            case Temporal temporal -> temporal.requalifyVariable(oldPrefix, newPrefix);
+            case Ner ner -> ner.requalifyVariable(oldPrefix, newPrefix);
+            case Pos pos -> pos.requalifyVariable(oldPrefix, newPrefix);
+            case Contains contains -> contains.requalifyVariable(oldPrefix, newPrefix);
+            case Dependency dependency -> dependency.requalifyVariable(oldPrefix, newPrefix);
+            case Logical logical -> logical.requalifyVariables(oldPrefix, newPrefix);
+            case Not not -> not.requalifyVariables(oldPrefix, newPrefix);
+        };
+    }
 }

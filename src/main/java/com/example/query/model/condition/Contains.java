@@ -135,4 +135,26 @@ public record Contains(
             return String.format("CONTAINS(\"%s\")", termsString);
         }
     }
+
+    /**
+     * Creates a new Contains condition with the variable name requalified.
+     * This is used during subquery processing when variable names need to be updated
+     * from one alias scope to another (e.g., from "$main.text" to "q2.text").
+     *
+     * @param oldPrefix The old prefix to replace (e.g., "$main.")
+     * @param newPrefix The new prefix to use (e.g., "q2.")
+     * @return A new Contains condition with the requalified variable name, or this condition if no change needed
+     */
+    public Contains requalifyVariable(String oldPrefix, String newPrefix) {
+        if (!isVariable || qualifiedVariableName == null) {
+            return this; // No variable to requalify
+        }
+
+        if (!qualifiedVariableName.startsWith(oldPrefix)) {
+            return this; // Variable doesn't match the old prefix
+        }
+
+        String newVarName = newPrefix + qualifiedVariableName.substring(oldPrefix.length());
+        return new Contains(this.terms, newVarName, this.isVariable);
+    }
 }

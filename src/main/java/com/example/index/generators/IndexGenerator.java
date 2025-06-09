@@ -29,6 +29,7 @@ import com.example.index.IndexEntry;
 import com.example.logging.IndexingMetrics;
 import com.example.logging.ProgressTracker;
 import com.google.code.externalsorting.ExternalSort;
+import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -44,6 +45,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     public static final String DELIMITER = "\0";
     public static final char ESCAPE_CHAR = '\u001F';
     private static final int MAX_POSITIONS_PER_SEGMENT = 50_000_000; // Max positions per term segment
+    private static final long MAX_MEMORY_BUFFER_SIZE = 1024 * 1024 * 1024; // 1GB buffer before writing temp file
 
     protected final IndexAccessInterface indexAccess;
     protected final Connection sqliteConn;
@@ -505,6 +507,22 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     }
 
     /**
+     * Estimates the memory size of a PositionListSoA for buffering decisions.
+     * Uses the actual serialized size for accurate memory tracking.
+     */
+    private long estimatePositionListSize(PositionListSoA positionList) {
+        try {
+            // Use the actual compressed/serialized size for accurate estimation
+            byte[] serialized = positionList.serializeToCompositeBlob();
+            return serialized.length;
+        } catch (IOException e) {
+            logger.warn("Failed to serialize PositionListSoA for size estimation, using fallback calculation. Error: {}", e.getMessage());
+            // Fallback to rough estimate: 5 integers per position + compression factor
+            return (long) positionList.getNumPositions() * 15; // Assume ~25% compression ratio
+        }
+    }
+
+    /**
      * Generates the index by processing documents in batches, sorting externally,
      * and merging to the final index store.
      */
@@ -514,6 +532,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         IndexingMetrics metrics = new IndexingMetrics();
         long totalRawEntriesFetched = 0;
         totalNGramsGenerated = 0;
+
+        // Memory buffer to accumulate multiple batches before writing temp files
+        ListMultimap<String, PositionListSoA> memoryBuffer = ArrayListMultimap.create();
+        long currentBufferSizeBytes = 0;
 
         try {
             long totalCountForProgressBar = getDocumentCountForIndex();
@@ -540,10 +562,24 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                 long durationWriteTempNanos = 0;
                 if (!positions.isEmpty()) {
-                    long startTimeWriteTemp = System.nanoTime();
-                    File tempFile = writeBatchToTempFile(positions);
-                    durationWriteTempNanos = System.nanoTime() - startTimeWriteTemp;
-                    tempFiles.add(tempFile);
+                    // Add to memory buffer instead of immediately writing to disk
+                    for (Map.Entry<String, Collection<PositionListSoA>> entry : positions.asMap().entrySet()) {
+                        for (PositionListSoA positionList : entry.getValue()) {
+                            memoryBuffer.put(entry.getKey(), positionList);
+                            currentBufferSizeBytes += estimatePositionListSize(positionList);
+                        }
+                    }
+
+                    // Write buffer to temp file if it exceeds the size threshold
+                    if (currentBufferSizeBytes >= MAX_MEMORY_BUFFER_SIZE) {
+                        long startTimeWriteTemp = System.nanoTime();
+                        File tempFile = writeBatchToTempFile(memoryBuffer);
+                        durationWriteTempNanos = System.nanoTime() - startTimeWriteTemp;
+                        tempFiles.add(tempFile);
+                        memoryBuffer.clear();
+                        currentBufferSizeBytes = 0;
+                        logger.debug("Wrote buffered temp file for index [{}], total temp files so far: {}", getIndexName(), tempFiles.size());
+                    }
                 }
 
                 metrics.recordBatchStageDurations(durationFetchNanos, durationProcessNanos, durationWriteTempNanos, itemsInBatchOutput, rawEntriesInBatch);
@@ -553,6 +589,15 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 }
 
                 progress.updateIndex(rawEntriesInBatch);
+            }
+
+            // Write any remaining data in the memory buffer
+            if (!memoryBuffer.isEmpty()) {
+                logger.info("Writing final buffered temp file for index [{}] with {} terms", getIndexName(), memoryBuffer.keySet().size());
+                File tempFile = writeBatchToTempFile(memoryBuffer);
+                tempFiles.add(tempFile);
+                memoryBuffer.clear();
+                currentBufferSizeBytes = 0;
             }
 
             logger.info("Finished fetching {} raw entries for index [{}].", totalRawEntriesFetched, getIndexName());

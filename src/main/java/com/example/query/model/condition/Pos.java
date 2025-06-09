@@ -195,4 +195,26 @@ public record Pos(
             return String.format("POS(%s, %s)", posTag, term);
         }
     }
+
+    /**
+     * Creates a new Pos condition with the variable name requalified.
+     * This is used during subquery processing when variable names need to be updated
+     * from one alias scope to another (e.g., from "$main.pos" to "q2.pos").
+     *
+     * @param oldPrefix The old prefix to replace (e.g., "$main.")
+     * @param newPrefix The new prefix to use (e.g., "q2.")
+     * @return A new Pos condition with the requalified variable name, or this condition if no change needed
+     */
+    public Pos requalifyVariable(String oldPrefix, String newPrefix) {
+        if (!isVariable || qualifiedVariableName == null) {
+            return this; // No variable to requalify
+        }
+
+        if (!qualifiedVariableName.startsWith(oldPrefix)) {
+            return this; // Variable doesn't match the old prefix
+        }
+
+        String newVarName = newPrefix + qualifiedVariableName.substring(oldPrefix.length());
+        return new Pos(this.posTag, this.term, newVarName, this.isVariable);
+    }
 }

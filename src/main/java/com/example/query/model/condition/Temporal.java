@@ -535,6 +535,35 @@ public record Temporal(
     }
 
     /**
+     * Creates a new Temporal condition with the variable name requalified.
+     * This is used during subquery processing when variable names need to be updated
+     * from one alias scope to another (e.g., from "$main.date" to "q2.date").
+     *
+     * @param oldPrefix The old prefix to replace (e.g., "$main.")
+     * @param newPrefix The new prefix to use (e.g., "q2.")
+     * @return A new Temporal condition with the requalified variable name, or this condition if no change needed
+     */
+    public Temporal requalifyVariable(String oldPrefix, String newPrefix) {
+        if (qualifiedVariableName.isEmpty()) {
+            return this; // No variable to requalify
+        }
+
+        String currentVarName = qualifiedVariableName.get();
+        if (!currentVarName.startsWith(oldPrefix)) {
+            return this; // Variable doesn't match the old prefix
+        }
+
+        String newVarName = newPrefix + currentVarName.substring(oldPrefix.length());
+        return new Temporal(
+            this.startDate,
+            this.endDate,
+            Optional.of(newVarName),
+            this.range,
+            this.temporalType
+        );
+    }
+
+    /**
      * Checks if a given document date/time matches this temporal condition.
      * The documentDateTime is typically the start of the day for date-only comparisons from stitch index.
      *

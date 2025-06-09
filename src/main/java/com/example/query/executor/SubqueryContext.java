@@ -6,6 +6,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.example.query.model.SubquerySpec;
 
 /**
@@ -15,6 +18,7 @@ import com.example.query.model.SubquerySpec;
  * the recursive execution of queries with subqueries.
  */
 public class SubqueryContext {
+    private static final Logger logger = LoggerFactory.getLogger(SubqueryContext.class);
     private final Map<String, QueryResultSoA> queryResults;
 
     /**
@@ -49,7 +53,7 @@ public class SubqueryContext {
         Objects.requireNonNull(result, "QueryResultSoA cannot be null");
         if (queryResults.containsKey(alias)) {
             // Decide on behavior: overwrite or throw? For now, overwrite might be okay for implicit main query.
-            System.out.println("Overwriting existing QueryResultSoA for alias: " + alias);
+            logger.debug("Overwriting existing QueryResultSoA for alias: {}", alias);
         }
         queryResults.put(alias, result);
         // Note: aliasToSpecMap will not have an entry for aliases added this way.

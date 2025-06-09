@@ -23,6 +23,8 @@ import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
 import com.example.query.model.condition.Pos;
 import com.example.query.model.condition.Temporal;
+import com.example.query.parser.util.ValidationUtils;
+import com.example.query.parser.util.VariableQualifier;
 
 /**
  * Visitor implementation that builds a Query model from the parse tree.
@@ -33,7 +35,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     private static final Logger logger = LoggerFactory.getLogger(QueryModelBuilder.class);
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ISO_DATE_TIME;
-    private static final String DEFAULT_MAIN_ALIAS = "$main"; // Default alias for main query without ALIAS
+    public static final String DEFAULT_MAIN_ALIAS = "$main"; // Default alias for main query without ALIAS
 
     // Variable registry for tracking variables - qualified names will be used internally
     private final VariableRegistry variableRegistry = new VariableRegistry();
@@ -100,7 +102,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
 
         // Determine if qualification is required in SELECT, ORDER BY, GROUP BY
-        boolean qualificationRequired = explicitMainAlias.isPresent() || !subqueries.isEmpty();
+        boolean qualificationRequired = VariableQualifier.isQualificationRequired(explicitMainAlias, !ctx.joinClause().isEmpty(), !subqueries.isEmpty());
 
         // Extract select columns, passing qualification requirement
         if (ctx.selectClause() != null && ctx.selectClause().selectList() != null) {
@@ -143,7 +145,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             throw new IllegalStateException("Variable binding errors: " + String.join(", ", validationErrors));
         }
 
-        // Updated Query constructor call - pass explicitMainAlias, not effectiveMainAlias
         // The Query object stores the user-provided alias, or empty if none.
         // Internal logic uses effectiveMainAlias ($main or explicit).
         return new Query(source, conditions, orderColumns, limit, granularity, granularitySize, selectColumns, variableRegistry, subqueries, joinCondition, explicitMainAlias, groupByColumns);
@@ -378,24 +379,12 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         String varName = ctx.variable().getText();
         String qualifiedVarName;
 
-        if (qualificationRequired) {
-            // If qualification is required, the variable in COUNT(UNIQUE var) must already be qualified or this is an error.
-            // However, the grammar for `variable` is just IDENTIFIER. We need to check if it's part of a qualifiedIdentifier context
-            // OR assume it must be from the main query if no explicit alias is given. This is tricky.
-            // For now, let's assume if qualificationRequired is true, it must be found in a subquery or aliased main.
-            // The SELECT column visitor logic is better suited to resolve this.
-            // Here, we might need to throw if it's not parsable as a qualified name directly
-            // or rely on a (currently non-existent) method to get the alias from the context of `variable`.
-            // Let's assume for now that `variable` itself must be of the form `alias.var` if qualification is required here.
-            // This part of the logic might need refinement based on how qualified variables are handled by `visitVariable` in select.
-             if (!varName.contains(".")) {
-                 throw new IllegalStateException(
-                     String.format("COUNT(UNIQUE %s) requires a qualified variable in this context. Use COUNT(UNIQUE alias.%s)", varName, varName)
-                 );
-             }
-            qualifiedVarName = varName; // Already qualified
-        } else {
-            qualifiedVarName = DEFAULT_MAIN_ALIAS + "." + varName; // Implicitly qualify
+        try {
+            qualifiedVarName = VariableQualifier.qualifyVariable(varName, qualificationRequired, Optional.of(DEFAULT_MAIN_ALIAS));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                String.format("COUNT(UNIQUE %s) requires a qualified variable in this context. Use COUNT(UNIQUE alias.%s)", varName, varName)
+            );
         }
         return CountColumn.countUnique(qualifiedVarName);
     }
@@ -423,7 +412,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         // Start with the first condition
         Object firstResult = visitCondition(ctx.condition(0), currentScopeAlias);
-        Condition currentCondition = extractSingleCondition(firstResult, "first operand");
+        Condition currentCondition = ValidationUtils.extractSingleCondition(firstResult, "first operand");
 
         // Process the logical operations
         for (int i = 0; i < ctx.logicalOp().size(); i++) {
@@ -432,7 +421,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
             // Get the right operand
             Object rightResult = visitCondition(ctx.condition(i + 1), currentScopeAlias);
-            Condition rightCondition = extractSingleCondition(rightResult, "right operand");
+            Condition rightCondition = ValidationUtils.extractSingleCondition(rightResult, "right operand");
 
             // Create a logical condition
             currentCondition = new Logical(operator, currentCondition, rightCondition);
@@ -441,22 +430,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         return List.of(currentCondition);
     }
 
-    // Helper to extract a single condition from the result of visiting a condition node
-    private Condition extractSingleCondition(Object visitResult, String operandDescription) {
-         if (visitResult instanceof Condition) {
-            return (Condition) visitResult;
-         } else if (visitResult instanceof List<?>) {
-            @SuppressWarnings("unchecked")
-            List<Condition> conditions = (List<Condition>) visitResult;
-            if (conditions.size() == 1) {
-                return conditions.get(0);
-            } else {
-                 throw new IllegalStateException(String.format("Logical operator %s unexpectedly resolved to multiple conditions.", operandDescription)); // TODO: Add context
-            }
-         } else {
-             throw new IllegalStateException(String.format("Logical operator %s resolved to unexpected type: %s", operandDescription, visitResult != null ? visitResult.getClass().getName() : "null")); // TODO: Add context
-         }
-    }
+
 
     // Helper to parse logical operator text
     private Logical.LogicalOperator parseLogicalOperator(String opText) {
@@ -477,7 +451,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     // Overload visitNotCondition to pass alias
     public Object visitNotCondition(QueryLangParser.NotConditionContext ctx, String currentScopeAlias) {
         Object result = visitAtomicCondition(ctx.atomicCondition(), currentScopeAlias);
-        Condition conditionToNegate = extractSingleCondition(result, "operand of NOT");
+        Condition conditionToNegate = ValidationUtils.extractSingleCondition(result, "operand of NOT");
         return new Not(conditionToNegate);
     }
 
@@ -555,7 +529,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         boolean isVariable = false; // Flag to track if variable is bound
         if (ctx.BIND() != null && ctx.var != null) {
             String plainVarName = (String) visit(ctx.var);
-            qualifiedVariableName = currentScopeAlias + "." + plainVarName; // Qualify
+            qualifiedVariableName = VariableQualifier.qualifyWithScope(plainVarName, currentScopeAlias);
             isVariable = true; // Set flag
             logger.debug("Registering producer: {} type: TEXT_SPAN for CONTAINS", qualifiedVariableName);
             variableRegistry.registerProducer(qualifiedVariableName, VariableType.TEXT_SPAN, "CONTAINS");
@@ -571,7 +545,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         boolean isVariable = false; // Flag
         if (ctx.BIND() != null && ctx.var != null) {
             String plainVarName = (String) visit(ctx.var);
-            qualifiedVariableName = currentScopeAlias + "." + plainVarName; // Qualify
+            qualifiedVariableName = VariableQualifier.qualifyWithScope(plainVarName, currentScopeAlias);
             isVariable = true; // Set flag
             VariableType varType = determineNerVariableType(type);
             logger.debug("Registering producer: {} type: {} for NER", qualifiedVariableName, varType);
@@ -625,7 +599,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         if (ctx.PERCENT() != null) return "PERCENT";
         if (ctx.SET() != null) return "SET";
 
-        throw new IllegalStateException("Invalid entity type: " + ctx.getText());
+        throw new IllegalArgumentException("Invalid entity type: " + ctx.getText());
     }
 
     @Override
@@ -633,44 +607,46 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         return ctx.IDENTIFIER().getText(); // Return the plain variable name
     }
 
+    /**
+     * Handles DATE comparison expressions from the grammar rule:
+     * DATE(comparisonOp year=INTEGER_LITERAL) (BIND var=variable)?
+     *
+     * Examples: DATE(> 2020) BIND date, DATE(< 2018), DATE(>= 2000) BIND year
+     *
+     * This creates a temporal condition that compares against a specific year.
+     * The year value is extracted from ctx.year and the comparison operator determines
+     * how the comparison is performed (before, after, etc.).
+     */
     public Object visitDateComparisonExpression(QueryLangParser.DateComparisonExpressionContext ctx, String currentScopeAlias) {
         String operator = ctx.comparisonOp().getText();
-        // Year parsing is no longer needed here as comparison logic is changing.
-        // int year = Integer.parseInt(ctx.year.getText());
+        int year = Integer.parseInt(ctx.year.getText()); // Extract the year from the grammar
 
-        // Determine the correct TemporalPredicate based on the operator
+        // Map comparison operator to temporal predicate (>, <, >=, <=, =, ==)
         TemporalPredicate temporalType = mapComparisonOpToPredicate(operator);
 
-        // The date value comes from the variable being compared against,
-        // so startDate and endDate are not set here in the model.
-        // The variable name itself is stored.
+        // Convert year to LocalDateTime for the start of that year
+        LocalDateTime yearStartDate = LocalDateTime.of(year, 1, 1, 0, 0);
 
         String qualifiedVariableName = null;
         if (ctx.BIND() != null && ctx.var != null) {
+            // BIND clause present: register the variable as a producer
             String plainVarName = (String) visit(ctx.var);
-            qualifiedVariableName = currentScopeAlias + "." + plainVarName; // Qualify
-            logger.debug("Registering producer: {} type: TEMPORAL for TEMPORAL comparison", qualifiedVariableName);
-            // Registering as TEMPORAL, executor needs to handle variable resolution
-            variableRegistry.registerProducer(qualifiedVariableName, VariableType.TEMPORAL, "TEMPORAL");
+            qualifiedVariableName = currentScopeAlias + "." + plainVarName;
+            logger.debug("Registering producer: {} type: TEMPORAL for DATE comparison", qualifiedVariableName);
+            variableRegistry.registerProducer(qualifiedVariableName, VariableType.TEMPORAL, "DATE_COMPARISON");
         } else {
-            // TODO: Handle the case where the comparison target itself might be a variable - Needs grammar change?
-            // For now, assume the comparison is against a property of the current alias scope, e.g., q1.date < 2024
-            // If we need to compare q1.date < q2.another_date, the grammar needs adjustment.
-            // Assuming implicit target is 'date' field of currentScopeAlias if BIND is absent.
-            // This part might need refinement depending on exact semantics desired.
-             logger.warn("DATE comparison without explicit BIND clause. Assuming comparison against implicit 'date' field.");
-             // qualifiedVariableName = currentScopeAlias + ".date"; // Implicit target - Reconsider if this is correct.
-             // For now, let's require BIND for clarity.
-             throw new UnsupportedOperationException("DATE comparison requires an explicit BIND clause specifying the date variable.");
+            // No BIND clause: this is a filter condition without variable binding
+            logger.debug("DATE comparison without BIND clause - filtering documents by year {}", year);
+            // qualifiedVariableName remains null - indicates this is a filter, not a variable producer
         }
 
-        // Create Temporal model with the specific predicate and variable name
+        // Create Temporal model with the year date and predicate
         return new Temporal(
-            Optional.empty(), // Start date comes from variable resolution later
-            Optional.empty(), // End date is not used for simple comparison predicates
-            Optional.ofNullable(qualifiedVariableName), // The variable being compared
-            Optional.empty(), // Range not applicable here
-            temporalType // Use the specific predicate (BEFORE, AFTER, etc.)
+            Optional.of(yearStartDate), // The year as a LocalDateTime (start of year)
+            Optional.empty(), // End date not used for simple year comparisons
+            Optional.ofNullable(qualifiedVariableName), // Variable name if BIND clause present
+            Optional.empty(), // Range not applicable for year comparisons
+            temporalType // The comparison predicate (BEFORE, AFTER, etc.)
         );
     }
 
@@ -678,27 +654,19 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         String operator = ctx.dateOperator().getText();
         TemporalPredicate type = mapOperatorToTemporal(operator); // Corrected variable name: 'type' not 'dependencyType'
 
-        System.out.println("DEBUG: DateOperatorExpression with operator: " + operator);
-        System.out.println("DEBUG: DateValue context: " + ctx.dateValue().getText());
-
         // Directly visit the dateValue node instead of using visitChildren
         Object dateValue = visit(ctx.dateValue());
-        System.out.println("DEBUG: Date value type: " + (dateValue != null ? dateValue.getClass().getName() : "null"));
-        System.out.println("DEBUG: Date value: " + dateValue);
 
         LocalDateTime startDate;
         Optional<LocalDateTime> endDate = Optional.empty();
 
         if (dateValue instanceof Integer year) {
-            System.out.println("DEBUG: Handling as Integer year: " + year);
             startDate = LocalDateTime.of(year, 1, 1, 0, 0);
         } else if (dateValue instanceof LocalDateTime[] dateRange) {
-            System.out.println("DEBUG: Handling as LocalDateTime[] with length: " + dateRange.length);
             // Handle date range as array of LocalDateTime [start, end]
             startDate = dateRange[0];
             endDate = Optional.of(dateRange[1]);
         } else {
-            System.out.println("DEBUG: Handling as single date");
             // Assume it's a single date
             startDate = (LocalDateTime) dateValue;
         }
@@ -725,24 +693,18 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     @Override
     public Object visitDateRange(QueryLangParser.DateRangeContext ctx) {
-        System.out.println("DEBUG: visitDateRange with text: " + ctx.getText());
         int startYear = Integer.parseInt(ctx.start.getText());
         int endYear = Integer.parseInt(ctx.end.getText());
-        System.out.println("DEBUG: DateRange with startYear=" + startYear + ", endYear=" + endYear);
         LocalDateTime startDate = LocalDateTime.of(startYear, 1, 1, 0, 0);
         LocalDateTime endDate = LocalDateTime.of(endYear, 12, 31, 23, 59, 59);
         LocalDateTime[] result = new LocalDateTime[] { startDate, endDate };
-        System.out.println("DEBUG: Returning LocalDateTime[] with values: " + result[0] + ", " + result[1]);
         return result;
     }
 
     @Override
     public Object visitSingleYear(QueryLangParser.SingleYearContext ctx) {
-        System.out.println("DEBUG: visitSingleYear with text: " + ctx.getText());
         int year = Integer.parseInt(ctx.single.getText());
-        System.out.println("DEBUG: SingleYear with year=" + year);
         LocalDateTime result = LocalDateTime.of(year, 1, 1, 0, 0);
-        System.out.println("DEBUG: Returning LocalDateTime: " + result);
         return result;
     }
 
@@ -753,7 +715,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             case "<=" -> Temporal.ComparisonType.LE;
             case ">=" -> Temporal.ComparisonType.GE;
             case "==" -> Temporal.ComparisonType.EQ;
-            default -> throw new IllegalStateException("Invalid comparison operator: " + operator);
+            default -> throw new IllegalArgumentException("Invalid comparison operator: " + operator);
         };
     }
 
@@ -773,7 +735,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             case "PROXIMITY" -> TemporalPredicate.PROXIMITY;
             case "BEFORE" -> TemporalPredicate.BEFORE;
             case "AFTER" -> TemporalPredicate.AFTER;
-            default -> throw new IllegalStateException("Invalid temporal operator: " + operator);
+            default -> throw new IllegalArgumentException("Invalid temporal operator: " + operator);
         };
     }
 
@@ -990,16 +952,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
          return orderColumns;
     }
 
-    private LocalDateTime parseDateTime(String text) {
-        text = unquote(text);
-        try {
-            // Try parsing as date-time first
-            return LocalDateTime.parse(text, DATE_TIME_FORMATTER);
-        } catch (Exception e) {
-            // If that fails, try parsing as date and convert to start of day
-            return LocalDateTime.of(LocalDate.parse(text, DATE_FORMATTER), java.time.LocalTime.MIN);
-        }
-    }
 
     private String unquote(String text) {
         if (text == null || text.length() < 2) {
@@ -1103,12 +1055,17 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         // Re-qualify all variables from $main. to subqueryAlias.
         subqueryBuilder.variableRegistry.requalifyVariables("$main.", subqueryAlias + ".");
 
+        // Re-qualify conditions to update their variable names as well
+        List<Condition> requalifiedConditions = conditions.stream()
+            .map(condition -> requalifyCondition(condition, "$main.", subqueryAlias + "."))
+            .collect(java.util.stream.Collectors.toList());
+
         // Also update select columns to use the new qualified names
         List<SelectColumn> requalifiedSelectColumns = selectColumns.stream()
             .map(col -> {
                 if (col instanceof VariableColumn varCol) {
                     String oldName = varCol.getColumnName();
-                    String plainName = oldName.contains(".") ? oldName.substring(oldName.indexOf(".") + 1) : oldName;
+                    String plainName = VariableQualifier.extractPlainName(oldName);
                     // Construct the target qualified name using the subquery's alias
                     String targetQualifiedName = subqueryAlias + "." + plainName;
                     // Check if this variable is actually produced in the requalified registry
@@ -1117,7 +1074,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
                 } else if (col instanceof SnippetColumn snipCol) {
                     String oldName = snipCol.getVariableName();
-                     String plainName = oldName.contains(".") ? oldName.substring(oldName.indexOf(".") + 1) : oldName;
+                     String plainName = VariableQualifier.extractPlainName(oldName);
                     // Construct the target qualified name using the subquery's alias
                     String targetQualifiedName = subqueryAlias + "." + plainName;
                      // Check if this variable is actually produced in the requalified registry
@@ -1133,7 +1090,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         // Create the subquery Query object
         Query subquery = new Query(
             source,
-            conditions,
+            requalifiedConditions,
             List.of(), // No ORDER BY within subquery definition
             Optional.empty(), // No LIMIT within subquery definition
             Query.Granularity.DOCUMENT, // Default granularity for subquery context? Or inherit? Let's assume default.
@@ -1414,12 +1371,28 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     // Helper record to distinguish Variable references in ambiguous contexts (like DEPENDS)
     private record VariableReference(String plainName, String qualifiedName) {}
 
+    /**
+     * Helper method to requalify a single condition based on its type.
+     * This updates variable names in conditions during subquery processing.
+     */
+    private static Condition requalifyCondition(Condition condition, String oldPrefix, String newPrefix) {
+        return switch (condition) {
+            case Temporal temporal -> temporal.requalifyVariable(oldPrefix, newPrefix);
+            case Ner ner -> ner.requalifyVariable(oldPrefix, newPrefix);
+            case Pos pos -> pos.requalifyVariable(oldPrefix, newPrefix);
+            case Contains contains -> contains.requalifyVariable(oldPrefix, newPrefix);
+            case Dependency dependency -> dependency.requalifyVariable(oldPrefix, newPrefix);
+            case Logical logical -> logical.requalifyVariables(oldPrefix, newPrefix);
+            case Not not -> not.requalifyVariables(oldPrefix, newPrefix);
+        };
+    }
+
     // Helper method to map comparison operator string to TemporalPredicate
     private TemporalPredicate mapComparisonOpToPredicate(String operator) {
         return switch (operator) {
             case "<" -> TemporalPredicate.BEFORE;
             case ">" -> TemporalPredicate.AFTER;
-            case "=" -> TemporalPredicate.EQUAL; // Assuming '=' means exact match for the date granularity
+            case "=" -> TemporalPredicate.EQUAL;
             case "==" -> TemporalPredicate.EQUAL;
             case "<=" -> TemporalPredicate.BEFORE_EQUAL;
             case ">=" -> TemporalPredicate.AFTER_EQUAL;
@@ -1427,7 +1400,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         };
     }
 
-    // New methods for Group By Clause
     public List<String> visitGroupByClause(QueryLangParser.GroupByClauseContext ctx, String effectiveMainAlias, boolean qualificationRequired) {
         if (ctx.groupByItemList() != null) {
             return visitGroupByItemList(ctx.groupByItemList(), effectiveMainAlias, qualificationRequired);
@@ -1483,5 +1455,4 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
         throw new IllegalStateException("Unknown groupByItem type: " + ctx.getText());
     }
-    // End new methods for Group By Clause
 }

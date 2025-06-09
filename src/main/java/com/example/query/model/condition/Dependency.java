@@ -162,4 +162,26 @@ public record Dependency(
             return String.format("DEPENDS(%s, %s, %s)", governor, relation, dependent);
         }
     }
+
+    /**
+     * Creates a new Dependency condition with the variable name requalified.
+     * This is used during subquery processing when variable names need to be updated
+     * from one alias scope to another (e.g., from "$main.dep" to "q2.dep").
+     *
+     * @param oldPrefix The old prefix to replace (e.g., "$main.")
+     * @param newPrefix The new prefix to use (e.g., "q2.")
+     * @return A new Dependency condition with the requalified variable name, or this condition if no change needed
+     */
+    public Dependency requalifyVariable(String oldPrefix, String newPrefix) {
+        if (!isVariable || qualifiedVariableName == null) {
+            return this; // No variable to requalify
+        }
+
+        if (!qualifiedVariableName.startsWith(oldPrefix)) {
+            return this; // Variable doesn't match the old prefix
+        }
+
+        String newVarName = newPrefix + qualifiedVariableName.substring(oldPrefix.length());
+        return new Dependency(this.governor, this.relation, this.dependent, newVarName, this.isVariable);
+    }
 }
