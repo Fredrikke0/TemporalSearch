@@ -238,7 +238,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         // Extract year and check if it's "0000"
         String year = date.substring(0, 4);
         if ("0000".equals(year)) {
-            logger.warn("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", date);
+            logger.debug("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", date);
             return null;
         }
         try {

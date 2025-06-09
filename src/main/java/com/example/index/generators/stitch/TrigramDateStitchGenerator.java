@@ -61,7 +61,7 @@ public final class TrigramDateStitchGenerator extends AbstractNgramStitchGenerat
         }
         String year = yyyyDashMmDashDd.substring(0, 4);
         if ("0000".equals(year)) {
-            logger.warn("Invalid year '0000' in date string '{}'.", yyyyDashMmDashDd);
+            logger.debug("Invalid year '0000' in date string '{}'.", yyyyDashMmDashDd);
             return null;
         }
         try {

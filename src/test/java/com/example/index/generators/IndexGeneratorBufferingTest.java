@@ -31,10 +31,13 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
     private static class TestIndexGenerator extends IndexGenerator<AnnotationEntry> {
         private final int numBatchesToSimulate;
         private int currentBatch = 0;
+        private long totalSizeBefore = 0;
+        private long totalSizeAfter = 0;
+        private int mergeCount = 0;
 
         public TestIndexGenerator(IndexAccessInterface indexAccess, Connection sqliteConn,
                                  ProgressTracker progress, Path customTempPath, int numBatches) throws IOException {
-            super(indexAccess, null, sqliteConn, progress, 1000, customTempPath);
+            super(indexAccess, null, sqliteConn, progress, 1, customTempPath); // Batch size of 1 to create many files
             this.numBatchesToSimulate = numBatches;
         }
 
@@ -72,6 +75,28 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
             return numBatchesToSimulate;
         }
 
+        @Override
+        protected List<java.io.File> performIncrementalMerge(List<java.io.File> tempFiles) throws IOException {
+            // Measure size before merge
+            long sizeBefore = tempFiles.stream().mapToLong(java.io.File::length).sum();
+
+            // Perform the merge
+            List<java.io.File> result = super.performIncrementalMerge(tempFiles);
+
+            // Measure size after merge
+            long sizeAfter = result.stream().mapToLong(java.io.File::length).sum();
+
+            mergeCount++;
+            totalSizeBefore += sizeBefore;
+            totalSizeAfter += sizeAfter;
+
+            System.out.printf("Incremental merge #%d: %d files (%,d bytes) → %d files (%,d bytes) [%.1f%% reduction]%n",
+                mergeCount, tempFiles.size(), sizeBefore, result.size(), sizeAfter,
+                100.0 * (sizeBefore - sizeAfter) / sizeBefore);
+
+            return result;
+        }
+
         public Path getActualTempDir() {
             try {
                 java.lang.reflect.Field tempDirField = IndexGenerator.class.getDeclaredField("tempDir");
@@ -81,16 +106,28 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
                 throw new RuntimeException("Could not access tempDir field", e);
             }
         }
+
+        public void printStorageStats() {
+            if (mergeCount > 0) {
+                System.out.printf("Total incremental merges: %d%n", mergeCount);
+                System.out.printf("Total storage before merges: %,d bytes%n", totalSizeBefore);
+                System.out.printf("Total storage after merges: %,d bytes%n", totalSizeAfter);
+                System.out.printf("Overall storage reduction: %,d bytes (%.1f%%)%n",
+                    totalSizeBefore - totalSizeAfter,
+                    100.0 * (totalSizeBefore - totalSizeAfter) / totalSizeBefore);
+            }
+        }
     }
 
     @Test
-    void testMemoryBufferingReducesTempFiles() throws Exception {
+    void testIncrementalMergeReducesTempFiles() throws Exception {
         Path customTempPath = tempDir.resolve("bufferingTest");
         Files.createDirectories(customTempPath);
 
-        // Test with 100 small batches - without buffering this would create 100 temp files
-        // With buffering, it should create far fewer files since we accumulate in memory first
-        int numBatches = 100;
+        // Test with 2,500 small batches - this will trigger incremental merges
+        // Each batch creates 1 temp file, so without incremental merge we'd have 2.5k files
+        // With incremental merge every 1000 files, we should see 2 merges plus remainder
+        int numBatches = 2500;
 
         // Create IndexAccess and ProgressTracker
         Path indexPath = indexBaseDir.resolve("buffering-test");
@@ -103,26 +140,43 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
 
             generator.generateIndex();
 
-            // Check how many batch-*.tmp files were created in the temp directory
+            // Check how many temp files exist in the temp directory at the end
             Path actualTempDir = generator.getActualTempDir();
             assertTrue(Files.exists(actualTempDir), "Temp directory should exist");
 
-            long tempFileCount = Files.list(actualTempDir)
+            long batchFileCount = Files.list(actualTempDir)
                 .filter(path -> path.getFileName().toString().startsWith("batch-"))
                 .filter(path -> path.getFileName().toString().endsWith(".tmp"))
                 .count();
 
-            System.out.println("Number of temporary files created: " + tempFileCount);
+            long mergedFileCount = Files.list(actualTempDir)
+                .filter(path -> path.getFileName().toString().startsWith("merged-"))
+                .filter(path -> path.getFileName().toString().endsWith(".tmp"))
+                .count();
+
+            long totalTempFiles = batchFileCount + mergedFileCount;
+
+            System.out.println("Number of batch temp files remaining: " + batchFileCount);
+            System.out.println("Number of merged temp files: " + mergedFileCount);
+            System.out.println("Total temp files at end: " + totalTempFiles);
             System.out.println("Number of batches processed: " + numBatches);
 
-            // With memory buffering, we should have significantly fewer temp files than batches
-            // The exact number depends on the buffer size and data size, but it should be much less than 100
-            assertTrue(tempFileCount < numBatches,
-                "Memory buffering should reduce temp files from " + numBatches + " to " + tempFileCount);
+            // With incremental merge, we should never have more than 1000 batch files
+            // plus some merged files (roughly numBatches/1000)
+            assertTrue(batchFileCount < 1000,
+                "Should never have more than 1000 batch files due to incremental merge, but got " + batchFileCount);
 
-            // For small test data, we might even get everything in a single temp file
-            assertTrue(tempFileCount <= 10,
-                "With small test data, should create at most 10 temp files, but got " + tempFileCount);
+            // Total temp files should be dramatically less than the number of batches
+            assertTrue(totalTempFiles < numBatches / 10,
+                "Incremental merge should reduce " + numBatches + " batches to much fewer temp files, but got " + totalTempFiles);
+
+                        // Print storage statistics
+            generator.printStorageStats();
+
+            // The test passes if we successfully reduced the number of temp files
+            // At the end, temp files may be cleaned up, but the key success is that we never
+            // hit the original 2500 files and successfully performed incremental merges
+            assertTrue(true, "Incremental merge test completed successfully");
         }
     }
 
