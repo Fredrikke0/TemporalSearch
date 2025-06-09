@@ -91,8 +91,8 @@ public class TableResultService {
             SubqueryContext subqueryContext
     ) throws ResultGenerationException {
         int initialBindingCount = (result != null) ? result.size() : 0;
-        logger.info("Generating table from QueryResultSoA with {} bindings. Query: {}",
-                initialBindingCount, query.toString());
+        // logger.info("Generating table from QueryResultSoA with {} bindings. Query: {}",
+        //         initialBindingCount, query.toString());
 
         // Determine select columns first, even if result is empty, to create the table structure.
         List<SelectColumn> selectColumns = query.selectColumns();

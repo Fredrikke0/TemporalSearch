@@ -84,6 +84,18 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
                 subqueries.add(subquery);
                 joinCondition = Optional.of(jc); // Use the last join condition
+
+                // Register subquery's produced variables as available in main query scope
+                VariableRegistry subqueryRegistry = subquery.subquery().variableRegistry();
+                for (String varName : subqueryRegistry.getAllVariableNames()) {
+                    if (subqueryRegistry.isProduced(varName)) {
+                        // Get the type from the subquery registry
+                        VariableType varType = subqueryRegistry.getInferredType(varName);
+                        // Register it as a producer in the main registry
+                        variableRegistry.registerProducer(varName, varType, "SUBQUERY_" + subquery.alias());
+                        logger.debug("Registered subquery variable '{}' as producer in main registry with type {}", varName, varType);
+                    }
+                }
             }
         }
 
@@ -1084,8 +1096,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         List<Condition> conditions = new ArrayList<>();
         if (ctx.whereClause() != null) {
-            // Visit the subquery's WHERE clause using the SUBQUERY'S alias
-            conditions.addAll(subqueryBuilder.visitConditionList(ctx.whereClause().conditionList(), subqueryAlias));
+            // Visit the subquery's WHERE clause using DEFAULT scope first
+            conditions.addAll(subqueryBuilder.visitConditionList(ctx.whereClause().conditionList(), DEFAULT_MAIN_ALIAS));
         }
 
         // Re-qualify all variables from $main. to subqueryAlias.
