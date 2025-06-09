@@ -29,7 +29,6 @@ import com.example.index.IndexEntry;
 import com.example.logging.IndexingMetrics;
 import com.example.logging.ProgressTracker;
 import com.google.code.externalsorting.ExternalSort;
-import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -45,8 +44,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     public static final String DELIMITER = "\0";
     public static final char ESCAPE_CHAR = '\u001F';
     private static final int MAX_POSITIONS_PER_SEGMENT = 50_000_000; // Max positions per term segment
-    private static final long MAX_MEMORY_BUFFER_SIZE = 1024 * 1024 * 1024; // 1GB buffer before writing temp file
-
+    private static final int MAX_TEMP_FILES_BEFORE_MERGE = 1000; // Merge temp files when we hit this limit
     protected final IndexAccessInterface indexAccess;
     protected final Connection sqliteConn;
     protected final ProgressTracker progress;
@@ -507,20 +505,38 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     }
 
     /**
-     * Estimates the memory size of a PositionListSoA for buffering decisions.
-     * Uses the actual serialized size for accurate memory tracking.
+     * Performs incremental merge of temp files to prevent file count explosion.
+     * Merges all current temp files into a single intermediate file.
      */
-    private long estimatePositionListSize(PositionListSoA positionList) {
-        try {
-            // Use the actual compressed/serialized size for accurate estimation
-            byte[] serialized = positionList.serializeToCompositeBlob();
-            return serialized.length;
-        } catch (IOException e) {
-            logger.warn("Failed to serialize PositionListSoA for size estimation, using fallback calculation. Error: {}", e.getMessage());
-            // Fallback to rough estimate: 5 integers per position + compression factor
-            return (long) positionList.getNumPositions() * 15; // Assume ~25% compression ratio
+    protected List<File> performIncrementalMerge(List<File> tempFiles) throws IOException {
+        if (tempFiles.size() <= 1) {
+            return tempFiles; // Nothing to merge
         }
+
+        // Create a new intermediate merged file
+        File mergedFile = Files.createTempFile(tempDir, "merged-", ".tmp").toFile();
+
+        // Merge all temp files into the new file
+        ExternalSort.mergeSortedFiles(tempFiles, mergedFile, new PositionListComparator(),
+                                     Charset.defaultCharset(), false);
+
+        // Clean up the original temp files
+        for (File file : tempFiles) {
+            try {
+                Files.deleteIfExists(file.toPath());
+            } catch (IOException e) {
+                logger.debug("Could not delete temp file during incremental merge: {}. Error: {}",
+                           file.getAbsolutePath(), e.getMessage());
+            }
+        }
+
+        // Return a list with just the merged file
+        List<File> result = new ArrayList<>();
+        result.add(mergedFile);
+        return result;
     }
+
+
 
     /**
      * Generates the index by processing documents in batches, sorting externally,
@@ -532,10 +548,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         IndexingMetrics metrics = new IndexingMetrics();
         long totalRawEntriesFetched = 0;
         totalNGramsGenerated = 0;
-
-        // Memory buffer to accumulate multiple batches before writing temp files
-        ListMultimap<String, PositionListSoA> memoryBuffer = ArrayListMultimap.create();
-        long currentBufferSizeBytes = 0;
 
         try {
             long totalCountForProgressBar = getDocumentCountForIndex();
@@ -562,23 +574,18 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                 long durationWriteTempNanos = 0;
                 if (!positions.isEmpty()) {
-                    // Add to memory buffer instead of immediately writing to disk
-                    for (Map.Entry<String, Collection<PositionListSoA>> entry : positions.asMap().entrySet()) {
-                        for (PositionListSoA positionList : entry.getValue()) {
-                            memoryBuffer.put(entry.getKey(), positionList);
-                            currentBufferSizeBytes += estimatePositionListSize(positionList);
-                        }
-                    }
+                    long startTimeWriteTemp = System.nanoTime();
+                    File tempFile = writeBatchToTempFile(positions);
+                    durationWriteTempNanos = System.nanoTime() - startTimeWriteTemp;
+                    tempFiles.add(tempFile);
 
-                    // Write buffer to temp file if it exceeds the size threshold
-                    if (currentBufferSizeBytes >= MAX_MEMORY_BUFFER_SIZE) {
-                        long startTimeWriteTemp = System.nanoTime();
-                        File tempFile = writeBatchToTempFile(memoryBuffer);
-                        durationWriteTempNanos = System.nanoTime() - startTimeWriteTemp;
-                        tempFiles.add(tempFile);
-                        memoryBuffer.clear();
-                        currentBufferSizeBytes = 0;
-                        logger.debug("Wrote buffered temp file for index [{}], total temp files so far: {}", getIndexName(), tempFiles.size());
+                    // Incremental merge when we have too many temp files
+                    if (tempFiles.size() >= MAX_TEMP_FILES_BEFORE_MERGE) {
+                        logger.info("Reached {} temp files for index [{}]. Performing incremental merge...",
+                                   tempFiles.size(), getIndexName());
+                        tempFiles = performIncrementalMerge(tempFiles);
+                        logger.info("Incremental merge complete for index [{}]. Reduced to {} files.",
+                                   getIndexName(), tempFiles.size());
                     }
                 }
 
@@ -589,15 +596,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 }
 
                 progress.updateIndex(rawEntriesInBatch);
-            }
-
-            // Write any remaining data in the memory buffer
-            if (!memoryBuffer.isEmpty()) {
-                logger.info("Writing final buffered temp file for index [{}] with {} terms", getIndexName(), memoryBuffer.keySet().size());
-                File tempFile = writeBatchToTempFile(memoryBuffer);
-                tempFiles.add(tempFile);
-                memoryBuffer.clear();
-                currentBufferSizeBytes = 0;
             }
 
             logger.info("Finished fetching {} raw entries for index [{}].", totalRawEntriesFetched, getIndexName());
