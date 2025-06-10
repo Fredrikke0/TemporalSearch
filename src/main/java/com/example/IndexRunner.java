@@ -36,13 +36,10 @@ import com.example.index.generators.TrigramIndexGenerator;
 import com.example.index.generators.UnigramIndexGenerator;
 import com.example.index.generators.stitch.BigramDateStitchGenerator;
 import com.example.index.generators.stitch.BigramNerStitchGenerator;
-import com.example.index.generators.stitch.BigramPosStitchGenerator;
 import com.example.index.generators.stitch.TrigramDateStitchGenerator;
 import com.example.index.generators.stitch.TrigramNerStitchGenerator;
-import com.example.index.generators.stitch.TrigramPosStitchGenerator;
 import com.example.index.generators.stitch.UnigramDateStitchIndexGenerator;
 import com.example.index.generators.stitch.UnigramNerStitchIndexGenerator;
-import com.example.index.generators.stitch.UnigramPosStitchIndexGenerator;
 import com.example.index.util.SynonymManager;
 import com.example.logging.IndexingMetrics;
 import com.example.logging.ProgressTracker;
@@ -68,8 +65,7 @@ public class IndexRunner {
         parser.addArgument("--batch-size").setDefault(1000).type(Integer.class).help("Batch size for processing (default: 1000)");
         parser.addArgument("-t", "--type")
                 .choices("all", "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash",
-                         "stitch_unigram_date", "stitch_unigram_ner", "stitch_unigram_pos",
-                         "stitch_bigram_pos", "stitch_trigram_pos",
+                         "stitch_unigram_date", "stitch_unigram_ner",
                          "stitch_bigram_ner", "stitch_trigram_ner",
                          "stitch_bigram_date", "stitch_trigram_date")
                 .setDefault(List.of("all"))
@@ -120,8 +116,7 @@ public class IndexRunner {
             typesBeingBuilt.addAll(List.of(
                 "unigram", "bigram", "trigram", "dependency", "hypernym",
                 "ner_date", "pos", "ner", "nash",
-                "stitch_unigram_date", "stitch_unigram_ner", "stitch_unigram_pos",
-                "stitch_bigram_pos", "stitch_trigram_pos",
+                "stitch_unigram_date", "stitch_unigram_ner",
                 "stitch_bigram_ner", "stitch_trigram_ner",
                 "stitch_bigram_date", "stitch_trigram_date"
             ));
@@ -342,50 +337,9 @@ public class IndexRunner {
                             }
                         }
 
-                        if (type.equals(UnigramPosStitchIndexGenerator.MY_INDEX_NAME)) {
-                            metrics.startBatch(batchSize, type);
-                            try (UnigramPosStitchIndexGenerator gen = new UnigramPosStitchIndexGenerator(
-                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
-                                progress.startIndex(type, gen.getDocumentCountForIndex());
-                                gen.generateIndex();
-                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
-                            } catch (Exception e) {
-                                metrics.recordBatchFailure();
-                                logger.error("Error generating {} index: {}", type, e.getMessage(), e);
-                            } finally {
-                                progress.completeIndex();
-                            }
-                        }
 
-                        // N-gram POS Stitch Generators
-                        if (type.equals(BigramPosStitchGenerator.MY_INDEX_NAME)) {
-                            metrics.startBatch(batchSize, type);
-                            try (BigramPosStitchGenerator gen = new BigramPosStitchGenerator(
-                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
-                                progress.startIndex(type, gen.getDocumentCountForIndex());
-                                gen.generateIndex();
-                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
-                            } catch (Exception e) {
-                                metrics.recordBatchFailure();
-                                logger.error("Error generating {} index: {}", type, e.getMessage(), e);
-                            } finally {
-                                progress.completeIndex();
-                            }
-                        }
-                        if (type.equals(TrigramPosStitchGenerator.MY_INDEX_NAME)) {
-                            metrics.startBatch(batchSize, type);
-                            try (TrigramPosStitchGenerator gen = new TrigramPosStitchGenerator(
-                                    indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
-                                progress.startIndex(type, gen.getDocumentCountForIndex());
-                                gen.generateIndex();
-                                metrics.recordBatchSuccess((int) gen.getDocumentCountForIndex());
-                            } catch (Exception e) {
-                                metrics.recordBatchFailure();
-                                logger.error("Error generating {} index: {}", type, e.getMessage(), e);
-                            } finally {
-                                progress.completeIndex();
-                            }
-                        }
+
+
 
                         // N-gram NER Stitch Generators
                         if (type.equals(BigramNerStitchGenerator.MY_INDEX_NAME)) {
