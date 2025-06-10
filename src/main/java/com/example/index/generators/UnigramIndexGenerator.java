@@ -120,6 +120,11 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             return false;
         }
 
+        // Filter out tokens starting with apostrophe (parsing artifacts)
+        if (token.startsWith("'")) {
+            return false;
+        }
+
         boolean hasLetter = false;
         boolean hasDigit = false;
         boolean hasOther = false;

@@ -284,6 +284,11 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             return false;
         }
 
+        // Filter out tokens starting with apostrophe (parsing artifacts)
+        if (token.startsWith("'")) {
+            return false;
+        }
+
         boolean hasLetter = false;
         boolean hasDigit = false;
         boolean hasOther = false;
