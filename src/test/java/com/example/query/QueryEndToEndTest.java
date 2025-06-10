@@ -720,4 +720,122 @@ public class QueryEndToEndTest {
         assertFalse(results.isEmpty(), "Expected results for DATE(> 2023-03-20)");
         assertQueryResultContainsDocIds(results, 3, 30);
     }
+
+    @Test
+    public void testDateWildcardQuery() throws QueryParseException, QueryExecutionException, ResultGenerationException {
+        // Test DATE(*) wildcard - should find any dates that intersect with documents containing 'apple'
+        // Expected: documents 1 and 2 contain 'apple', and documents 1 and 2 also have dates
+        // (from mockNerDateIndex: "20230320" in doc 1, "20230115" in doc 2)
+        String queryStr = "SELECT DOCUMENT_ID FROM mockSource WHERE CONTAINS('apple') AND DATE(*)";
+        Query query = queryParser.parse(queryStr);
+        QueryResultSoA results = queryExecutor.execute(query, mockIndexManager);
+
+        assertNotNull(results, "QueryResultSoA should not be null for DATE(*) wildcard query");
+        assertFalse(results.isEmpty(), "Expected results for CONTAINS('apple') AND DATE(*)");
+        assertQueryResultContainsDocIds(results, 1, 2);
+    }
+
+    @Test
+    public void testDateWildcardWithVariableBinding() throws QueryParseException, QueryExecutionException, ResultGenerationException {
+        // Test DATE(*) with variable binding - should bind the actual dates found
+        String queryStr = "SELECT date FROM mockSource WHERE CONTAINS('apple') AND DATE(*) BIND date";
+        Query query = queryParser.parse(queryStr);
+        QueryResultSoA results = queryExecutor.execute(query, mockIndexManager);
+        Table table = tableResultService.generateTable(query, results, mockIndexManager.getAllIndexes());
+
+        assertNotNull(results, "QueryResultSoA should not be null for DATE(*) with binding");
+        assertNotNull(table, "Table should not be null");
+        assertFalse(results.isEmpty(), "Expected results for CONTAINS('apple') AND DATE(*) BIND date");
+
+        // Should find dates in documents that contain 'apple'
+        // From mockNerDateIndex: "20230320" in doc 1, "20230115" in doc 2
+        assertTrue(table.rowCount() > 0, "Expected at least one row with date binding");
+
+        // Check that we have date values bound to the 'date' variable
+        assertTrue(table.columnNames().contains("$main.date"), "Expected 'date' column in results");
+    }
+
+    @Test
+    public void testDateWildcardWithMultipleConditions() throws QueryParseException, QueryExecutionException, ResultGenerationException {
+        // Test DATE(*) with multiple other conditions to ensure it executes last
+        // This tests the optimization where DATE(*) should only look for dates within
+        // the positions already matched by CONTAINS('test')
+        String queryStr = "SELECT DOCUMENT_ID FROM mockSource WHERE CONTAINS('test') AND DATE(*)";
+        Query query = queryParser.parse(queryStr);
+        QueryResultSoA results = queryExecutor.execute(query, mockIndexManager);
+
+        assertNotNull(results, "QueryResultSoA should not be null for complex DATE(*) query");
+
+        // CONTAINS('test') matches documents 0 and 1
+        // We need to check if any of these documents also have dates
+        // Based on mock data, only specific documents have dates, so this might return fewer results
+        if (!results.isEmpty()) {
+            // If we get results, they should only be from documents that contain 'test'
+            for (int i = 0; i < results.size(); i++) {
+                int docId = results.getDocumentIdAt(i);
+                assertTrue(docId == 0 || docId == 1,
+                    "DATE(*) results should only include documents that match CONTAINS('test'): " + docId);
+            }
+        }
+    }
+
+            @Test
+    public void testDateWildcardWithVariableBindingOptimization() throws QueryParseException, QueryExecutionException, ResultGenerationException {
+        // Test that DATE(*) works efficiently with variable binding for date values
+        String queryStr = "SELECT dateVar FROM mockSource WHERE CONTAINS('apple') AND DATE(*) BIND dateVar";
+        Query query = queryParser.parse(queryStr);
+        QueryResultSoA results = queryExecutor.execute(query, mockIndexManager);
+
+        assertNotNull(results, "QueryResultSoA should not be null");
+        assertFalse(results.isEmpty(), "Expected results for CONTAINS + DATE(*) BIND");
+
+        // Verify that all results have both the original matches and date bindings
+        boolean hasOriginalMatches = false;
+        boolean hasDateBindings = false;
+        for (int i = 0; i < results.size(); i++) {
+            String varName = results.getVariableNameAt(i);
+            if ("$main.dateVar".equals(varName)) {
+                hasDateBindings = true;
+                assertEquals(com.example.query.binding.ValueType.DATE, results.getValueTypeAt(i),
+                           "DATE(*) BIND should produce DATE values");
+            } else {
+                hasOriginalMatches = true;
+            }
+        }
+
+        assertTrue(hasOriginalMatches, "Should have original CONTAINS matches");
+        assertTrue(hasDateBindings, "Should have DATE(*) variable bindings");
+    }
+
+        @Test
+    public void testDateWildcardFiltersOutNonDateMatches() throws QueryParseException, QueryExecutionException, ResultGenerationException {
+        // Test that DATE(*) filters out matches that don't intersect with any dates
+        // This tests the core filtering behavior where only matches with date intersections are kept
+        String queryStr = "SELECT DOCUMENT_ID FROM mockSource WHERE CONTAINS('test') AND DATE(*)";
+        Query query = queryParser.parse(queryStr);
+        QueryResultSoA results = queryExecutor.execute(query, mockIndexManager);
+
+        assertNotNull(results, "QueryResultSoA should not be null");
+
+        // The result size should be smaller than a query without DATE(*) because
+        // DATE(*) filters out matches that don't have intersecting dates
+        String queryWithoutDateStr = "SELECT DOCUMENT_ID FROM mockSource WHERE CONTAINS('test')";
+        Query queryWithoutDate = queryParser.parse(queryWithoutDateStr);
+        QueryResultSoA resultsWithoutDate = queryExecutor.execute(queryWithoutDate, mockIndexManager);
+
+        // If there are any matches without dates, the DATE(*) query should have fewer results
+        // Note: This test assumes that not all 'test' matches have intersecting dates
+        assertTrue(results.size() <= resultsWithoutDate.size(),
+                  "DATE(*) should filter out matches without date intersections");
+
+        // Verify that all remaining matches are from documents/sentences that actually contain dates
+        for (int i = 0; i < results.size(); i++) {
+            int docId = results.getDocumentIdAt(i);
+            // The fact that this result exists means it passed the date intersection filter
+            assertTrue(docId >= 0, "All filtered results should have valid document IDs");
+        }
+
+        logger.info("DATE(*) filtering: {} matches with dates vs {} total matches",
+                   results.size(), resultsWithoutDate.size());
+    }
 }

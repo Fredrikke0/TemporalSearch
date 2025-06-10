@@ -158,6 +158,11 @@ public record Temporal(
             if (startDate.isEmpty() || endDate.isEmpty()) { // These predicates always require both from the query
                 throw new IllegalArgumentException("Interval predicates (CONTAINS, CONTAINED_BY, INTERSECT) require both start and end dates from query.");
             }
+        } else if (temporalType == TemporalPredicate.WILDCARD) {
+            // WILDCARD predicates don't require specific dates - they find any dates within existing matches
+            if (startDate.isPresent() || endDate.isPresent()) {
+                throw new IllegalArgumentException("WILDCARD predicate should not have specific start or end dates.");
+            }
         }
     }
 
@@ -379,6 +384,10 @@ public record Temporal(
             return Optional.empty();
         }
 
+        if (temporalType == TemporalPredicate.WILDCARD) {
+            return Optional.empty(); // WILDCARD conditions don't produce Nash intervals
+        }
+
         return Optional.empty();
     }
 
@@ -432,6 +441,16 @@ public record Temporal(
     }
 
     @Override
+    public Set<String> getConsumedVariables() {
+        if (temporalType == TemporalPredicate.WILDCARD) {
+            // WILDCARD conditions consume a special variable indicating they depend on existing matches
+            // This ensures they are executed last in the optimization order
+            return Set.of("*positions*");
+        }
+        return Collections.emptySet();
+    }
+
+    @Override
     public VariableType getProducedVariableType() {
         return VariableType.TEMPORAL;
     }
@@ -448,8 +467,10 @@ public record Temporal(
     public String toString() {
         StringBuilder sb = new StringBuilder("DATE(");
 
-        // Append operator and date value representation
-        if (temporalType == TemporalPredicate.INTERSECT && startDate.isPresent() && endDate.isPresent()) {
+        // Handle WILDCARD case specially
+        if (temporalType == TemporalPredicate.WILDCARD) {
+            sb.append("*");
+        } else if (temporalType == TemporalPredicate.INTERSECT && startDate.isPresent() && endDate.isPresent()) {
             // Handle date comparison operators by showing the original comparison
             // This requires mapping back from the internal representation, which is complex.
             // For simplicity, show the internal INTERSECT format.
@@ -617,6 +638,10 @@ public record Temporal(
                     yield !queryStartOpt.get().isAfter(docEnd) && !queryEndOpt.get().isBefore(docStart); // Intersect
                 }
                 yield false;
+            }
+            case WILDCARD -> {
+                // WILDCARD conditions always match - they find any date within existing position matches
+                yield true;
             }
             default -> false;
         };

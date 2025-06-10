@@ -353,6 +353,35 @@ public class QueryExecutor {
         }
         // --- STITCH STRATEGY LOGIC --- END ---
 
+                // Handle WILDCARD temporal conditions specially - they need existing position context
+        if (condition instanceof Temporal temporalCondition &&
+            temporalCondition.temporalType() == TemporalPredicate.WILDCARD) {
+
+            logger.debug("Handling WILDCARD temporal condition: {}", condition);
+
+            // WILDCARD conditions should only appear within logical combinations where
+            // other conditions provide the position context. If we reach here, it means
+            // the condition wasn't properly optimized or is being executed in isolation.
+            throw new QueryExecutionException(
+                "WILDCARD temporal conditions cannot be executed in isolation. " +
+                "They must be combined with other conditions that provide position context.",
+                condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+
+        // Handle Logical AND conditions that contain WILDCARD temporal conditions specially
+        if (condition instanceof Logical logicalCondition &&
+            logicalCondition.operator() == Logical.LogicalOperator.AND) {
+
+            // Check if any child conditions are WILDCARD temporal conditions
+            boolean hasWildcardTemporal = logicalCondition.conditions().stream()
+                .anyMatch(c -> c instanceof Temporal t && t.temporalType() == TemporalPredicate.WILDCARD);
+
+            if (hasWildcardTemporal) {
+                logger.debug("Handling Logical AND with WILDCARD temporal conditions");
+                return executeLogicalAndWithWildcard(logicalCondition, indexes, granularity, granularitySize, source, requirements);
+            }
+        }
+
         try {
             ConditionExecutor<Condition> executor = executorFactory.getExecutor(condition);
 
@@ -663,14 +692,243 @@ public class QueryExecutor {
         }
     }
 
-    /**
-     * Extracts document IDs from a QueryResult.
-     * TODO: Implement this if needed.
-     *
-     * @param result The QueryResult to process
-     * @return Set of document IDs
-     */
+    // TODO: Implement document ID extraction if needed
     // public Set<Integer> getDocumentIds(QueryResult result) { ... }
+
+    /**
+     * Executes a Logical AND condition that contains WILDCARD temporal conditions.
+     * This method first executes all non-WILDCARD conditions to get base positions,
+     * then intersects those positions with dates for each WILDCARD condition.
+     *
+     * @param logicalCondition The Logical AND condition containing WILDCARD temporal conditions
+     * @param indexes Map of index name to IndexAccessInterface
+     * @param granularity The query granularity
+     * @param granularitySize The window size for sentence granularity
+     * @param source The corpus name
+     * @param requirements Attribute requirements for SoA optimization
+     * @return QueryResultSoA containing the intersection of all conditions
+     * @throws QueryExecutionException if execution fails
+     */
+    private QueryResultSoA executeLogicalAndWithWildcard(
+            Logical logicalCondition,
+            Map<String, IndexAccessInterface> indexes,
+            Query.Granularity granularity,
+            int granularitySize,
+            String source,
+            AttributeRequirements requirements) throws QueryExecutionException {
+
+        logger.debug("Executing Logical AND with WILDCARD: {}", logicalCondition);
+
+        // Separate WILDCARD and non-WILDCARD conditions
+        List<Condition> nonWildcardConditions = new ArrayList<>();
+        List<Temporal> wildcardConditions = new ArrayList<>();
+
+        for (Condition condition : logicalCondition.conditions()) {
+            if (condition instanceof Temporal temporal && temporal.temporalType() == TemporalPredicate.WILDCARD) {
+                wildcardConditions.add(temporal);
+            } else {
+                nonWildcardConditions.add(condition);
+            }
+        }
+
+        logger.debug("Found {} non-wildcard conditions and {} wildcard conditions",
+                    nonWildcardConditions.size(), wildcardConditions.size());
+
+        // First, execute all non-WILDCARD conditions to get base positions
+        QueryResultSoA baseResults = null;
+        if (!nonWildcardConditions.isEmpty()) {
+            if (nonWildcardConditions.size() == 1) {
+                baseResults = executeCondition(nonWildcardConditions.get(0), indexes, granularity, granularitySize, source, requirements);
+            } else {
+                Logical nonWildcardLogical = new Logical(Logical.LogicalOperator.AND, nonWildcardConditions);
+                baseResults = executeCondition(nonWildcardLogical, indexes, granularity, granularitySize, source, requirements);
+            }
+            logger.debug("Base conditions executed, found {} matches", baseResults.size());
+        } else {
+            // No non-wildcard conditions - this shouldn't happen due to optimization order
+            logger.warn("WILDCARD conditions without any base conditions - this may indicate an optimization issue");
+            baseResults = new QueryResultSoA(granularity, granularitySize, requirements);
+        }
+
+        // Now intersect base positions with dates for each WILDCARD condition
+        for (Temporal wildcardCondition : wildcardConditions) {
+            logger.debug("Processing WILDCARD condition: {}", wildcardCondition);
+            baseResults = intersectWithDates(baseResults, wildcardCondition, indexes, granularity, granularitySize, source);
+            logger.debug("After WILDCARD intersection, {} matches remain", baseResults.size());
+        }
+
+        return baseResults;
+    }
+
+    /**
+     * Intersects existing QueryResultSoA positions with dates from the date index.
+     * This method looks for dates that occur within the same documents/sentences as the existing matches.
+     *
+     * @param existingResults The existing query results with positions
+     * @param wildcardCondition The WILDCARD temporal condition to bind dates to
+     * @param indexes Map of index name to IndexAccessInterface
+     * @param granularity The query granularity
+     * @param granularitySize The window size for sentence granularity
+     * @param source The corpus name
+     * @return QueryResultSoA with additional date bindings where dates intersect with existing positions
+     * @throws QueryExecutionException if execution fails
+     */
+    private QueryResultSoA intersectWithDates(
+            QueryResultSoA existingResults,
+            Temporal wildcardCondition,
+            Map<String, IndexAccessInterface> indexes,
+            Query.Granularity granularity,
+            int granularitySize,
+            String source) throws QueryExecutionException {
+
+        logger.debug("Intersecting {} existing matches with dates for WILDCARD condition", existingResults.size());
+
+        if (existingResults.size() == 0) {
+            logger.debug("No existing matches to intersect with dates");
+            return existingResults;
+        }
+
+        IndexAccessInterface dateIndex = indexes.get("ner_date");
+        if (dateIndex == null || !dateIndex.isOpen()) {
+            logger.warn("Date index 'ner_date' is not available or not open. Cannot execute WILDCARD temporal condition.");
+            return existingResults;
+        }
+
+        // Build sets of documents and sentences from existing results for efficient lookup
+        Set<Integer> existingDocuments = new HashSet<>();
+        Set<String> existingSentenceKeys = new HashSet<>(); // Format: "docId:sentId"
+
+        for (int i = 0; i < existingResults.size(); i++) {
+            int docId = existingResults.getDocumentIdAt(i);
+            existingDocuments.add(docId);
+
+            if (granularity == Query.Granularity.SENTENCE && existingResults.getRequirements().needsSentenceId) {
+                int sentId = existingResults.getSentenceIdAt(i);
+                if (sentId >= 0) {
+                    existingSentenceKeys.add(docId + ":" + sentId);
+                }
+            }
+        }
+
+        logger.debug("Existing matches span {} documents and {} sentences",
+                    existingDocuments.size(), existingSentenceKeys.size());
+
+        // Create new result set that will only contain matches that intersect with dates
+        QueryResultSoA filteredResults = new QueryResultSoA(granularity, granularitySize, existingResults.getRequirements());
+
+        // We'll track which existing matches have found intersecting dates
+        Set<Integer> matchesWithDates = new HashSet<>();
+
+        // Now scan the date index and add intersecting dates
+        String variableNameToBind = wildcardCondition.variableName();
+
+        int newDateEntries = 0;
+        try (var iterator = dateIndex.iterateFromFirst()) {
+            while (iterator.isValid()) {
+                byte[] keyBytes = iterator.key();
+                byte[] valueBytes = iterator.value();
+                String dateStr = com.example.core.IndexAccess.asString(keyBytes);
+
+                java.time.LocalDate entryDate = TemporalExecutor.parseDateKey(dateStr);
+                if (entryDate != null) {
+                    // Deserialize positions for this date
+                    try {
+                        com.example.core.PositionListSoA positions =
+                            com.example.core.PositionListSoA.deserializeFromCompositeBlob(valueBytes);
+
+                        // Check each position to see if it intersects with existing matches
+                        for (int i = 0; i < positions.getNumPositions(); i++) {
+                            int docId = positions.getDocIdAt(i);
+                            int sentId = positions.getSentenceIdAt(i);
+
+                            boolean intersects = false;
+                            if (granularity == Query.Granularity.DOCUMENT) {
+                                // Document level: check if date occurs in any of the existing documents
+                                intersects = existingDocuments.contains(docId);
+                            } else {
+                                // Sentence level: check if date occurs in any of the existing sentences
+                                String sentenceKey = docId + ":" + sentId;
+                                intersects = existingSentenceKeys.contains(sentenceKey);
+                            }
+
+                            if (intersects) {
+                                // Mark that we found a date intersection for this document/sentence scope
+                                if (granularity == Query.Granularity.DOCUMENT) {
+                                    // For document granularity, mark all existing matches in this document
+                                    for (int j = 0; j < existingResults.size(); j++) {
+                                        if (existingResults.getDocumentIdAt(j) == docId) {
+                                            matchesWithDates.add(j);
+                                        }
+                                    }
+                                } else {
+                                    // For sentence granularity, mark existing matches in this specific sentence
+                                    String sentenceKey = docId + ":" + sentId;
+                                    for (int j = 0; j < existingResults.size(); j++) {
+                                        if (existingResults.getRequirements().needsSentenceId) {
+                                            int existingSentId = existingResults.getSentenceIdAt(j);
+                                            String existingSentenceKey = existingResults.getDocumentIdAt(j) + ":" + existingSentId;
+                                            if (existingSentenceKey.equals(sentenceKey)) {
+                                                matchesWithDates.add(j);
+                                            }
+                                        } else if (existingResults.getDocumentIdAt(j) == docId) {
+                                            // Fallback to document level if sentence IDs not available
+                                            matchesWithDates.add(j);
+                                        }
+                                    }
+                                }
+
+                                // If variable binding is requested, add the date as a separate result row
+                                if (variableNameToBind != null) {
+                                    filteredResults.add(
+                                        entryDate,                          // The date value
+                                        com.example.query.binding.ValueType.DATE,
+                                        variableNameToBind,                 // Variable name for the date
+                                        docId,                              // Document ID
+                                        positions.getSentenceIdAt(i),      // Sentence ID
+                                        positions.getBeginCharAt(i),       // Begin position
+                                        positions.getEndCharAt(i),         // End position
+                                        positions.getSynonymIdAt(i),       // Synonym ID
+                                        filteredResults.getNextConceptualRowId() // New conceptual row
+                                    );
+                                    newDateEntries++;
+                                }
+                            }
+                        }
+                    } catch (java.io.IOException e) {
+                        logger.warn("Failed to deserialize positions for date key '{}': {}", dateStr, e.getMessage());
+                    }
+                }
+                iterator.next();
+            }
+        } catch (Exception e) {
+            logger.error("Error iterating over date index for WILDCARD intersection: {}", e.getMessage(), e);
+            throw new QueryExecutionException("Failed to intersect with dates: " + e.getMessage(), e,
+                wildcardCondition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+        }
+
+        // Finally, add the existing matches that had date intersections
+        for (int matchIndex : matchesWithDates) {
+            AttributeRequirements requirements = existingResults.getRequirements();
+            filteredResults.add(
+                existingResults.getValueAt(matchIndex),
+                existingResults.getValueTypeAt(matchIndex),
+                existingResults.getVariableNameAt(matchIndex),
+                existingResults.getDocumentIdAt(matchIndex),
+                requirements.needsSentenceId ? existingResults.getSentenceIdAt(matchIndex) : -1,
+                requirements.needsPositions ? existingResults.getBeginCharAt(matchIndex) : -1,
+                requirements.needsPositions ? existingResults.getEndCharAt(matchIndex) : -1,
+                requirements.needsSynonymIds ? existingResults.getSynonymIdAt(matchIndex) : -1,
+                requirements.needsConceptualRowIds ? existingResults.getConceptualRowIdAt(matchIndex) : -1
+            );
+        }
+
+        logger.debug("WILDCARD intersection: {} existing matches had date intersections, {} new date entries added",
+                    matchesWithDates.size(), newDateEntries);
+        logger.debug("Final result size: {} (filtered from {} original matches)",
+                    filteredResults.size(), existingResults.size());
+
+        return filteredResults;
+    }
 
     private QueryResultSoA executeWithRequirements(Query query, Map<String, IndexAccessInterface> indexes,
                                         AttributeRequirements requirements, SubqueryContext subqueryContext)

@@ -39,7 +39,14 @@ public enum TemporalPredicate {
      * Dates are within a specified time window of each other.
      * For example: 2023-01-01 PROXIMITY 2023-01-03 (within 2 days)
      */
-    PROXIMITY;
+    PROXIMITY,
+
+    /**
+     * Wildcard predicate for finding any date that intersects with existing matches.
+     * Used by DATE(*) expressions to query for temporal data only within the scope
+     * of positions already matched by other conditions.
+     */
+    WILDCARD;
 
     /**
      * Maps this TemporalPredicate to the corresponding Nash.RangePredicate.
@@ -59,6 +66,9 @@ public enum TemporalPredicate {
 
             // BEFORE and AFTER are handled differently by NashTemporalStrategy (using CONTAINS)
             case BEFORE, AFTER -> Optional.empty(); // Return empty; handled specifically in NashTemporalStrategy
+
+            // WILDCARD is handled specially by temporal executor strategies
+            case WILDCARD -> Optional.empty(); // Return empty; handled specifically in strategies
         };
     }
 

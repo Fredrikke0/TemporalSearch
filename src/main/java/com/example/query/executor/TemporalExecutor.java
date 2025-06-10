@@ -126,6 +126,14 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
         logger.debug("Executing TEMPORAL condition with active strategy: '{}', AttributeRequirements: {}",
             activeStrategyName, requirements.getRequiredSoAAttributes());
 
+        // Handle WILDCARD conditions specially - they need existing results to intersect with
+        if (condition.temporalType() == TemporalPredicate.WILDCARD) {
+            throw new QueryExecutionException(
+                "WILDCARD temporal conditions require existing match context and cannot be executed independently. " +
+                "This suggests an issue with query execution order optimization.",
+                condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+
         TemporalExecutionStrategy strategy = getActiveStrategy();
         return strategy.execute(condition, indexes, granularity, granularitySize, corpusName, this, requirements);
     }

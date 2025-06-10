@@ -496,6 +496,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
          if (tree instanceof QueryLangParser.DateComparisonExpressionContext c) return visitDateComparisonExpression(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.DateLiteralComparisonExpressionContext c) return visitDateLiteralComparisonExpression(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.DateOperatorExpressionContext c) return visitDateOperatorExpression(c, currentScopeAlias);
+         if (tree instanceof QueryLangParser.DateWildcardExpressionContext c) return visitDateWildcardExpression(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.DependsExpressionContext c) return visitDependsExpression(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.PosExpressionContext c) return visitPosExpression(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.ConditionListContext c) return visitConditionList(c, currentScopeAlias);
@@ -650,6 +651,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         );
     }
 
+    // Overload visitDateOperatorExpression to accept alias
     public Object visitDateOperatorExpression(QueryLangParser.DateOperatorExpressionContext ctx, String currentScopeAlias) {
         String operator = ctx.dateOperator().getText();
         TemporalPredicate type = mapOperatorToTemporal(operator); // Corrected variable name: 'type' not 'dependencyType'
@@ -689,6 +691,35 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         // Model updated to store qualified name (as Optional)
         // Wrap startDate in Optional.of() to match the updated Temporal constructor
         return new Temporal(Optional.of(startDate), endDate, Optional.ofNullable(qualifiedVariableName), range, type);
+    }
+
+    /**
+     * Handles DATE wildcard expressions from the grammar rule:
+     * DATE(*) (BIND var=variable)?
+     *
+     * Examples: DATE(*) BIND date, DATE(*)
+     *
+     * This creates a temporal condition that finds any date intersecting with existing matches.
+     * The wildcard condition consumes variables from other conditions and is executed last.
+     */
+    public Object visitDateWildcardExpression(QueryLangParser.DateWildcardExpressionContext ctx, String currentScopeAlias) {
+        String qualifiedVariableName = null;
+        if (ctx.BIND() != null && ctx.var != null) {
+            // BIND clause present: register the variable as a producer
+            String plainVarName = (String) visit(ctx.var);
+            qualifiedVariableName = currentScopeAlias + "." + plainVarName;
+            logger.debug("Registering producer: {} type: TEMPORAL for DATE wildcard", qualifiedVariableName);
+            variableRegistry.registerProducer(qualifiedVariableName, VariableType.TEMPORAL, "DATE_WILDCARD");
+        }
+
+        // Create wildcard Temporal condition - no specific date bounds, special WILDCARD predicate
+        return new Temporal(
+            Optional.empty(),                                    // No start date - wildcard
+            Optional.empty(),                                    // No end date - wildcard
+            Optional.ofNullable(qualifiedVariableName),         // Variable name if BIND clause present
+            Optional.empty(),                                    // No range for wildcard
+            TemporalPredicate.WILDCARD                          // Special wildcard predicate
+        );
     }
 
     @Override
