@@ -164,6 +164,8 @@ public class MockIndexAccess implements IndexAccessInterface {
             logger.debug("MockIndexAccess [{}]: Key='{}' is new.", indexType, key);
         }
         list.add(pos);
+        // Sort to mimic real index behavior where data is sorted by document ID
+        list.sort();
         int positionsAfter = list.getNumPositions();
         byte[] serializedValue = list.serializeToCompositeBlob();
         dataStore.put(wrappedKey, serializedValue);
@@ -187,8 +189,12 @@ public class MockIndexAccess implements IndexAccessInterface {
             positionsBefore = mergedList.getNumPositions();
             logger.debug("MockIndexAccess [{}]: Key='{}' existed (pre-serialized). Positions before merge: {}", indexType, key, positionsBefore);
             mergedList.addAll(newPositions);
+            // Sort to mimic real index behavior where data is sorted by document ID
+            mergedList.sort();
         } else {
             mergedList = newPositions;
+            // Sort to mimic real index behavior where data is sorted by document ID
+            mergedList.sort();
             logger.debug("MockIndexAccess [{}]: Key='{}' is new (pre-serialized).", indexType, key);
         }
         byte[] serializedValue = mergedList.serializeToCompositeBlob();

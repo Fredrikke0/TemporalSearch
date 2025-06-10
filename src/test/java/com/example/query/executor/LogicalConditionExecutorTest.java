@@ -139,7 +139,6 @@ public class LogicalConditionExecutorTest {
         return uniqueIds.size();
     }
 
-
     @Test
     void testExecuteAnd_twoConditions_bothReturnResults() throws QueryExecutionException {
         Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
@@ -365,5 +364,40 @@ public class LogicalConditionExecutorTest {
             }
         }
         assertTrue(term1Found);
+    }
+
+    @Test
+    void testMergeJoinBasic() throws QueryExecutionException {
+        // Test basic merge join functionality
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
+
+        // Left: documents [1, 3] (sorted)
+        // Right: documents [1, 3] (sorted)
+        // Expected result: both docs 1 and 3 should match
+        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0),
+            new TestDataEntry("term1", ValueType.TERM, "v1", 3, 1, 0, 4, -1, 1)
+        ));
+        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
+            new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 5, 9, -1, 0),
+            new TestDataEntry("term2", ValueType.TERM, "v2", 3, 1, 5, 9, -1, 1)
+        ));
+
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result1SoA);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements))).thenReturn(result2SoA);
+
+        QueryResultSoA result = logicalExecutor.execute(andCondition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+
+        assertEquals(4, result.size(), "Expected 4 total binding entries (2 from left + 2 from right)");
+        assertEquals(2, countUniqueConceptualRows(result), "Expected 2 conceptual rows (one for each matching doc)");
+
+        // Verify document IDs are present
+        Set<Integer> actualDocIds = new HashSet<>();
+        for (int i = 0; i < result.size(); i++) {
+            actualDocIds.add(result.getDocumentIdAt(i));
+        }
+        assertTrue(actualDocIds.contains(1), "Document 1 should be present");
+        assertTrue(actualDocIds.contains(3), "Document 3 should be present");
+        assertEquals(2, actualDocIds.size(), "Should have exactly 2 unique document IDs");
     }
 }

@@ -487,6 +487,11 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 throw new QueryExecutionException("Failed to execute temporal condition: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
             }
             strategyLogger.debug("NaiveTemporalStrategy execution finished, {} conceptual rows. Final SoA size: {}", resultSoA.getConceptualRowCount(), resultSoA.size());
+
+            // Sort by document ID to ensure merge join optimization works correctly
+            resultSoA.sort();
+            strategyLogger.debug("NaiveTemporalStrategy: Sorted result by document ID for merge join compatibility");
+
             return resultSoA;
         }
 

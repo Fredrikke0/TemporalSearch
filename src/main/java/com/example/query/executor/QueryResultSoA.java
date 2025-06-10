@@ -19,6 +19,8 @@ import com.example.query.model.Query;
 
 import it.unimi.dsi.fastutil.bytes.ByteArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.ints.IntArrays;
+import it.unimi.dsi.fastutil.ints.IntComparator;
 import tech.tablesaw.api.Table;
 
 /**
@@ -573,5 +575,102 @@ public final class QueryResultSoA {
             return Collections.emptySet();
         }
         return new HashSet<>(conceptualRowIds);
+    }
+
+    /**
+     * Sorts all parallel attribute arrays according to the standard position comparison:
+     * documentId, then sentenceId (if available), then beginChar (if available), then endChar (if available).
+     * The sort preserves conceptual row IDs and all other attributes.
+     * The sort is stable with respect to elements not distinguished by the comparator.
+     *
+     * This follows the same efficient pattern as PositionListSoA.sort().
+     */
+    public void sort() {
+        if (size <= 1) {
+            return;
+        }
+
+        // Create index array for indirect sorting (same pattern as PositionListSoA)
+        int[] indices = new int[size];
+        for (int i = 0; i < size; i++) {
+            indices[i] = i;
+        }
+
+        // Define comparator similar to PositionListSoA but respecting requirements
+        IntComparator comparator = (i1, i2) -> {
+            // Always compare by document ID first
+            int docIdCompare = Integer.compare(documentIds.getInt(i1), documentIds.getInt(i2));
+            if (docIdCompare != 0) return docIdCompare;
+
+            // Compare by sentence ID if available
+            if (sentenceIds != null) {
+                int sentIdCompare = Integer.compare(sentenceIds.getInt(i1), sentenceIds.getInt(i2));
+                if (sentIdCompare != 0) return sentIdCompare;
+            }
+
+            // Compare by begin char if available
+            if (beginChars != null) {
+                int beginCompare = Integer.compare(beginChars.getInt(i1), beginChars.getInt(i2));
+                if (beginCompare != 0) return beginCompare;
+            }
+
+            // Compare by end char if available
+            if (endChars != null) {
+                int endCompare = Integer.compare(endChars.getInt(i1), endChars.getInt(i2));
+                if (endCompare != 0) return endCompare;
+            }
+
+            // Compare by synonym ID if available
+            if (synonymIds != null) {
+                int synonymCompare = Integer.compare(synonymIds.getInt(i1), synonymIds.getInt(i2));
+                if (synonymCompare != 0) return synonymCompare;
+            }
+
+            return 0; // Equal according to all available criteria
+        };
+
+        // Sort indices using efficient QuickSort (same as PositionListSoA)
+        IntArrays.quickSort(indices, comparator);
+
+        // Rebuild all arrays in sorted order (same pattern as PositionListSoA)
+        IntArrayList sortedDocumentIds = new IntArrayList(size);
+        IntArrayList sortedSentenceIds = sentenceIds != null ? new IntArrayList(size) : null;
+        IntArrayList sortedBeginChars = beginChars != null ? new IntArrayList(size) : null;
+        IntArrayList sortedEndChars = endChars != null ? new IntArrayList(size) : null;
+        IntArrayList sortedSynonymIds = synonymIds != null ? new IntArrayList(size) : null;
+        IntArrayList sortedConceptualRowIds = conceptualRowIds != null ? new IntArrayList(size) : null;
+
+        // Rebuild value and variable arrays
+        IntArrayList sortedValueIndices = new IntArrayList(size);
+        IntArrayList sortedVariableNameIndices = new IntArrayList(size);
+        ByteArrayList sortedValueTypes = new ByteArrayList(size);
+
+        for (int i = 0; i < size; i++) {
+            int originalIndex = indices[i];
+
+            // Rebuild position arrays
+            sortedDocumentIds.add(documentIds.getInt(originalIndex));
+            if (sortedSentenceIds != null) sortedSentenceIds.add(sentenceIds.getInt(originalIndex));
+            if (sortedBeginChars != null) sortedBeginChars.add(beginChars.getInt(originalIndex));
+            if (sortedEndChars != null) sortedEndChars.add(endChars.getInt(originalIndex));
+            if (sortedSynonymIds != null) sortedSynonymIds.add(synonymIds.getInt(originalIndex));
+            if (sortedConceptualRowIds != null) sortedConceptualRowIds.add(conceptualRowIds.getInt(originalIndex));
+
+            // Rebuild value arrays
+            sortedValueIndices.add(valueIndices.getInt(originalIndex));
+            sortedVariableNameIndices.add(variableNameIndices.getInt(originalIndex));
+            sortedValueTypes.add(valueTypes.getByte(originalIndex));
+        }
+
+        // Replace arrays with sorted versions
+        this.documentIds = sortedDocumentIds;
+        this.sentenceIds = sortedSentenceIds;
+        this.beginChars = sortedBeginChars;
+        this.endChars = sortedEndChars;
+        this.synonymIds = sortedSynonymIds;
+        this.conceptualRowIds = sortedConceptualRowIds;
+        this.valueIndices = sortedValueIndices;
+        this.variableNameIndices = sortedVariableNameIndices;
+        this.valueTypes = sortedValueTypes;
     }
 }

@@ -141,14 +141,15 @@ public class QueryEndToEndTest {
         mockIndexManager = org.mockito.Mockito.mock(IndexManager.class);
 
         mockUnigramIndex = new MockIndexAccess("unigram", com.example.index.AnnotationType.UNKNOWN, new java.util.HashMap<>());
-        mockUnigramIndex.addTestData("apple", 1, 1, 0, 5);
-        mockUnigramIndex.addTestData("apple", 2, 1, 10, 15);
-        mockUnigramIndex.addTestData("banana", 2, 2, 20, 25);
-        mockUnigramIndex.addTestData("test", 0, 0, 0, 4);
-        mockUnigramIndex.addTestData("test", 1, 1, 0, 4);
-        mockUnigramIndex.addTestData("window", 0, 1, 0, 6);
-        mockUnigramIndex.addTestData("window", 0, 3, 0, 6);
-        mockUnigramIndex.addTestData("grape", 3, 1, 5, 10);
+        // Add test data sorted by document ID (just like real indexes would be)
+        mockUnigramIndex.addTestData("apple", 1, 1, 0, 5);       // Document 1
+        mockUnigramIndex.addTestData("apple", 2, 1, 10, 15);     // Document 2
+        mockUnigramIndex.addTestData("banana", 2, 2, 20, 25);    // Document 2
+        mockUnigramIndex.addTestData("test", 0, 0, 0, 4);        // Document 0
+        mockUnigramIndex.addTestData("test", 1, 1, 0, 4);        // Document 1
+        mockUnigramIndex.addTestData("window", 0, 1, 0, 6);      // Document 0
+        mockUnigramIndex.addTestData("window", 0, 3, 0, 6);      // Document 0
+        mockUnigramIndex.addTestData("grape", 3, 1, 5, 10);      // Document 3
 
         mockBigramIndex = new MockIndexAccess();
         mockBigramIndex.addTestData("read" + DELIMITER + "monkey", 3, 1, 10, 20);
@@ -189,10 +190,11 @@ public class QueryEndToEndTest {
         // --- End New NER Mock Data Population ---
 
         mockNerDateIndex = new MockIndexAccess("ner_date", com.example.index.AnnotationType.DATE, new java.util.HashMap<>());
-        mockNerDateIndex.addTestData("20230115", 2, 1, 0, 10);
-        mockNerDateIndex.addTestData("20230320", 1, 1, 30, 40);
-        mockNerDateIndex.addTestData("20240101", 3, 1, 50, 60);
-        mockNerDateIndex.addTestData("20240115", 30, 1, 0, 10);
+        // Add test data sorted by document ID (just like real indexes would be)
+        mockNerDateIndex.addTestData("20230320", 1, 1, 30, 40);  // Document 1
+        mockNerDateIndex.addTestData("20230115", 2, 1, 0, 10);   // Document 2
+        mockNerDateIndex.addTestData("20240101", 3, 1, 50, 60);  // Document 3
+        mockNerDateIndex.addTestData("20240115", 30, 1, 0, 10);  // Document 30
 
         mockNashIndex = new MockIndexAccess();
 
@@ -688,6 +690,7 @@ public class QueryEndToEndTest {
         QueryResultSoA results = queryExecutor.execute(query, mockIndexManager);
         assertNotNull(results);
         assertFalse(results.isEmpty(), "Expected results for CONTAINS('apple') AND DATE(==2023)");
+
         assertQueryResultContainsDocIds(results, 1, 2);
     }
 

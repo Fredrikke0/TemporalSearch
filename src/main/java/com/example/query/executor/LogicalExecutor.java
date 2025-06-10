@@ -1,11 +1,7 @@
 package com.example.query.executor;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +33,8 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
     public LogicalExecutor(ConditionExecutorFactory executorFactory) {
         this.executorFactory = executorFactory;
     }
+
+
 
     private <C extends Condition> QueryResultSoA executeCondition(
         C condition,
@@ -158,123 +156,190 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
 
     private QueryResultSoA performAndSoA(QueryResultSoA left, QueryResultSoA right,
                                          Query.Granularity granularity, AttributeRequirements requirements) {
-        logger.debug("Performing SoA AND operation. Left size: {}, Right size: {}. Granularity: {}",
+        logger.debug("Performing SoA AND operation (merge join). Left size: {}, Right size: {}. Granularity: {}",
                      left.size(), right.size(), granularity);
+
+        // DEBUG: Log the actual data being merged
+        logger.debug("LEFT data:");
+        for (int i = 0; i < left.size(); i++) {
+            logger.debug("  Left[{}]: docId={}, value={}, valueType={}",
+                        i, left.getDocumentIdAt(i), left.getValueAt(i), left.getValueTypeAt(i));
+        }
+        logger.debug("RIGHT data:");
+        for (int i = 0; i < right.size(); i++) {
+            logger.debug("  Right[{}]: docId={}, value={}, valueType={}",
+                        i, right.getDocumentIdAt(i), right.getValueAt(i), right.getValueTypeAt(i));
+        }
 
         AttributeRequirements combinedReqs = new AttributeRequirements();
         combinedReqs.merge(left.getRequirements());
         combinedReqs.merge(right.getRequirements());
         combinedReqs.needsConceptualRowIds = true; // Crucial for AND/JOIN logic
 
+        // Data from indexes should already be sorted by document ID due to indexing process
+        // No need to re-sort - trust the index ordering
+
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, left.getGranularitySize(), combinedReqs);
         int nextConceptualRowId = 0;
 
+        // Merge join algorithm - now guaranteed to work with sorted inputs
+        int leftIdx = 0;
+        int rightIdx = 0;
+
         if (granularity == Query.Granularity.DOCUMENT) {
-            // Map docId to list of original indices in 'left'
-            Map<Integer, List<Integer>> leftDocIdToIndices = new HashMap<>();
-            for (int i = 0; i < left.size(); i++) {
-                leftDocIdToIndices.computeIfAbsent(left.getDocumentIdAt(i), k -> new ArrayList<>()).add(i);
-            }
+            while (leftIdx < left.size() && rightIdx < right.size()) {
+                int leftDocId = left.getDocumentIdAt(leftIdx);
+                int rightDocId = right.getDocumentIdAt(rightIdx);
 
-            // Find common docIds and process them
-            Set<Integer> rightProcessedDocIds = new HashSet<>(); // To avoid processing right-side docs multiple times if they have multiple entries for the same docId
-            for (int i = 0; i < right.size(); i++) {
-                int rightDocId = right.getDocumentIdAt(i);
-                if (leftDocIdToIndices.containsKey(rightDocId) && !rightProcessedDocIds.contains(rightDocId)) {
-                    // Common docId found, generate a new conceptual row
-                    int currentOutputConceptualId = nextConceptualRowId++;
+                logger.trace("Merge join: comparing left[{}] docId={} vs right[{}] docId={}",
+                           leftIdx, leftDocId, rightIdx, rightDocId);
 
-                    // Add all left-side bindings for this common docId
-                    for (int leftIndex : leftDocIdToIndices.get(rightDocId)) {
+                if (leftDocId < rightDocId) {
+                    logger.trace("Left docId {} < right docId {}, advancing left", leftDocId, rightDocId);
+                    leftIdx++;
+                } else if (leftDocId > rightDocId) {
+                    logger.trace("Left docId {} > right docId {}, advancing right", leftDocId, rightDocId);
+                    rightIdx++;
+                } else {
+                    logger.debug("MATCH FOUND: docId={}", leftDocId);
+                    // Found matching docId - create cross product of all matching entries
+                    int currentConceptualId = nextConceptualRowId++;
+
+                    // Store the start positions to iterate over all combinations
+                    int leftStart = leftIdx;
+                    int rightStart = rightIdx;
+
+                    // Count how many entries we have for this docId on both sides
+                    int leftCount = 0;
+                    while (leftIdx + leftCount < left.size() && left.getDocumentIdAt(leftIdx + leftCount) == leftDocId) {
+                        leftCount++;
+                    }
+
+                    int rightCount = 0;
+                    while (rightIdx + rightCount < right.size() && right.getDocumentIdAt(rightIdx + rightCount) == rightDocId) {
+                        rightCount++;
+                    }
+
+                    logger.debug("Adding {} left entries and {} right entries for conceptual ID {}",
+                               leftCount, rightCount, currentConceptualId);
+
+                                        // Add all left bindings for this docId
+                    for (int li = 0; li < leftCount; li++) {
+                        int leftRowIdx = leftStart + li;
                         resultSoA.add(
-                            left.getValueAt(leftIndex),
-                            left.getValueTypeAt(leftIndex),
-                            left.getVariableNameAt(leftIndex),
-                            left.getDocumentIdAt(leftIndex),
-                            combinedReqs.needsSentenceId ? left.getSentenceIdAt(leftIndex) : -1,
-                            combinedReqs.needsPositions ? left.getBeginCharAt(leftIndex) : -1,
-                            combinedReqs.needsPositions ? left.getEndCharAt(leftIndex) : -1,
-                            combinedReqs.needsSynonymIds ? left.getSynonymIdAt(leftIndex) : -1,
-                            currentOutputConceptualId
+                            left.getValueAt(leftRowIdx),
+                            left.getValueTypeAt(leftRowIdx),
+                            left.getVariableNameAt(leftRowIdx),
+                            left.getDocumentIdAt(leftRowIdx),
+                            combinedReqs.needsSentenceId ? left.getSentenceIdAt(leftRowIdx) : -1,
+                            combinedReqs.needsPositions ? left.getBeginCharAt(leftRowIdx) : -1,
+                            combinedReqs.needsPositions ? left.getEndCharAt(leftRowIdx) : -1,
+                            combinedReqs.needsSynonymIds ? left.getSynonymIdAt(leftRowIdx) : -1,
+                            currentConceptualId
                         );
                     }
 
-                    // Add all right-side bindings for this common docId
-                    // Need to iterate through 'right' to find all matches for rightDocId
-                    for (int j = 0; j < right.size(); j++) {
-                        if (right.getDocumentIdAt(j) == rightDocId) {
-                            resultSoA.add(
-                                right.getValueAt(j),
-                                right.getValueTypeAt(j),
-                                right.getVariableNameAt(j),
-                                right.getDocumentIdAt(j),
-                                combinedReqs.needsSentenceId ? right.getSentenceIdAt(j) : -1,
-                                combinedReqs.needsPositions ? right.getBeginCharAt(j) : -1,
-                                combinedReqs.needsPositions ? right.getEndCharAt(j) : -1,
-                                combinedReqs.needsSynonymIds ? right.getSynonymIdAt(j) : -1,
-                                currentOutputConceptualId
-                            );
-                        }
+                    // Add all right bindings for this docId
+                    for (int ri = 0; ri < rightCount; ri++) {
+                        int rightRowIdx = rightStart + ri;
+                        resultSoA.add(
+                            right.getValueAt(rightRowIdx),
+                            right.getValueTypeAt(rightRowIdx),
+                            right.getVariableNameAt(rightRowIdx),
+                            right.getDocumentIdAt(rightRowIdx),
+                            combinedReqs.needsSentenceId ? right.getSentenceIdAt(rightRowIdx) : -1,
+                            combinedReqs.needsPositions ? right.getBeginCharAt(rightRowIdx) : -1,
+                            combinedReqs.needsPositions ? right.getEndCharAt(rightRowIdx) : -1,
+                            combinedReqs.needsSynonymIds ? right.getSynonymIdAt(rightRowIdx) : -1,
+                            currentConceptualId
+                        );
                     }
-                    rightProcessedDocIds.add(rightDocId);
+
+                    // Advance both pointers past all processed entries
+                    leftIdx += leftCount;
+                    rightIdx += rightCount;
                 }
             }
         } else { // Granularity.SENTENCE
-            // Map DocSentIdPair to list of original indices in 'left'
-            Map<DocSentIdPair, List<Integer>> leftPairToIndices = new HashMap<>();
-            if (left.getRequirements().needsSentenceId) {
-                for (int i = 0; i < left.size(); i++) {
-                    leftPairToIndices.computeIfAbsent(
-                        new DocSentIdPair(left.getDocumentIdAt(i), left.getSentenceIdAt(i)),
-                        k -> new ArrayList<>()
-                    ).add(i);
+            // For sentence granularity, we need to merge on (docId, sentenceId) pairs
+            while (leftIdx < left.size() && rightIdx < right.size()) {
+                int leftDocId = left.getDocumentIdAt(leftIdx);
+                int rightDocId = right.getDocumentIdAt(rightIdx);
+                int leftSentId = combinedReqs.needsSentenceId ? left.getSentenceIdAt(leftIdx) : -1;
+                int rightSentId = combinedReqs.needsSentenceId ? right.getSentenceIdAt(rightIdx) : -1;
+
+                // Compare (docId, sentenceId) pairs lexicographically
+                int comparison = Integer.compare(leftDocId, rightDocId);
+                if (comparison == 0 && combinedReqs.needsSentenceId) {
+                    comparison = Integer.compare(leftSentId, rightSentId);
                 }
-            }
 
-            Set<DocSentIdPair> rightProcessedPairs = new HashSet<>();
-            if (right.getRequirements().needsSentenceId && left.getRequirements().needsSentenceId) {
-                for (int i = 0; i < right.size(); i++) {
-                    DocSentIdPair rightPair = new DocSentIdPair(right.getDocumentIdAt(i), right.getSentenceIdAt(i));
-                    if (leftPairToIndices.containsKey(rightPair) && !rightProcessedPairs.contains(rightPair)) {
-                        int currentOutputConceptualId = nextConceptualRowId++;
+                if (comparison < 0) {
+                    leftIdx++;
+                } else if (comparison > 0) {
+                    rightIdx++;
+                } else {
+                    // Found matching (docId, sentenceId) pair
+                    int currentConceptualId = nextConceptualRowId++;
 
-                        // Add all left-side bindings for this common pair
-                        for (int leftIndex : leftPairToIndices.get(rightPair)) {
-                            resultSoA.add(
-                                left.getValueAt(leftIndex),
-                                left.getValueTypeAt(leftIndex),
-                                left.getVariableNameAt(leftIndex),
-                                left.getDocumentIdAt(leftIndex),
-                                left.getSentenceIdAt(leftIndex), // SentenceId is definitely available
-                                combinedReqs.needsPositions ? left.getBeginCharAt(leftIndex) : -1,
-                                combinedReqs.needsPositions ? left.getEndCharAt(leftIndex) : -1,
-                                combinedReqs.needsSynonymIds ? left.getSynonymIdAt(leftIndex) : -1,
-                                currentOutputConceptualId
-                            );
-                        }
+                    // Count entries for this (docId, sentenceId) pair on both sides
+                    int leftStart = leftIdx;
+                    int rightStart = rightIdx;
 
-                        // Add all right-side bindings for this common pair
-                        for (int j = 0; j < right.size(); j++) {
-                            if (right.getDocumentIdAt(j) == rightPair.docId() && right.getSentenceIdAt(j) == rightPair.sentId()) {
-                                resultSoA.add(
-                                    right.getValueAt(j),
-                                    right.getValueTypeAt(j),
-                                    right.getVariableNameAt(j),
-                                    right.getDocumentIdAt(j),
-                                    right.getSentenceIdAt(j), // SentenceId is definitely available
-                                    combinedReqs.needsPositions ? right.getBeginCharAt(j) : -1,
-                                    combinedReqs.needsPositions ? right.getEndCharAt(j) : -1,
-                                    combinedReqs.needsSynonymIds ? right.getSynonymIdAt(j) : -1,
-                                    currentOutputConceptualId
-                                );
-                            }
-                        }
-                        rightProcessedPairs.add(rightPair);
+                    int leftCount = 0;
+                    while (leftIdx + leftCount < left.size() &&
+                           left.getDocumentIdAt(leftIdx + leftCount) == leftDocId &&
+                           (!combinedReqs.needsSentenceId || left.getSentenceIdAt(leftIdx + leftCount) == leftSentId)) {
+                        leftCount++;
                     }
+
+                    int rightCount = 0;
+                    while (rightIdx + rightCount < right.size() &&
+                           right.getDocumentIdAt(rightIdx + rightCount) == rightDocId &&
+                           (!combinedReqs.needsSentenceId || right.getSentenceIdAt(rightIdx + rightCount) == rightSentId)) {
+                        rightCount++;
+                    }
+
+                    // Add all left bindings for this (docId, sentenceId) pair
+                    for (int li = 0; li < leftCount; li++) {
+                        int leftRowIdx = leftStart + li;
+                        resultSoA.add(
+                            left.getValueAt(leftRowIdx),
+                            left.getValueTypeAt(leftRowIdx),
+                            left.getVariableNameAt(leftRowIdx),
+                            left.getDocumentIdAt(leftRowIdx),
+                            combinedReqs.needsSentenceId ? left.getSentenceIdAt(leftRowIdx) : -1,
+                            combinedReqs.needsPositions ? left.getBeginCharAt(leftRowIdx) : -1,
+                            combinedReqs.needsPositions ? left.getEndCharAt(leftRowIdx) : -1,
+                            combinedReqs.needsSynonymIds ? left.getSynonymIdAt(leftRowIdx) : -1,
+                            currentConceptualId
+                        );
+                    }
+
+                    // Add all right bindings for this (docId, sentenceId) pair
+                    for (int ri = 0; ri < rightCount; ri++) {
+                        int rightRowIdx = rightStart + ri;
+                        resultSoA.add(
+                            right.getValueAt(rightRowIdx),
+                            right.getValueTypeAt(rightRowIdx),
+                            right.getVariableNameAt(rightRowIdx),
+                            right.getDocumentIdAt(rightRowIdx),
+                            combinedReqs.needsSentenceId ? right.getSentenceIdAt(rightRowIdx) : -1,
+                            combinedReqs.needsPositions ? right.getBeginCharAt(rightRowIdx) : -1,
+                            combinedReqs.needsPositions ? right.getEndCharAt(rightRowIdx) : -1,
+                            combinedReqs.needsSynonymIds ? right.getSynonymIdAt(rightRowIdx) : -1,
+                            currentConceptualId
+                        );
+                    }
+
+                    // Advance both pointers past all processed entries
+                    leftIdx += leftCount;
+                    rightIdx += rightCount;
                 }
             }
         }
-        logger.debug("SoA AND operation complete. Result size: {}", resultSoA.size());
+
+        logger.debug("SoA AND operation (merge join) complete. Result size: {}", resultSoA.size());
         return resultSoA;
     }
 

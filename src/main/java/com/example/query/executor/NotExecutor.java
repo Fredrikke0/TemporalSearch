@@ -220,6 +220,10 @@ public final class NotExecutor implements ConditionExecutor<Not> {
             );
         }
         logger.info("NOT condition execution complete. Produced {} result entries.", finalResult.size());
+
+        // Sort by document ID to ensure merge join optimization works correctly
+        finalResult.sort();
+
         return finalResult;
     }
 }

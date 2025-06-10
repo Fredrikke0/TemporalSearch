@@ -109,6 +109,10 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 }
             }
             logger.debug("NER condition execution produced {} conceptual result rows, total SoA size: {}", conceptualRowsAdded, resultSoA.size());
+
+            // Sort by document ID to ensure merge join optimization works correctly
+            resultSoA.sort();
+
             return resultSoA;
 
         } catch (IndexAccessException | IOException e) {
