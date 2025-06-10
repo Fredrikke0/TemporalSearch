@@ -44,7 +44,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     public static final String DELIMITER = "\0";
     public static final char ESCAPE_CHAR = '\u001F';
     private static final int MAX_POSITIONS_PER_SEGMENT = 50_000_000; // Max positions per term segment
-    private static final int MAX_TEMP_FILES_BEFORE_MERGE = 5000; // Merge temp files when we hit this limit
+    private static final int MAX_TEMP_FILES_BEFORE_MERGE = 15_000; // Merge temp files when we hit this limit
     protected final IndexAccessInterface indexAccess;
     protected final Connection sqliteConn;
     protected final ProgressTracker progress;
