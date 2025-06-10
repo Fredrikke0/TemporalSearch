@@ -253,13 +253,27 @@ public class TableResultService {
         String[] sortOnArgs = new String[orderColumns.size()];
         for (int i = 0; i < orderColumns.size(); i++) {
             String orderSpec = orderColumns.get(i);
-            String colName = orderSpec.startsWith("-") || orderSpec.startsWith("+") ? orderSpec.substring(1) : orderSpec;
-            if (!table.columnNames().contains(colName)) {
+            boolean isDescending = orderSpec.startsWith("-");
+            boolean isAscending = orderSpec.startsWith("+");
+            String colName = (isDescending || isAscending) ? orderSpec.substring(1) : orderSpec;
+
+            // Map count expressions to their actual generated column names
+            String actualColName = mapToActualColumnName(colName, table);
+
+            if (!table.columnNames().contains(actualColName)) {
                 throw new IllegalArgumentException(
                     String.format("Cannot sort by column '%s': column not found in table. Available columns: %s",
-                                  colName, table.columnNames()));
+                                  actualColName, table.columnNames()));
             }
-            sortOnArgs[i] = orderSpec; // Use the original spec (e.g., "-colName" or "+colName" or "colName")
+
+            // Reconstruct the sort specification with the actual column name
+            if (isDescending) {
+                sortOnArgs[i] = "-" + actualColName;
+            } else if (isAscending) {
+                sortOnArgs[i] = "+" + actualColName;
+            } else {
+                sortOnArgs[i] = actualColName;
+            }
         }
 
         try {
@@ -270,6 +284,54 @@ public class TableResultService {
             // Consider rethrowing as ResultGenerationException for consistency
             throw new RuntimeException("Table sorting failed: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Maps ORDER BY column names to actual table column names, handling count expressions.
+     * This is needed because GROUP BY aggregation generates different column names than
+     * what appears in the original query.
+     */
+    private String mapToActualColumnName(String orderByColumnName, Table table) {
+        // If the column exists as-is, return it
+        if (table.columnNames().contains(orderByColumnName)) {
+            return orderByColumnName;
+        }
+
+        // Handle COUNT(*) mapping to generated count column names
+        if ("COUNT(*)".equals(orderByColumnName)) {
+            // Look for any column that starts with "Count [" - this will be the COUNT(*) result
+            for (String colName : table.columnNames()) {
+                if (colName.startsWith("Count [") && colName.endsWith("]")) {
+                    logger.debug("Mapping ORDER BY column 'COUNT(*)' to actual column '{}'", colName);
+                    return colName;
+                }
+            }
+        }
+
+        // Handle COUNT(UNIQUE variable) - would generate similar pattern
+        if (orderByColumnName.startsWith("COUNT(") && orderByColumnName.endsWith(")")) {
+            for (String colName : table.columnNames()) {
+                if (colName.startsWith("Count [") && colName.endsWith("]")) {
+                    logger.debug("Mapping ORDER BY column '{}' to actual column '{}'", orderByColumnName, colName);
+                    return colName;
+                }
+            }
+        }
+
+        // Handle COUNT(DOCUMENTS)
+        if ("COUNT(DOCUMENTS)".equals(orderByColumnName)) {
+            for (String colName : table.columnNames()) {
+                if (colName.startsWith("Count [") && colName.endsWith("]")) {
+                    logger.debug("Mapping ORDER BY column 'COUNT(DOCUMENTS)' to actual column '{}'", colName);
+                    return colName;
+                }
+            }
+        }
+
+        // If no mapping found, return the original name (will likely cause an error)
+        logger.warn("Could not map ORDER BY column '{}' to any actual table column. Available: {}",
+                   orderByColumnName, table.columnNames());
+        return orderByColumnName;
     }
 
     /**
