@@ -220,7 +220,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         String sql = """
             SELECT sentence_id, begin_char, end_char, token
             FROM annotations
-            WHERE document_id = ?
+            WHERE document_id = ? AND pos NOT IN ('FW', 'ADD')
             ORDER BY sentence_id, begin_char
         """;
 
@@ -231,7 +231,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
                     String token = rs.getString("token");
                     String normalizedToken = token.toLowerCase();
 
-                    if (isStopword(normalizedToken) || !normalizedToken.chars().anyMatch(Character::isLetterOrDigit)) {
+                    if (isStopword(normalizedToken) || !isValidToken(normalizedToken)) {
                         continue;
                     }
                     tokensBySentence.computeIfAbsent(rs.getInt("sentence_id"), k -> new ArrayList<>())
@@ -269,6 +269,40 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             }
         }
         return ngramsBySentence;
+    }
+
+    /**
+     * Validates if a token should be included in the index.
+     * Uses a middle-ground approach: keeps mixed alphanumeric tokens but filters out
+     * purely numeric or purely punctuation tokens.
+     *
+     * @param token The token to validate (should be lowercase)
+     * @return true if the token should be indexed, false otherwise
+     */
+    private static boolean isValidToken(String token) {
+        if (token == null || token.isEmpty()) {
+            return false;
+        }
+
+        boolean hasLetter = false;
+        boolean hasDigit = false;
+        boolean hasOther = false;
+
+        for (int i = 0; i < token.length(); i++) {
+            char c = token.charAt(i);
+            if (Character.isLetter(c)) {
+                hasLetter = true;
+            } else if (Character.isDigit(c)) {
+                hasDigit = true;
+            } else {
+                hasOther = true;
+            }
+        }
+
+        // Keep tokens that have at least one letter
+        // This includes: pure letters, letters+digits, letters+punctuation, letters+digits+punctuation
+        // Filters out: pure numbers, pure punctuation, digits+punctuation (no letters)
+        return hasLetter;
     }
 
     @Override

@@ -63,7 +63,7 @@ public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGe
         // Extract year and check if it's "0000"
         String year = yyyyDashMmDashDd.substring(0, 4);
         if ("0000".equals(year)) {
-            logger.warn("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", yyyyDashMmDashDd);
+            logger.debug("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", yyyyDashMmDashDd);
             return null;
         }
         try {
