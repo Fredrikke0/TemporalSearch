@@ -326,11 +326,12 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 effectiveStart = start;
                 effectiveEnd = end;
             } else if (start != null) { // Only start is provided
-                 effectiveStart = start;
                  // For predicates like AFTER, AFTER_EQUAL, EQUAL when only start is given.
                  // For EQUAL, treat as single day. For AFTER, range is (start, future]. For AFTER_EQUAL, [start, future]
+                 // For BEFORE, start is the reference date, so range is [GLOBAL_LOWER_BOUND, start-1]
                  switch (predicateType) {
                     case EQUAL:
+                        effectiveStart = start;
                         effectiveEnd = start;
                         break;
                     case AFTER: // (start, GLOBAL_UPPER_BOUND]
@@ -338,16 +339,19 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                         effectiveEnd = Nash.GLOBAL_UPPER_BOUND; // Use Nash's global upper bound
                         break;
                     case AFTER_EQUAL: // [start, GLOBAL_UPPER_BOUND]
+                        effectiveStart = start;
                         effectiveEnd = Nash.GLOBAL_UPPER_BOUND;
                         break;
-                     case BEFORE: // [GLOBAL_LOWER_BOUND, start-1] - this case is unusual if queryStart is 'start'
-                     case BEFORE_EQUAL: // [GLOBAL_LOWER_BOUND, start] - unusual
-                         // If query logic means 'date is before queryStart', then queryStart is the 'end' of the range.
-                         strategyLogger.warn("convertToNashIntervalString: Predicate {} with only queryStart is ambiguous. Treating queryStart as the reference point.", predicateType);
-                         // Defaulting to a single day for now if predicate is not clearly directional like AFTER/*
-                         effectiveEnd = start; // Fallback to single day. This path needs careful thought for all predicates.
+                     case BEFORE: // [GLOBAL_LOWER_BOUND, start-1] - start is the reference date
+                         effectiveStart = Nash.GLOBAL_LOWER_BOUND;
+                         effectiveEnd = start.minusDays(1); // Exclusive of reference date
+                         break;
+                     case BEFORE_EQUAL: // [GLOBAL_LOWER_BOUND, start] - start is the reference date
+                         effectiveStart = Nash.GLOBAL_LOWER_BOUND;
+                         effectiveEnd = start; // Inclusive of reference date
                          break;
                     default: // INTERSECT, CONTAINS, etc. with only a start point is often a single day query.
+                        effectiveStart = start;
                         effectiveEnd = start;
                         break;
                 }
@@ -447,37 +451,110 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             strategyLogger.debug("Naive strategy: queryStart={}, queryEnd={}, variable={}, DateIndex='{}'",
                 queryDateTimeStart, queryDateTimeEnd, variableNameToBind, dateIndex.getIndexType());
 
-            try (RocksIterator iterator = dateIndex.iterateFromFirst()) {
-                strategyLogger.debug("NaiveTemporalStrategy: Iterator obtained. isValid: {}", iterator.isValid());
-                while (iterator.isValid()) {
-                    byte[] keyBytes = iterator.key();
-                    byte[] valueBytes = iterator.value();
-                    String dateStr = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
-                    strategyLogger.trace("NaiveTemporalStrategy: Iterator valid. Key='{}', Value size={}", dateStr, valueBytes.length);
+                            // Calculate early termination bounds for optimization
+        String startKey = null;
+        String stopKey = null;
 
-                    LocalDate entryDate = parseDateKey(dateStr);
-
-                    if (entryDate != null) {
-                        boolean temporalMatch = evaluateTemporalCondition(
-                            condition.temporalType(),
-                            entryDate.atStartOfDay(), entryDate.atTime(LocalTime.MAX),
-                            queryDateTimeStart.orElse(null), queryDateTimeEnd.orElse(null)
-                        );
-
-                        if (temporalMatch) {
-                            Object valueToBindInSoA = entryDate;
-                            strategyLogger.trace("NaiveTemporalStrategy: Key='{}', Date='{}', TemporalMatch=true. Deserializing PositionListSoA.", dateStr, entryDate);
-
-                            conceptualRowIdCounter = processEntry(
-                                new SimpleEntry<>(keyBytes, valueBytes),
-                                condition, resultSoA, requirements,
-                                granularity, granularitySize, conceptualRowIdCounter, entryDate, variableNameToBind, valueToBindInSoA
-                            );
-                        }
+        if (queryDateTimeStart.isPresent() || queryDateTimeEnd.isPresent()) {
+            switch (condition.temporalType()) {
+                case BEFORE:
+                    // For DATE(< X), stop when we reach X
+                    if (queryDateTimeStart.isPresent()) {
+                        stopKey = queryDateTimeStart.get().format(INDEX_DATE_FORMATTER);
+                        strategyLogger.debug("NaiveTemporalStrategy: BEFORE optimization - will stop at key '{}'", stopKey);
                     }
-                    iterator.next();
-                }
+                    break;
+                case BEFORE_EQUAL:
+                    // For DATE(<= X), stop when we reach X+1
+                    if (queryDateTimeEnd.isPresent()) {
+                        stopKey = queryDateTimeEnd.get().plusDays(1).format(INDEX_DATE_FORMATTER);
+                        strategyLogger.debug("NaiveTemporalStrategy: BEFORE_EQUAL optimization - will stop at key '{}'", stopKey);
+                    }
+                    break;
+                case AFTER:
+                    // For DATE(> X), start from X+1
+                    if (queryDateTimeStart.isPresent()) {
+                        startKey = queryDateTimeStart.get().plusDays(1).format(INDEX_DATE_FORMATTER);
+                        strategyLogger.debug("NaiveTemporalStrategy: AFTER optimization - will start from key '{}'", startKey);
+                    }
+                    break;
+                case AFTER_EQUAL:
+                    // For DATE(>= X), start from X
+                    if (queryDateTimeStart.isPresent()) {
+                        startKey = queryDateTimeStart.get().format(INDEX_DATE_FORMATTER);
+                        strategyLogger.debug("NaiveTemporalStrategy: AFTER_EQUAL optimization - will start from key '{}'", startKey);
+                    }
+                    break;
+                case EQUAL:
+                    // For DATE(= X), start from X and stop after X (or X's end if range)
+                    if (queryDateTimeStart.isPresent()) {
+                        startKey = queryDateTimeStart.get().format(INDEX_DATE_FORMATTER);
+                        LocalDate endDate = queryDateTimeEnd.isPresent() ? queryDateTimeEnd.get().toLocalDate() : queryDateTimeStart.get().toLocalDate();
+                        stopKey = endDate.plusDays(1).format(INDEX_DATE_FORMATTER);
+                        strategyLogger.debug("NaiveTemporalStrategy: EQUAL optimization - will scan from '{}' to '{}'", startKey, stopKey);
+                    }
+                    break;
+                case CONTAINS:
+                case CONTAINED_BY:
+                case INTERSECT:
+                    // For range predicates, we could optimize if we have both bounds
+                    if (queryDateTimeStart.isPresent() && queryDateTimeEnd.isPresent()) {
+                        // For these predicates, we need to be more careful about bounds
+                        // For now, only optimize the upper bound for safety
+                        stopKey = queryDateTimeEnd.get().plusDays(1).format(INDEX_DATE_FORMATTER);
+                        strategyLogger.debug("NaiveTemporalStrategy: Range predicate optimization - will stop at key '{}'", stopKey);
+                    }
+                    break;
+                default:
+                    strategyLogger.debug("NaiveTemporalStrategy: No optimization available for predicate type '{}'", condition.temporalType());
+                    break;
             }
+        }
+
+        try (RocksIterator iterator = dateIndex.iterateFromFirst()) {
+            strategyLogger.debug("NaiveTemporalStrategy: Iterator obtained. isValid: {}", iterator.isValid());
+
+            // Seek to start position if we have a startKey
+            if (startKey != null) {
+                iterator.seek(startKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                strategyLogger.debug("NaiveTemporalStrategy: Seeked to start key '{}'", startKey);
+            }
+
+            while (iterator.isValid()) {
+                byte[] keyBytes = iterator.key();
+                byte[] valueBytes = iterator.value();
+                String dateStr = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+                strategyLogger.trace("NaiveTemporalStrategy: Iterator valid. Key='{}', Value size={}", dateStr, valueBytes.length);
+
+                // Early termination check - since index is sorted by YYYYMMDD format
+                if (stopKey != null && dateStr.compareTo(stopKey) >= 0) {
+                    strategyLogger.debug("NaiveTemporalStrategy: Early termination at key '{}' (stop key: '{}'). Optimization saved scanning remaining dates.", dateStr, stopKey);
+                    break;
+                }
+
+                LocalDate entryDate = parseDateKey(dateStr);
+
+                if (entryDate != null) {
+                    boolean temporalMatch = evaluateTemporalCondition(
+                        condition.temporalType(),
+                        entryDate.atStartOfDay(), entryDate.atTime(LocalTime.MAX),
+                        queryDateTimeStart.orElse(null), queryDateTimeEnd.orElse(null)
+                    );
+
+                    if (temporalMatch) {
+                        Object valueToBindInSoA = entryDate;
+                        strategyLogger.trace("NaiveTemporalStrategy: Key='{}', Date='{}', TemporalMatch=true. Deserializing PositionListSoA.", dateStr, entryDate);
+
+                        conceptualRowIdCounter = processEntry(
+                            new SimpleEntry<>(keyBytes, valueBytes),
+                            condition, resultSoA, requirements,
+                            granularity, granularitySize, conceptualRowIdCounter, entryDate, variableNameToBind, valueToBindInSoA
+                        );
+                    }
+                }
+                iterator.next();
+            }
+        }
              catch (IOException e) {
                 strategyLogger.error("IOException during NaiveTemporalStrategy execution: {}", e.getMessage(), e);
                 throw new QueryExecutionException("Failed to read from date index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
