@@ -21,8 +21,6 @@ import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Dependency;
 
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-
 /**
  * Executor for DEPENDENCY conditions.
  */
@@ -37,10 +35,12 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
-                               AttributeRequirements requirements)
+                               AttributeRequirements requirements,
+                               Optional<FilteringContext> context)
         throws QueryExecutionException {
 
-        logger.debug("Executing DEPENDENCY condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        logger.debug("Executing DEPENDENCY condition with AttributeRequirements: {}, FilteringContext isPresent: {}",
+                     requirements.getRequiredSoAAttributes(), context.isPresent());
 
         if (!indexes.containsKey(DEPENDENCY_INDEX_NAME)) {
             throw new QueryExecutionException(
@@ -72,9 +72,9 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
             if (governor != null && !governor.startsWith("?") &&
                 dependent != null && !dependent.startsWith("?") &&
                 relation != null && !relation.startsWith("?")) {
-                conceptualRowIdCounter = executeSpecificSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements);
+                conceptualRowIdCounter = executeSpecificSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
             } else if (isVariable && relation != null && !relation.startsWith("?")) {
-                 conceptualRowIdCounter = executeVariableSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements);
+                 conceptualRowIdCounter = executeVariableSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
             } else {
                 logger.warn("Unsupported or incomplete DEPENDENCY condition: {}. For specific search, governor, relation, and dependent must be specified literals. For variable search, relation must be a literal and variable must be true.", condition);
             }
@@ -105,7 +105,8 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
     private int executeSpecificSearchOptimized(Dependency condition, IndexAccessInterface index,
                                                 QueryResultSoA resultSoA, int currentConceptualRowId,
-                                                AttributeRequirements requirements)
+                                                AttributeRequirements requirements,
+                                                Optional<FilteringContext> context)
         throws IndexAccessException, IOException {
 
         String normalizedGovernor = condition.governor().toLowerCase();
@@ -122,16 +123,14 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
         if (rawBlobOptional.isPresent()) {
             byte[] rawBlob = rawBlobOptional.get();
-            int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-            if (numPositions == 0) return currentConceptualRowId;
+            PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
 
-            logger.debug("Found {} positions for dependency relation '{}'", numPositions, searchKey);
-
-            IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
-            IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
-            IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
-            IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
-            IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(rawBlob) : null;
+            if (positions.isEmpty()) {
+                logger.debug("No positions for dependency relation '{}' after applying context filters.", searchKey);
+                return currentConceptualRowId;
+            }
+            int numPositions = positions.getNumPositions();
+            logger.debug("Found {} positions for dependency relation '{}' after context filtering.", numPositions, searchKey);
 
             String value = String.join(":", normalizedGovernor, normalizedRelation, normalizedDependent);
             String variableNameToUse = condition.isVariable() ? condition.variableName() : null;
@@ -141,16 +140,14 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     value,
                     ValueType.DEPENDENCY,
                     variableNameToUse,
-                    docIds.getInt(i),
-                    sentIds != null ? sentIds.getInt(i) : -1,
-                    beginChars != null ? beginChars.getInt(i) : -1,
-                    endChars != null ? endChars.getInt(i) : -1,
-                    synonymIds != null ? synonymIds.getInt(i) : -1,
-                    currentConceptualRowId // Use currentConceptualRowId for this whole match group
+                    positions.getDocIdAt(i),
+                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                    requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
+                    currentConceptualRowId
                 );
             }
-            // Only increment conceptualRowId ONCE per unique dependency match found in the index,
-            // as all its positions belong to the same conceptual match.
             if (numPositions > 0) {
                 currentConceptualRowId++;
             }
@@ -163,7 +160,8 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
     private int executeVariableSearchOptimized(Dependency condition, IndexAccessInterface index,
                                                QueryResultSoA resultSoA, int currentConceptualRowId,
-                                               AttributeRequirements requirements)
+                                               AttributeRequirements requirements,
+                                               Optional<FilteringContext> context)
         throws IndexAccessException, IOException {
 
         String variableName = condition.variableName();
@@ -231,35 +229,33 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                         continue;
                     }
 
-                    String valueToBind = key.replace(IndexAccessInterface.DELIMITER, ':');
-                    int numPositions = PositionListSoA.getNumPositionsFromBlob(valueBytes);
-                    if (numPositions == 0) {
+                    String valueToBind = String.join(":", currentGovernor, currentRelation, currentDependent);
+                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context);
+
+                    if (positions.isEmpty()) {
                         iterator.next();
                         continue;
                     }
-
-                    IntArrayList docIds = PositionListSoA.decompressDocIds(valueBytes);
-                    IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(valueBytes) : null;
-                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(valueBytes) : null;
-                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(valueBytes) : null;
-                    IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(valueBytes) : null;
+                    int numPositions = positions.getNumPositions();
 
                     for (int i = 0; i < numPositions; i++) {
                         resultSoA.add(
                             valueToBind,
                             ValueType.DEPENDENCY,
                             variableName,
-                            docIds.getInt(i),
-                            sentIds != null ? sentIds.getInt(i) : -1,
-                            beginChars != null ? beginChars.getInt(i) : -1,
-                            endChars != null ? endChars.getInt(i) : -1,
-                            synonymIds != null ? synonymIds.getInt(i) : -1,
+                            positions.getDocIdAt(i),
+                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                            requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
                             currentConceptualRowId
                         );
                     }
                     if (numPositions > 0) {
-                         currentConceptualRowId++;
+                        currentConceptualRowId++;
                     }
+                    logger.debug("Added {} bindings for dependency variable '{}' (key: '{}') under conceptual ID range ending {}",
+                                 numPositions, variableName, key, currentConceptualRowId -1);
                 } else {
                     logger.warn("Skipping invalid key format in dependency index: {}", key);
                 }

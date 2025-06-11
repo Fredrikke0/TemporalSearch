@@ -40,7 +40,7 @@ public class QueryExecutor {
 
     private final ConditionExecutorFactory executorFactory;
     private TableResultService tableResultService;
-    private JoinOptimizationStrategy joinStrategy = JoinOptimizationStrategy.INDEPENDENT;
+    private PushdownStrategy pushdownStrategy = PushdownStrategy.OPTIMIZED;
     private final String stitchStrategy;
     private Query currentQuery;
     private final SynonymManager synonymManager;
@@ -69,7 +69,7 @@ public class QueryExecutor {
         this.synonymManager = synonymManager;
         this.tableResultService = tableResultService;
         this.stitchStrategy = (stitchStrategy == null || stitchStrategy.isBlank()) ? "none" : stitchStrategy;
-        logger.debug("Initialized QueryExecutor with stitch strategy: {} and provided SynonymManager and ExecutorFactory", this.stitchStrategy);
+        logger.debug("Initialized QueryExecutor with stitch strategy: {} and provided SynonymManager and ExecutorFactory. Default pushdown strategy: {}", this.stitchStrategy, this.pushdownStrategy);
     }
 
     /**
@@ -159,32 +159,41 @@ public class QueryExecutor {
         // Always execute main conditions first if they exist.
         QueryResultSoA mainConditionsResult = null;
         List<Condition> mainConditions = query.conditions();
+
+        // Initial context for the main conditions is empty (will become unrestricted in LogicalExecutor if needed)
+        Optional<FilteringContext> initialContextForMainConditions = Optional.empty();
+
         if (!mainConditions.isEmpty()) {
             logger.debug("Executing main query conditions...");
             List<Condition> orderedMainConditions = optimizeExecutionOrder(mainConditions);
             if (orderedMainConditions.size() == 1) {
-                mainConditionsResult = executeCondition(orderedMainConditions.get(0), indexes, granularity, granularitySize, source, requirements);
+                mainConditionsResult = executeCondition(orderedMainConditions.get(0), indexes, granularity, granularitySize, source, requirements, initialContextForMainConditions);
             } else {
                 Logical implicitAnd = new Logical(LogicalOperator.AND, orderedMainConditions);
-                mainConditionsResult = executeCondition(implicitAnd, indexes, granularity, granularitySize, source, requirements);
+                mainConditionsResult = executeCondition(implicitAnd, indexes, granularity, granularitySize, source, requirements, initialContextForMainConditions);
             }
             logger.debug("Main query conditions executed, {} matches found.", mainConditionsResult.size());
         } else {
             logger.debug("No main query conditions found.");
             mainConditionsResult = new QueryResultSoA(granularity, granularitySize, requirements);
         }
-        // --- JOIN STRATEGY BRANCHING ---
+        // --- PUSHDOWN STRATEGY BRANCHING ---
         if (query.joinCondition().isPresent()) {
             JoinCondition joinCondition = query.joinCondition().get();
             String mainAlias = query.mainAlias().orElse("$main");
             subqueryContext.addQueryResult(mainAlias, mainConditionsResult);
-            if (this.joinStrategy == JoinOptimizationStrategy.DEPENDENT &&
+            if (this.pushdownStrategy == PushdownStrategy.OPTIMIZED &&
                 joinCondition.type() == JoinCondition.JoinType.INNER &&
                 (joinCondition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL)) {
-                logger.info("Using DEPENDENT join strategy flow for query: {}", query.toString());
+                logger.info("Using OPTIMIZED pushdown strategy: attempting dependent join flow for query: {}", query.toString());
                 return executeDependentJoin(query, indexes, subqueryContext, mainAlias, mainConditionsResult, requirements);
             } else {
-                logger.info("Using INDEPENDENT join strategy flow for query: {}", query.toString());
+                if (this.pushdownStrategy == PushdownStrategy.NONE) {
+                    logger.info("Using NONE pushdown strategy: using independent join flow for query: {}", query.toString());
+                } else {
+                    // This case handles OPTIMIZED strategy but not meeting dependent join criteria
+                    logger.info("Using OPTIMIZED pushdown strategy, but not a dependent temporal join: using independent join flow for query: {}", query.toString());
+                }
                 return executeIndependentJoin(query, indexes, subqueryContext, requirements);
             }
         } else {
@@ -276,6 +285,7 @@ public class QueryExecutor {
      * @param granularitySize The window size for sentence granularity
      * @param source The corpus name
      * @param requirements Attribute requirements for SoA optimization
+     * @param context The filtering context for the condition
      * @return QueryResultSoA containing matches at the specified granularity level
      * @throws QueryExecutionException if execution fails
      */
@@ -286,10 +296,11 @@ public class QueryExecutor {
             Query.Granularity granularity,
             int granularitySize,
             String source,
-            AttributeRequirements requirements)
+            AttributeRequirements requirements,
+            Optional<FilteringContext> context)
             throws QueryExecutionException {
-        logger.debug("Executing condition: {} with granularity: {} and size: {}",
-                condition, granularity, granularitySize);
+        logger.debug("Executing condition: {} with granularity: {} and size: {}, contextIsPresent: {}",
+                condition, granularity, granularitySize, context.isPresent());
 
         // --- STITCH STRATEGY LOGIC --- START ---
         if (this.stitchStrategy.equals("optimized") &&
@@ -319,8 +330,8 @@ public class QueryExecutor {
                 }
 
                 if (containsCond != null && annotationCond != null) {
-                    logger.debug("Attempting stitch optimization for CONTAINS ({}) AND {} ({})",
-                                 containsCond.terms(), annotationCond.getType(), annotationCond);
+                    logger.debug("Attempting stitch optimization for CONTAINS ({}) AND {} ({}) with contextIsPresent: {}",
+                                 containsCond.terms(), annotationCond.getType(), annotationCond, context.isPresent());
                     StitchIntersectionExecutor stitchExecutor = new StitchIntersectionExecutor();
                     try {
                         QueryResultSoA stitchResult = stitchExecutor.execute(
@@ -332,11 +343,12 @@ public class QueryExecutor {
                             granularitySize,
                             source,
                             requirements,
-                            this.currentQuery
+                            this.currentQuery,
+                            context // Pass context to stitch executor
                         );
                         if (stitchResult != null) {
                             logger.info("Stitch optimization successful for CONTAINS + {}. Result count: {}",
-                                        containsCond.terms(), stitchResult.size());
+                                        annotationCond.getType(), stitchResult.size()); // containsCond.terms() was used before, changed to annotationCond.getType() for brevity
                             return stitchResult;
                         } else {
                             logger.warn("Stitch execution did not complete or apply for CONTAINS + {}. Falling back to standard AND execution.", annotationCond.getType());
@@ -356,8 +368,8 @@ public class QueryExecutor {
         try {
             ConditionExecutor<Condition> executor = executorFactory.getExecutor(condition);
 
-            // Executors now directly return QueryResultSoA
-            return executor.execute(condition, indexes, granularity, granularitySize, source, requirements);
+            // Pass the received context to the actual condition executor
+            return executor.execute(condition, indexes, granularity, granularitySize, source, requirements, context);
 
         } catch (QueryExecutionException e) {
             throw e;
@@ -372,11 +384,16 @@ public class QueryExecutor {
     }
 
     /**
-     * Sets the join optimization strategy for this executor.
-     * @param strategy The join optimization strategy to use
+     * Sets the pushdown strategy for this executor.
+     * @param strategy The pushdown strategy to use
      */
-    public void setJoinOptimizationStrategy(JoinOptimizationStrategy strategy) {
-        this.joinStrategy = (strategy != null) ? strategy : JoinOptimizationStrategy.INDEPENDENT;
+    public void setPushdownStrategy(PushdownStrategy strategy) {
+        if (strategy != null) {
+            this.pushdownStrategy = strategy;
+            logger.debug("Pushdown strategy set to: {}", this.pushdownStrategy);
+        } else {
+            logger.warn("Attempted to set null pushdown strategy. Retaining current: {}", this.pushdownStrategy);
+        }
     }
 
     /**

@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -90,12 +91,12 @@ public class NotConditionExecutorTest {
     @Test
     void testExecute_subConditionReturnsEmpty() throws Exception {
         Not notCondition = new Not(subCondition);
-        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class)))
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class), any()))
             .thenReturn(emptySubResult);
 
         mockUnigramIndexForUniverse(List.of(new Position(100, 0, 0, 1)));
 
-        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements);
+        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements, Optional.empty());
 
         assertNotNull(finalResult);
         assertEquals(1, finalResult.size());
@@ -105,12 +106,12 @@ public class NotConditionExecutorTest {
     @Test
     void testExecute_subConditionReturnsMatch_universeExcludesMatch() throws Exception {
         Not notCondition = new Not(subCondition);
-        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class)))
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class), any()))
             .thenReturn(nonEmptySubResult);
 
         mockUnigramIndexForUniverse(List.of(new Position(1, 0, 0, 1), new Position(2, 0, 0, 1)));
 
-        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements);
+        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements, Optional.empty());
 
         assertNotNull(finalResult);
         assertEquals(1, finalResult.size());
@@ -120,13 +121,13 @@ public class NotConditionExecutorTest {
     @Test
     void testExecute_subConditionReturnsAll_emptyUniverseLeadsToError() throws Exception {
         Not notCondition = new Not(subCondition);
-        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class)))
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class), any()))
             .thenReturn(nonEmptySubResult);
 
         when(mockDBIterator.isValid()).thenReturn(false);
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
-            notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements);
+            notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements, Optional.empty());
         });
         assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
     }
@@ -145,7 +146,7 @@ public class NotConditionExecutorTest {
 
         Not notCondition = new Not(subCondition);
 
-        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class)))
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class), any()))
             .thenReturn(nonEmptySubResult);
 
         mockUnigramIndexForUniverse(List.of(
@@ -154,7 +155,7 @@ public class NotConditionExecutorTest {
             new Position(2, 1, 0, 1)
         ));
 
-        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, sentenceGranularityRequirements);
+        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, sentenceGranularityRequirements, Optional.empty());
 
         assertNotNull(finalResult);
         assertEquals(2, finalResult.size());

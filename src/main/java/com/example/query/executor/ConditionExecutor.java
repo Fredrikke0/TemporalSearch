@@ -1,6 +1,7 @@
 package com.example.query.executor;
 
 import java.util.Map;
+import java.util.Optional;
 
 import com.example.core.IndexAccessInterface;
 import com.example.query.model.Query;
@@ -34,6 +35,7 @@ public sealed interface ConditionExecutor<T extends Condition>
      * @param granularitySize Window size for sentence granularity (0 = same sentence only, 1 = adjacent sentences, etc.)
      * @param corpusName The name of the corpus being queried
      * @param requirements Specifies which SoA attributes are needed for this execution
+     * @param context Optional filtering context
      * @return QueryResultSoA representing the matches.
      * @throws QueryExecutionException if execution fails
      */
@@ -41,6 +43,7 @@ public sealed interface ConditionExecutor<T extends Condition>
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
-                               AttributeRequirements requirements)
+                               AttributeRequirements requirements,
+                               Optional<FilteringContext> context)
         throws QueryExecutionException;
 }

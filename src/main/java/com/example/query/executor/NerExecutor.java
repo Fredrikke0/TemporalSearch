@@ -17,8 +17,6 @@ import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Ner;
 
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-
 /**
  * Executor for NER (Named Entity Recognition) conditions, excluding DATE.
  * Handles entity type matching and variable binding for named entities.
@@ -44,10 +42,17 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
-                               AttributeRequirements requirements)
+                               AttributeRequirements requirements,
+                               Optional<FilteringContext> context)
         throws QueryExecutionException {
 
-        logger.debug("Executing NER condition: {}, AttrReqs: {}", condition, requirements.getRequiredSoAAttributes());
+        logger.debug("Executing NER condition: {}, AttrReqs: {}, FilteringContext isPresent: {}",
+                     condition, requirements.getRequiredSoAAttributes(), context.isPresent());
+        // TODO: Add early exit based on context if definitively empty
+        // if (context.isPresent() && context.get().allowedDocumentIds().map(Set::isEmpty).orElse(false)) {
+        //     logger.debug("FilteringContext indicates no allowed document IDs, returning empty result for NER.");
+        //     return new QueryResultSoA(granularity, granularitySize, requirements);
+        // }
 
         String entityType = condition.entityType();
         String normalizedEntityType = entityType.toUpperCase(); // NER types are generally stored/queried in uppercase
@@ -96,16 +101,16 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             if (isVariable) {
                 logger.debug("NER path: Explicit Variable Binding. Type='{}', FilterTarget='{}', VarName='{}'",
                              normalizedEntityType, targetValue, variableName);
-                conceptualRowsAdded = executeVariableBindingSearch(normalizedEntityType, targetValue, variableName, index, requirements, resultSoA);
+                conceptualRowsAdded = executeVariableBindingSearch(normalizedEntityType, targetValue, variableName, index, requirements, resultSoA, context);
             } else {
                 if (targetValue != null) {
                     logger.debug("NER path: Specific Entity Filter (no BIND). Type='{}', TargetValue='{}'",
                                  normalizedEntityType, targetValue);
-                    conceptualRowsAdded = executeSpecificEntityFilterSearch(normalizedEntityType, targetValue, index, requirements, resultSoA);
+                    conceptualRowsAdded = executeSpecificEntityFilterSearch(normalizedEntityType, targetValue, index, requirements, resultSoA, context);
                 } else {
                     logger.debug("NER path: Entity Type Only Search (no BIND). Type='{}'",
                                  normalizedEntityType);
-                    conceptualRowsAdded = executeEntityTypeOnlySearch(normalizedEntityType, index, requirements, resultSoA);
+                    conceptualRowsAdded = executeEntityTypeOnlySearch(normalizedEntityType, index, requirements, resultSoA, context);
                 }
             }
             logger.debug("NER condition execution produced {} conceptual result rows, total SoA size: {}", conceptualRowsAdded, resultSoA.size());
@@ -130,9 +135,10 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
      * The entity type string itself is stored as the value.
      */
     private int executeEntityTypeOnlySearch(String normalizedEntityType, IndexAccessInterface index,
-                                            AttributeRequirements requirements, QueryResultSoA resultSoA)
+                                            AttributeRequirements requirements, QueryResultSoA resultSoA,
+                                            Optional<FilteringContext> context)
         throws IOException, IndexAccessException {
-        logger.debug("executeEntityTypeOnlySearch: Seeking for Type='{}'", normalizedEntityType);
+        logger.debug("executeEntityTypeOnlySearch: Seeking for Type='{}', ContextIsPresent={}", normalizedEntityType, context.isPresent());
 
         byte[] keyForIndexLookup = normalizedEntityType.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
@@ -142,34 +148,28 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             return 0;
         }
 
-            byte[] rawBlob = rawBlobOptional.get();
-            int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-        if (numPositions == 0) {
-            logger.debug("executeEntityTypeOnlySearch: numPositions is 0 for type '{}', no positions to add.", normalizedEntityType);
+        byte[] rawBlob = rawBlobOptional.get();
+        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+
+        if (positions.isEmpty()) {
+            logger.debug("executeEntityTypeOnlySearch: No positions for type '{}' after context filtering.", normalizedEntityType);
             return 0;
         }
+        int numPositions = positions.getNumPositions();
 
-        int conceptualRowId = resultSoA.getNextConceptualRowId(); // All positions for this type share one conceptual ID
+        int conceptualRowId = resultSoA.getNextConceptualRowId();
         int positionsAddedToSoa = 0;
 
-        // For ENTITY_TYPE, we generally don't need synonym IDs, but we need other positional data.
-        // AttributeRequirements should reflect this (needsSynonymIds=false typically for this path).
-                    IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
-                    IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
-                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
-                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
-        // We don't need to decompress synonymIds as the value is the entityType itself.
-
-                    for (int i = 0; i < numPositions; i++) {
-                        resultSoA.add(
-                normalizedEntityType, // Value is the entity type string
+        for (int i = 0; i < numPositions; i++) {
+            resultSoA.add(
+                normalizedEntityType,
                 ValueType.ENTITY_TYPE,
-                null, // No variable name
-                            docIds.getInt(i),
-                            sentIds != null ? sentIds.getInt(i) : -1,
-                            beginChars != null ? beginChars.getInt(i) : -1,
-                            endChars != null ? endChars.getInt(i) : -1,
-                -1, // No specific synonymId associated with the TYPE itself
+                null,
+                positions.getDocIdAt(i),
+                requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                -1,
                 conceptualRowId
             );
             positionsAddedToSoa++;
@@ -185,7 +185,8 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
      */
     private int executeSpecificEntityFilterSearch(String normalizedEntityType, String targetValueFromQuery,
                                                  IndexAccessInterface index, AttributeRequirements requirements,
-                                                 QueryResultSoA resultSoA)
+                                                 QueryResultSoA resultSoA,
+                                                 Optional<FilteringContext> context)
         throws IOException, IndexAccessException, QueryExecutionException {
 
         // For filtering by a specific entity value, we must have synonym IDs.
@@ -212,7 +213,6 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         logger.debug("executeSpecificEntityFilterSearch: Type='{}', TargetValue='{}' (original), NormalizedTargetTerm='{}', TargetSynonymID={}",
             normalizedEntityType, targetValueFromQuery, normalizedTargetTerm, targetSynonymId);
 
-
         byte[] keyForIndexLookup = normalizedEntityType.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
 
@@ -222,51 +222,39 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
 
         byte[] rawBlob = rawBlobOptional.get();
-        int numPositionsTotal = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-        if (numPositionsTotal == 0) return 0;
+        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
 
-        // Must decompress synonym IDs for filtering
-        IntArrayList synonymIds = PositionListSoA.decompressSynonymIds(rawBlob);
-        if (synonymIds == null || synonymIds.isEmpty()) { // Should not happen if numPositionsTotal > 0 and index is well-formed
-             logger.warn("executeSpecificEntityFilterSearch: No synonym IDs found in blob for type '{}' despite {} positions. Inconsistent data?", normalizedEntityType, numPositionsTotal);
-             return 0;
+        if (positions.isEmpty()) {
+            logger.debug("executeSpecificEntityFilterSearch: No positions for type '{}' after initial context filtering.", normalizedEntityType);
+            return 0;
         }
 
-        IntArrayList docIds = null;
-        IntArrayList sentIds = null;
-        IntArrayList beginChars = null;
-        IntArrayList endChars = null;
-
-        int conceptualRowId = -1; // Assigned when first match found
+        int conceptualRowId = -1;
         int positionsAddedToSoa = 0;
+        int initialNumPositions = positions.getNumPositions();
 
-        for (int i = 0; i < numPositionsTotal; i++) {
-            if (synonymIds.getInt(i) == targetSynonymId) {
-                if (conceptualRowId == -1) { // First match for this target value
+        for (int i = 0; i < initialNumPositions; i++) {
+            if (positions.getSynonymIdAt(i) == targetSynonymId) {
+                if (conceptualRowId == -1) {
                     conceptualRowId = resultSoA.getNextConceptualRowId();
-                    // Decompress other attributes only now, if needed, to save work
-                    docIds = PositionListSoA.decompressDocIds(rawBlob); // Always needed
-                    sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
-                    beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
-                    endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
                 }
-                        resultSoA.add(
-                    targetValueFromQuery, // Store original casing from query
+                resultSoA.add(
+                    targetValueFromQuery,
                     ValueType.ENTITY,
-                    null, // No variable name
-                            docIds.getInt(i),
-                            sentIds != null ? sentIds.getInt(i) : -1,
-                            beginChars != null ? beginChars.getInt(i) : -1,
-                            endChars != null ? endChars.getInt(i) : -1,
+                    null,
+                    positions.getDocIdAt(i),
+                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                     targetSynonymId,
                     conceptualRowId
                 );
                 positionsAddedToSoa++;
             }
         }
-        logger.debug("executeSpecificEntityFilterSearch for Type '{}', Target '{}' added {} positions to QueryResultSoA under conceptualRowId {}",
-            normalizedEntityType, targetValueFromQuery, positionsAddedToSoa, conceptualRowId != -1 ? conceptualRowId : "(none)");
-        return positionsAddedToSoa > 0 ? 1 : 0; // Returns 1 conceptual row if positions were added
+        logger.debug("executeSpecificEntityFilterSearch for Type '{}', Target '{}' (synId {}), added {} positions to QueryResultSoA under conceptualRowId {} after all filtering.",
+                     normalizedEntityType, targetValueFromQuery, targetSynonymId, positionsAddedToSoa, conceptualRowId != -1 ? conceptualRowId : "N/A");
+        return positionsAddedToSoa > 0 ? 1 : 0;
     }
 
     /**
@@ -275,7 +263,8 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
      */
     private int executeVariableBindingSearch(String normalizedEntityType, String filterTargetValueFromQuery, // Original casing from query, can be null
                                             String queryVariableName, IndexAccessInterface index,
-                                            AttributeRequirements requirements, QueryResultSoA resultSoA)
+                                            AttributeRequirements requirements, QueryResultSoA resultSoA,
+                                            Optional<FilteringContext> context)
         throws IOException, IndexAccessException, QueryExecutionException {
 
         if (!requirements.needsSynonymIds) {
@@ -284,8 +273,8 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             // Depending on strictness, could return 0 or throw an error.
             // For now, proceed but expect potential issues if synonym IDs are crucial later.
         }
-        logger.debug("Executing executeVariableBindingSearch: Type='{}', Var='{}', TargetFilter='{}'",
-                     normalizedEntityType, queryVariableName, filterTargetValueFromQuery);
+        logger.debug("Executing executeVariableBindingSearch: Type='{}', Var='{}', TargetFilter='{}', ContextIsPresent={}",
+                     normalizedEntityType, queryVariableName, filterTargetValueFromQuery, context.isPresent());
 
         Optional<Integer> filterTargetSynonymId = Optional.empty();
         if (filterTargetValueFromQuery != null) {
@@ -315,27 +304,18 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
 
         byte[] rawBlob = rawBlobOptional.get();
-        int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob);
-        logger.debug("executeVariableBindingSearch: Blob found for '{}'. numPositions from blob: {}", normalizedEntityType, numPositions);
+        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
 
-        if (numPositions == 0) {
-            logger.debug("executeVariableBindingSearch: numPositions is 0 for entity type '{}', returning 0 conceptual rows.", normalizedEntityType);
-            return 0;
-        }
-
-                    IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob);
-        IntArrayList sentenceIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob) : null;
-                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob) : null;
-                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob) : null;
-        IntArrayList synonymIds = PositionListSoA.decompressSynonymIds(rawBlob);
-
-        logger.trace("executeVariableBindingSearch: Decompressed raw arrays. DocIds size: {}, SynonymIds size: {}", docIds.size(), synonymIds.size());
+        logger.trace("executeVariableBindingSearch: Decompressed raw arrays. DocIds size: {}, SynonymIds size: {}", positions.getNumPositions(), positions.getSynonymIds().size());
 
         Map<String, Integer> resolvedTermToConceptualRowId = new HashMap<>();
         Map<Integer, String> resolvedSynonymIdToTermCache = new HashMap<>(); // Cache for term resolution
 
-                    for (int i = 0; i < numPositions; i++) {
-            int currentSynonymId = synonymIds.getInt(i);
+        int conceptualRowsAdded = 0;
+        int initialNumPositions = positions.getNumPositions();
+
+        for (int i = 0; i < initialNumPositions; i++) {
+            int currentSynonymId = positions.getSynonymIdAt(i);
             logger.trace("executeVariableBindingSearch: Processing position {}, currentSynonymId: {}", i, currentSynonymId);
 
             if (filterTargetSynonymId.isPresent() && filterTargetSynonymId.get() != currentSynonymId) {
@@ -373,16 +353,16 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 });
 
                 logger.trace("executeVariableBindingSearch: Adding to resultSoA. ConceptualRowId: {}, VarName: '{}', Value: '{}', ValueType: ENTITY, DocId: {}",
-                    conceptualRowId, queryVariableName, valueToBind, docIds.getInt(i));
+                    conceptualRowId, queryVariableName, valueToBind, positions.getDocIdAt(i));
 
                 resultSoA.add(
                     valueToBind,                  // Object value
                     ValueType.ENTITY,             // ValueType valueType
                     queryVariableName,            // String variableName
-                    docIds.getInt(i),             // int documentId
-                    requirements.needsSentenceId ? sentenceIds.getInt(i) : -1, // int sentenceId
-                    requirements.needsPositions ? beginChars.getInt(i) : -1,   // int beginChar
-                    requirements.needsPositions ? endChars.getInt(i) : -1,     // int endChar
+                    positions.getDocIdAt(i),       // int documentId
+                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1, // int sentenceId
+                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,   // int beginChar
+                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,     // int endChar
                     currentSynonymId,             // int synonymId (Store the synonymId of the resolved entity)
                     conceptualRowId               // int conceptualRowId
                 );
@@ -391,9 +371,9 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 throw new IndexAccessException("Failed to resolve term for synonymId: " + currentSynonymId, NER_INDEX_NAME, IndexAccessException.ErrorType.READ_ERROR, e);
             }
         }
-        int conceptualRowsAddedCount = resolvedTermToConceptualRowId.size();
+        conceptualRowsAdded = resolvedTermToConceptualRowId.size();
         logger.debug("executeVariableBindingSearch for Type '{}' completed. Added {} conceptual rows and {} total bindings to QueryResultSoA.",
-                     normalizedEntityType, conceptualRowsAddedCount, resultSoA.size());
-        return conceptualRowsAddedCount;
+                     normalizedEntityType, conceptualRowsAdded, resultSoA.size());
+        return conceptualRowsAdded;
     }
 }

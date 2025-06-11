@@ -55,7 +55,7 @@ public class DependencyConditionExecutorTest {
         positions.add(new Position(1, 2, 5, 12));
         when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(2, result.size());
@@ -90,7 +90,7 @@ public class DependencyConditionExecutorTest {
         positions.add(new Position(10, 2, 3, 9));   // Different sentence
         when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(3, result.size()); // Should get 3 binding entries
@@ -111,7 +111,7 @@ public class DependencyConditionExecutorTest {
         positions.add(new Position(5, 3, 2, 8));
         when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(1, result.size());
@@ -127,7 +127,7 @@ public class DependencyConditionExecutorTest {
         String expectedKey = "unknown" + DELIMITER_STR + "rel" + DELIMITER_STR + "target";
         when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.empty());
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertTrue(result.isEmpty());
@@ -139,7 +139,7 @@ public class DependencyConditionExecutorTest {
         Map<String, IndexAccessInterface> emptyIndexes = Collections.emptyMap();
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
-            executor.execute(condition, emptyIndexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+            executor.execute(condition, emptyIndexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         });
 
         assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
@@ -152,7 +152,7 @@ public class DependencyConditionExecutorTest {
         when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenThrow(new IndexAccessException("Test error accessing index", "dependency", IndexAccessException.ErrorType.READ_ERROR));
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
-            executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+            executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         });
 
         assertEquals(QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR, exception.getErrorType());

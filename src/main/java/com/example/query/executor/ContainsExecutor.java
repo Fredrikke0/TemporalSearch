@@ -19,8 +19,6 @@ import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Contains;
 
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-
 /**
  * Executor for CONTAINS conditions.
  * Handles n-gram pattern matching and variable binding.
@@ -50,18 +48,40 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
-                               AttributeRequirements requirements)
+                               AttributeRequirements requirements,
+                               Optional<FilteringContext> context)
         throws QueryExecutionException {
 
-        logger.debug("Executing CONTAINS condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        logger.debug("Executing CONTAINS condition with AttributeRequirements: {}, FilteringContext isPresent: {}",
+                     requirements.getRequiredSoAAttributes(), context.isPresent());
+        // TODO: If context is present and specifies empty doc/sentence IDs, can we early exit here?
+        // if (context.isPresent() && context.get().allowedDocumentIds().map(Set::isEmpty).orElse(false)) {
+        //     logger.debug("FilteringContext indicates no allowed document IDs, returning empty result for CONTAINS.");
+        //     return new QueryResultSoA(granularity, granularitySize, requirements);
+        // }
 
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
         int conceptualRowIdCounter = 0;
 
         List<String> terms = condition.terms();
         if (terms.isEmpty()) {
-            logger.warn("CONTAINS condition has no terms, returning empty result");
-            return resultSoA;
+            throw new QueryExecutionException(
+                "Contains condition must have at least one term.",
+                condition.toString(),
+                QueryExecutionException.ErrorType.INVALID_CONDITION
+            );
+        }
+
+        // Validate individual terms
+        for (String term : terms) {
+            if (term == null || term.trim().isEmpty()) {
+                logger.error("CONTAINS condition contains null, empty, or blank term: '{}' in terms: {}", term, terms);
+                throw new QueryExecutionException(
+                    "CONTAINS condition cannot have null, empty, or blank terms.",
+                    condition.toString(),
+                    QueryExecutionException.ErrorType.INVALID_CONDITION
+                );
+            }
         }
 
         boolean isVariable = condition.isVariable();
@@ -91,7 +111,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
 
             for (String pattern : patterns) {
                 conceptualRowIdCounter = executePatternSearchOptimized(
-                    pattern, isVariable, variableName, index, condition, resultSoA, conceptualRowIdCounter, requirements);
+                    pattern, isVariable, variableName, index, condition, resultSoA, conceptualRowIdCounter, requirements, context);
             }
 
             logger.debug("Found {} total entries in QueryResultSoA for terms: {} using selective deserialization",
@@ -159,6 +179,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
      * @param resultSoA The QueryResultSoA to add results to
      * @param conceptualRowIdCounter The current counter for conceptualRowIds
      * @param requirements AttributeRequirements for deserialization
+     * @param context FilteringContext for filtering
      * @return The updated conceptualRowIdCounter
      * @throws QueryExecutionException If an error occurs during query execution
      * @throws IndexAccessException If an error occurs during index access
@@ -166,10 +187,11 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
     private int executePrefixSearch(String prefix, boolean isVariable, String variableName,
                                         IndexAccessInterface index, Contains condition,
                                         QueryResultSoA resultSoA, int conceptualRowIdCounter,
-                                        AttributeRequirements requirements)
+                                        AttributeRequirements requirements,
+                                        Optional<FilteringContext> context)
         throws QueryExecutionException, IndexAccessException {
 
-        logger.debug("Executing prefix search for: {} (populating QueryResultSoA)", prefix);
+        logger.debug("Executing prefix search for: {} (populating QueryResultSoA), FilteringContext isPresent: {}", prefix, context.isPresent());
         int originalConceptualRowIdCounter = conceptualRowIdCounter;
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
@@ -185,7 +207,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                 }
 
                 // Deserialize the value to PositionListSoA
-                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
+                PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context);
 
                 // Always reconstruct value for human readability if it contained delimiters
                 String actualValue = reconstructValue(key, DELIMITER);
@@ -253,12 +275,17 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
      * @param resultSoA The QueryResultSoA to populate
      * @param conceptualRowIdCounter The current conceptualRowId counter
      * @param requirements The AttributeRequirements for selective deserialization
+     * @param context FilteringContext for filtering
      * @return The updated conceptualRowIdCounter
      */
     private int executePatternSearchOptimized(String pattern, boolean isVariable, String variableName,
                                         IndexAccessInterface index, Contains condition, QueryResultSoA resultSoA,
-                                        int conceptualRowIdCounter, AttributeRequirements requirements)
+                                        int conceptualRowIdCounter, AttributeRequirements requirements,
+                                        Optional<FilteringContext> context)
         throws QueryExecutionException, IndexAccessException {
+
+        logger.debug("Executing optimized pattern search for: {}, variable: {}, contextIsPresent: {}", pattern, variableName, context.isPresent());
+        int originalConceptualRowIdCounter = conceptualRowIdCounter;
 
         // Pattern is already lowercased by constructSearchPatterns
         if (pattern == null || pattern.trim().isEmpty()) {
@@ -272,7 +299,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             // E.g., "term*", "term1<DELIMITER>term2*"
             String prefix = pattern.substring(0, pattern.length() - 1);
             logger.debug("Pattern '{}' ends with '*', performing prefix search for '{}'", pattern, prefix);
-            return executePrefixSearch(prefix, isVariable, variableName, index, condition, resultSoA, conceptualRowIdCounter, requirements);
+            return executePrefixSearch(prefix, isVariable, variableName, index, condition, resultSoA, conceptualRowIdCounter, requirements, context);
         } else {
             // Handles:
             // 1. Exact terms: "term", "term1<DELIMITER>term2"
@@ -281,22 +308,20 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             // These will all be direct lookups.
             logger.debug("Attempting direct lookup for pattern: {}", pattern);
             byte[] keyBytes = pattern.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            Optional<byte[]> rawBlob = index.getRaw(keyBytes);
+            Optional<byte[]> rawBlobOptional = index.getRaw(keyBytes);
 
-            if (rawBlob.isPresent()) {
+            if (rawBlobOptional.isPresent()) {
                 try {
-                    int numPositions = PositionListSoA.getNumPositionsFromBlob(rawBlob.get());
-                    if (numPositions == 0) {
+                    byte[] rawBlob = rawBlobOptional.get();
+                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+
+                    if (positions.isEmpty()) {
+                        logger.debug("No positions for pattern '{}' after context filtering.", pattern);
                         return conceptualRowIdCounter;
                     }
 
-                    logger.debug("Found {} positions for pattern: '{}' (using selective deserialization)", numPositions, pattern);
-
-                    IntArrayList docIds = PositionListSoA.decompressDocIds(rawBlob.get());
-                    IntArrayList sentIds = requirements.needsSentenceId ? PositionListSoA.decompressSentenceIds(rawBlob.get()) : null;
-                    IntArrayList beginChars = requirements.needsPositions ? PositionListSoA.decompressBeginChars(rawBlob.get()) : null;
-                    IntArrayList endChars = requirements.needsPositions ? PositionListSoA.decompressEndChars(rawBlob.get()) : null;
-                    IntArrayList synonymIds = requirements.needsSynonymIds ? PositionListSoA.decompressSynonymIds(rawBlob.get()) : null;
+                    int numPositions = positions.getNumPositions();
+                    logger.debug("Found {} positions for pattern: '{}' after context filtering", numPositions, pattern);
 
                     String actualValue = reconstructValue(pattern, DELIMITER); // Reconstruct for display/binding
 
@@ -305,25 +330,25 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                             actualValue,
                             ValueType.TERM,
                             isVariable ? variableName : null,
-                            docIds.getInt(i),
-                            sentIds != null ? sentIds.getInt(i) : -1,
-                            beginChars != null ? beginChars.getInt(i) : -1,
-                            endChars != null ? endChars.getInt(i) : -1,
-                            synonymIds != null ? synonymIds.getInt(i) : -1,
+                            positions.getDocIdAt(i),
+                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                            requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
                             conceptualRowIdCounter++
                         );
                     }
 
-                    logger.debug("Selective deserialization for '{}': docIds={}, sentIds={}, positions={}, synonymIds={}",
-                               pattern, (docIds != null && !docIds.isEmpty()), (sentIds != null && !sentIds.isEmpty()),
-                               (beginChars != null && !beginChars.isEmpty()), (synonymIds != null && !synonymIds.isEmpty()));
+                    // Logging for selective deserialization effectiveness can be removed or adapted if needed,
+                    // as deserializeWithFilters handles the full object based on context.
+                    logger.debug("Pattern '{}' resulted in {} entries in SoA after filtering.", pattern, numPositions);
 
                 } catch (Exception e) {
-                    logger.error("Error during selective deserialization for pattern '{}': {}", pattern, e.getMessage(), e);
-                    throw new QueryExecutionException("Error during selective deserialization for pattern " + pattern, e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+                    logger.error("Error during direct lookup and deserialization for pattern '{}': {}", pattern, e.getMessage(), e);
+                    throw new QueryExecutionException("Error during direct lookup for pattern " + pattern, e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
                 }
             } else {
-                logger.debug("No positions found for pattern: '{}'", pattern);
+                logger.debug("No positions found for pattern: '{}' (direct lookup)", pattern);
             }
             return conceptualRowIdCounter;
         }

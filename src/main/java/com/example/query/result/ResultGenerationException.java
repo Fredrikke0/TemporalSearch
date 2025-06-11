@@ -12,7 +12,6 @@ public class ResultGenerationException extends Exception {
      * Enum defining the types of errors that can occur during result generation.
      */
     public enum ErrorType {
-        METADATA_ACCESS_ERROR,
         SNIPPET_GENERATION_ERROR,
         VARIABLE_BINDING_ERROR,
         FORMATTING_ERROR,

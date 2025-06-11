@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -82,9 +83,9 @@ class PosExecutorTest {
         positions.add(1, 0, 5, 10, testTermSynonymId);
         positions.add(2, 1, 15, 20, testTermSynonymId);
         positions.add(1, 1, 25, 30, 456);
-        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
+        when(posIndex.getMergedPositions(eq(expectedTagString), any())).thenReturn(Optional.of(positions));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
@@ -100,7 +101,7 @@ class PosExecutorTest {
             assertEquals(testTermSynonymId, result.getSynonymIdAt(i));
         }
         verify(synonymManager).getId("test");
-        verify(posIndex).getMergedPositions(eq(expectedTagString));
+        verify(posIndex).getMergedPositions(eq(expectedTagString), any());
     }
 
     @Test
@@ -118,9 +119,9 @@ class PosExecutorTest {
         positions.add(1, 1, 10, 15, runTermSynonymId);
         positions.add(1, 3, 20, 25, 999);
 
-        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
+        when(posIndex.getMergedPositions(eq(expectedTagString), any())).thenReturn(Optional.of(positions));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
@@ -144,7 +145,7 @@ class PosExecutorTest {
         assertEquals(4, foundRunTermSynonymIdCount, "All 4 results should be for 'run'");
 
         verify(synonymManager).getId("run");
-        verify(posIndex).getMergedPositions(eq(expectedTagString));
+        verify(posIndex).getMergedPositions(eq(expectedTagString), any());
     }
 
     @Test
@@ -161,9 +162,9 @@ class PosExecutorTest {
         positions.add(1, 3, 5, 6, nounTermSynonymId);
         positions.add(2, 1, 7, 8, nounTermSynonymId);
 
-        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
+        when(posIndex.getMergedPositions(eq(expectedTagString), any())).thenReturn(Optional.of(positions));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
@@ -186,7 +187,7 @@ class PosExecutorTest {
         assertTrue(match2_1);
 
         verify(synonymManager).getId("noun");
-        verify(posIndex).getMergedPositions(eq(expectedTagString));
+        verify(posIndex).getMergedPositions(eq(expectedTagString), any());
     }
 
     @Test
@@ -204,13 +205,13 @@ class PosExecutorTest {
         positionsForJJ.add(1, 2, 25, 30, uglySynId);
         positionsForJJ.add(3, 0, 35, 40, goodSynId);
 
-        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positionsForJJ));
+        when(posIndex.getMergedPositions(eq(expectedTagString), any())).thenReturn(Optional.of(positionsForJJ));
 
         when(synonymManager.getTerm(goodSynId)).thenReturn(Optional.of("good"));
         when(synonymManager.getTerm(badSynId)).thenReturn(Optional.of("bad"));
         when(synonymManager.getTerm(uglySynId)).thenReturn(Optional.of("ugly"));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
@@ -235,7 +236,7 @@ class PosExecutorTest {
         assertEquals(1, (int)valueCounts.get("bad"));
         assertEquals(1, (int)valueCounts.get("ugly"));
 
-        verify(posIndex).getMergedPositions(eq(expectedTagString));
+        verify(posIndex).getMergedPositions(eq(expectedTagString), any());
         verify(synonymManager, times(1)).getTerm(goodSynId);
         verify(synonymManager, times(1)).getTerm(badSynId);
         verify(synonymManager, times(1)).getTerm(uglySynId);
@@ -251,9 +252,9 @@ class PosExecutorTest {
         positions.add(1, 1, 15, 20, 222);
         positions.add(2, 0, 25, 30, 111);
 
-        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
+        when(posIndex.getMergedPositions(eq(expectedTagString), any())).thenReturn(Optional.of(positions));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
@@ -270,7 +271,7 @@ class PosExecutorTest {
         }
         assertTrue(docIds.containsAll(Set.of(1, 2)));
 
-        verify(posIndex).getMergedPositions(eq(expectedTagString));
+        verify(posIndex).getMergedPositions(eq(expectedTagString), any());
         verify(synonymManager, times(0)).getTerm(anyInt());
     }
 
@@ -278,10 +279,10 @@ class PosExecutorTest {
     void testExecuteWildcardSearch_allPosTags() throws Exception {
         Pos condition = new Pos("*", null);
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
-            executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+            executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         });
         assertEquals(QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION, exception.getErrorType());
-        verify(posIndex, times(0)).getMergedPositions(anyString());
+        verify(posIndex, times(0)).getMergedPositions(anyString(), any());
     }
 
     @Test
@@ -296,9 +297,9 @@ class PosExecutorTest {
         positions.add(1, 1, 10, 15, happySynId);
         positions.add(1, 2, 20, 25, 666);
 
-        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.of(positions));
+        when(posIndex.getMergedPositions(eq(expectedTagString), any())).thenReturn(Optional.of(positions));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
@@ -311,7 +312,7 @@ class PosExecutorTest {
         assertEquals(1, result.getDocumentIdAt(0));
 
         verify(synonymManager).getId("happy");
-        verify(posIndex).getMergedPositions(eq(expectedTagString));
+        verify(posIndex).getMergedPositions(eq(expectedTagString), any());
     }
 
     @Test
@@ -321,16 +322,16 @@ class PosExecutorTest {
         int nonExistentTermSynId = 999;
 
         when(synonymManager.getId("term_that_does_not_exist")).thenReturn(nonExistentTermSynId);
-        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.empty());
+        when(posIndex.getMergedPositions(eq(expectedTagString), any())).thenReturn(Optional.empty());
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertTrue(result.isEmpty());
         assertEquals(0, result.getConceptualRowCount());
 
         verify(synonymManager).getId("term_that_does_not_exist");
-        verify(posIndex).getMergedPositions(eq(expectedTagString));
+        verify(posIndex).getMergedPositions(eq(expectedTagString), any());
     }
 
     @Test
@@ -338,14 +339,14 @@ class PosExecutorTest {
         Pos condition = new Pos("ABC", null, "?var");
         String expectedTagString = "ABC";
 
-        when(posIndex.getMergedPositions(eq(expectedTagString))).thenReturn(Optional.empty());
+        when(posIndex.getMergedPositions(eq(expectedTagString), any())).thenReturn(Optional.empty());
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         assertNotNull(result);
         assertTrue(result.isEmpty());
         assertEquals(0, result.getConceptualRowCount());
 
-        verify(posIndex).getMergedPositions(eq(expectedTagString));
+        verify(posIndex).getMergedPositions(eq(expectedTagString), any());
         verify(synonymManager, times(0)).getTerm(anyInt());
     }
 
@@ -355,7 +356,7 @@ class PosExecutorTest {
         Map<String, IndexAccessInterface> emptyIndexes = Collections.emptyMap();
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
-            executor.execute(condition, emptyIndexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+            executor.execute(condition, emptyIndexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         });
         assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
     }

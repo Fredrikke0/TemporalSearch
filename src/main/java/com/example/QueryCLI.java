@@ -15,7 +15,7 @@ import com.example.query.QueryParseException;
 import com.example.query.QueryParser;
 import com.example.query.QuerySemanticValidator;
 import com.example.query.executor.ConditionExecutorFactory;
-import com.example.query.executor.JoinOptimizationStrategy;
+import com.example.query.executor.PushdownStrategy;
 import com.example.query.executor.QueryExecutor;
 import com.example.query.executor.QueryResultSoA;
 import com.example.query.index.IndexManager;
@@ -44,7 +44,7 @@ public class QueryCLI {
     // executorFactory and executor are now created per-query execution
 
     private final String temporalStrategyName; // Stored from constructor
-    private final JoinOptimizationStrategy joinOptimizationStrategy; // Stored from constructor
+    private final PushdownStrategy pushdownStrategy; // ADDED
     private final String stitchStrategyName; // Stored from constructor
 
     /**
@@ -53,21 +53,21 @@ public class QueryCLI {
      * @param dbFilePath The path to the project's SQLite database file.
      * @param indexDirPath The path to the directory containing project indexes.
      * @param temporalStrategyName The desired temporal execution strategy ("nash" or "naive")
-     * @param joinOptStrategy The desired join execution strategy
+     * @param pushdownStrategy The desired pushdown strategy
      * @param stitchStrategyName The desired stitch execution strategy ("none" or "optimized")
      */
-    public QueryCLI(String dbFilePath, Path indexDirPath, String temporalStrategyName, JoinOptimizationStrategy joinOptStrategy, String stitchStrategyName) {
+    public QueryCLI(String dbFilePath, Path indexDirPath, String temporalStrategyName, PushdownStrategy pushdownStrategy, String stitchStrategyName) {
         this.dbFilePath = dbFilePath;
         this.indexDirPath = indexDirPath;
         this.parser = new QueryParser();
         this.validator = new QuerySemanticValidator();
 
         this.temporalStrategyName = temporalStrategyName;
-        this.joinOptimizationStrategy = joinOptStrategy;
+        this.pushdownStrategy = pushdownStrategy;
         this.stitchStrategyName = stitchStrategyName;
 
         logger.info("Initialized QueryCLI with DB file: {} and Index directory: {}", dbFilePath, indexDirPath);
-        logger.info("Temporal Strategy: {}, Join Strategy: {}, Stitch Strategy: {}", temporalStrategyName, joinOptStrategy, stitchStrategyName);
+        logger.info("Temporal Strategy: {}, Pushdown Strategy: {}, Stitch Strategy: {}", temporalStrategyName, pushdownStrategy, stitchStrategyName);
     }
 
     /**
@@ -116,7 +116,7 @@ public class QueryCLI {
                 executorFactory.setTemporalStrategy(this.temporalStrategyName); // Set strategy on the factory
 
                 QueryExecutor queryExecutor = new QueryExecutor(executorFactory, this.stitchStrategyName, synonymManager);
-                queryExecutor.setJoinOptimizationStrategy(this.joinOptimizationStrategy); // Set strategy on the executor
+                queryExecutor.setPushdownStrategy(this.pushdownStrategy);
 
                 logger.debug("Executing query against project: {}", projectName);
                 Query.Granularity granularity = query.granularity();
@@ -248,78 +248,60 @@ public class QueryCLI {
         parser.addArgument("--export")
                 .help("Export results to a file in the specified format: csv:filename.csv, json:filename.json, or html:filename.html");
 
-        // Add the new temporal strategy flag
         parser.addArgument("--temporal-strategy")
-                .choices("nash", "naive") // Define allowed choices
-                .setDefault("naive")      // Set the default value
-                .help("Select the execution strategy for temporal conditions (default: naive)");
+                .choices("nash", "naive").setDefault("naive")
+                .help("Specify the temporal execution strategy (nash or naive).");
 
-        // Add the new join strategy flag
-        parser.addArgument("--join-strategy")
-                .choices("independent", "dependent")
-                .setDefault("independent")
-                .help("Specifies the execution strategy for JOIN operations. 'independent' executes both sides fully before joining (default). 'dependent' attempts to optimize by filtering one side based on the results of the other.");
+        parser.addArgument("--pushdown-strategy")
+                .choices("none", "optimized").setDefault("none")
+                .type(String.class)
+                .help("Specify the predicate pushdown strategy (none or optimized). Default: optimized.");
 
-        // Add the new stitch strategy flag
         parser.addArgument("--stitch-strategy")
-                .choices("none", "optimized") // Define allowed choices
-                .setDefault("none")      // Set the default value
-                .help("Select the execution strategy for stitch index optimization (default: none)");
+                .choices("none", "optimized").setDefault("none")
+                .help("Specify the stitch execution strategy (none or optimized).");
 
         parser.addArgument("query")
                 .nargs("?")
-                .help("Query string to execute");
+                .help("The query string to execute. If not provided, enters interactive mode.");
 
         try {
-            // Parse arguments
             Namespace ns = parser.parseArgs(args);
-            String dbFileStr = ns.getString("db_file");
-            Path indexDirPath = Path.of(ns.getString("index_dir"));
-            String query = ns.getString("query");
+            String dbFile = ns.getString("db_file");
+            String indexDir = ns.getString("index_dir");
             String exportArg = ns.getString("export");
-            String temporalStrategy = ns.getString("temporal_strategy"); // Get the strategy name
-            String joinStrategyStr = ns.getString("join_strategy");
-            String stitchStrategy = ns.getString("stitch_strategy"); // Get stitch strategy
-            JoinOptimizationStrategy joinStrategyEnum;
-            if ("dependent".equalsIgnoreCase(joinStrategyStr)) {
-                joinStrategyEnum = JoinOptimizationStrategy.DEPENDENT;
-            } else {
-                joinStrategyEnum = JoinOptimizationStrategy.INDEPENDENT;
-            }
+            String temporalStrategy = ns.getString("temporal_strategy");
+            String pushdownStrategyStr = ns.getString("pushdown_strategy");
+            PushdownStrategy pushdownStrategy = PushdownStrategy.fromString(pushdownStrategyStr);
+            String stitchStrategy = ns.getString("stitch_strategy");
+            String queryStr = ns.getString("query");
 
-            // Parse export argument if provided
             Optional<String> exportFormat = Optional.empty();
             Optional<String> exportFilename = Optional.empty();
 
-            if (exportArg != null && !exportArg.isEmpty()) {
+            if (exportArg != null) {
                 String[] parts = exportArg.split(":", 2);
                 if (parts.length == 2) {
                     exportFormat = Optional.of(parts[0]);
                     exportFilename = Optional.of(parts[1]);
                 } else {
-                    System.err.println("Invalid export format. Use format:filename (e.g., csv:results.csv)");
-                    System.exit(1);
+                    System.err.println("Invalid export format. Use format:filename (e.g., csv:output.csv)");
+                    return;
                 }
             }
 
-            // Create and run CLI, passing the chosen strategies
-            logger.info("Configuring temporal strategy: {}", temporalStrategy);
-            logger.info("Configuring join strategy: {}", joinStrategyEnum);
-            logger.info("Configuring stitch strategy: {}", stitchStrategy);
-            QueryCLI cli = new QueryCLI(dbFileStr, indexDirPath, temporalStrategy, joinStrategyEnum, stitchStrategy);
+            QueryCLI cli = new QueryCLI(dbFile, Path.of(indexDir), temporalStrategy, pushdownStrategy, stitchStrategy);
 
-            if (query != null) {
-                // Execute the provided query
-                cli.executeQuery(query, exportFormat, exportFilename);
+            if (queryStr != null) {
+                cli.executeQuery(queryStr, exportFormat, exportFilename);
             } else {
-                // Interactive mode
                 Scanner scanner = new Scanner(System.in);
                 System.out.println("Query CLI - Enter queries or 'exit' to quit");
-                System.out.println("Using DB file: " + dbFileStr);
-                System.out.println("Using Index directory: " + indexDirPath.toString());
+                System.out.println("Using DB file: " + dbFile);
+                System.out.println("Using Index directory: " + indexDir);
                 System.out.println("Specify project in query using: FROM [PROJECT_NAME]");
                 System.out.println("Temporal Strategy: " + temporalStrategy + " (Use --temporal-strategy nash|naive to change at startup)");
-                System.out.println("Join Strategy: " + joinStrategyEnum.name().toLowerCase() + " (Use --join-strategy independent|dependent to change at startup)");
+                System.out.println("Pushdown Strategy: " + pushdownStrategy.name().toLowerCase() + " (Use --pushdown-strategy none|optimized to change at startup)");
                 System.out.println("Stitch Strategy: " + stitchStrategy + " (Use --stitch-strategy none|optimized to change at startup)");
                 System.out.println("Snippet support is enabled. Use SNIPPET(variable) in SELECT clause to show text context.");
                 System.out.println("Export support: Add --export=format:filename to export results (formats: csv, json, html)");
@@ -333,7 +315,6 @@ public class QueryCLI {
                     }
 
                     if (!input.isEmpty()) {
-                        // Note: In interactive mode, the strategy chosen at startup is used for all queries.
                         cli.executeQuery(input, exportFormat, exportFilename);
                     }
                 }

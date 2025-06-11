@@ -82,7 +82,7 @@ public class ContainsConditionExecutorTest {
 
         when(mockUnigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positionList)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         verify(mockUnigramIndex).getRaw(eq(keyBytes));
         assertEquals(2, result.size());
@@ -105,7 +105,7 @@ public class ContainsConditionExecutorTest {
 
         when(mockBigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positionList)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         verify(mockBigramIndex).getRaw(eq(keyBytes));
         assertEquals(2, result.size());
@@ -128,7 +128,7 @@ public class ContainsConditionExecutorTest {
 
         when(mockBigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positionList)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         verify(mockBigramIndex).getRaw(eq(keyBytes));
         assertEquals(2, result.size());
@@ -151,7 +151,7 @@ public class ContainsConditionExecutorTest {
 
         when(mockTrigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positionList)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         verify(mockTrigramIndex).getRaw(eq(keyBytes));
         assertEquals(2, result.size());
@@ -188,7 +188,7 @@ public class ContainsConditionExecutorTest {
         byte[] keyBytes = "nonexistent".toLowerCase().getBytes();
         when(mockUnigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.empty());
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         verify(mockUnigramIndex).getRaw(eq(keyBytes));
         assertTrue(result.isEmpty());
     }
@@ -199,7 +199,7 @@ public class ContainsConditionExecutorTest {
         Map<String, IndexAccessInterface> emptyIndexes = new HashMap<>();
         QueryExecutionException exception = assertThrows(
             QueryExecutionException.class,
-            () -> executor.execute(condition, emptyIndexes, Query.Granularity.DOCUMENT, 1, "test_corpus", defaultTestRequirements)
+            () -> executor.execute(condition, emptyIndexes, Query.Granularity.DOCUMENT, 1, "test_corpus", defaultTestRequirements, Optional.empty())
         );
         assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
         assertTrue(exception.getMessage().contains("Required unigram index not found"));
@@ -214,7 +214,7 @@ public class ContainsConditionExecutorTest {
 
         when(mockUnigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positionList)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertEquals(1, result.size());
         assertEquals("test", result.getValueAt(0));
@@ -234,7 +234,7 @@ public class ContainsConditionExecutorTest {
 
         when(mockBigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positionList)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertEquals(1, result.size());
         assertEquals("hello world", result.getValueAt(0)); // Value is space-separated
@@ -258,7 +258,7 @@ public class ContainsConditionExecutorTest {
         // This test focuses on the ContainsExecutor returning all sentence matches;
         // windowing is applied later by QueryExecutor/JoinHandler if applicable.
         // For ContainsExecutor, granularity and window size mainly affect QueryResultSoA metadata.
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 1, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 1, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertEquals(3, result.size()); // Expect all 3 matches from the PositionListSoA
         assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
@@ -281,7 +281,7 @@ public class ContainsConditionExecutorTest {
         positions.add(new Position(2,1,10,15));
         when(mockUnigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positions)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(2, result.size());
@@ -300,7 +300,7 @@ public class ContainsConditionExecutorTest {
         positions.add(new Position(3,1,0,8));
         when(mockBigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positions)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(1, result.size());
@@ -318,7 +318,7 @@ public class ContainsConditionExecutorTest {
         positions.add(new Position(4,1,0,15));
         when(mockTrigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positions)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(1, result.size());
@@ -332,7 +332,7 @@ public class ContainsConditionExecutorTest {
         byte[] keyBytes = "nonexistent".toLowerCase().getBytes();
         lenient().when(mockUnigramIndex.getRaw(keyBytes)).thenReturn(Optional.empty());
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         assertTrue(result.isEmpty());
         verify(mockUnigramIndex).getRaw(keyBytes);
     }
@@ -340,9 +340,9 @@ public class ContainsConditionExecutorTest {
     @Test
     void testEmptyTerms() throws QueryExecutionException {
         Contains condition = new Contains(Collections.emptyList());
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
-        assertTrue(result.isEmpty());
-        assertEquals(0, result.size());
+        QueryExecutionException ex = assertThrows(QueryExecutionException.class,
+            () -> executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty()));
+        assertEquals("Contains condition must have at least one term.", ex.getMessage());
     }
 
     @Test
@@ -355,7 +355,7 @@ public class ContainsConditionExecutorTest {
         positions.add(new Position(5,1,2,7));
         when(mockUnigramIndex.getRaw(eq(keyBytes))).thenReturn(Optional.of(soaToBlob(positions)));
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements);
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
         assertEquals(1, result.size());

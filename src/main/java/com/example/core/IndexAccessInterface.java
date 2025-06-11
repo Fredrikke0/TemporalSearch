@@ -1,12 +1,9 @@
 package com.example.core;
 
 import java.io.IOException;
-import java.util.Map;
 import java.util.Optional;
 
 import org.rocksdb.RocksIterator;
-
-import com.example.index.AnnotationType;
 
 /**
  * Interface defining the core access methods for indexes.
@@ -87,21 +84,6 @@ public interface IndexAccessInterface extends AutoCloseable {
     boolean isOpen();
 
     /**
-     * Gets the index metadata.
-     * @return An Optional containing the index metadata, or an empty Optional if none exists.
-     */
-    Optional<Map<String, String>> getIndexMetadata();
-
-    /**
-     * Gets the specific type of annotation this index provides (e.g., NER, POS, DATE).
-     * This helps in understanding what kind of data to expect from the index.
-     * @return The AnnotationType of the index, or {@link AnnotationType#UNKNOWN} if not specified.
-     */
-    default AnnotationType getAnnotationType() {
-        return AnnotationType.UNKNOWN;
-    }
-
-    /**
      * Gets the root path of this index.
      * This can be used by components like SynonymManager to store auxiliary data
      * in a sub-directory relative to the main index data.
@@ -113,6 +95,7 @@ public interface IndexAccessInterface extends AutoCloseable {
      * Retrieves all segments for a given base term and merges them into a single PositionListSoA.
      * If the term is not segmented (i.e., it was small enough to be stored under its base name),
      * this method will retrieve that single entry.
+     * This version does not apply any filtering context.
      *
      * @param baseTerm The base term to look up (e.g., "apple", "NOUN").
      * @return An Optional containing the merged PositionListSoA for the term. If the base term
@@ -120,7 +103,27 @@ public interface IndexAccessInterface extends AutoCloseable {
      * @throws IOException If an I/O error occurs during deserialization or reading from the index.
      * @throws IndexAccessException If an error occurs accessing the underlying index storage.
      */
-    Optional<PositionListSoA> getMergedPositions(String baseTerm) throws IOException, IndexAccessException;
+    default Optional<PositionListSoA> getMergedPositions(String baseTerm) throws IOException, IndexAccessException {
+        return getMergedPositions(baseTerm, Optional.empty());
+    }
+
+    /**
+     * Retrieves all segments for a given base term, applies filtering based on the provided
+     * context, and merges them into a single PositionListSoA.
+     * If the term is not segmented, this method will retrieve that single entry and filter it.
+     *
+     * @param baseTerm The base term to look up (e.g., "apple", "NOUN").
+     * @param context The FilteringContext to apply. If Optional.empty() or context is unrestricted,
+     *                no filtering beyond normal deserialization occurs. Implementations should strive
+     *                to apply filtering as early as possible (e.g., during/before full deserialization
+     *                of each segment).
+     * @return An Optional containing the merged and filtered PositionListSoA for the term.
+     *         If the base term and no segments are found, or if filtering results in an empty list,
+     *         returns Optional.empty().
+     * @throws IOException If an I/O error occurs during deserialization or reading from the index.
+     * @throws IndexAccessException If an error occurs accessing the underlying index storage.
+     */
+    Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<com.example.query.executor.FilteringContext> context) throws IOException, IndexAccessException;
 
     /**
      * Closes the index access, releasing any underlying resources.

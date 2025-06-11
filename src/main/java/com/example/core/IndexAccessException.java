@@ -13,7 +13,6 @@ public class IndexAccessException extends Exception {
         INITIALIZATION_ERROR,
         READ_ERROR,
         WRITE_ERROR,
-        METADATA_ERROR,
         RESOURCE_ERROR,
         CORRUPTION_ERROR
     }

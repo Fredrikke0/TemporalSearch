@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.AbstractMap.SimpleEntry;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import org.rocksdb.RocksIterator;
@@ -42,15 +43,16 @@ public final class NotExecutor implements ConditionExecutor<Not> {
     public QueryResultSoA execute(Not condition, Map<String, IndexAccessInterface> indexes,
                                Query.Granularity granularity,
                                int granularitySize,
-                               String corpusName) throws QueryExecutionException {
-        logger.debug("Executing NOT condition (delegating to execute with default AttributeRequirements): {}, Granularity: {}, Size: {}, Corpus: {}",
-                     condition, granularity, granularitySize, corpusName);
+                               String corpusName,
+                               Optional<FilteringContext> context) throws QueryExecutionException {
+        logger.debug("Executing NOT condition (delegating to execute with default AttributeRequirements): {}, Granularity: {}, Size: {}, Corpus: {}, ContextIsPresent: {}",
+                     condition, granularity, granularitySize, corpusName, context.isPresent());
         AttributeRequirements defaultRequirements = new AttributeRequirements();
         if (granularity == Query.Granularity.SENTENCE) {
             defaultRequirements.needsSentenceId = true;
         }
         defaultRequirements.needsConceptualRowIds = true;
-        return execute(condition, indexes, granularity, granularitySize, corpusName, defaultRequirements);
+        return execute(condition, indexes, granularity, granularitySize, corpusName, defaultRequirements, context);
     }
 
     /** Helper to extract IDs based on granularity */
@@ -156,17 +158,18 @@ public final class NotExecutor implements ConditionExecutor<Not> {
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
-                               AttributeRequirements requirements)
+                               AttributeRequirements requirements,
+                               Optional<FilteringContext> context)
         throws QueryExecutionException {
 
-        logger.debug("Executing NOT condition with AttributeRequirements: {}", requirements.getRequiredSoAAttributes());
+        logger.debug("Executing NOT condition with AttributeRequirements: {}, ContextIsPresent: {}",
+                     requirements.getRequiredSoAAttributes(), context.isPresent());
 
         Condition operand = condition.condition();
         ConditionExecutor<Condition> subExecutor = factory.getExecutor(operand);
 
-        // Execute the sub-condition with the provided requirements
-        // The sub-executor should ideally respect these requirements.
-        QueryResultSoA subResult = subExecutor.execute(operand, indexes, granularity, granularitySize, corpusName, requirements);
+        // Execute the sub-condition with the provided requirements AND context
+        QueryResultSoA subResult = subExecutor.execute(operand, indexes, granularity, granularitySize, corpusName, requirements, context);
 
         Set<?> subResultIds = extractIds(subResult, granularity);
         logger.debug("Sub-condition executed. Found {} entries, resulting in {} unique IDs for NOT logic.", subResult.size(), subResultIds.size());

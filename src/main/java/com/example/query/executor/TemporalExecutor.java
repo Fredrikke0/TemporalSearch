@@ -7,7 +7,6 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.AbstractMap.SimpleEntry;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -51,6 +50,21 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     // --- Strategy Management ---
     private final Map<String, TemporalExecutionStrategy> strategies = new HashMap<>();
     private String activeStrategyName = "naive"; // Default to naive strategy
+
+    // Define the strategy interface explicitly
+    interface TemporalExecutionStrategy {
+        String getName();
+        QueryResultSoA execute(
+            Temporal condition,
+            Map<String, IndexAccessInterface> indexes,
+            Query.Granularity granularity,
+            int granularitySize,
+            String corpusName,
+            TemporalExecutor temporalExecutor, // Executor instance for accessing shared helpers
+            AttributeRequirements requirements,
+            Optional<FilteringContext> context
+        ) throws QueryExecutionException;
+    }
 
     /**
      * Creates a new TemporalExecutor and registers default strategies.
@@ -120,14 +134,15 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
-                               AttributeRequirements requirements)
+                               AttributeRequirements requirements,
+                               Optional<FilteringContext> context)
         throws QueryExecutionException {
 
-        logger.debug("Executing TEMPORAL condition with active strategy: '{}', AttributeRequirements: {}",
-            activeStrategyName, requirements.getRequiredSoAAttributes());
+        logger.debug("Executing TEMPORAL condition with active strategy: '{}', AttributeRequirements: {}, ContextIsPresent: {}",
+            activeStrategyName, requirements.getRequiredSoAAttributes(), context.isPresent());
 
         TemporalExecutionStrategy strategy = getActiveStrategy();
-        return strategy.execute(condition, indexes, granularity, granularitySize, corpusName, this, requirements);
+        return strategy.execute(condition, indexes, granularity, granularitySize, corpusName, this, requirements, context);
     }
 
     // =========================================================================
@@ -154,10 +169,11 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             int granularitySize,
             String corpusName,
             TemporalExecutor temporalExecutor,
-            AttributeRequirements requirements)
+            AttributeRequirements requirements,
+            Optional<FilteringContext> context)
             throws QueryExecutionException {
 
-            strategyLogger.debug("Executing NashTemporalStrategy for condition: {}", condition);
+            strategyLogger.debug("Executing NashTemporalStrategy for condition: {}, ContextIsPresent: {}", condition, context.isPresent());
             QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
 
             IndexAccessInterface nashDB = indexes.get(NASH_INDEX);
@@ -230,8 +246,14 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
                     if (serializedEntriesBytes.isPresent()) {
                         strategyLogger.trace("NashTemporalStrategy: Found data for prefix '{}'. Deserializing with PositionListSoA.", prefix);
-                        PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(serializedEntriesBytes.get());
-                        strategyLogger.trace("NashTemporalStrategy: Deserialized {} entries using PositionListSoA for prefix '{}'.", positionsSoA.getNumPositions(), prefix);
+                        PositionListSoA positionsSoA = PositionListSoA.deserializeWithFilters(serializedEntriesBytes.get(), context);
+                        strategyLogger.trace("NashTemporalStrategy: Deserialized {} entries using PositionListSoA for prefix '{}'. Filtered size: {}.",
+                                             PositionListSoA.getNumPositionsFromBlob(serializedEntriesBytes.get()), prefix, positionsSoA.getNumPositions());
+
+                        if (positionsSoA.isEmpty()) {
+                            strategyLogger.trace("NashTemporalStrategy: PositionsSoA for prefix '{}' is empty after context filtering.", prefix);
+                            continue;
+                        }
 
                         for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
                             Position currentPosition = positionsSoA.getPositionAt(i);
@@ -294,6 +316,8 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 throw new QueryExecutionException("Unexpected error in Nash temporal strategy: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
             }
 
+            // Sort results by document ID to ensure proper ordering for merge joins
+            resultSoA.sort();
             strategyLogger.debug("NashTemporalStrategy execution finished, {} results in SoA ({} conceptual rows).", resultSoA.size(), resultSoA.getConceptualRowCount());
             return resultSoA;
         }
@@ -432,179 +456,118 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 int granularitySize,
                 String corpusName,
                 TemporalExecutor temporalExecutor,
-                AttributeRequirements requirements)
+                AttributeRequirements requirements,
+                Optional<FilteringContext> context)
             throws QueryExecutionException {
-            strategyLogger.debug("Executing NaiveTemporalStrategy for condition: {}, AttrReqs: {}", condition, requirements.getRequiredSoAAttributes());
+            strategyLogger.debug("Executing NaiveTemporalStrategy for condition: {}, ContextIsPresent: {}", condition, context.isPresent());
             QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
             int conceptualRowIdCounter = 0;
 
             IndexAccessInterface dateIndex = indexes.get(DATE_INDEX);
             if (dateIndex == null || !dateIndex.isOpen()) {
-                strategyLogger.warn("Date index '{}' is not available or not open. Cannot execute temporal condition.", DATE_INDEX);
+                strategyLogger.warn("Date index '{}' is not available or not open. Cannot execute temporal condition with naive strategy.", DATE_INDEX);
                 return resultSoA;
             }
-
-            Optional<LocalDateTime> queryDateTimeStart = condition.startDate();
-            Optional<LocalDateTime> queryDateTimeEnd = condition.endDate();
             String variableNameToBind = condition.variableName();
-
-            strategyLogger.debug("Naive strategy: queryStart={}, queryEnd={}, variable={}, DateIndex='{}'",
-                queryDateTimeStart, queryDateTimeEnd, variableNameToBind, dateIndex.getIndexType());
-
-                            // Calculate early termination bounds for optimization
-        String startKey = null;
-        String stopKey = null;
-
-        if (queryDateTimeStart.isPresent() || queryDateTimeEnd.isPresent()) {
-            switch (condition.temporalType()) {
-                case BEFORE:
-                    // For DATE(< X), stop when we reach X
-                    if (queryDateTimeStart.isPresent()) {
-                        stopKey = queryDateTimeStart.get().format(INDEX_DATE_FORMATTER);
-                        strategyLogger.debug("NaiveTemporalStrategy: BEFORE optimization - will stop at key '{}'", stopKey);
+            Optional<LocalDateTime> queryStartDateTime = condition.startDate();
+            Optional<LocalDateTime> queryEndDateTime = condition.endDate();
+            TemporalPredicate type = condition.temporalType();
+            try (RocksIterator iterator = dateIndex.iterateFromFirst()) {
+                for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
+                    String currentKey = new String(iterator.key(), StandardCharsets.UTF_8);
+                    byte[] valueBytes = iterator.value();
+                    if (valueBytes == null || valueBytes.length == 0) continue;
+                    LocalDate entryDate;
+                    try {
+                        entryDate = TemporalExecutor.parseDateKey(currentKey);
+                    } catch (DateTimeParseException e) {
+                        strategyLogger.warn("Could not parse date from key '{}' in {} index. Skipping. Error: {}", currentKey, DATE_INDEX, e.getMessage());
+                        continue;
                     }
-                    break;
-                case BEFORE_EQUAL:
-                    // For DATE(<= X), stop when we reach X+1
-                    if (queryDateTimeEnd.isPresent()) {
-                        stopKey = queryDateTimeEnd.get().plusDays(1).format(INDEX_DATE_FORMATTER);
-                        strategyLogger.debug("NaiveTemporalStrategy: BEFORE_EQUAL optimization - will stop at key '{}'", stopKey);
-                    }
-                    break;
-                case AFTER:
-                    // For DATE(> X), start from X+1
-                    if (queryDateTimeStart.isPresent()) {
-                        startKey = queryDateTimeStart.get().plusDays(1).format(INDEX_DATE_FORMATTER);
-                        strategyLogger.debug("NaiveTemporalStrategy: AFTER optimization - will start from key '{}'", startKey);
-                    }
-                    break;
-                case AFTER_EQUAL:
-                    // For DATE(>= X), start from X
-                    if (queryDateTimeStart.isPresent()) {
-                        startKey = queryDateTimeStart.get().format(INDEX_DATE_FORMATTER);
-                        strategyLogger.debug("NaiveTemporalStrategy: AFTER_EQUAL optimization - will start from key '{}'", startKey);
-                    }
-                    break;
-                case EQUAL:
-                    // For DATE(= X), start from X and stop after X (or X's end if range)
-                    if (queryDateTimeStart.isPresent()) {
-                        startKey = queryDateTimeStart.get().format(INDEX_DATE_FORMATTER);
-                        LocalDate endDate = queryDateTimeEnd.isPresent() ? queryDateTimeEnd.get().toLocalDate() : queryDateTimeStart.get().toLocalDate();
-                        stopKey = endDate.plusDays(1).format(INDEX_DATE_FORMATTER);
-                        strategyLogger.debug("NaiveTemporalStrategy: EQUAL optimization - will scan from '{}' to '{}'", startKey, stopKey);
-                    }
-                    break;
-                case CONTAINS:
-                case CONTAINED_BY:
-                case INTERSECT:
-                    // For range predicates, we could optimize if we have both bounds
-                    if (queryDateTimeStart.isPresent() && queryDateTimeEnd.isPresent()) {
-                        // For these predicates, we need to be more careful about bounds
-                        // For now, only optimize the upper bound for safety
-                        stopKey = queryDateTimeEnd.get().plusDays(1).format(INDEX_DATE_FORMATTER);
-                        strategyLogger.debug("NaiveTemporalStrategy: Range predicate optimization - will stop at key '{}'", stopKey);
-                    }
-                    break;
-                default:
-                    strategyLogger.debug("NaiveTemporalStrategy: No optimization available for predicate type '{}'", condition.temporalType());
-                    break;
-            }
-        }
-
-        try (RocksIterator iterator = dateIndex.iterateFromFirst()) {
-            strategyLogger.debug("NaiveTemporalStrategy: Iterator obtained. isValid: {}", iterator.isValid());
-
-            // Seek to start position if we have a startKey
-            if (startKey != null) {
-                iterator.seek(startKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                strategyLogger.debug("NaiveTemporalStrategy: Seeked to start key '{}'", startKey);
-            }
-
-            while (iterator.isValid()) {
-                byte[] keyBytes = iterator.key();
-                byte[] valueBytes = iterator.value();
-                String dateStr = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
-                strategyLogger.trace("NaiveTemporalStrategy: Iterator valid. Key='{}', Value size={}", dateStr, valueBytes.length);
-
-                // Early termination check - since index is sorted by YYYYMMDD format
-                if (stopKey != null && dateStr.compareTo(stopKey) >= 0) {
-                    strategyLogger.debug("NaiveTemporalStrategy: Early termination at key '{}' (stop key: '{}'). Optimization saved scanning remaining dates.", dateStr, stopKey);
-                    break;
-                }
-
-                LocalDate entryDate = parseDateKey(dateStr);
-
-                if (entryDate != null) {
-                    boolean temporalMatch = evaluateTemporalCondition(
-                        condition.temporalType(),
-                        entryDate.atStartOfDay(), entryDate.atTime(LocalTime.MAX),
-                        queryDateTimeStart.orElse(null), queryDateTimeEnd.orElse(null)
+                    boolean match = TemporalExecutor.evaluateTemporalCondition(
+                        type,
+                        entryDate.atStartOfDay(),
+                        entryDate.atTime(LocalTime.MAX),
+                        queryStartDateTime.orElse(null),
+                        queryEndDateTime.orElse(null)
                     );
+                    if (match) {
+                        PositionListSoA positionList = PositionListSoA.deserializeWithFilters(valueBytes, context);
+                        strategyLogger.trace("NaiveTemporalStrategy: Original blob for key '{}' indicated {} positions. Filtered size: {}.",
+                                             currentKey, PositionListSoA.getNumPositionsFromBlob(valueBytes), positionList.getNumPositions());
+                        if (positionList.isEmpty()){
+                            continue;
+                        }
 
-                    if (temporalMatch) {
-                        Object valueToBindInSoA = entryDate;
-                        strategyLogger.trace("NaiveTemporalStrategy: Key='{}', Date='{}', TemporalMatch=true. Deserializing PositionListSoA.", dateStr, entryDate);
-
-                        conceptualRowIdCounter = processEntry(
-                            new SimpleEntry<>(keyBytes, valueBytes),
-                            condition, resultSoA, requirements,
-                            granularity, granularitySize, conceptualRowIdCounter, entryDate, variableNameToBind, valueToBindInSoA
-                        );
+                        // Corrected logic to call the new helper methods
+                        if (variableNameToBind != null) {
+                            for (int i = 0; i < positionList.getNumPositions(); i++) {
+                                Position pos = positionList.getPositionAt(i);
+                                // Assuming the helper method correctly manages conceptualRowId additions and this counter is for distinct items found by the strategy.
+                                conceptualRowIdCounter = processEntryForVariableBinding(condition, resultSoA, requirements, granularity, granularitySize, conceptualRowIdCounter, entryDate, variableNameToBind, pos);
+                            }
+                        } else {
+                            conceptualRowIdCounter = processEntryForDateLiteral(condition, resultSoA, requirements, granularity, granularitySize, conceptualRowIdCounter, entryDate, positionList);
+                        }
                     }
                 }
-                iterator.next();
+            } catch (IOException | IndexAccessException e) {
+                strategyLogger.error("Error during NaiveTemporalStrategy execution: {}", e.getMessage(), e);
+                throw new QueryExecutionException("Error accessing date index or deserializing data.", e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
             }
-        }
-             catch (IOException e) {
-                strategyLogger.error("IOException during NaiveTemporalStrategy execution: {}", e.getMessage(), e);
-                throw new QueryExecutionException("Failed to read from date index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
-            }
-            catch (Exception e) {
-                strategyLogger.error("Error executing NaiveTemporalStrategy: {}", e.getMessage(), e);
-                throw new QueryExecutionException("Failed to execute temporal condition: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
-            }
-            strategyLogger.debug("NaiveTemporalStrategy execution finished, {} conceptual rows. Final SoA size: {}", resultSoA.getConceptualRowCount(), resultSoA.size());
 
-            // Sort by document ID to ensure merge join optimization works correctly
+            // Sort results by document ID to ensure proper ordering for merge joins
             resultSoA.sort();
-            strategyLogger.debug("NaiveTemporalStrategy: Sorted result by document ID for merge join compatibility");
-
+            strategyLogger.debug("NaiveTemporalStrategy finished. QueryResultSoA size: {}.", resultSoA.size());
             return resultSoA;
         }
 
-        private int processEntry(Map.Entry<byte[], byte[]> entry, Temporal condition,
-                                  QueryResultSoA resultSoA, AttributeRequirements requirements,
+        // DELETE THE OLD processEntry method (which was incorrectly renamed to processEntryForDateLiteral and contains the error).
+        // This method started around line 599 in the previous read_file output and had the signature:
+        // private int processEntryForDateLiteral(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
+        //                                          Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
+        //                                          LocalDate boundDate, String variableNameToBind, Object valueToBind,
+        //                                          Optional<FilteringContext> context)
+        // Its body contained the `else if (valueToBind instanceof Position)` block with the faulty `pos.getSynonymId()` call.
+        // The deletion should span the entire block of this old method.
+
+        // The CORRECT processEntryForDateLiteral starts here:
+        private int processEntryForDateLiteral(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
                                   Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
-                                  LocalDate boundDate, String variableNameToBind, Object valueToBind)
-                                  throws IOException {
-            byte[] valueBytes = entry.getValue(); // Get value from entry
-            String keyString = new String(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8); // Get key string for logging
-            strategyLogger.trace("NaiveTemporalStrategy.processEntry: Key='{}', boundDate='{}', variable='{}'", keyString, boundDate, variableNameToBind);
-
-            PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
-            strategyLogger.trace("NaiveTemporalStrategy.processEntry: Key='{}', deserialized PositionListSoA, numPositions={}", keyString, positions.getNumPositions());
-
-            int conceptualRowIdForTheseBindings = currentConceptualRowId;
-            boolean firstBindingForThisEntry = true;
-
-            for (int i = 0; i < positions.getNumPositions(); i++) {
-                 if (firstBindingForThisEntry) {
-                    conceptualRowIdForTheseBindings = resultSoA.getNextConceptualRowId();
-                    firstBindingForThisEntry = false;
-                }
+                                               LocalDate boundDate, PositionListSoA filteredPositions) {
+            if (filteredPositions.isEmpty()) return currentConceptualRowId;
+            int conceptualId = resultSoA.getNextConceptualRowId();
+            for (int i = 0; i < filteredPositions.getNumPositions(); i++) {
                 resultSoA.add(
-                    valueToBind,
-                    ValueType.DATE,
-                    variableNameToBind,
-                    positions.getDocIdAt(i),
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                    conceptualRowIdForTheseBindings
+                    boundDate, ValueType.DATE, null, // variableNameToBind is null for this path
+                    filteredPositions.getDocIdAt(i),
+                    requirements.needsSentenceId ? filteredPositions.getSentenceIdAt(i) : -1,
+                    requirements.needsPositions ? filteredPositions.getBeginCharAt(i) : -1,
+                    requirements.needsPositions ? filteredPositions.getEndCharAt(i) : -1,
+                    -1, // Synonym ID is -1 for date literals
+                    conceptualId
                 );
             }
-            return positions.getNumPositions() > 0 ? currentConceptualRowId +1 : currentConceptualRowId;
+            // If conceptual rows were added, increment the strategy's counter of processed items.
+            return currentConceptualRowId + 1;
+        }
+
+        // The CORRECT processEntryForVariableBinding starts here:
+        private int processEntryForVariableBinding(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
+                                                 Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
+                                                 LocalDate boundDate, String variableNameToBind, Position filteredPosition) {
+            int conceptualId = resultSoA.getNextConceptualRowId();
+            resultSoA.add(
+                boundDate, ValueType.DATE, variableNameToBind,
+                filteredPosition.getDocumentId(),
+                requirements.needsSentenceId ? filteredPosition.getSentenceId() : -1,
+                requirements.needsPositions ? filteredPosition.getBeginPosition() : -1,
+                requirements.needsPositions ? filteredPosition.getEndPosition() : -1,
+                -1, // Ensuring this is -1 as Position object has no getSynonymId and it's not relevant for ner_date entries here.
+                conceptualId
+            );
+             // If a conceptual row was added, increment the strategy's counter.
+             return currentConceptualRowId + 1;
         }
     }
 

@@ -188,7 +188,7 @@ class QueryExecutorTest {
         mockSoaResult.add("test", ValueType.TERM, null, 1,1,10,20, -1, 0);
 
         when(factory.getExecutor(condition)).thenReturn(containsExecutor);
-        when(containsExecutor.execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class)))
+        when(containsExecutor.execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class), any()))
             .thenReturn(mockSoaResult);
         lenient().when(mockQuery.granularity()).thenReturn(Query.Granularity.DOCUMENT);
         lenient().when(mockQuery.source()).thenReturn("testProject");
@@ -196,7 +196,7 @@ class QueryExecutorTest {
         QueryResultSoA result = queryExecutor.execute(mockQuery, mockIndexManager);
 
         assertEquals(1, result.size());
-        verify(containsExecutor).execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class));
+        verify(containsExecutor).execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class), any());
     }
 
     @Test
@@ -207,7 +207,7 @@ class QueryExecutorTest {
         mockSoaResult.add("person_val", ValueType.ENTITY, null, 1,1,10,20, -1, 0);
 
         when(factory.getExecutor(condition)).thenReturn(nerExecutor);
-        when(nerExecutor.execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class)))
+        when(nerExecutor.execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class), any()))
             .thenReturn(mockSoaResult);
         lenient().when(mockQuery.granularity()).thenReturn(Query.Granularity.DOCUMENT);
         lenient().when(mockQuery.source()).thenReturn("testProject");
@@ -215,7 +215,7 @@ class QueryExecutorTest {
         QueryResultSoA result = queryExecutor.execute(mockQuery, mockIndexManager);
 
         assertEquals(1, result.size());
-        verify(nerExecutor).execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class));
+        verify(nerExecutor).execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class), any());
     }
 
     @Test
@@ -228,7 +228,7 @@ class QueryExecutorTest {
         mockSoaResult.add("some_val", ValueType.TERM, null, 1,1,10,20, -1, 0); // Example result
 
         when(factory.getExecutor(condition)).thenReturn(logicalExecutor);
-        when(logicalExecutor.execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class)))
+        when(logicalExecutor.execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class), any()))
             .thenReturn(mockSoaResult);
         lenient().when(mockQuery.granularity()).thenReturn(Query.Granularity.DOCUMENT);
         lenient().when(mockQuery.source()).thenReturn("testProject");
@@ -236,7 +236,7 @@ class QueryExecutorTest {
         QueryResultSoA result = queryExecutor.execute(mockQuery, mockIndexManager);
 
         assertEquals(1, result.size());
-        verify(logicalExecutor).execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class));
+        verify(logicalExecutor).execute(eq(condition), eq(indexes), eq(Query.Granularity.DOCUMENT), eq(0), eq("testProject"), any(AttributeRequirements.class), any());
     }
 
 

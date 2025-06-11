@@ -229,17 +229,6 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     /**
-     * Gets the index metadata.
-     * For the generic IndexAccess, this currently returns empty.
-     * Specific subclasses or wrappers might provide metadata.
-     * @return An Optional containing the index metadata, or an empty Optional if none exists.
-     */
-    @Override
-    public Optional<java.util.Map<String, String>> getIndexMetadata() {
-        return Optional.empty(); // Basic implementation
-    }
-
-    /**
      * Gets the root path of this index.
      * Implements the interface method.
      * @return The Path to the index directory.
@@ -250,14 +239,17 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public Optional<PositionListSoA> getMergedPositions(String baseTerm) throws IOException, IndexAccessException {
+    public Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<com.example.query.executor.FilteringContext> context)
+            throws IOException, IndexAccessException {
         checkOpen();
         byte[] baseTermBytes = bytes(baseTerm);
         Optional<byte[]> rawBaseData = getRaw(baseTermBytes);
 
         if (rawBaseData.isPresent()) {
             // Term was not segmented or this is the only part
-            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(rawBaseData.get()));
+            // Apply context filtering directly during deserialization
+            PositionListSoA soa = PositionListSoA.deserializeWithFilters(rawBaseData.get(), context);
+            return soa.isEmpty() ? Optional.empty() : Optional.of(soa);
         }
 
         // If base term not found, look for segments term#0, term#1, ...
@@ -272,11 +264,15 @@ public class IndexAccess implements IndexAccessInterface {
 
             if (rawSegmentData.isPresent()) {
                 segmentFoundInLoop = true;
-                PositionListSoA segmentSoA = PositionListSoA.deserializeFromCompositeBlob(rawSegmentData.get());
-                if (mergedSoA == null) {
-                    mergedSoA = segmentSoA;
-                } else {
-                    mergedSoA.addAll(segmentSoA); // Ensure PositionListSoA.addAll is robust
+                // Apply context filtering directly during deserialization of the segment
+                PositionListSoA segmentSoA = PositionListSoA.deserializeWithFilters(rawSegmentData.get(), context);
+
+                if (!segmentSoA.isEmpty()) { // Only merge if the filtered segment is not empty
+                    if (mergedSoA == null) {
+                        mergedSoA = segmentSoA;
+                    } else {
+                        mergedSoA.addAll(segmentSoA); // Ensure PositionListSoA.addAll is robust
+                    }
                 }
             } else {
                 // No data for current segmentKeyBytes
@@ -291,9 +287,13 @@ public class IndexAccess implements IndexAccessInterface {
             }
             segmentNum++;
         }
-        // If mergedSoA is still null here, it means neither base term nor any segments were found.
-        // However, the logic above (break conditions) should ensure Optional.empty() is returned earlier if segmentNum=0 and no segment is found.
-        return Optional.ofNullable(mergedSoA);
+        // If mergedSoA is not null and not empty, return it.
+        // If mergedSoA is null (no segments found or all filtered out), or became empty after filtering, return Optional.empty().
+        if (mergedSoA != null && !mergedSoA.isEmpty()) {
+            return Optional.of(mergedSoA);
+        } else {
+            return Optional.empty();
+        }
     }
 
     private void checkOpen() throws IndexAccessException {

@@ -2,6 +2,7 @@ package com.example.query.executor;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,9 +43,10 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         Query.Granularity granularity,
         int granularitySize,
         String corpusName,
-        AttributeRequirements requirements) throws QueryExecutionException {
+        AttributeRequirements requirements,
+        Optional<FilteringContext> context) throws QueryExecutionException {
         ConditionExecutor<C> executor = executorFactory.getExecutor(condition);
-        return executor.execute(condition, indexes, granularity, granularitySize, corpusName, requirements);
+        return executor.execute(condition, indexes, granularity, granularitySize, corpusName, requirements, context);
     }
 
     @Override
@@ -52,10 +54,10 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                                Query.Granularity granularity,
                                int granularitySize,
                                String corpusName,
-                               AttributeRequirements requirements)
+                               AttributeRequirements requirements,
+                               Optional<FilteringContext> context)
         throws QueryExecutionException {
-        QueryResultSoA internalResult = executeInternal(condition, indexes, granularity, granularitySize, corpusName, requirements);
-         return internalResult;
+        return executeInternal(condition, indexes, granularity, granularitySize, corpusName, requirements, context);
     }
 
     // --- Internal execution logic using QueryResultSoA ---
@@ -63,11 +65,12 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                                       Query.Granularity granularity,
                                       int granularitySize,
                                       String corpusName,
-                                      AttributeRequirements requirements)
+                                      AttributeRequirements requirements,
+                                      Optional<FilteringContext> context)
         throws QueryExecutionException {
 
-        logger.debug("Executing logical condition internally: operator={}, subconditions={}, granularity={}, size={}, corpus={}, requirements={}",
-                condition.operator(), condition.conditions().size(), granularity, granularitySize, corpusName, requirements);
+        logger.debug("Executing logical condition internally: operator={}, subconditions={}, granularity={}, size={}, corpus={}, requirements={}, contextIsPresent={}",
+                condition.operator(), condition.conditions().size(), granularity, granularitySize, corpusName, requirements, context.isPresent());
 
         List<Condition> subConditions = condition.conditions();
         if (subConditions.isEmpty()) {
@@ -77,75 +80,107 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
 
         LogicalOperator operator = condition.operator();
         if (operator == LogicalOperator.AND) {
-            return executeAnd(subConditions, indexes, granularity, granularitySize, corpusName, requirements);
+            return executeAnd(subConditions, indexes, granularity, granularitySize, corpusName, requirements, context);
         } else if (operator == LogicalOperator.OR) {
-            return executeOr(subConditions, indexes, granularity, granularitySize, corpusName, requirements);
+            return executeOr(subConditions, indexes, granularity, granularitySize, corpusName, requirements, context);
         } else {
             throw new QueryExecutionException("Unsupported logical operator: " + operator, condition.toString(), QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
         }
     }
 
     /**
-     * Executes a logical AND, operating on QueryResultSoA.
+     * Executes a logical AND, operating on QueryResultSoA, with FilteringContext propagation.
      */
     private QueryResultSoA executeAnd(List<Condition> conditions,
             Map<String, IndexAccessInterface> indexes,
             Query.Granularity granularity,
             int granularitySize,
             String corpusName,
-            AttributeRequirements requirements)
+            AttributeRequirements requirements,
+            Optional<FilteringContext> initialContext)
         throws QueryExecutionException {
         if (conditions.isEmpty()) {
             return new QueryResultSoA(granularity, granularitySize, requirements);
         }
 
-        // Execute the first condition
-        QueryResultSoA combinedResult = executeCondition(conditions.get(0), indexes, granularity, granularitySize, corpusName, requirements);
-        if (combinedResult.isEmpty()) {
-            return combinedResult; // Early exit if any AND condition returns no results
+        Optional<FilteringContext> currentContext = initialContext.isPresent() ? initialContext :
+                                                Optional.of(FilteringContext.unrestricted(granularity));
+        logger.debug("executeAnd: Initial FilteringContext isPresent: {}, isUnrestricted: {}",
+                     currentContext.isPresent(), currentContext.map(FilteringContext::isUnrestricted).orElse(true));
+
+        QueryResultSoA firstResult = executeCondition(conditions.get(0), indexes, granularity, granularitySize, corpusName, requirements, currentContext);
+
+        if (firstResult.isEmpty()) {
+            logger.debug("executeAnd: First condition returned empty result. AND chain result is empty.");
+            return firstResult;
         }
 
-        // Iteratively apply AND with subsequent conditions
+        currentContext = Optional.of(currentContext.get().intersect(firstResult));
+        logger.debug("executeAnd: Context after first condition, isPresent: {}, isUnrestricted: {}, isEmptyFilter: {}",
+                     currentContext.isPresent(), currentContext.map(FilteringContext::isUnrestricted).orElse(true),
+                     currentContext.map(c -> c.allowedDocumentIds().isPresent() && c.allowedDocumentIds().get().isEmpty()).orElse(false));
+
+        if (currentContext.get().allowedDocumentIds().isPresent() && currentContext.get().allowedDocumentIds().get().isEmpty()){
+            logger.debug("executeAnd: FilteringContext became empty (no doc IDs) after first condition. AND chain result is empty.");
+            return new QueryResultSoA(granularity, granularitySize, requirements);
+        }
+
+        QueryResultSoA cumulativeResult = firstResult;
+
         for (int i = 1; i < conditions.size(); i++) {
-            QueryResultSoA currentResult = executeCondition(conditions.get(i), indexes, granularity, granularitySize, corpusName, requirements);
-            if (currentResult.isEmpty()) {
-                return currentResult; // Early exit
-            }
-            combinedResult = performAndSoA(combinedResult, currentResult, granularity, requirements);
+            logger.debug("executeAnd: Processing condition {} of {} with current context.", i + 1, conditions.size());
+            QueryResultSoA currentStepResult = executeCondition(conditions.get(i), indexes, granularity, granularitySize, corpusName, requirements, currentContext);
 
-            if (combinedResult.isEmpty()) {
-                return combinedResult; // Early exit
+            if (currentStepResult.isEmpty()) {
+                logger.debug("executeAnd: Condition {} returned empty result. AND chain result is empty.", i + 1);
+                return currentStepResult;
+            }
+
+            cumulativeResult = performAndSoA(cumulativeResult, currentStepResult, granularity, requirements);
+            logger.debug("executeAnd: Cumulative result size after performAndSoA with condition {}: {}", i + 1, cumulativeResult.size());
+
+            if (cumulativeResult.isEmpty()) {
+                logger.debug("executeAnd: Cumulative result became empty after performAndSoA. AND chain result is empty.");
+                return cumulativeResult;
+            }
+
+            currentContext = Optional.of(currentContext.get().intersect(currentStepResult));
+            logger.debug("executeAnd: Context updated after condition {}, isPresent: {}, isUnrestricted: {}, isEmptyFilter: {}",
+                         i + 1, currentContext.isPresent(), currentContext.map(FilteringContext::isUnrestricted).orElse(true),
+                         currentContext.map(c -> c.allowedDocumentIds().isPresent() && c.allowedDocumentIds().get().isEmpty()).orElse(false));
+
+            if (currentContext.get().allowedDocumentIds().isPresent() && currentContext.get().allowedDocumentIds().get().isEmpty()){
+                logger.debug("executeAnd: FilteringContext became empty (no doc IDs) after condition {}. AND chain result is empty.", i + 1);
+                return new QueryResultSoA(granularity, granularitySize, requirements);
             }
         }
-        return combinedResult;
+        logger.debug("executeAnd: Completed. Final cumulative result size: {}", cumulativeResult.size());
+        return cumulativeResult;
     }
 
     /**
-     * Executes a logical OR, operating on QueryResultSoA.
+     * Executes a logical OR, operating on QueryResultSoA. Each branch of OR is filtered by the incoming context.
      */
     private QueryResultSoA executeOr(List<Condition> conditions,
             Map<String, IndexAccessInterface> indexes,
             Query.Granularity granularity,
             int granularitySize,
             String corpusName,
-            AttributeRequirements requirements)
+            AttributeRequirements requirements,
+            Optional<FilteringContext> context)
         throws QueryExecutionException {
         if (conditions.isEmpty()) {
             return new QueryResultSoA(granularity, granularitySize, requirements);
         }
 
-        // Execute the first condition
-        QueryResultSoA combinedResult = executeCondition(conditions.get(0), indexes, granularity, granularitySize, corpusName, requirements);
+        QueryResultSoA combinedResult = executeCondition(conditions.get(0), indexes, granularity, granularitySize, corpusName, requirements, context);
 
-        // Iteratively apply OR with subsequent conditions
         for (int i = 1; i < conditions.size(); i++) {
-            QueryResultSoA currentResult = executeCondition(conditions.get(i), indexes, granularity, granularitySize, corpusName, requirements);
+            QueryResultSoA currentResult = executeCondition(conditions.get(i), indexes, granularity, granularitySize, corpusName, requirements, context);
             if (currentResult.isEmpty()) {
-                // If current is empty, combinedResult remains as is
                 continue;
             }
             if (combinedResult.isEmpty()) {
-                // If combined was empty and current is not, current becomes the new combined
                 combinedResult = currentResult;
                 continue;
             }

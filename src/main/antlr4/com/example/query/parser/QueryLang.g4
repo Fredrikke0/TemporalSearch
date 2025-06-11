@@ -6,13 +6,13 @@ grammar QueryLang;
  * The BIND keyword followed by a variable name binds the result of a condition to a variable.
  * Variables are plain identifiers.
  * Variables can be used in SELECT clause and subsequent WHERE conditions.
- * 
+ *
  * Variable binding flow:
  * 1. Variables are produced by conditions using the BIND var syntax
  * 2. Variables can be consumed by other conditions that reference them
  * 3. Variables can be used in the SELECT clause to display results
  * 4. Type safety is enforced through the VariableRegistry
- * 
+ *
  * This grammar also supports subqueries and joins:
  * - Subqueries are defined using parentheses around a full query
  * - Joins are specified using the JOIN keyword
@@ -103,8 +103,8 @@ DATE_LITERAL: [0-9][0-9][0-9][0-9] ('-' [0-9][0-9]? ('-' [0-9][0-9]?)?)?;
 // Basic Data Type Tokens
 IDENTIFIER: [a-zA-Z_][a-zA-Z0-9_]*;
 STRING
-    : '"' ( ~["] | '""' )* '"'   // Double-quoted strings
-    | '\'' ( ~['] | '\'\'' )* '\'' // Single-quoted strings
+    : '"' ( ~["] | '""' )+ '"'   // Non-empty double-quoted strings
+    | '\'' ( ~['] | '\'\'' )+ '\'' // Non-empty single-quoted strings
     ;
 INTEGER_LITERAL: [0-9]+; // Renamed: For numeric literals like 123
 
@@ -139,7 +139,7 @@ selectColumn
     // Prioritize specific structural keywords before generic variable/identifier rules
     : TITLE                               # UnqualifiedTitleColumn
     | TIMESTAMP                           # UnqualifiedTimestampColumn
-    | DOCUMENT_ID                         # UnqualifiedDocumentIdColumn 
+    | DOCUMENT_ID                         # UnqualifiedDocumentIdColumn
     | SENTENCE_ID                         # UnqualifiedSentenceIdColumn
     | qualifiedStructuralColumn           # StructColumn             // alias.TITLE, alias.TIMESTAMP, etc.
     | countExpression                     # CountColumn              // COUNT(*), COUNT(UNIQUE var), etc.
@@ -216,7 +216,7 @@ dateOperator
 dateValue
     : LBRACKET start=INTEGER_LITERAL COMMA end=INTEGER_LITERAL RBRACKET  # DateRange
     | LBRACKET start=DATE_LITERAL COMMA end=DATE_LITERAL RBRACKET        # DateLiteralRange
-    | start=DATE_LITERAL (COMMA end=DATE_LITERAL)?                       # DateSingleOrPair 
+    | start=DATE_LITERAL (COMMA end=DATE_LITERAL)?                       # DateSingleOrPair
     | single=INTEGER_LITERAL                                             # SingleYear
     ;
 
@@ -386,4 +386,4 @@ groupByItem
     : qualifiedIdentifier  // e.g., alias.myVar, alias.DOCUMENT_ID
     | variable             // e.g., myVar (implicitly $main.myVar)
     | identifier           // Potentially for simple, unqualified column names if design evolves
-    ; 
+    ;

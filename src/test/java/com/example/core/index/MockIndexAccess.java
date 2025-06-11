@@ -7,7 +7,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -32,7 +31,7 @@ import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
-import com.example.index.AnnotationType;
+import com.example.query.executor.FilteringContext;
 
 /**
  * A mock implementation providing an IndexAccess-like API for testing purposes.
@@ -46,8 +45,6 @@ public class MockIndexAccess implements IndexAccessInterface {
     private final String indexType;
     private final NavigableMap<ByteArrayWrapper, byte[]> dataStore;
     private boolean closed = false;
-    private final AnnotationType annotationType;
-    private final Map<String, String> metadata;
 
     private RocksDB mockRocksDbInstance;
     private Path mockRocksDbPath;
@@ -120,11 +117,9 @@ public class MockIndexAccess implements IndexAccessInterface {
         }
     }
 
-    public MockIndexAccess(String indexType, AnnotationType annotationType, Map<String, String> metadata) {
+    public MockIndexAccess(String indexType) {
         this.indexType = indexType;
-        this.annotationType = annotationType;
         this.dataStore = new ConcurrentSkipListMap<>();
-        this.metadata = metadata;
         RocksDB.loadLibrary();
         try {
             this.mockRocksDbPath = Files.createTempDirectory("mockrocksdb_" + indexType + "_");
@@ -139,7 +134,7 @@ public class MockIndexAccess implements IndexAccessInterface {
 
     // Convenience constructor for common "unigram" type
     public MockIndexAccess() {
-        this("mock", AnnotationType.UNKNOWN, new HashMap<>());
+        this("mock");
     }
 
     /**
@@ -359,78 +354,85 @@ public class MockIndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public AnnotationType getAnnotationType() {
-        return this.annotationType;
-    }
-
-    @Override
-    public Optional<Map<String, String>> getIndexMetadata() {
-        if (closed) throw new IllegalStateException("Index is closed");
-        return Optional.ofNullable(this.metadata);
-    }
-
-    @Override
     public Path getIndexPath() {
-        // Return a dummy path or a path to a temporary directory if needed for tests
-        return Path.of("/tmp/mockindex/" + this.indexType);
+        return this.mockRocksDbPath;
     }
 
     @Override
-    public Optional<PositionListSoA> getMergedPositions(String baseTerm) throws IOException, IndexAccessException {
-        if (this.closed) {
-            throw new IndexAccessException("MockIndexAccess is closed", this.indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+    public Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<FilteringContext> context) throws IOException, IndexAccessException {
+        if (closed) {
+            throw new IndexAccessException("MockIndexAccess is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         }
+        logger.debug("MockIndexAccess [{}]: getMergedPositions for baseTerm='{}', with context: {}", indexType, baseTerm, context.isPresent());
+
         byte[] baseTermBytes = baseTerm.getBytes(StandardCharsets.UTF_8);
         ByteArrayWrapper baseKeyWrapper = new ByteArrayWrapper(baseTermBytes);
 
-        if (this.dataStore.containsKey(baseKeyWrapper)) {
-            byte[] blob = this.dataStore.get(baseKeyWrapper);
-            if (blob == null || blob.length == 0) { // Should ideally not happen if key exists but good practice
-                logger.warn("Base term key '{}' found in MockIndexAccess but has null or empty data.", baseTerm);
-                return Optional.empty();
+        byte[] blob = dataStore.get(baseKeyWrapper);
+
+        if (blob != null) { // Base term exists
+            if (blob.length == 0) {
+                logger.warn("Base term key '{}' found in MockIndexAccess but has empty data.", baseTerm);
+                return Optional.empty(); // Or an empty PositionListSoA if context is present
             }
-            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(blob));
+            try {
+                PositionListSoA resultSoa = PositionListSoA.deserializeWithFilters(blob, context);
+                // resultSoa could be empty after filtering
+                return resultSoa.isEmpty() ? Optional.empty() : Optional.of(resultSoa);
+            } catch (IOException e) {
+                throw new IndexAccessException("Failed to deserialize base term with filters: " + baseTerm, indexType, IndexAccessException.ErrorType.READ_ERROR, e);
+            }
         }
 
-        // If base term not found, look for segments term#0, term#1, ...
+        // If base term not found (blob == null), look for segments term#0, term#1, ...
         PositionListSoA mergedSoA = null;
         int segmentNum = 0;
-        boolean segmentFoundInLoop = false; // Tracks if any segment (e.g. term#0) was found
+        boolean segmentFoundInLoop = false;
 
         while (true) {
             String segmentKeyString = baseTerm + "#" + segmentNum;
             byte[] segmentKeyBytes = segmentKeyString.getBytes(StandardCharsets.UTF_8);
             ByteArrayWrapper keyWrapper = new ByteArrayWrapper(segmentKeyBytes);
 
-            if (this.dataStore.containsKey(keyWrapper)) {
+            byte[] segmentBlob = dataStore.get(keyWrapper);
+
+            if (segmentBlob != null) {
                 segmentFoundInLoop = true;
-                byte[] segmentBlob = this.dataStore.get(keyWrapper);
-                if (segmentBlob != null && segmentBlob.length > 0) {
-                    PositionListSoA segmentSoA = PositionListSoA.deserializeFromCompositeBlob(segmentBlob);
-                    if (mergedSoA == null) {
-                        mergedSoA = segmentSoA;
-                    } else {
-                        mergedSoA.addAll(segmentSoA);
+                if (segmentBlob.length > 0) {
+                    try {
+                        PositionListSoA segmentSoA = PositionListSoA.deserializeWithFilters(segmentBlob, context);
+                        if (!segmentSoA.isEmpty()) { // Only merge if not empty after filtering
+                            if (mergedSoA == null) {
+                                mergedSoA = segmentSoA; // First non-empty segment
+                            } else {
+                                mergedSoA.addAll(segmentSoA);
+                            }
+                        }
+                    } catch (IOException e) {
+                         throw new IndexAccessException("Failed to deserialize segment with filters: " + segmentKeyString, indexType, IndexAccessException.ErrorType.READ_ERROR, e);
                     }
                 } else {
-                    logger.warn("Segment key '{}' found in MockIndexAccess but has null or empty data.", segmentKeyString);
-                    // Continue to next segment, effectively treating this one as non-existent for merging.
+                    logger.warn("Segment key '{}' found in MockIndexAccess but has empty data.", segmentKeyString);
                 }
             } else {
                 // No data for current segmentKeyBytes
                 if (segmentNum == 0 && !segmentFoundInLoop) {
                     // Base term was not found (checked earlier), AND term#0 was not found.
-                    // This means the term (segmented or not) does not exist.
                     return Optional.empty();
                 }
-                // If segmentNum > 0, then not finding a segment means we've processed all available ones.
-                // If segmentNum == 0 BUT segmentFoundInLoop is true (this case should not be hit due to above check,
-                // but as a safeguard), it would mean term#0 existed, so mergedSoA wouldn't be null.
-                break; // Exit loop, all available segments have been processed or none were found.
+                // If segmentNum > 0 or segment 0 was found (even if empty after filtering),
+                // not finding a subsequent segment means we've processed all available ones.
+                break;
             }
             segmentNum++;
         }
-        return Optional.ofNullable(mergedSoA);
+
+        if (mergedSoA != null && !mergedSoA.isEmpty()) {
+            mergedSoA.sort(); // Sort after all segments are merged
+            return Optional.of(mergedSoA);
+        }
+
+        return Optional.empty(); // No base term and no (non-empty filtered) segments found
     }
 
     // --- Inner Mock Iterator Class ---

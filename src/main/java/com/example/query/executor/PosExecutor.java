@@ -40,9 +40,11 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
 
     @Override
     public QueryResultSoA execute(Pos condition, Map<String, IndexAccessInterface> indexes, Query.Granularity granularity,
-                                 int granularitySize, String corpusName, AttributeRequirements requirements)
+                                 int granularitySize, String corpusName, AttributeRequirements requirements,
+                                 Optional<FilteringContext> context)
             throws QueryExecutionException {
-        logger.debug("Executing POS condition: {}, AttrReqs: {}", condition, requirements);
+        logger.debug("Executing POS condition: {}, AttrReqs: {}, ContextIsPresent: {}",
+                     condition, requirements, context.isPresent());
 
         IndexAccessInterface posIndex = indexes.get(POS_INDEX_NAME);
         if (posIndex == null) {
@@ -75,10 +77,10 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         try {
             if (termFromQuery != null) {
                 logger.debug("POS path: Specific Term Search. Tag='{}', TermFromQuery='{}', VarName='{}'", tagFromQuery, termFromQuery, variableName);
-                executeSpecificTermSearch(tagFromQuery, termFromQuery, variableName, posIndex, requirements, resultSoA);
+                executeSpecificTermSearch(tagFromQuery, termFromQuery, variableName, posIndex, requirements, resultSoA, context);
             } else {
                 logger.debug("POS path: Tag-Only or Variable Binding to Term. Tag='{}', VarName='{}'", tagFromQuery, variableName);
-                executeTagOnlyOrVariableTermSearch(tagFromQuery, variableName, posIndex, requirements, resultSoA);
+                executeTagOnlyOrVariableTermSearch(tagFromQuery, variableName, posIndex, requirements, resultSoA, context);
             }
         } catch (IOException e) {
             logger.error("IOException during POS condition execution: {}", e.getMessage(), e);
@@ -104,7 +106,8 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
     }
 
     private void executeSpecificTermSearch(String tagFromQuery, String termFromQuery, String variableName, IndexAccessInterface index,
-                                           AttributeRequirements requirements, QueryResultSoA resultSoA)
+                                           AttributeRequirements requirements, QueryResultSoA resultSoA,
+                                           Optional<FilteringContext> context)
             throws IOException, IndexAccessException, org.rocksdb.RocksDBException {
 
         if (!requirements.needsSynonymIds && variableName == null) {
@@ -118,14 +121,21 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         logger.debug("executeSpecificTermSearch: Tag='{}', TermValue='{}' (original), NormalizedTerm='{}', TargetSynonymID={}",
             tagFromQuery, termFromQuery, normalizedTargetTerm, targetSynonymId);
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
-            logger.debug("executeSpecificTermSearch: No data found for POS tag '{}' after getMergedPositions", tagFromQuery);
+            logger.debug("executeSpecificTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);
             return;
         }
 
         PositionListSoA positions = positionsOptional.get();
+        // The positions object is already filtered by the context thanks to the updated getMergedPositions call.
+
+        if (positions.isEmpty()) { // Defensive check, should be covered by !positionsOptional.isPresent()
+            logger.debug("executeSpecificTermSearch: No positions for tag '{}' after context filtering (positions.isEmpty() check).", tagFromQuery);
+            return;
+        }
+
         int numPositionsTotal = positions.getNumPositions();
         if (numPositionsTotal == 0) return; // Should be caught by positions.isEmpty() but defensive check.
 
@@ -159,17 +169,25 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
     }
 
     private void executeTagOnlyOrVariableTermSearch(String tagFromQuery, String variableName, IndexAccessInterface index,
-                                                    AttributeRequirements requirements, QueryResultSoA resultSoA)
+                                                    AttributeRequirements requirements, QueryResultSoA resultSoA,
+                                                    Optional<FilteringContext> context)
             throws IOException, IndexAccessException, org.rocksdb.RocksDBException {
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
-            logger.debug("executeTagOnlyOrVariableTermSearch: No data found for POS tag '{}' after getMergedPositions", tagFromQuery);
+            logger.debug("executeTagOnlyOrVariableTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);
             return;
         }
 
         PositionListSoA positions = positionsOptional.get();
+        // The positions object is already filtered by the context.
+
+        if (positions.isEmpty()) { // Defensive check
+            logger.debug("executeTagOnlyOrVariableTermSearch: No positions for tag '{}' after context filtering (positions.isEmpty() check).", tagFromQuery);
+            return;
+        }
+
         int numPositions = positions.getNumPositions();
         logger.debug("executeTagOnlyOrVariableTermSearch: Positions found for '{}'. numPositions: {}", tagFromQuery, numPositions);
 

@@ -673,4 +673,32 @@ public final class QueryResultSoA {
         this.variableNameIndices = sortedVariableNameIndices;
         this.valueTypes = sortedValueTypes;
     }
+
+    // ADDED METHOD
+    public Set<Integer> getUniqueDocumentIds() {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return Collections.emptySet();
+        }
+        Set<Integer> uniqueDocIds = new HashSet<>(documentIds.size());
+        for (int i = 0; i < documentIds.size(); i++) {
+            uniqueDocIds.add(documentIds.getInt(i));
+        }
+        return uniqueDocIds;
+    }
+
+    // ADDED METHOD
+    public Map<Integer, Set<Integer>> getUniqueDocumentSentenceIds() {
+        if (sentenceIds == null || sentenceIds.isEmpty() || documentIds == null || documentIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<Integer, Set<Integer>> docToSentIds = new HashMap<>();
+        for (int i = 0; i < size; i++) {
+            int docId = documentIds.getInt(i);
+            int sentId = sentenceIds.getInt(i);
+            if (sentId != -1) { // Assuming -1 or some other value indicates no specific sentence
+                docToSentIds.computeIfAbsent(docId, k -> new HashSet<>()).add(sentId);
+            }
+        }
+        return docToSentIds;
+    }
 }
