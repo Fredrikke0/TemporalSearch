@@ -230,76 +230,76 @@ public class StitchIntersectionExecutor {
 
             } else {
                 // For non-temporal conditions (NER/POS), use the original single-key lookup
-                String stitchLookupKey = ngramTerm + DELIMITER_CHAR + specificAnnotationTypeForLookup;
-                logger.debug("Looking up in stitch index '{}' with key: '{}', context isPresent: {}", stitchIndexName, stitchLookupKey, context.isPresent());
+        String stitchLookupKey = ngramTerm + DELIMITER_CHAR + specificAnnotationTypeForLookup;
+        logger.debug("Looking up in stitch index '{}' with key: '{}', context isPresent: {}", stitchIndexName, stitchLookupKey, context.isPresent());
 
-                Optional<byte[]> rawBlobOpt = stitchIndex.getRaw(stitchLookupKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            Optional<byte[]> rawBlobOpt = stitchIndex.getRaw(stitchLookupKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-                if (rawBlobOpt.isPresent()) {
-                    byte[] rawBlob = rawBlobOpt.get();
-                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
-                    logger.debug("Found {} potential co-occurrences for key '{}' in stitch index '{}' after context filtering.",
-                                 positions.getNumPositions(), stitchLookupKey, stitchIndexName);
+            if (rawBlobOpt.isPresent()) {
+                byte[] rawBlob = rawBlobOpt.get();
+                PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+                logger.debug("Found {} potential co-occurrences for key '{}' in stitch index '{}' after context filtering.",
+                             positions.getNumPositions(), stitchLookupKey, stitchIndexName);
 
-                    for (int i = 0; i < positions.getNumPositions(); i++) {
-                        int docId = positions.getDocIdAt(i);
-                        int sentenceId = positions.getSentenceIdAt(i);
-                        int unigramBeginChar = positions.getBeginCharAt(i);
-                        int unigramEndChar = positions.getEndCharAt(i);
-                        int specificAnnotationTextId = positions.getSynonymIdAt(i); // ID of the annotation text in stitch synonym store
+                for (int i = 0; i < positions.getNumPositions(); i++) {
+                    int docId = positions.getDocIdAt(i);
+                    int sentenceId = positions.getSentenceIdAt(i);
+                    int unigramBeginChar = positions.getBeginCharAt(i);
+                    int unigramEndChar = positions.getEndCharAt(i);
+                    int specificAnnotationTextId = positions.getSynonymIdAt(i); // ID of the annotation text in stitch synonym store
 
-                        String retrievedAnnotationText = null;
-                        try {
-                            retrievedAnnotationText = synonymManager.getTerm(specificAnnotationTextId).orElse(null);
-                        } catch (org.rocksdb.RocksDBException e) {
-                            logger.warn("RocksDBException while retrieving term for synonymId {} from stitch key '{}'. Skipping.",
-                                    specificAnnotationTextId, stitchLookupKey, e);
-                            continue;
-                        }
+                    String retrievedAnnotationText = null;
+                    try {
+                        retrievedAnnotationText = synonymManager.getTerm(specificAnnotationTextId).orElse(null);
+                    } catch (org.rocksdb.RocksDBException e) {
+                        logger.warn("RocksDBException while retrieving term for synonymId {} from stitch key '{}'. Skipping.",
+                                specificAnnotationTextId, stitchLookupKey, e);
+                        continue;
+                    }
 
-                        if (retrievedAnnotationText == null) {
-                            logger.warn("Null annotation text for synonymId {} from stitch key '{}' (using SynonymManager). Skipping.",
-                                        specificAnnotationTextId, stitchLookupKey);
-                            continue;
-                        }
+                    if (retrievedAnnotationText == null) {
+                        logger.warn("Null annotation text for synonymId {} from stitch key '{}' (using SynonymManager). Skipping.",
+                                    specificAnnotationTextId, stitchLookupKey);
+                        continue;
+                    }
 
-                        boolean valueMatch = true; // Default to true
+                    boolean valueMatch = true; // Default to true
                         Object conditionSpecificValue = retrievedAnnotationText; // Store String for SoA
                         if (targetAnnotationValue != null && !targetAnnotationValue.equalsIgnoreCase(retrievedAnnotationText)) {
                             valueMatch = false;
-                        }
+                    }
 
-                        if (valueMatch) {
-                            int conceptualRowId = resultSoA.getNextConceptualRowId();
+                    if (valueMatch) {
+                        int conceptualRowId = resultSoA.getNextConceptualRowId();
 
+                        resultSoA.add(
+                            ngramTerm, // Use the potentially multi-word N-gram term here
+                            ValueType.TERM, // Or a more specific NGRAM_TERM type if available
+                            containsCondition.variableName(),
+                            docId, sentenceId,
+                            unigramBeginChar, unigramEndChar,
+                            -1, // No specific synonym ID for the plain term here
+                            conceptualRowId
+                        );
+
+                        if (annotationVarName != null && !annotationVarName.isBlank()) {
                             resultSoA.add(
-                                ngramTerm, // Use the potentially multi-word N-gram term here
-                                ValueType.TERM, // Or a more specific NGRAM_TERM type if available
-                                containsCondition.variableName(),
+                                    conditionSpecificValue, // This is String for NER/POS
+                                annotationValueType,
+                                annotationVarName,
                                 docId, sentenceId,
-                                unigramBeginChar, unigramEndChar,
-                                -1, // No specific synonym ID for the plain term here
+                                -1, -1, // Placeholder coordinates for the annotation part from stitch
+                                specificAnnotationTextId,
                                 conceptualRowId
                             );
-
-                            if (annotationVarName != null && !annotationVarName.isBlank()) {
-                                resultSoA.add(
-                                    conditionSpecificValue, // This is String for NER/POS
-                                    annotationValueType,
-                                    annotationVarName,
-                                    docId, sentenceId,
-                                    -1, -1, // Placeholder coordinates for the annotation part from stitch
-                                    specificAnnotationTextId,
-                                    conceptualRowId
-                                );
                             }
 
                             logger.trace("Added stitched match: term='{}', annotationType='{}', annotationText='{}', conceptualId={}",
-                                         ngramTerm, specificAnnotationTypeForLookup, retrievedAnnotationText, conceptualRowId);
-                        }
+                                     ngramTerm, specificAnnotationTypeForLookup, retrievedAnnotationText, conceptualRowId);
                     }
-                } else {
-                     logger.debug("No co-occurrences found for key '{}' in stitch index '{}'.", stitchLookupKey, stitchIndexName);
+                }
+            } else {
+                 logger.debug("No co-occurrences found for key '{}' in stitch index '{}'.", stitchLookupKey, stitchIndexName);
                 }
             }
         } catch (IndexAccessException e) {

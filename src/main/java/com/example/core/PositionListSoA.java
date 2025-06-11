@@ -1157,4 +1157,73 @@ public class PositionListSoA {
         //logger.debug("deserializeWithFilters: Selected {} positions out of {} from blob after filtering.", selectedCount, numPositionsInBlob);
         return result;
     }
+
+    /**
+     * Efficiently merges two compressed PositionListSoA blobs by selectively decompressing,
+     * merging, and recompressing each attribute array one at a time. This minimizes peak memory
+     * usage compared to fully decompressing both blobs.
+     *
+     * @param blob1 The first compressed blob (accumulated state)
+     * @param blob2 The second compressed blob (new chunk to merge)
+     * @return A new compressed blob containing the merged data
+     * @throws IOException If an I/O error occurs during decompression/compression
+     */
+    public static byte[] mergeCompressedBlobs(byte[] blob1, byte[] blob2) throws IOException {
+        if (blob1 == null || blob1.length == 0) {
+            if (blob2 == null || blob2.length == 0) {
+                return new PositionListSoA().serializeToCompositeBlob(); // Return empty blob
+            }
+            return blob2;
+        }
+        if (blob2 == null || blob2.length == 0) {
+            return blob1;
+        }
+
+        // Get the number of positions from each blob
+        int numPositions1 = getNumPositionsFromBlob(blob1);
+        int numPositions2 = getNumPositionsFromBlob(blob2);
+        int totalPositions = numPositions1 + numPositions2;
+
+        if (totalPositions == 0) {
+            return new PositionListSoA().serializeToCompositeBlob();
+        }
+
+        // Create a result container
+        PositionListSoA result = new PositionListSoA();
+
+        // Merge each attribute array selectively to minimize memory usage
+        // 1. Document IDs
+        IntArrayList docIds1 = decompressDocIds(blob1);
+        IntArrayList docIds2 = decompressDocIds(blob2);
+        docIds1.addAll(docIds2);
+        result.documentIds = docIds1;
+
+        // 2. Sentence IDs
+        IntArrayList sentIds1 = decompressSentenceIds(blob1);
+        IntArrayList sentIds2 = decompressSentenceIds(blob2);
+        sentIds1.addAll(sentIds2);
+        result.sentenceIds = sentIds1;
+
+        // 3. Begin characters
+        IntArrayList beginChars1 = decompressBeginChars(blob1);
+        IntArrayList beginChars2 = decompressBeginChars(blob2);
+        beginChars1.addAll(beginChars2);
+        result.beginChars = beginChars1;
+
+        // 4. End characters
+        IntArrayList endChars1 = decompressEndChars(blob1);
+        IntArrayList endChars2 = decompressEndChars(blob2);
+        endChars1.addAll(endChars2);
+        result.endChars = endChars1;
+
+        // 5. Synonym IDs
+        IntArrayList synonymIds1 = decompressSynonymIds(blob1);
+        IntArrayList synonymIds2 = decompressSynonymIds(blob2);
+        synonymIds1.addAll(synonymIds2);
+        result.synonymIds = synonymIds1;
+
+        result.numPositions = totalPositions;
+
+        return result.serializeToCompositeBlob();
+    }
 }

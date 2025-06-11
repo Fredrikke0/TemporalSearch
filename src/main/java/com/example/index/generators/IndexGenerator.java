@@ -1,6 +1,11 @@
 package com.example.index.generators;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileStore;
@@ -30,8 +35,6 @@ import com.example.logging.IndexingMetrics;
 import com.example.logging.ProgressTracker;
 import com.google.code.externalsorting.ExternalSort;
 import com.google.common.collect.ListMultimap;
-
-import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 /**
  * Abstract base class for streaming index generation that processes large datasets efficiently
@@ -259,30 +262,23 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
     /**
      * Writes the final merged and sorted entries to the index.
-     * Implements a streaming re-compression strategy using PositionListSoA.
-     * Each chunk from the sorted file is processed one attribute at a time to minimize memory.
-     * Only one uncompressed attribute array from one chunk is held in memory at any time.
+     * Implements a memory-efficient streaming strategy that keeps position data compressed
+     * during merging, only decompressing individual attribute arrays as needed.
      *
      * @param sortedFile The file containing the sorted entries
-     * @return The total number of terms written to the database.
      */
     protected void writeToLevelDB(File sortedFile) throws IOException {
         logger.info("Starting to write to RocksDB from sorted file: {}", sortedFile.getAbsolutePath());
         String currentTerm = null;
-        long totalTermsWritten = 0; // Counts unique base terms written
-        long totalSegmentsWritten = 0; // Counts total segments (including non-segmented terms as 1 segment)
-        final long TARGET_BATCH_BYTES = 8 * 1024 * 1024; // 8MB target batch size
+        long totalTermsWritten = 0;
+        long totalSegmentsWritten = 0;
+        final long TARGET_BATCH_BYTES = 8 * 1024 * 1024;
         long currentBatchSizeBytes = 0;
-        int termsInCurrentBatch = 0; // Number of physical RocksDB puts in the current WriteBatch
+        int termsInCurrentBatch = 0;
 
-        IntArrayList termDocIdsList = new IntArrayList();
-        IntArrayList termSentIdsList = new IntArrayList();
-        IntArrayList termBeginCharsList = new IntArrayList();
-        IntArrayList termEndCharsList = new IntArrayList();
-        IntArrayList termSynonymIdsList = new IntArrayList();
-
-        int numPositionsForCurrentTermSegment = 0; // Positions for the current segment of currentTerm
-        int segmentCounter = 0; // For term#0, term#1, etc.
+        byte[] currentTermCompressedBlob = null;
+        int numPositionsForCurrentTermSegment = 0;
+        int segmentCounter = 0;
 
         org.rocksdb.WriteBatch batch = null;
         try {
@@ -303,12 +299,11 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                         currentTerm = termFromFile;
                     }
 
-                    // If term changes, write out the previous term's data (or its last segment)
                     if (!termFromFile.equals(currentTerm)) {
-                        if (numPositionsForCurrentTermSegment > 0) {
+                        if (numPositionsForCurrentTermSegment > 0 && currentTermCompressedBlob != null) {
                             String keyToWrite = (segmentCounter == 0) ? currentTerm : currentTerm + "#" + segmentCounter;
                             byte[] termKeyBytes = bytes(keyToWrite);
-                            byte[] termValueBytes = serializeTermDataToBlob(numPositionsForCurrentTermSegment, termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
+                            byte[] termValueBytes = currentTermCompressedBlob;
 
                             if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES)) {
                                 writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
@@ -332,20 +327,18 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                         }
 
                         currentTerm = termFromFile;
-                        clearAccumulators(termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
+                        currentTermCompressedBlob = null;
                         numPositionsForCurrentTermSegment = 0;
                         segmentCounter = 0;
                     }
 
-                    // Process current line's data
-                    try (DataInputStream disChunk = new DataInputStream(new ByteArrayInputStream(lineCompositeBlob))) {
-                        int chunkNumPositions = disChunk.readInt();
+                    if (lineCompositeBlob != null && lineCompositeBlob.length > 0) {
+                        int chunkNumPositions = PositionListSoA.getNumPositionsFromBlob(lineCompositeBlob);
                         if (chunkNumPositions > 0) {
                             if (numPositionsForCurrentTermSegment + chunkNumPositions > MAX_POSITIONS_PER_SEGMENT && numPositionsForCurrentTermSegment > 0) {
-                                // Current segment is full, write it out before adding this new chunk
-                                String keyToWrite = currentTerm + "#" + segmentCounter; // Must be a segment if it's full
+                                String keyToWrite = currentTerm + "#" + segmentCounter;
                                 byte[] termKeyBytes = bytes(keyToWrite);
-                                byte[] termValueBytes = serializeTermDataToBlob(numPositionsForCurrentTermSegment, termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
+                                byte[] termValueBytes = currentTermCompressedBlob;
 
                                 if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES)) {
                                     writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
@@ -364,42 +357,27 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                                     throw new IOException("Failed to put to WriteBatch for term segment: " + keyToWrite, e);
                                 }
 
-                                clearAccumulators(termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
+                                currentTermCompressedBlob = null;
                                 numPositionsForCurrentTermSegment = 0;
                                 segmentCounter++;
                             }
 
-                            // Add current chunk data to accumulators
-                            IntArrayList tempChunkDocIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            termDocIdsList.addAll(tempChunkDocIds);
-
-                            IntArrayList tempChunkSentIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            termSentIdsList.addAll(tempChunkSentIds);
-
-                            IntArrayList tempChunkBeginChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            termBeginCharsList.addAll(tempChunkBeginChars);
-
-                            IntArrayList tempChunkEndChars = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, true);
-                            termEndCharsList.addAll(tempChunkEndChars);
-
-                            IntArrayList tempChunkSynonymIds = PositionListSoA.readCompressedIntArray(disChunk, chunkNumPositions, false); // original for chunk
-                            termSynonymIdsList.addAll(tempChunkSynonymIds);
-
+                            // Merge current chunk with accumulated data using compressed blob merging
+                            currentTermCompressedBlob = PositionListSoA.mergeCompressedBlobs(currentTermCompressedBlob, lineCompositeBlob);
                             numPositionsForCurrentTermSegment += chunkNumPositions;
                         }
                     }
-                } // End of while loop over lines
-            } // End of try-with-resources for BufferedReader
+                }
+            }
 
-            // Write the last term's data or its last segment
-            if (currentTerm != null && numPositionsForCurrentTermSegment > 0) {
+            if (currentTerm != null && numPositionsForCurrentTermSegment > 0 && currentTermCompressedBlob != null) {
                 String keyToWrite = (segmentCounter == 0) ? currentTerm : currentTerm + "#" + segmentCounter;
                 byte[] termKeyBytes = bytes(keyToWrite);
-                byte[] termValueBytes = serializeTermDataToBlob(numPositionsForCurrentTermSegment, termDocIdsList, termSentIdsList, termBeginCharsList, termEndCharsList, termSynonymIdsList);
+                byte[] termValueBytes = currentTermCompressedBlob;
 
                 if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES) && termsInCurrentBatch > 0) {
                     writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
-                    progress.updateIndex(termsInCurrentBatch); // Update progress after batch write
+                    progress.updateIndex(termsInCurrentBatch);
                     batch.close();
                     batch = indexAccess.createWriteBatch();
                     logger.info("Written batch of {} DB entries (approx {:.2f} MB) to RocksDB before adding final term segment. Total unique terms written: {}, total segments: {}.",
@@ -414,7 +392,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 } catch (org.rocksdb.RocksDBException e) {
                     throw new IOException("Failed to put to WriteBatch for final term segment: " + keyToWrite, e);
                 }
-                totalTermsWritten++; // Count the last base term
+                totalTermsWritten++;
             }
 
             if (termsInCurrentBatch > 0) {
@@ -440,31 +418,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         }
     }
 
-    /**
-     * Helper method to serialize the current term's accumulated data to a byte blob.
-     */
-    private byte[] serializeTermDataToBlob(int numPositions, IntArrayList docIds, IntArrayList sentIds,
-                                           IntArrayList beginChars, IntArrayList endChars, IntArrayList synonymIds) throws IOException {
-        ByteArrayOutputStream finalCompositeBlobStream = new ByteArrayOutputStream();
-        try (DataOutputStream dosFinal = new DataOutputStream(finalCompositeBlobStream)) {
-            dosFinal.writeInt(numPositions);
-            PositionListSoA.writeCompressedIntArray(dosFinal, docIds.elements(), docIds.size(), true);
-            PositionListSoA.writeCompressedIntArray(dosFinal, sentIds.elements(), sentIds.size(), true);
-            PositionListSoA.writeCompressedIntArray(dosFinal, beginChars.elements(), beginChars.size(), true);
-            PositionListSoA.writeCompressedIntArray(dosFinal, endChars.elements(), endChars.size(), true);
-            PositionListSoA.writeCompressedIntArray(dosFinal, synonymIds.elements(), synonymIds.size(), false); // Still false for synonymIds as per original
-        }
-        return finalCompositeBlobStream.toByteArray();
-    }
 
-    /**
-     * Helper method to clear accumulator lists.
-     */
-    private void clearAccumulators(IntArrayList... lists) {
-        for (IntArrayList list : lists) {
-            list.clear();
-        }
-    }
 
     /**
      * Attempts to write a batch to the index, retrying on specific failures.

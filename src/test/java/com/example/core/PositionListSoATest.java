@@ -461,4 +461,106 @@ class PositionListSoATest {
                 "Blobs for RLE with different constant synonym values (-1 vs 777) should be the same size " +
                 "if other attributes are identical. Size(-1): " + rleBlob_NegativeOne.length + ", Size(777): " + rleBlob_ConstantPositive.length);
     }
+
+    @Test
+    void testMergeCompressedBlobs() throws IOException {
+        // Test merging null/empty blobs
+        assertNotNull(PositionListSoA.mergeCompressedBlobs(null, null));
+
+        PositionListSoA emptyList = new PositionListSoA();
+        byte[] emptyBlob = emptyList.serializeToCompositeBlob();
+
+        // Merging null with non-empty should return the non-empty blob
+        PositionListSoA list1 = new PositionListSoA();
+        list1.add(1, 1, 10, 20);
+        byte[] blob1 = list1.serializeToCompositeBlob();
+
+        byte[] result1 = PositionListSoA.mergeCompressedBlobs(null, blob1);
+        assertEquals(blob1.length, result1.length);
+        PositionListSoA deserialized1 = PositionListSoA.deserializeFromCompositeBlob(result1);
+        assertSoaListsEqual(list1, deserialized1);
+
+        // Merging non-empty with null should return the non-empty blob
+        byte[] result2 = PositionListSoA.mergeCompressedBlobs(blob1, null);
+        assertEquals(blob1.length, result2.length);
+        PositionListSoA deserialized2 = PositionListSoA.deserializeFromCompositeBlob(result2);
+        assertSoaListsEqual(list1, deserialized2);
+
+        // Merging empty with non-empty
+        byte[] result3 = PositionListSoA.mergeCompressedBlobs(emptyBlob, blob1);
+        PositionListSoA deserialized3 = PositionListSoA.deserializeFromCompositeBlob(result3);
+        assertSoaListsEqual(list1, deserialized3);
+
+        // Test merging two non-empty blobs
+        PositionListSoA list2 = new PositionListSoA();
+        list2.add(2, 1, 30, 40, 1001);
+        list2.add(3, 2, 50, 60);
+        byte[] blob2 = list2.serializeToCompositeBlob();
+
+        byte[] mergedBlob = PositionListSoA.mergeCompressedBlobs(blob1, blob2);
+        PositionListSoA mergedList = PositionListSoA.deserializeFromCompositeBlob(mergedBlob);
+
+        // Should have combined positions from both lists
+        assertEquals(3, mergedList.getNumPositions());
+
+        // First position from list1
+        assertEquals(1, mergedList.getDocIdAt(0));
+        assertEquals(1, mergedList.getSentenceIdAt(0));
+        assertEquals(10, mergedList.getBeginCharAt(0));
+        assertEquals(20, mergedList.getEndCharAt(0));
+        assertEquals(-1, mergedList.getSynonymIdAt(0));
+
+        // First position from list2
+        assertEquals(2, mergedList.getDocIdAt(1));
+        assertEquals(1, mergedList.getSentenceIdAt(1));
+        assertEquals(30, mergedList.getBeginCharAt(1));
+        assertEquals(40, mergedList.getEndCharAt(1));
+        assertEquals(1001, mergedList.getSynonymIdAt(1));
+
+        // Second position from list2
+        assertEquals(3, mergedList.getDocIdAt(2));
+        assertEquals(2, mergedList.getSentenceIdAt(2));
+        assertEquals(50, mergedList.getBeginCharAt(2));
+        assertEquals(60, mergedList.getEndCharAt(2));
+        assertEquals(-1, mergedList.getSynonymIdAt(2));
+
+        // Test that merging is commutative (order shouldn't matter for final content)
+        byte[] mergedBlob2 = PositionListSoA.mergeCompressedBlobs(blob2, blob1);
+        PositionListSoA mergedList2 = PositionListSoA.deserializeFromCompositeBlob(mergedBlob2);
+        assertEquals(3, mergedList2.getNumPositions());
+        // The positions should be the same, just in different order since we append blob2 first
+        assertEquals(2, mergedList2.getDocIdAt(0)); // First from list2
+        assertEquals(3, mergedList2.getDocIdAt(1)); // Second from list2
+        assertEquals(1, mergedList2.getDocIdAt(2)); // From list1
+    }
+
+    @Test
+    void testMergeCompressedBlobs_LargeData() throws IOException {
+        // Test with larger datasets to ensure compression/decompression works correctly
+        PositionListSoA largeList1 = new PositionListSoA();
+        for (int i = 0; i < 100; i++) {
+            largeList1.add(i / 10, i % 5, i * 2, i * 2 + 5);
+        }
+
+        PositionListSoA largeList2 = new PositionListSoA();
+        for (int i = 100; i < 200; i++) {
+            largeList2.add(i / 10, i % 5, i * 2, i * 2 + 5, 2000 + i);
+        }
+
+        byte[] blob1 = largeList1.serializeToCompositeBlob();
+        byte[] blob2 = largeList2.serializeToCompositeBlob();
+
+        byte[] mergedBlob = PositionListSoA.mergeCompressedBlobs(blob1, blob2);
+        PositionListSoA mergedList = PositionListSoA.deserializeFromCompositeBlob(mergedBlob);
+
+        assertEquals(200, mergedList.getNumPositions());
+
+        // Verify first few positions from list1
+        assertEquals(0, mergedList.getDocIdAt(0));
+        assertEquals(-1, mergedList.getSynonymIdAt(0));
+
+        // Verify first few positions from list2 (should start at index 100)
+        assertEquals(10, mergedList.getDocIdAt(100)); // 100/10 = 10
+        assertEquals(2100, mergedList.getSynonymIdAt(100)); // 2000 + 100
+    }
 }
