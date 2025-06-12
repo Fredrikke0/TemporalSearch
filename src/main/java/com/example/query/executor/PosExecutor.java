@@ -1,8 +1,11 @@
 package com.example.query.executor;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -129,9 +132,8 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         }
 
         PositionListSoA positions = positionsOptional.get();
-        // The positions object is already filtered by the context thanks to the updated getMergedPositions call.
 
-        if (positions.isEmpty()) { // Defensive check, should be covered by !positionsOptional.isPresent()
+        if (positions.isEmpty()) {
             logger.debug("executeSpecificTermSearch: No positions for tag '{}' after context filtering (positions.isEmpty() check).", tagFromQuery);
             return;
         }
@@ -139,15 +141,12 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         int numPositionsTotal = positions.getNumPositions();
         if (numPositionsTotal == 0) return; // Should be caught by positions.isEmpty() but defensive check.
 
-        // Note: We don't need to decompress attribute by attribute anymore.
-        // We have the full PositionListSoA object.
-
         int conceptualRowId = -1;
         int positionsAddedToSoa = 0;
 
         for (int i = 0; i < numPositionsTotal; i++) {
             if (positions.getSynonymIdAt(i) == targetSynonymId) {
-                if (conceptualRowId == -1) { // First match for this specific term
+                if (conceptualRowId == -1) {
                     conceptualRowId = resultSoA.getNextConceptualRowId();
                 }
                 resultSoA.add(
@@ -158,7 +157,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                     requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
                     requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                     requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    targetSynonymId, // This is the synonym ID we filtered by
+                    targetSynonymId,
                     conceptualRowId
                 );
                 positionsAddedToSoa++;
@@ -171,7 +170,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
     private void executeTagOnlyOrVariableTermSearch(String tagFromQuery, String variableName, IndexAccessInterface index,
                                                     AttributeRequirements requirements, QueryResultSoA resultSoA,
                                                     Optional<FilteringContext> context)
-            throws IOException, IndexAccessException, org.rocksdb.RocksDBException {
+            throws IOException, IndexAccessException, org.rocksdb.RocksDBException, QueryExecutionException {
 
         Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context);
 
@@ -194,23 +193,40 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         if (numPositions == 0) return;
 
         if (variableName != null) {
+            // Collect unique synonym IDs
+            Set<Integer> uniqueSynonymIds = new HashSet<>();
+            for (int i = 0; i < numPositions; i++) {
+                uniqueSynonymIds.add(positions.getSynonymIdAt(i));
+            }
+
+            // Fetch terms in a batch
+            Map<Integer, String> resolvedTermsCache = Collections.emptyMap(); // Default to empty
+            if (!uniqueSynonymIds.isEmpty()) {
+                try {
+                    resolvedTermsCache = synonymManager.getTerms(uniqueSynonymIds);
+                    logger.debug("executeTagOnlyOrVariableTermSearch: Batch fetched {} terms for {} unique synonym IDs for POS tag '{}'.",
+                                 resolvedTermsCache.size(), uniqueSynonymIds.size(), tagFromQuery);
+                } catch (org.rocksdb.RocksDBException e) {
+                    logger.error("RocksDBException while batch fetching terms in POS variable binding for Tag '{}'", tagFromQuery, e);
+                    // Propagate as a QueryExecutionException or a more specific custom exception if desired
+                    throw new QueryExecutionException("Failed to batch fetch terms from SynonymManager for POS BIND",
+                                                    e, "POS(" + tagFromQuery + ") BIND " + variableName,
+                                                    QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+                }
+            }
+
             Map<String, Integer> resolvedTermToConceptualRowId = new java.util.HashMap<>();
-            Map<Integer, String> resolvedSynonymIdToTermCache = new java.util.HashMap<>();
+            // Map<Integer, String> resolvedSynonymIdToTermCache = new java.util.HashMap<>(); // REMOVED
 
             for (int i = 0; i < numPositions; i++) {
                 int currentSynonymId = positions.getSynonymIdAt(i);
-                String termToBind;
+                String termToBind = resolvedTermsCache.get(currentSynonymId);
 
-                if (resolvedSynonymIdToTermCache.containsKey(currentSynonymId)) {
-                    termToBind = resolvedSynonymIdToTermCache.get(currentSynonymId);
-                } else {
-                    Optional<String> termOptional = synonymManager.getTerm(currentSynonymId);
-                    if (!termOptional.isPresent()) {
-                        logger.warn("executeTagOnlyOrVariableTermSearch: No term found for synonymId {} (tag: {}). Skipping.", currentSynonymId, tagFromQuery);
-                        continue;
-                    }
-                    termToBind = termOptional.get();
-                    resolvedSynonymIdToTermCache.put(currentSynonymId, termToBind);
+                if (termToBind == null) {
+                    // This can happen if a synonym ID was in positions but not resolvable by getTerms (e.g. not in DB, cache issue)
+                    logger.warn("executeTagOnlyOrVariableTermSearch: No term found in pre-fetched cache for synonymId {} (tag: {}). Skipping.",
+                                currentSynonymId, tagFromQuery);
+                    continue;
                 }
 
                 int conceptualRowId = resolvedTermToConceptualRowId.computeIfAbsent(termToBind, k -> resultSoA.getNextConceptualRowId());

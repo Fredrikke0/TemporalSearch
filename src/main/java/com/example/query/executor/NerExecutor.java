@@ -1,9 +1,12 @@
 package com.example.query.executor;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
@@ -309,10 +312,31 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         logger.trace("executeVariableBindingSearch: Decompressed raw arrays. DocIds size: {}, SynonymIds size: {}", positions.getNumPositions(), positions.getSynonymIds().size());
 
         Map<String, Integer> resolvedTermToConceptualRowId = new HashMap<>();
-        Map<Integer, String> resolvedSynonymIdToTermCache = new HashMap<>(); // Cache for term resolution
+        // Map<Integer, String> resolvedSynonymIdToTermCache = new HashMap<>(); // Cache for term resolution - REMOVED, will use batch fetch
 
         int conceptualRowsAdded = 0;
         int initialNumPositions = positions.getNumPositions();
+
+        // Step 1: Collect unique synonym IDs
+        Set<Integer> uniqueSynonymIds = new HashSet<>();
+        if (initialNumPositions > 0 && requirements.needsSynonymIds) { // Only collect if needed and positions exist
+            for (int i = 0; i < initialNumPositions; i++) {
+                uniqueSynonymIds.add(positions.getSynonymIdAt(i));
+            }
+        }
+        logger.debug("executeVariableBindingSearch: Collected {} unique synonym IDs from {} positions.", uniqueSynonymIds.size(), initialNumPositions);
+
+        // Step 2: Fetch terms in a batch
+        Map<Integer, String> resolvedTermsCache = Collections.emptyMap(); // Default to empty
+        if (!uniqueSynonymIds.isEmpty()) {
+            try {
+                resolvedTermsCache = synonymManager.getTerms(uniqueSynonymIds);
+                logger.debug("executeVariableBindingSearch: Batch fetched {} terms for {} unique synonym IDs.", resolvedTermsCache.size(), uniqueSynonymIds.size());
+            } catch (RocksDBException e) {
+                logger.error("RocksDBException while batch fetching terms in variable binding search for Type '{}'", normalizedEntityType, e);
+                throw new IndexAccessException("Failed to batch fetch terms from SynonymManager", NER_INDEX_NAME, IndexAccessException.ErrorType.READ_ERROR, e);
+            }
+        }
 
         for (int i = 0; i < initialNumPositions; i++) {
             int currentSynonymId = positions.getSynonymIdAt(i);
@@ -324,52 +348,43 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 continue;
             }
 
-            try {
-                String term;
-                if (resolvedSynonymIdToTermCache.containsKey(currentSynonymId)) {
-                    term = resolvedSynonymIdToTermCache.get(currentSynonymId);
-                    logger.trace("executeVariableBindingSearch: Term '{}' for synId {} found in cache.", term, currentSynonymId);
+            String term = resolvedTermsCache.get(currentSynonymId);
+            if (term == null) {
+                if (requirements.needsSynonymIds) {
+                     logger.warn("executeVariableBindingSearch: No term found in pre-fetched cache for synonymId {} at position {}. Skipping.", currentSynonymId, i);
                 } else {
-                    Optional<String> termOptional = synonymManager.getTerm(currentSynonymId);
-                    if (!termOptional.isPresent()) {
-                        logger.warn("executeVariableBindingSearch: No term found for synonymId {} at position {}. Skipping.", currentSynonymId, i);
-                        continue;
-                    }
-                    term = termOptional.get();
-                    resolvedSynonymIdToTermCache.put(currentSynonymId, term);
-                    logger.trace("executeVariableBindingSearch: Resolved synId {} to term '{}' and cached it.", currentSynonymId, term);
+                     logger.error("executeVariableBindingSearch: Term for synonymId {} is null and needsSynonymIds is false. Cannot bind variable '{}'. Skipping position {}.",
+                                 currentSynonymId, queryVariableName, i);
                 }
-
-                // Use original casing if available (from filterTargetValueFromQuery), otherwise use resolved term
-                String valueToBind = (filterTargetValueFromQuery != null && filterTargetSynonymId.isPresent() && filterTargetSynonymId.get() == currentSynonymId)
-                                    ? filterTargetValueFromQuery
-                                    : term;
-
-                int conceptualRowId = resolvedTermToConceptualRowId.computeIfAbsent(valueToBind, k -> {
-                    int newConceptualId = resultSoA.getNextConceptualRowId(); // Use QueryResultSoA's ID generator
-                    logger.trace("executeVariableBindingSearch: New conceptual row for term '{}' (valueToBind: '{}'). Assigning new conceptualRowId: {}",
-                                 term, valueToBind, newConceptualId);
-                    return newConceptualId;
-                });
-
-                logger.trace("executeVariableBindingSearch: Adding to resultSoA. ConceptualRowId: {}, VarName: '{}', Value: '{}', ValueType: ENTITY, DocId: {}",
-                    conceptualRowId, queryVariableName, valueToBind, positions.getDocIdAt(i));
-
-                resultSoA.add(
-                    valueToBind,                  // Object value
-                    ValueType.ENTITY,             // ValueType valueType
-                    queryVariableName,            // String variableName
-                    positions.getDocIdAt(i),       // int documentId
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1, // int sentenceId
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,   // int beginChar
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,     // int endChar
-                    currentSynonymId,             // int synonymId (Store the synonymId of the resolved entity)
-                    conceptualRowId               // int conceptualRowId
-                );
-            } catch (RocksDBException e) {
-                logger.error("RocksDBException while resolving term for synonymId {} in variable binding search for Type '{}'", currentSynonymId, normalizedEntityType, e);
-                throw new IndexAccessException("Failed to resolve term for synonymId: " + currentSynonymId, NER_INDEX_NAME, IndexAccessException.ErrorType.READ_ERROR, e);
+                continue;
             }
+            logger.trace("executeVariableBindingSearch: Term '{}' for synId {} found via pre-fetched cache.", term, currentSynonymId);
+
+            String valueToBind = (filterTargetValueFromQuery != null && filterTargetSynonymId.isPresent() && filterTargetSynonymId.get() == currentSynonymId)
+                                ? filterTargetValueFromQuery
+                                : term;
+
+            int conceptualRowId = resolvedTermToConceptualRowId.computeIfAbsent(valueToBind, k -> {
+                int newConceptualId = resultSoA.getNextConceptualRowId();
+                logger.trace("executeVariableBindingSearch: New conceptual row for term '{}' (valueToBind: '{}'). Assigning new conceptualRowId: {}",
+                             term, valueToBind, newConceptualId);
+                return newConceptualId;
+            });
+
+            logger.trace("executeVariableBindingSearch: Adding to resultSoA. ConceptualRowId: {}, VarName: '{}', Value: '{}', ValueType: ENTITY, DocId: {}",
+                conceptualRowId, queryVariableName, valueToBind, positions.getDocIdAt(i));
+
+            resultSoA.add(
+                valueToBind,
+                ValueType.ENTITY,
+                queryVariableName,
+                positions.getDocIdAt(i),
+                requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                currentSynonymId,
+                conceptualRowId
+            );
         }
         conceptualRowsAdded = resolvedTermToConceptualRowId.size();
         logger.debug("executeVariableBindingSearch for Type '{}' completed. Added {} conceptual rows and {} total bindings to QueryResultSoA.",

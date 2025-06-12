@@ -3,9 +3,12 @@ package com.example.query.executor;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,7 +28,7 @@ import com.example.query.model.condition.Temporal;
 
 public class StitchIntersectionExecutor {
     private static final Logger logger = LoggerFactory.getLogger(StitchIntersectionExecutor.class);
-    private static final char DELIMITER_CHAR = IndexAccessInterface.DELIMITER; // Usually \u0000
+    private static final char DELIMITER_CHAR = IndexAccessInterface.DELIMITER;
 
     public StitchIntersectionExecutor() {
         // Constructor
@@ -241,6 +244,30 @@ public class StitchIntersectionExecutor {
                 logger.debug("Found {} potential co-occurrences for key '{}' in stitch index '{}' after context filtering.",
                              positions.getNumPositions(), stitchLookupKey, stitchIndexName);
 
+                // Step 1: Collect unique synonym IDs for annotation texts
+                Set<Integer> uniqueAnnotationSynonymIds = new HashSet<>();
+                if (positions.getNumPositions() > 0) {
+                    for (int i = 0; i < positions.getNumPositions(); i++) {
+                        uniqueAnnotationSynonymIds.add(positions.getSynonymIdAt(i)); // synonymId is the specificAnnotationTextId
+                    }
+                }
+                logger.debug("StitchExecutor: Collected {} unique annotation synonym IDs from {} positions for key '{}'.",
+                             uniqueAnnotationSynonymIds.size(), positions.getNumPositions(), stitchLookupKey);
+
+                // Step 2: Fetch annotation terms in a batch
+                Map<Integer, String> resolvedAnnotationTermsCache = Collections.emptyMap();
+                if (!uniqueAnnotationSynonymIds.isEmpty()) {
+                    try {
+                        resolvedAnnotationTermsCache = synonymManager.getTerms(uniqueAnnotationSynonymIds);
+                        logger.debug("StitchExecutor: Batch fetched {} terms for {} unique annotation synonym IDs for key '{}'.",
+                                     resolvedAnnotationTermsCache.size(), uniqueAnnotationSynonymIds.size(), stitchLookupKey);
+                    } catch (org.rocksdb.RocksDBException e) {
+                        logger.error("RocksDBException while batch fetching terms for stitch key '{}'", stitchLookupKey, e);
+                        throw new QueryExecutionException("Failed to batch fetch annotation terms from SynonymManager for stitch key: " + stitchLookupKey,
+                                                        e, corpusName, QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+                    }
+                }
+
                 for (int i = 0; i < positions.getNumPositions(); i++) {
                     int docId = positions.getDocIdAt(i);
                     int sentenceId = positions.getSentenceIdAt(i);
@@ -248,25 +275,19 @@ public class StitchIntersectionExecutor {
                     int unigramEndChar = positions.getEndCharAt(i);
                     int specificAnnotationTextId = positions.getSynonymIdAt(i); // ID of the annotation text in stitch synonym store
 
-                    String retrievedAnnotationText = null;
-                    try {
-                        retrievedAnnotationText = synonymManager.getTerm(specificAnnotationTextId).orElse(null);
-                    } catch (org.rocksdb.RocksDBException e) {
-                        logger.warn("RocksDBException while retrieving term for synonymId {} from stitch key '{}'. Skipping.",
-                                specificAnnotationTextId, stitchLookupKey, e);
-                        continue;
-                    }
+                    String retrievedAnnotationText = resolvedAnnotationTermsCache.get(specificAnnotationTextId);
 
                     if (retrievedAnnotationText == null) {
-                        logger.warn("Null annotation text for synonymId {} from stitch key '{}' (using SynonymManager). Skipping.",
+                        // This can happen if synonym ID from positions was not in the batch-fetched map
+                        logger.warn("Null annotation text for synonymId {} from stitch key '{}' (using pre-fetched cache). Skipping.",
                                     specificAnnotationTextId, stitchLookupKey);
                         continue;
                     }
 
                     boolean valueMatch = true; // Default to true
-                        Object conditionSpecificValue = retrievedAnnotationText; // Store String for SoA
-                        if (targetAnnotationValue != null && !targetAnnotationValue.equalsIgnoreCase(retrievedAnnotationText)) {
-                            valueMatch = false;
+                    Object conditionSpecificValue = retrievedAnnotationText; // Store String for SoA
+                    if (targetAnnotationValue != null && !targetAnnotationValue.equalsIgnoreCase(retrievedAnnotationText)) {
+                        valueMatch = false;
                     }
 
                     if (valueMatch) {

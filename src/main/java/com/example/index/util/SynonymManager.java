@@ -5,9 +5,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.rocksdb.Options;
@@ -128,11 +131,58 @@ public class SynonymManager implements AutoCloseable {
         if (termBytes != null) {
             String term = new String(termBytes, StandardCharsets.UTF_8);
             // Populate cache for future lookups
-            termToIdCache.put(term, id);
+            // Be cautious about concurrent modifications if other threads might be adding terms.
+            // For now, assume single-threaded or appropriate external synchronization for cache updates here.
             idToTermCache.put(id, term);
+            // We also need to ensure termToIdCache is consistent if this term was unknown.
+            // This scenario (ID exists, but term not in termToIdCache) implies an inconsistency
+            // or that loadAllMappings didn't cover all cases, which should be investigated.
+            // For safety, let's ensure termToIdCache is also updated if we fetch from DB.
+            if (!termToIdCache.containsKey(term)) {
+                 termToIdCache.put(term, id);
+            }
             return Optional.of(term);
         }
         return Optional.empty();
+    }
+
+    public Map<Integer, String> getTerms(Set<Integer> ids) throws RocksDBException {
+        Map<Integer, String> result = new HashMap<>();
+        List<Integer> idsToFetchFromDB = new ArrayList<>(); // Using ArrayList, assuming set 'ids' isn't excessively large for this list
+
+        for (Integer id : ids) {
+            if (idToTermCache.containsKey(id)) {
+                result.put(id, idToTermCache.get(id));
+            } else {
+                // This case suggests the idToTermCache might not be fully populated
+                // or the ID is invalid. Log a warning if unexpected.
+                logger.warn("Synonym ID {} not found in idToTermCache during getTerms. Will attempt DB lookup.", id);
+                idsToFetchFromDB.add(id);
+            }
+        }
+
+        if (!idsToFetchFromDB.isEmpty()) {
+            logger.debug("Attempting to fetch {} terms from RocksDB for getTerms operation.", idsToFetchFromDB.size());
+            // Using individual gets as a fallback.
+            // Consider RocksDB.multiGet() if this path is hit frequently with many IDs.
+            for (Integer idToFetch : idsToFetchFromDB) {
+                byte[] idKey = ("id:" + idToFetch).getBytes(StandardCharsets.UTF_8);
+                byte[] termBytes = db.get(idKey);
+                if (termBytes != null) {
+                    String term = new String(termBytes, StandardCharsets.UTF_8);
+                    result.put(idToFetch, term);
+                    // Populate caches for future lookups, be mindful of consistency
+                    idToTermCache.put(idToFetch, term);
+                    if (!termToIdCache.containsKey(term)) { // Avoid overwriting if term maps to a different primary ID
+                        termToIdCache.put(term, idToFetch);
+                    }
+                     logger.trace("Fetched term '{}' for ID {} from DB and cached.", term, idToFetch);
+                } else {
+                    logger.warn("Synonym ID {} not found in RocksDB either during getTerms fallback.", idToFetch);
+                }
+            }
+        }
+        return result;
     }
 
     public synchronized void putBatch(Map<String, Integer> batch) throws RocksDBException {
