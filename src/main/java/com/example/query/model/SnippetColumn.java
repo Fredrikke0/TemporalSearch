@@ -21,18 +21,18 @@ import tech.tablesaw.columns.Column;
 public class SnippetColumn implements SelectColumn {
     private static final Logger logger = LoggerFactory.getLogger(SnippetColumn.class);
 
-    private static final int DEFAULT_SNIPPET_WINDOW = 5; // Default words before/after
+    private static final int DEFAULT_SNIPPET_WINDOW = 40;
 
     private final String columnName;
     private final int windowSize;
-    private final String qualifiedVariableName; // Store qualified name (e.g., "$main.term" or "q1.term")
+    private final String qualifiedVariableName;
 
     public SnippetColumn(String qualifiedVariableName, int windowSize) {
         if (qualifiedVariableName == null || qualifiedVariableName.isEmpty() || !qualifiedVariableName.contains(".")) {
             throw new IllegalArgumentException("SnippetColumn requires a qualified variable name (e.g., alias.var), got: " + qualifiedVariableName);
         }
         this.qualifiedVariableName = qualifiedVariableName;
-        this.windowSize = windowSize >= 0 ? windowSize : DEFAULT_SNIPPET_WINDOW; // Allow window 0
+        this.windowSize = windowSize >= 0 ? windowSize : DEFAULT_SNIPPET_WINDOW;
         this.columnName = "snippet_" + this.qualifiedVariableName.replace('.', '_');
     }
 
@@ -123,67 +123,29 @@ public class SnippetColumn implements SelectColumn {
     }
 
     private String generateSnippet(String fullText, int matchStart, int matchEnd) {
-        int snippetStart = findWordBoundary(fullText, matchStart, -windowSize);
-        int snippetEnd = findWordBoundary(fullText, matchEnd, windowSize);
+        int snippetStart = Math.max(0, matchStart - this.windowSize);
+        int snippetEnd = Math.min(fullText.length(), matchEnd + this.windowSize);
 
-        // Ensure snippetStart and snippetEnd are within fullText bounds and in correct order
-        snippetStart = Math.max(0, snippetStart);
-        snippetEnd = Math.min(fullText.length(), snippetEnd);
-        if (snippetStart >= snippetEnd) { // Should not happen if findWordBoundary is correct
-             logger.warn("Calculated snippet boundaries are invalid: start={}, end={}. Using match boundaries.", snippetStart, snippetEnd);
-             snippetStart = Math.max(0, matchStart);
-             snippetEnd = Math.min(fullText.length(), matchEnd);
-        }
+        if (snippetStart >= snippetEnd) {
+            snippetStart = Math.max(0, matchStart - 5);
+            snippetEnd = Math.min(fullText.length(), matchEnd + 5);
 
-        String snippet = fullText.substring(snippetStart, snippetEnd);
-
-        return "..." + snippet.trim() + "...";
-    }
-
-    private int findWordBoundary(String text, int center, int wordOffset) {
-        int currentPos = center;
-        int wordsFound = 0;
-        int direction = wordOffset > 0 ? 1 : -1;
-
-        // Handle edge case: if center is already at the beginning/end and we want to go further out.
-        if (direction == -1 && center == 0 && wordOffset < 0) return 0;
-        if (direction == 1 && center == text.length() && wordOffset > 0) return text.length();
-
-        while (wordsFound < Math.abs(wordOffset) && currentPos >= 0 && currentPos < text.length()) {
-            int prevCharPos = currentPos - direction; // Look at the character on the "other side" of currentPos for transition
-
-            if (prevCharPos >= 0 && prevCharPos < text.length()) {
-                boolean currentIsSpace = Character.isWhitespace(text.charAt(currentPos));
-                boolean prevIsSpace = Character.isWhitespace(text.charAt(prevCharPos));
-                if (direction == 1) { // Moving right (finding end of snippet)
-                    if (prevIsSpace && !currentIsSpace) wordsFound++; // Space to Non-space transition marks start of a new word
-                } else { // Moving left (finding start of snippet)
-                    if (!prevIsSpace && currentIsSpace) wordsFound++; // Non-space to Space transition marks end of a word going left
-                }
-            }
-
-            if (wordsFound >= Math.abs(wordOffset)) break;
-
-            currentPos += direction;
-            if (currentPos < 0 || currentPos >= text.length()) break;
-        }
-
-        // Adjust to be just after/before the space boundary, or at text ends
-        if (direction == 1) { // Moving right, ensure we are at the start of the word or text end
-            while (currentPos < text.length() && Character.isWhitespace(text.charAt(currentPos))) {
-                currentPos++;
-            }
-        } else { // Moving left, ensure we are at the end of the word or text start
-             while (currentPos > 0 && Character.isWhitespace(text.charAt(currentPos -1))) {
-                currentPos--;
+            if (snippetStart >= snippetEnd) {
+               snippetStart = Math.max(0, matchStart);
+               snippetEnd = Math.min(fullText.length(), matchEnd);
             }
         }
 
-        return Math.max(0, Math.min(text.length(), currentPos));
+        String textContent = fullText.substring(snippetStart, snippetEnd);
+
+        String prefix = (snippetStart > 0) ? "..." : "";
+        String suffix = (snippetEnd < fullText.length()) ? "..." : "";
+
+        return prefix + textContent.trim() + suffix;
     }
 
     @Override
     public String toString() {
-        return "SNIPPET(" + qualifiedVariableName + ", WINDOW=" + windowSize + ")";
+        return "SNIPPET(" + qualifiedVariableName + ", CHAR_WINDOW=" + windowSize + ")";
     }
 }

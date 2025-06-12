@@ -1,7 +1,10 @@
 package com.example.query.model;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.*;
 
 public class SnippetNodeTest {
 
@@ -45,18 +48,24 @@ public class SnippetNodeTest {
 
     @Test
     public void testNegativeWindowSize() {
-        Exception exception = assertThrows(IllegalArgumentException.class, () -> {
-            new SnippetNode("main.var", -1);
-        });
-        assertTrue(exception.getMessage().contains("windowSize must be between 0 and 5"));
+        // SnippetNode now allows negative window sizes (e.g., -1 for default propagation).
+        // It no longer throws an IllegalArgumentException for this.
+        SnippetNode node = new SnippetNode("main.var", -1);
+        assertEquals(-1, node.windowSize());
+
+        SnippetNode nodeNegativeFive = new SnippetNode("main.var", -5);
+        assertEquals(-5, nodeNegativeFive.windowSize());
     }
 
     @Test
     public void testTooLargeWindowSize() {
-        Exception exception = assertThrows(IllegalArgumentException.class, () -> {
-            new SnippetNode("main.var", 6);
-        });
-        assertTrue(exception.getMessage().contains("windowSize must be between 0 and 5"));
+        // SnippetNode no longer has an upper limit validation for windowSize.
+        // Validation for a practical maximum is handled by QuerySemanticValidator.
+        SnippetNode node = new SnippetNode("main.var", 6);
+        assertEquals(6, node.windowSize());
+
+        SnippetNode nodeLarge = new SnippetNode("main.var", 1000);
+        assertEquals(1000, nodeLarge.windowSize());
     }
 
     @Test
@@ -68,6 +77,6 @@ public class SnippetNodeTest {
     @Test
     public void testToStringWithCustomWindowSize() {
         SnippetNode node = new SnippetNode("main.var", 2);
-        assertEquals("SNIPPET(main.var, window=2)", node.toString());
+        assertEquals("SNIPPET(main.var, CHAR_WINDOW=2)", node.toString());
     }
 }

@@ -8,9 +8,9 @@ public record SnippetNode(
     String qualifiedVariableName,
     int windowSize
 ) {
-    
-    public static final int DEFAULT_WINDOW_SIZE = 4;
-    
+
+    public static final int DEFAULT_WINDOW_SIZE = -1;
+
     /**
      * Creates a new SnippetNode with the specified variable and default settings
      * @param qualifiedVariableName The qualified variable name to extract a snippet for
@@ -23,30 +23,27 @@ public record SnippetNode(
         if (qualifiedVariableName == null || qualifiedVariableName.isEmpty() || !qualifiedVariableName.contains(".")) {
             throw new IllegalArgumentException("qualifiedVariableName must be a valid qualified name (e.g., alias.var)");
         }
-        if (windowSize < 0 || windowSize > 5) {
-            throw new IllegalArgumentException("windowSize must be between 0 and 5");
-        }
     }
 
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("SNIPPET(%s", qualifiedVariableName));
-        
+
         if (windowSize != DEFAULT_WINDOW_SIZE) {
-            sb.append(", window=").append(windowSize);
+            sb.append(", CHAR_WINDOW=").append(windowSize);
         }
-        
+
         sb.append(")");
         return sb.toString();
     }
 
     /**
      * Returns the variable name this snippet is based on.
-     * 
+     *
      * @return The qualified variable name
      */
     public String variableName() {
         return qualifiedVariableName;
     }
-} 
+}

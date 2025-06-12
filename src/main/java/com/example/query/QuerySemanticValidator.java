@@ -31,9 +31,9 @@ import com.example.query.model.condition.Ner;
  */
 public class QuerySemanticValidator {
     private static final Logger logger = LoggerFactory.getLogger(QuerySemanticValidator.class);
-
-    // Maximum allowed snippet window size (sentences)
-    private static final int MAX_SNIPPET_WINDOW_SIZE = 5;
+    private static final int MAX_CONDITION_DEPTH = 10; // Max nesting depth for conditions
+    private static final int MAX_JOIN_DEPTH = 5;       // Max number of joins
+    private static final int MAX_SNIPPET_WINDOW_SIZE = 150; // Max characters for snippet window
 
     // Maximum proximity window for temporal joins
     private static final int MAX_TEMPORAL_PROXIMITY_WINDOW = 365;
@@ -379,14 +379,15 @@ public class QuerySemanticValidator {
     private void validateSnippetWindowSizes(Query query) throws QueryParseException {
         for (SelectColumn column : query.selectColumns()) {
             if (column instanceof SnippetColumn snippetColumn) {
-                int windowSize = snippetColumn.getWindowSize();
+                int windowSize = snippetColumn.getWindowSize(); // This is now character-based
 
                 if (windowSize > MAX_SNIPPET_WINDOW_SIZE) {
                     throw new QueryParseException(String.format(
-                        "Snippet window size %d exceeds maximum allowed size of %d sentences",
+                        "Snippet window size %d characters exceeds maximum allowed size of %d characters",
                         windowSize, MAX_SNIPPET_WINDOW_SIZE
                     ));
                 }
+                // Minimum window size validation (e.g., must be >= 0) is handled by SnippetColumn constructor logic
             }
         }
     }
