@@ -18,6 +18,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentMatchers;
 import org.rocksdb.RocksDBException;
 // Added imports for logger
 import org.slf4j.Logger;
@@ -309,6 +310,24 @@ public class QueryEndToEndTest {
         // Stub mockIndexManager behavior (now that mockIndexes is populated)
         lenient().when(mockIndexManager.getAllIndexes()).thenReturn(mockIndexes);
         lenient().when(mockIndexManager.getSynonymManager()).thenReturn(staticMockSynonymManager); // mockSynonymManager created above
+
+        // NEW: Add lenient mocking for getTerms using an Answer to be dynamic
+        lenient().when(staticMockSynonymManager.getTerms(ArgumentMatchers.<Set<Integer>>any())).thenAnswer(invocation -> {
+            Set<Integer> idSet = invocation.getArgument(0);
+            Map<Integer, String> resultMap = new HashMap<>();
+            if (idSet != null) {
+                for (Integer id : idSet) {
+                    if (synIdToTermMap.containsKey(id)) {
+                        resultMap.put(id, synIdToTermMap.get(id));
+                    } else {
+                        // Optional: Log or handle cases where an ID is requested but not in synIdToTermMap
+                        // This might indicate an issue with test data setup if it occurs unexpectedly.
+                        logger.warn("QueryEndToEndTest: staticMockSynonymManager.getTerms was asked for id {} which is not in synIdToTermMap.", id);
+                    }
+                }
+            }
+            return resultMap;
+        });
 
         // Initialize factory and executor (now using static mocks)
         factory = new ConditionExecutorFactory(staticMockSynonymManager); // Updated

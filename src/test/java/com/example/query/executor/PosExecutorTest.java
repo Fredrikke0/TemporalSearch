@@ -15,6 +15,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -207,9 +208,12 @@ class PosExecutorTest {
 
         when(posIndex.getMergedPositions(eq(expectedTagString), any())).thenReturn(Optional.of(positionsForJJ));
 
-        when(synonymManager.getTerm(goodSynId)).thenReturn(Optional.of("good"));
-        when(synonymManager.getTerm(badSynId)).thenReturn(Optional.of("bad"));
-        when(synonymManager.getTerm(uglySynId)).thenReturn(Optional.of("ugly"));
+        Set<Integer> expectedSynIds = new HashSet<>(Arrays.asList(goodSynId, badSynId, uglySynId));
+        Map<Integer, String> expectedTermsMap = new HashMap<>();
+        expectedTermsMap.put(goodSynId, "good");
+        expectedTermsMap.put(badSynId, "bad");
+        expectedTermsMap.put(uglySynId, "ugly");
+        when(synonymManager.getTerms(eq(expectedSynIds))).thenReturn(expectedTermsMap);
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -237,9 +241,7 @@ class PosExecutorTest {
         assertEquals(1, (int)valueCounts.get("ugly"));
 
         verify(posIndex).getMergedPositions(eq(expectedTagString), any());
-        verify(synonymManager, times(1)).getTerm(goodSynId);
-        verify(synonymManager, times(1)).getTerm(badSynId);
-        verify(synonymManager, times(1)).getTerm(uglySynId);
+        verify(synonymManager, times(1)).getTerms(eq(expectedSynIds));
     }
 
     @Test

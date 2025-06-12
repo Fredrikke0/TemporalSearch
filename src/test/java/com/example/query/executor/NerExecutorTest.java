@@ -254,8 +254,12 @@ class NerExecutorTest {
         // Mock SynonymManager for term resolution
         int acmeId = 1;
         int globexId = 2;
-        when(synonymManager.getTerm(acmeId)).thenReturn(Optional.of("acmeinc")); // Lowercase
-        when(synonymManager.getTerm(globexId)).thenReturn(Optional.of("globexcorp")); // Lowercase
+
+        Map<Integer, String> expectedTerms = new HashMap<>();
+        expectedTerms.put(acmeId, "acmeinc");
+        expectedTerms.put(globexId, "globexcorp");
+        when(synonymManager.getTerms(eq(new HashSet<>(Arrays.asList(acmeId, globexId)))))
+            .thenReturn(expectedTerms);
 
         PositionListSoA positions = new PositionListSoA();
         positions.add(4, 1, 0, 10, acmeId);    // Doc 4, "AcmeInc"
@@ -297,8 +301,7 @@ class NerExecutorTest {
         assertEquals(1, valueCounts.get("globexcorp").intValue(), "Count for 'globexcorp'");
 
         verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
-        verify(synonymManager).getTerm(acmeId); // Called for each conceptual match
-        verify(synonymManager).getTerm(globexId);
+        verify(synonymManager).getTerms(eq(new HashSet<>(Arrays.asList(acmeId, globexId))));
     }
 
     @Test
@@ -307,7 +310,9 @@ class NerExecutorTest {
         Ner condition = new Ner("PERSON", null, "?anytype", true);
 
         int johnDoeId = 1;
-        when(synonymManager.getTerm(johnDoeId)).thenReturn(Optional.of("john doe"));
+        // when(synonymManager.getTerm(johnDoeId)).thenReturn(Optional.of("john doe")); // OLD MOCKING
+        when(synonymManager.getTerms(eq(Set.of(johnDoeId))))
+            .thenReturn(Map.of(johnDoeId, "john doe")); // NEW MOCKING
 
         PositionListSoA personPositions = new PositionListSoA();
         personPositions.add(1, 1, 0, 8, johnDoeId);
@@ -398,8 +403,17 @@ class NerExecutorTest {
 
         int parisId = 10;
         int londonId = 11;
-        when(synonymManager.getTerm(parisId)).thenReturn(Optional.of("paris"));
-        when(synonymManager.getTerm(londonId)).thenReturn(Optional.of("london"));
+        // when(synonymManager.getTerm(parisId)).thenReturn(Optional.of("paris")); // OLD MOCKING
+        // when(synonymManager.getTerm(londonId)).thenReturn(Optional.of("london")); // OLD MOCKING
+
+        Map<Integer, String> expectedLocationTerms = new HashMap<>();
+        expectedLocationTerms.put(parisId, "paris");
+        expectedLocationTerms.put(londonId, "london");
+        when(synonymManager.getTerms(eq(new HashSet<>(Arrays.asList(parisId, londonId)))))
+            .thenReturn(expectedLocationTerms);
+        // Add mocks for individual sets if they could be requested due to some filtering logic (not in this simple test)
+        // when(synonymManager.getTerms(eq(Set.of(parisId)))).thenReturn(Map.of(parisId, "paris"));
+        // when(synonymManager.getTerms(eq(Set.of(londonId)))).thenReturn(Map.of(londonId, "london"));
 
         PositionListSoA positions = new PositionListSoA();
         positions.add(1, 1, 0, 5, parisId);
@@ -424,8 +438,9 @@ class NerExecutorTest {
         }
         assertTrue(foundValues.containsAll(Set.of("paris", "london")), "Expected values 'paris' and 'london'. Found: " + foundValues);
 
-        verify(synonymManager).getTerm(parisId);
-        verify(synonymManager).getTerm(londonId);
+        // verify(synonymManager).getTerm(parisId); // OLD VERIFICATION
+        // verify(synonymManager).getTerm(londonId); // OLD VERIFICATION
+        verify(synonymManager).getTerms(eq(new HashSet<>(Arrays.asList(parisId, londonId)))); // NEW VERIFICATION
         verify(nerIndex).getRaw(argThat(key -> Arrays.equals(key, "LOCATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
     }
 
