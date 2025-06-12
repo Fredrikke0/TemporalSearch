@@ -11,7 +11,7 @@ import time  # For potential delays
 DEFAULT_JAR_PATH = "target/query-cli.jar"
 # This might need to be adjusted based on the actual JAR name and location
 
-def run_query_cli(query_string, projects_dir, temporal_strategy, join_strategy, stitch_strategy, jar_path, export_path=None):
+def run_query_cli(query_string, projects_dir, temporal_strategy, pushdown_strategy, stitch_strategy, jar_path, export_path=None):
     """
     Constructs and runs the QueryCLI command, then captures and returns the benchmark time.
     Optionally exports results.
@@ -27,7 +27,7 @@ def run_query_cli(query_string, projects_dir, temporal_strategy, join_strategy, 
         "-jar", jar_path,
         "-pd", projects_dir,
         "--temporal-strategy", temporal_strategy,
-        "--join-strategy", join_strategy,
+        "--pushdown-strategy", pushdown_strategy,
         "--stitch-strategy", stitch_strategy,
         query_string
     ]
@@ -127,10 +127,10 @@ if __name__ == "__main__":
     print("\n")
 
     temporal_strategies = ["naive", "nash"]
-    join_strategies = ["independent", "dependent"]
+    pushdown_strategies = ["none", "optimized"]
     stitch_strategies = ["none", "optimized"]
 
-    strategy_combinations = list(itertools.product(temporal_strategies, join_strategies, stitch_strategies))
+    strategy_combinations = list(itertools.product(temporal_strategies, pushdown_strategies, stitch_strategies))
 
     # Prepare queries based on cache mode
     if args.cache_mode == "cold":
@@ -149,11 +149,11 @@ if __name__ == "__main__":
         query_results_for_strategies = [] # Stores results for this query across all strategies
         print(f"========== Query {i+1}/{len(queries_to_run)}: {query_text} ==========")
 
-        for strat_idx, (temporal_strategy, join_strategy, stitch_strategy) in enumerate(strategy_combinations):
+        for strat_idx, (temporal_strategy, pushdown_strategy, stitch_strategy) in enumerate(strategy_combinations):
             current_run_count +=1
             progress_prefix = f"[Query {i+1}/{len(queries_to_run)}, Strategy {strat_idx+1}/{len(strategy_combinations)} ({current_run_count}/{total_query_strategy_combinations})]"
 
-            print(f"{progress_prefix} Running with Strategies: T:{temporal_strategy}, J:{join_strategy}, S:{stitch_strategy}")
+            print(f"{progress_prefix} Running with Strategies: T:{temporal_strategy}, P:{pushdown_strategy}, S:{stitch_strategy}")
 
             timed_run_times_ms = []
             final_stdout = ""
@@ -163,7 +163,7 @@ if __name__ == "__main__":
             export_filename_base = None
             if args.export_dir:
                 safe_query_part = re.sub(r'[^a-zA-Z0-9_-]', '_', query_text)[:50] # Sanitize query for filename
-                export_filename_base = f"q{i+1}_{safe_query_part}_T{temporal_strategy}_J{join_strategy}_S{stitch_strategy}"
+                export_filename_base = f"q{i+1}_{safe_query_part}_T{temporal_strategy}_P{pushdown_strategy}_S{stitch_strategy}"
 
             # --- Cache Mode Logic ---
             if args.cache_mode == "warm":
@@ -173,7 +173,7 @@ if __name__ == "__main__":
 
                 if args.verbose: print(f"  Executing command for warm-up: java -jar {args.jar_path} ... {query_text}")
                 _, warmup_stdout, warmup_stderr = run_query_cli(
-                    query_text, args.projects_dir, temporal_strategy, join_strategy, stitch_strategy, args.jar_path, warmup_export_path
+                    query_text, args.projects_dir, temporal_strategy, pushdown_strategy, stitch_strategy, args.jar_path, warmup_export_path
                 )
                 if args.verbose and warmup_stdout: print(f"  Warm-up QueryCLI Output:\n{warmup_stdout}")
                 if warmup_stderr: print(f"  Warm-up QueryCLI Errors:\n{warmup_stderr}")
@@ -189,7 +189,7 @@ if __name__ == "__main__":
 
                     if args.verbose: print(f"  Executing command for timed run {run_num+1}: java -jar {args.jar_path} ... {query_text}")
                     time_taken, stdout_output, stderr_output = run_query_cli(
-                        query_text, args.projects_dir, temporal_strategy, join_strategy, stitch_strategy, args.jar_path, timed_export_path
+                        query_text, args.projects_dir, temporal_strategy, pushdown_strategy, stitch_strategy, args.jar_path, timed_export_path
                     )
                     if time_taken is not None:
                         timed_run_times_ms.append(time_taken)
@@ -210,7 +210,7 @@ if __name__ == "__main__":
 
                 if args.verbose: print(f"  Executing command for {run_label}: java -jar {args.jar_path} ... {query_text}")
                 time_taken, stdout_output, stderr_output = run_query_cli(
-                    query_text, args.projects_dir, temporal_strategy, join_strategy, stitch_strategy, args.jar_path, single_run_export_path
+                    query_text, args.projects_dir, temporal_strategy, pushdown_strategy, stitch_strategy, args.jar_path, single_run_export_path
                 )
                 if time_taken is not None:
                     timed_run_times_ms.append(time_taken)
@@ -231,7 +231,7 @@ if __name__ == "__main__":
             result_entry = {
                 "query": query_text,
                 "temporal_strategy": temporal_strategy,
-                "join_strategy": join_strategy,
+                "pushdown_strategy": pushdown_strategy,
                 "stitch_strategy": stitch_strategy,
                 "time_ms": avg_time_ms, # This is now an average for warm mode
                 "individual_times_ms": list(timed_run_times_ms), # Store all timed runs
@@ -255,20 +255,20 @@ if __name__ == "__main__":
         print(f"\n----- Query: {query_text} -----")
         results_for_this_query = all_run_results[i]
         for res in results_for_this_query:
-            strat_key = f"T:{res['temporal_strategy']}, J:{res['join_strategy']}, S:{res['stitch_strategy']}"
+            strat_key = f"T:{res['temporal_strategy']}, P:{res['pushdown_strategy']}, S:{res['stitch_strategy']}"
             time_str = f"{res['time_ms']:.3f} ms" if res['time_ms'] is not None else "Failed"
             print(f"  {strat_key.ljust(45)}: {time_str}")
 
     # Calculate and print average times per strategy combination across all queries
     print("\n----- Average Times Per Strategy Combination (across all successful queries) -----")
     summary_by_strategy = {}
-    for temporal_strategy, join_strategy, stitch_strategy in strategy_combinations:
-        key = (temporal_strategy, join_strategy, stitch_strategy)
+    for temporal_strategy, pushdown_strategy, stitch_strategy in strategy_combinations:
+        key = (temporal_strategy, pushdown_strategy, stitch_strategy)
         times_for_combo = []
         for query_res_list in all_run_results:
             for res_entry in query_res_list:
                 if (res_entry['temporal_strategy'] == temporal_strategy and
-                    res_entry['join_strategy'] == join_strategy and
+                    res_entry['pushdown_strategy'] == pushdown_strategy and
                     res_entry['stitch_strategy'] == stitch_strategy and
                     res_entry['time_ms'] is not None):
                     times_for_combo.append(res_entry['time_ms'])
@@ -278,7 +278,7 @@ if __name__ == "__main__":
             avg_time_for_combo = sum(times_for_combo) / len(times_for_combo)
             avg_time_for_combo_str = f"{avg_time_for_combo:.3f} ms ({len(times_for_combo)} queries)"
 
-        strat_key_str = f"T:{temporal_strategy}, J:{join_strategy}, S:{stitch_strategy}"
+        strat_key_str = f"T:{temporal_strategy}, P:{pushdown_strategy}, S:{stitch_strategy}"
         print(f"  {strat_key_str.ljust(45)}: {avg_time_for_combo_str}")
 
     total_runs = len(queries_to_run) * len(strategy_combinations)

@@ -93,6 +93,13 @@ public class Pipeline {
                 .type(Integer.class)
                 .help("Number of parallel threads for CoreNLP processing.");
 
+        annotateGroup.addArgument("--fix-document-ids")
+                .dest("fix_ids")
+                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
+                .setDefault(false)
+                .help("Re-number document_ids of unannotated documents to be higher than existing ones before annotation. " +
+                      "Useful if annotating previously skipped long documents to maintain ID order for indexing.");
+
         // Index stage group
         var indexGroup = parser.addArgumentGroup("Index stage arguments (used in 'index' or 'all' stage)");
         indexGroup.addArgument("-w", "--stopwords")
@@ -144,6 +151,7 @@ public class Pipeline {
         boolean force = ns.getBoolean("force");
         Integer limit = ns.getInt("limit");
         Integer cliStartDocId = ns.get("cli_start_doc_id");
+        boolean fixIds = ns.getBoolean("fix_ids");
 
         java.util.List<String> cliRequestedIndexTypes = ns.getList("index_type"); // Renamed for clarity
 
@@ -201,10 +209,10 @@ public class Pipeline {
                     logger.info("Resuming annotation based on status, starting from document_id: {}", startId);
                 }
 
-                logger.info("Starting annotation (startDocumentId={}, force={}, limit={}, threads={}, batchSize={})",
-                            startId, force, limit == null ? "none" : limit, threads, batchSize);
+                logger.info("Starting annotation (startDocumentId={}, force={}, limit={}, threads={}, batchSize={}, fixIds={})",
+                            startId, force, limit == null ? "none" : limit, threads, batchSize, fixIds);
                 // Ensure limit is passed correctly
-                Annotations.runAnnotation(dbFilePath, startId, threads, batchSize, limit, force); // Pass force flag
+                Annotations.runAnnotation(dbFilePath, startId, threads, batchSize, limit, force, fixIds);
                 logger.info("Annotation stage completed.");
             } else {
                 logger.info("Annotation already complete according to status check. Skipping. Use --force to re-annotate.");

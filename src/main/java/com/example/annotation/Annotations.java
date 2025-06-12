@@ -30,7 +30,7 @@ import me.tongfei.progressbar.ProgressBarStyle;
 
 public class Annotations {
     private static final Logger logger = LoggerFactory.getLogger(Annotations.class);
-    private static final int MAX_DOCUMENT_LENGTH = 25000; // Skip very long documents.
+    private static final int MAX_DOCUMENT_LENGTH = 20000; // Max length to process; longer documents will be truncated.
     private static final int DOCUMENT_PROCESSING_TIMEOUT_MINUTES = 5; // Timeout for a single CoreNLP task
 
     private static StanfordCoreNLP createCoreNLPPipeline(int threads) {
@@ -55,34 +55,155 @@ public class Annotations {
     public static AnnotationStatus getAnnotationStatus(Path projectDbPath) throws SQLException {
         String url = "jdbc:sqlite:" + projectDbPath;
         try (Connection conn = DriverManager.getConnection(url)) {
-            // Check if annotation table exists
-            boolean hasAnnotations = false;
+            int minDocIdOverall = 1;
+            long totalDocsInDb = 0;
+
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT COUNT(*), MIN(document_id) FROM documents")) {
+                if (rs.next()) {
+                    totalDocsInDb = rs.getLong(1);
+                    if (totalDocsInDb > 0) {
+                        minDocIdOverall = rs.getInt(2);
+                        if (rs.wasNull() || minDocIdOverall == 0) minDocIdOverall = 1;
+                    }
+                }
+            } catch (SQLException e) {
+                logger.warn("Could not query 'documents' table (it might not exist). Assuming no documents to process.", e);
+                return new AnnotationStatus(false, 1); // Fail gracefully
+            }
+
+            if (totalDocsInDb == 0) {
+                logger.info("No documents found in the 'documents' table. Nothing to annotate.");
+                return new AnnotationStatus(false, 1);
+            }
+
+            boolean annotationsTableExists = false;
             try (ResultSet rs = conn.createStatement().executeQuery(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='annotations'")) {
-                if (rs.next()) hasAnnotations = true;
+                if (rs.next()) annotationsTableExists = true;
             }
-            if (!hasAnnotations) {
-                // No annotation table, needs full processing
-                int maxDocId = 0;
-                try (ResultSet rs = conn.createStatement().executeQuery("SELECT MAX(document_id) FROM documents")) {
-                    if (rs.next()) maxDocId = rs.getInt(1);
+            // If annotations table doesn't exist, we will try to query it and catch SQLException below if needed.
+
+            int startDocumentIdForProcessing = -1;
+            String findMinUnannotatedSql = """
+                SELECT MIN(d.document_id)
+                FROM documents d
+                LEFT JOIN (SELECT DISTINCT document_id FROM annotations) a
+                ON d.document_id = a.document_id
+                WHERE a.document_id IS NULL
+                """;
+
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(findMinUnannotatedSql)) {
+                if (rs.next()) {
+                    int minUnannotated = rs.getInt(1);
+                    if (!rs.wasNull()) {
+                        startDocumentIdForProcessing = minUnannotated;
+                    }
                 }
-                return new AnnotationStatus(true, 1);
+            } catch (SQLException e) {
+                // This can happen if 'annotations' table doesn't exist.
+                logger.info("Could not query for unannotated documents (e.g., 'annotations' table might not exist). Needs processing from the start (document_id: {}).", minDocIdOverall, e);
+                return new AnnotationStatus(true, minDocIdOverall); // Assume processing needed from start
             }
-            // Find max_annotated_id (where at least one annotation exists)
-            int maxAnnotatedDocumentId = 0;
-            try (ResultSet rs = conn.createStatement().executeQuery(
-                    "SELECT MAX(document_id) FROM annotations")) {
-                if (rs.next()) maxAnnotatedDocumentId = rs.getInt(1);
+
+            if (startDocumentIdForProcessing != -1) {
+                logger.info("Found unannotated documents. Annotation should start/resume from document_id: {}", startDocumentIdForProcessing);
+                return new AnnotationStatus(true, startDocumentIdForProcessing);
+            } else {
+                logger.info("All documents in the 'documents' table appear to have corresponding entries in 'annotations'. No new documents to process.");
+                return new AnnotationStatus(false, minDocIdOverall);
             }
-            // Find max_doc_id
-            int maxDocId = 0;
-            try (ResultSet rs = conn.createStatement().executeQuery("SELECT MAX(document_id) FROM documents")) {
-                if (rs.next()) maxDocId = rs.getInt(1);
+        }
+    }
+
+    /**
+     * Identifies unannotated documents and re-numbers their document_ids to be higher than
+     * the current maximum document_id in the documents table.
+     * Assumes 'documents' and 'annotations' tables exist.
+     */
+    public static void fixDocumentIds(Path projectDbPath) throws SQLException {
+        String url = "jdbc:sqlite:" + projectDbPath;
+        Connection conn = null;
+        try {
+            conn = DriverManager.getConnection(url);
+            conn.setAutoCommit(false);
+
+            List<Integer> unannotatedDocIds = new ArrayList<>();
+            // This query will fail if 'documents' or 'annotations' table does not exist.
+            String findUnannotatedSql = """
+                SELECT d.document_id
+                FROM documents d
+                LEFT JOIN (SELECT DISTINCT document_id FROM annotations) a
+                ON d.document_id = a.document_id
+                WHERE a.document_id IS NULL
+                ORDER BY d.document_id ASC
+                """;
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(findUnannotatedSql)) {
+                while (rs.next()) {
+                    unannotatedDocIds.add(rs.getInt(1));
+                }
             }
-            boolean needsProcessing = maxAnnotatedDocumentId < maxDocId;
-            int startDocumentId = (needsProcessing && maxAnnotatedDocumentId > 0) ? maxAnnotatedDocumentId : 1;
-            return new AnnotationStatus(needsProcessing, startDocumentId);
+
+            if (unannotatedDocIds.isEmpty()) {
+                logger.info("fixDocumentIds: No unannotated documents found. No IDs to fix.");
+                conn.commit();
+                return;
+            }
+            logger.info("fixDocumentIds: Found {} unannotated documents to re-number.", unannotatedDocIds.size());
+
+            long currentMaxOverallDocId = 0;
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT MAX(document_id) FROM documents")) {
+                if (rs.next()) {
+                    currentMaxOverallDocId = rs.getLong(1);
+                }
+            }
+            logger.debug("fixDocumentIds: Current MAX(document_id) in documents table is {}.", currentMaxOverallDocId);
+
+            long nextNewDocId = currentMaxOverallDocId + 1;
+            String updateSql = "UPDATE documents SET document_id = ? WHERE document_id = ?";
+            int renumberedCount = 0;
+            try (PreparedStatement pstmtUpdate = conn.prepareStatement(updateSql)) {
+                for (int oldDocId : unannotatedDocIds) {
+                    pstmtUpdate.setLong(1, nextNewDocId);
+                    pstmtUpdate.setInt(2, oldDocId);
+                    int affectedRows = pstmtUpdate.executeUpdate();
+                    if (affectedRows > 0) {
+                        logger.debug("fixDocumentIds: Re-numbered document_id {} to {}.", oldDocId, nextNewDocId);
+                        renumberedCount++;
+                        nextNewDocId++;
+                    } else {
+                        logger.warn("fixDocumentIds: Failed to update document_id {} (expected to be renumbered to {}).", oldDocId, nextNewDocId -1 );
+                    }
+                }
+            }
+
+            conn.commit();
+            logger.info("fixDocumentIds: Successfully re-numbered {} documents. Next available document_id for new documents would be {}.", renumberedCount, nextNewDocId);
+
+        } catch (SQLException e) {
+            logger.error("fixDocumentIds: SQLException during ID fixing. This might be due to missing 'documents' or 'annotations' tables, or other DB issues. Attempting to rollback.", e);
+            if (conn != null) {
+                try {
+                    if (!conn.getAutoCommit()) {
+                        conn.rollback();
+                        logger.info("fixDocumentIds: Rollback successful.");
+                    }
+                } catch (SQLException e2) {
+                    logger.error("fixDocumentIds: Error during explicit rollback.", e2);
+                }
+            }
+            throw e;
+        } finally {
+            if (conn != null) {
+                try {
+                    conn.close();
+                } catch (SQLException e3) {
+                    logger.error("fixDocumentIds: Error closing connection.", e3);
+                }
+            }
         }
     }
 
@@ -91,103 +212,159 @@ public class Annotations {
      * Processes up to 'limit' documents in this run (limit is per run, not total).
      * Respects resumability: resumes from the last annotated document.
      * Also accepts a force flag to control cleanup behavior.
+     * Includes an option to fix document IDs for unannotated documents before processing.
      */
-    public static void runAnnotation(Path projectDbPath, int startDocumentId, int threads, int batchSize, Integer limit, boolean force) throws Exception {
+    public static void runAnnotation(Path projectDbPath, int initialStartDocumentId, int threads, int batchSize, Integer limit, boolean force, boolean fixIds) throws Exception {
+        if (fixIds) {
+            logger.info("Fix IDs flag is true. Attempting to re-number unannotated document IDs.");
+            try {
+                fixDocumentIds(projectDbPath); // This modifies the DB
+                logger.info("Document ID fixing process completed.");
+            } catch (SQLException e) {
+                logger.error("Error during document ID fixing. Annotation process cannot proceed reliably.", e);
+                throw new Exception("Failed to fix document IDs, cannot annotate.", e);
+            }
+        }
+
+        AnnotationStatus currentStatus = getAnnotationStatus(projectDbPath);
+        int effectiveStartDocumentId;
+        boolean effectivelyNeedsProcessing = currentStatus.needsProcessing;
+
+        if (force) {
+            effectiveStartDocumentId = initialStartDocumentId;
+            effectivelyNeedsProcessing = true;
+            logger.info("Force flag is true. Annotation will start/resume from document_id {} (user-provided or default if 1).", effectiveStartDocumentId);
+        } else {
+            if (!currentStatus.needsProcessing) {
+                logger.info("No documents require annotation (according to getAnnotationStatus) and force flag is false. Nothing to do.");
+                return;
+            }
+            effectiveStartDocumentId = currentStatus.startDocumentId;
+            logger.info("Annotation will start/resume from document_id {} (determined by current status).", effectiveStartDocumentId);
+        }
+
         String url = "jdbc:sqlite:" + projectDbPath;
         try (Connection conn = DriverManager.getConnection(url)) {
             conn.setAutoCommit(false);
             createTables(conn, false); // Don't drop tables
 
-            // Cleanup logic based on force and startDocumentId
+            // Cleanup logic based on force and effectiveStartDocumentId
             if (force) {
-                logger.info("Force flag is true. Deleting existing annotations and dependencies for document_id >= {}", startDocumentId);
+                logger.info("Force flag is true. Deleting existing annotations and dependencies for document_id >= {}", effectiveStartDocumentId);
                 try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id >= ?");
                      PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id >= ?")) {
 
-                    delAnn.setInt(1, startDocumentId);
+                    delAnn.setInt(1, effectiveStartDocumentId);
                     delAnn.executeUpdate();
 
-                    delDep.setInt(1, startDocumentId);
-                    delDep.executeUpdate();
-
-                    conn.commit(); // Commit the deletions
-                } catch (SQLException e) {
-                    logger.error("Error during forced delete for document_id >= " + startDocumentId, e);
-                    throw e;
-                }
-            } else if (startDocumentId > 1) {
-                // Clean up only the specific document_id we are starting from
-                // in case it was partially processed.
-                logger.info("Resuming or starting from specific ID (force=false). Performing cleanup for document_id: {}", startDocumentId);
-                try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?");
-                     PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
-
-                    delAnn.setInt(1, startDocumentId);
-                    delAnn.executeUpdate();
-
-                    delDep.setInt(1, startDocumentId);
+                    delDep.setInt(1, effectiveStartDocumentId);
                     delDep.executeUpdate();
 
                     conn.commit();
                 } catch (SQLException e) {
-                    logger.error("Error during pre-emptive delete for document_id=" + startDocumentId, e);
+                    logger.error("Error during forced delete for document_id >= " + effectiveStartDocumentId, e);
+                    throw e;
+                }
+            } else if (effectivelyNeedsProcessing && effectiveStartDocumentId > 1) {
+                // This 'else if' condition ensures we only do this preemptive delete if we are *not* forcing,
+                // *and* we actually determined there's processing to do, *and* we're not starting from the very beginning (doc_id 1).
+                // This is to clean up a potentially partially processed document we are resuming.
+                logger.info("Resuming or starting from specific ID (force=false, effectivelyNeedsProcessing=true). Performing cleanup for document_id: {}", effectiveStartDocumentId);
+                try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?");
+                     PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
+
+                    delAnn.setInt(1, effectiveStartDocumentId);
+                    delAnn.executeUpdate();
+
+                    delDep.setInt(1, effectiveStartDocumentId);
+                    delDep.executeUpdate();
+
+                    conn.commit();
+                } catch (SQLException e) {
+                    logger.error("Error during pre-emptive delete for document_id=" + effectiveStartDocumentId, e);
                     throw e;
                 }
             }
 
-            // --- Calculate total documents to process (respecting limit and startId) ---
-            // Estimate documents in the current processing scope using MAX(document_id)
+            // --- Calculate total documents to process (respecting limit and effectiveStartDocumentId) ---
             long estimatedDocsInScope = 0;
-            String maxIdSql = "SELECT COALESCE(MAX(document_id), 0) FROM documents WHERE document_id >= ? AND LENGTH(text) <= " + MAX_DOCUMENT_LENGTH;
+            // Query for estimation should use effectiveStartDocumentId
+            String maxIdSql = "SELECT COALESCE(MAX(document_id), 0) FROM documents WHERE document_id >= ?";
             try (PreparedStatement maxIdStmt = conn.prepareStatement(maxIdSql)) {
-                maxIdStmt.setInt(1, startDocumentId);
+                maxIdStmt.setInt(1, effectiveStartDocumentId);
                 try (ResultSet maxIdRs = maxIdStmt.executeQuery()) {
                     if (maxIdRs.next()) {
                         long queriedMaxId = maxIdRs.getLong(1);
                         if (queriedMaxId > 0) {
-                            estimatedDocsInScope = (queriedMaxId >= startDocumentId) ? (queriedMaxId - startDocumentId + 1) : 0;
+                            estimatedDocsInScope = (queriedMaxId >= effectiveStartDocumentId) ? (queriedMaxId - effectiveStartDocumentId + 1) : 0;
                         }
                     }
                 }
             }
-            if (estimatedDocsInScope == 0 && startDocumentId == 1) {
-                try (PreparedStatement totalCheckStmt = conn.prepareStatement("SELECT COALESCE(MAX(document_id), 0) FROM documents WHERE LENGTH(text) <= " + MAX_DOCUMENT_LENGTH);
+            if (estimatedDocsInScope == 0 && effectiveStartDocumentId == 1) { // Check this logic carefully
+                 // If no docs in scope and starting from 1, maybe there are no docs at all or only docs < 1 (impossible)
+                try (PreparedStatement totalCheckStmt = conn.prepareStatement("SELECT COALESCE(MAX(document_id), 0) FROM documents");
                      ResultSet totalRs = totalCheckStmt.executeQuery()) {
                     if (totalRs.next() && totalRs.getLong(1) == 0) {
-                        logger.info("No documents found in the database (or all are too long). Nothing to annotate.");
+                        logger.info("No documents found in the database. Nothing to annotate.");
                         return;
                     }
                 }
             }
 
-            // Determine the actual number of documents for the progress bar this run
+
             long totalDocumentsToProcessThisRun;
-            String queryBase = "SELECT document_id, text, timestamp FROM documents WHERE document_id >= ? AND LENGTH(text) <= " + MAX_DOCUMENT_LENGTH + " ORDER BY document_id ASC";
+            // Query base should use effectiveStartDocumentId
+            String queryBase = "SELECT document_id, text, timestamp FROM documents WHERE document_id >= ? ORDER BY document_id ASC";
 
             if (limit != null) {
                 totalDocumentsToProcessThisRun = limit;
-                logger.info("Attempting to process up to {} documents starting from document_id {} (limit specified). Estimated {} documents in available range starting from this ID.", limit, startDocumentId, estimatedDocsInScope);
+                logger.info("Attempting to process up to {} documents starting from document_id {} (limit specified). Estimated {} documents in available range starting from this ID.", limit, effectiveStartDocumentId, estimatedDocsInScope);
             } else {
                 totalDocumentsToProcessThisRun = estimatedDocsInScope;
                 if (estimatedDocsInScope > 0) {
-                    logger.info("Attempting to process all {} estimated documents starting from document_id {} (no limit specified).", estimatedDocsInScope, startDocumentId);
+                    logger.info("Attempting to process all {} estimated documents starting from document_id {} (no limit specified).", estimatedDocsInScope, effectiveStartDocumentId);
                 } else {
-                    logger.info("No documents found to process at or after document_id {} (no limit specified).", startDocumentId);
-                    // If no documents to process, we can return early, progress bar won't even show.
-                    if (totalDocumentsToProcessThisRun == 0) return;
+                     // Check if any documents exist at all starting from effectiveStartDocumentId
+                    boolean docsActuallyExist = false;
+                    try (PreparedStatement checkExistStmt = conn.prepareStatement("SELECT 1 FROM documents WHERE document_id >= ? LIMIT 1")) {
+                        checkExistStmt.setInt(1, effectiveStartDocumentId);
+                        try(ResultSet rsCheck = checkExistStmt.executeQuery()) {
+                            if (rsCheck.next()) {
+                                docsActuallyExist = true;
+                            }
+                        }
+                    }
+                    if (docsActuallyExist) {
+                         // This case is tricky: estimatedDocsInScope might be 0 if effectiveStartDocumentId is MAX(doc_id)
+                         // but a document *does* exist at effectiveStartDocumentId. Progress bar will show 1.
+                         if (estimatedDocsInScope == 0) totalDocumentsToProcessThisRun = 1; // Process at least the start ID if it exists
+                         logger.info("Attempting to process documents starting from document_id {} (no limit specified, estimated 0 but start ID might exist).", effectiveStartDocumentId);
+                    } else {
+                        logger.info("No documents found to process at or after document_id {} (no limit specified, and start ID does not exist).", effectiveStartDocumentId);
+                        if (totalDocumentsToProcessThisRun == 0) return;
+                    }
                 }
             }
 
-            // If totalDocumentsToProcessThisRun is 0, nothing to do.
-            if (totalDocumentsToProcessThisRun == 0) {
-                 logger.info("No documents to process in this run.");
+            if (totalDocumentsToProcessThisRun == 0 && effectivelyNeedsProcessing) {
+                // If we thought we needed processing, but the count is 0, log and return.
+                // This might happen if getAnnotationStatus found a min unannotated ID, but it was fixed
+                // and the new max ID logic in runAnnotation estimates 0.
+                // Or if effectiveStartDocumentId itself doesn't exist.
+                 logger.info("No documents to process in this run, despite 'effectivelyNeedsProcessing' being true. This might be due to ID fixing or an empty range from {}.", effectiveStartDocumentId);
+                 return;
+            }
+            if (totalDocumentsToProcessThisRun == 0 && !effectivelyNeedsProcessing){
+                 // This is expected if getAnnotationStatus said no processing needed and no force flag.
+                 logger.info("No documents to process in this run (effectivelyNeedsProcessing is false and count is 0).");
                  return;
             }
 
-            // Use streaming approach with cursor-based pagination
-            final int FETCH_CHUNK_SIZE = batchSize * 10; // Fetch in chunks larger than batch size
-            int currentStartId = startDocumentId;
-            int totalProcessed = 0;
+
+            final int FETCH_CHUNK_SIZE = batchSize * 10;
+            int currentFetchStartId = effectiveStartDocumentId; // Use currentFetchStartId for query pagination
+            int totalProcessedInThisRun = 0; // Renamed from totalProcessed to avoid clash with AnnotationResult
 
             // Setup threading once
             int totalUserThreads = threads;
@@ -213,33 +390,32 @@ public class Annotations {
 
             ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(numExecutorThreads);
             List<java.util.concurrent.Future<AnnotationResult>> futures = new ArrayList<>();
-            List<Integer> docIds = new ArrayList<>();
+            List<Integer> docIdsInFlight = new ArrayList<>(); // Renamed from docIds to avoid confusion
             List<AnnotationResult> batchResults = new ArrayList<>();
-            int batch = 0;
+            int committedAnnotationsInBatch = 0; // Renamed from 'batch' to be clearer
 
             ProgressBarBuilder pbb = new ProgressBarBuilder()
                 .setTaskName("Annotating")
-                .setInitialMax(totalDocumentsToProcessThisRun)
+                .setInitialMax(totalDocumentsToProcessThisRun > 0 ? totalDocumentsToProcessThisRun : 1) // Ensure initialMax is at least 1 for PB
                 .setStyle(ProgressBarStyle.COLORFUL_UNICODE_BLOCK)
                 .setUpdateIntervalMillis(200)
                 .showSpeed();
 
             try (ProgressBar pb = pbb.build()) {
-                // Process documents in chunks to avoid loading everything into memory
                 while (true) {
                     int documentsToFetchThisChunk = FETCH_CHUNK_SIZE;
                     if (limit != null) {
-                        int remaining = limit - totalProcessed;
+                        int remaining = limit - totalProcessedInThisRun;
                         if (remaining <= 0) break;
                         documentsToFetchThisChunk = Math.min(FETCH_CHUNK_SIZE, remaining);
                     }
+                    if (documentsToFetchThisChunk <= 0 && limit !=null) break; // Optimization if limit dictates 0 to fetch
 
-                    String chunkQuery = queryBase + " LIMIT ?";
+                    String chunkQuery = queryBase + " LIMIT ?"; // queryBase already uses effectiveStartDocumentId implicitly via currentFetchStartId's init
                     List<DocumentData> documentsChunk = new ArrayList<>();
 
-                    // Fetch a chunk of documents
                     try (PreparedStatement chunkStmt = conn.prepareStatement(chunkQuery)) {
-                        chunkStmt.setInt(1, currentStartId);
+                        chunkStmt.setInt(1, currentFetchStartId);
                         chunkStmt.setInt(2, documentsToFetchThisChunk);
 
                         try (ResultSet rs = chunkStmt.executeQuery()) {
@@ -247,36 +423,38 @@ public class Annotations {
                                 int documentId = rs.getInt("document_id");
                                 String text = rs.getString("text");
                                 String timestamp = rs.getString("timestamp");
-
                                 documentsChunk.add(new DocumentData(documentId, text, timestamp));
-                                currentStartId = documentId + 1; // Update for next chunk
+                                // currentFetchStartId = documentId + 1; // This was original, correct for ASC order
                             }
                         }
                     }
 
-                    // If no documents found, we're done
                     if (documentsChunk.isEmpty()) {
-                        logger.debug("No more documents found starting from document_id {}. Processing complete.", currentStartId);
+                        logger.debug("No more documents found starting from document_id {}. Processing complete for this run.", currentFetchStartId);
                         break;
                     }
+                    // Update currentFetchStartId to the ID *after* the last one fetched in this chunk for the next iteration
+                    if (!documentsChunk.isEmpty()) {
+                        currentFetchStartId = documentsChunk.get(documentsChunk.size() -1).documentId + 1;
+                    }
+
 
                     logger.debug("Fetched {} documents in chunk starting from document_id {}", documentsChunk.size(), documentsChunk.get(0).documentId);
 
-                    // Process the chunk
                     for (DocumentData doc : documentsChunk) {
                         java.util.concurrent.Future<AnnotationResult> future = executor.submit(() -> {
+                            // processTextWithCoreNLP uses MAX_DOCUMENT_LENGTH for truncation
                             AnnotationResult result = processTextWithCoreNLP(pipeline, doc.text, doc.documentId, doc.timestamp);
                             return result;
                         });
                         futures.add(future);
-                        docIds.add(doc.documentId);
-                        totalProcessed++;
+                        docIdsInFlight.add(doc.documentId);
+                        // totalProcessedInThisRun++; // Increment *after* successful processing and adding to batchResults & pb.step()
 
-                        // If enough futures have been submitted, process them as a batch
                         if (futures.size() >= batchSize) {
                             for (int i = 0; i < futures.size(); i++) {
                                 java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
-                                int docId = docIds.get(i);
+                                int docId = docIdsInFlight.get(i);
                                 try {
                                     AnnotationResult result = f.get(DOCUMENT_PROCESSING_TIMEOUT_MINUTES, java.util.concurrent.TimeUnit.MINUTES);
                                     if (result != null) {
@@ -286,44 +464,38 @@ public class Annotations {
                                     logger.warn("Timeout ({} min) processing document_id={}. Skipping this document.", DOCUMENT_PROCESSING_TIMEOUT_MINUTES, docId);
                                 } catch (Exception e) {
                                     logger.error("Error during annotation task execution for documentId=" + docId, e);
-                                    // Optionally, decide if this error should be fatal or rethrown
                                 }
                             }
 
-                            // Insert all results in this batch
                             for (AnnotationResult result : batchResults) {
                                 insertData(conn, result.annotations, result.dependencies);
-                                batch++;
+                                committedAnnotationsInBatch++;
+                                totalProcessedInThisRun++; // Count successfully processed and inserted
                                 pb.step();
                             }
 
-                            // Commit the entire batch
-                            if (batch > 0) {
+                            if (committedAnnotationsInBatch > 0) {
                                 conn.commit();
-                                logger.trace("Committed batch of {} annotations.", batch);
-                                batch = 0;
+                                logger.trace("Committed batch of {} annotation results (for {} documents).", committedAnnotationsInBatch, batchResults.size()); // logging was batch (int)
+                                committedAnnotationsInBatch = 0;
                             }
 
                             batchResults.clear();
                             futures.clear();
-                            docIds.clear();
+                            docIdsInFlight.clear();
                         }
                     }
-
-                    // Clear the chunk from memory immediately
                     documentsChunk.clear();
-
-                    // Check if we've hit the limit
-                    if (limit != null && totalProcessed >= limit) {
+                    if (limit != null && totalProcessedInThisRun >= limit) {
                         logger.info("Reached processing limit ({}) for this run.", limit);
                         break;
                     }
                 }
 
-                // Process any remaining futures
+                // Process remaining futures
                 for (int i = 0; i < futures.size(); i++) {
                     java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
-                    int docId = docIds.get(i);
+                    int docId = docIdsInFlight.get(i);
                     try {
                         AnnotationResult result = f.get(DOCUMENT_PROCESSING_TIMEOUT_MINUTES, java.util.concurrent.TimeUnit.MINUTES);
                         if (result != null) {
@@ -333,22 +505,22 @@ public class Annotations {
                         logger.warn("Timeout ({} min) processing document_id={} (in remaining batch). Skipping this document.", DOCUMENT_PROCESSING_TIMEOUT_MINUTES, docId);
                     } catch (Exception e) {
                         logger.error("Error during annotation task execution for documentId=" + docId, e);
-                        // Optionally, decide if this error should be fatal or rethrown
                     }
                 }
 
-                // Insert remaining results
                 for (AnnotationResult result : batchResults) {
                     insertData(conn, result.annotations, result.dependencies);
-                    batch++;
+                    committedAnnotationsInBatch++;
+                    totalProcessedInThisRun++; // Count successfully processed and inserted
                     pb.step();
                 }
 
-                // Final commit for any remaining items
-                if (batch > 0) {
+                if (committedAnnotationsInBatch > 0) {
                     conn.commit();
-                    logger.trace("Committed final {} annotations.", batch);
+                    logger.trace("Committed final {} annotation results (for {} documents).", committedAnnotationsInBatch, batchResults.size());
                 }
+                 pb.setExtraMessage(String.format("Completed %d / %d", totalProcessedInThisRun, totalDocumentsToProcessThisRun));
+
             } finally {
                 executor.shutdown();
                 try {
@@ -434,7 +606,14 @@ public class Annotations {
         List<Map<String, Object>> annotations = new ArrayList<>();
         List<Map<String, Object>> dependencies = new ArrayList<>();
 
-        CoreDocument document = new CoreDocument(text);
+        String textToProcess = text;
+        if (text.length() > MAX_DOCUMENT_LENGTH) {
+            logger.info("Document_id {} exceeds MAX_DOCUMENT_LENGTH ({} > {}). Truncating to {} characters.",
+                        documentId, text.length(), MAX_DOCUMENT_LENGTH, MAX_DOCUMENT_LENGTH);
+            textToProcess = text.substring(0, MAX_DOCUMENT_LENGTH);
+        }
+
+        CoreDocument document = new CoreDocument(textToProcess);
 
         // Set the document date for SUTime to resolve relative dates like "yesterday"
         if (documentTimestamp != null && !documentTimestamp.isEmpty()) {
