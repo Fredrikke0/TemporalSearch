@@ -437,8 +437,9 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     }
 
     /**
-     * Strategy that directly scans the date index. Handles all cases, including variables
-     * and sentence granularity, but can be less efficient for simple document-level checks.
+     * Strategy that directly scans the date index with range optimization.
+     * Takes advantage of the ordered YYYYMMDD key format to efficiently iterate
+     * only within the relevant date range instead of scanning the entire index.
      */
     private static class NaiveTemporalStrategy implements TemporalExecutionStrategy {
         private static final Logger strategyLogger = LoggerFactory.getLogger(NaiveTemporalStrategy.class);
@@ -468,22 +469,53 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 strategyLogger.warn("Date index '{}' is not available or not open. Cannot execute temporal condition with naive strategy.", DATE_INDEX);
                 return resultSoA;
             }
+
             String variableNameToBind = condition.variableName();
             Optional<LocalDateTime> queryStartDateTime = condition.startDate();
             Optional<LocalDateTime> queryEndDateTime = condition.endDate();
             TemporalPredicate type = condition.temporalType();
+
+            // Calculate iteration range based on the temporal condition
+            IterationRange range = calculateIterationRange(condition, type, queryStartDateTime, queryEndDateTime);
+
             try (RocksIterator iterator = dateIndex.iterateFromFirst()) {
-                for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
+                // Position iterator at the start of our range
+                if (range.startKey() != null) {
+                    iterator.seek(range.startKey().getBytes(StandardCharsets.UTF_8));
+                    strategyLogger.debug("NaiveTemporalStrategy: Seeking to start key: {}", range.startKey());
+                } else {
+                    iterator.seekToFirst();
+                    strategyLogger.debug("NaiveTemporalStrategy: No start key, seeking to first entry");
+                }
+
+                int keysProcessed = 0;
+                int keysSkipped = 0;
+
+                while (iterator.isValid()) {
                     String currentKey = new String(iterator.key(), StandardCharsets.UTF_8);
+
+                    // Check if we've exceeded our range
+                    if (range.endKey() != null && currentKey.compareTo(range.endKey()) > 0) {
+                        strategyLogger.debug("NaiveTemporalStrategy: Reached end of range at key: {}", currentKey);
+                        break;
+                    }
+
+                    keysProcessed++;
                     byte[] valueBytes = iterator.value();
-                    if (valueBytes == null || valueBytes.length == 0) continue;
+                    if (valueBytes == null || valueBytes.length == 0) {
+                        iterator.next();
+                        continue;
+                    }
+
                     LocalDate entryDate;
                     try {
                         entryDate = TemporalExecutor.parseDateKey(currentKey);
                     } catch (DateTimeParseException e) {
                         strategyLogger.warn("Could not parse date from key '{}' in {} index. Skipping. Error: {}", currentKey, DATE_INDEX, e.getMessage());
+                        iterator.next();
                         continue;
                     }
+
                     boolean match = TemporalExecutor.evaluateTemporalCondition(
                         type,
                         entryDate.atStartOfDay(),
@@ -491,26 +523,34 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                         queryStartDateTime.orElse(null),
                         queryEndDateTime.orElse(null)
                     );
+
                     if (match) {
                         PositionListSoA positionList = PositionListSoA.deserializeWithFilters(valueBytes, context);
                         strategyLogger.trace("NaiveTemporalStrategy: Original blob for key '{}' indicated {} positions. Filtered size: {}.",
                                              currentKey, PositionListSoA.getNumPositionsFromBlob(valueBytes), positionList.getNumPositions());
                         if (positionList.isEmpty()){
+                            iterator.next();
                             continue;
                         }
 
-                        // Corrected logic to call the new helper methods
+                        // Process matching entries
                         if (variableNameToBind != null) {
                             for (int i = 0; i < positionList.getNumPositions(); i++) {
                                 Position pos = positionList.getPositionAt(i);
-                                // Assuming the helper method correctly manages conceptualRowId additions and this counter is for distinct items found by the strategy.
                                 conceptualRowIdCounter = processEntryForVariableBinding(condition, resultSoA, requirements, granularity, granularitySize, conceptualRowIdCounter, entryDate, variableNameToBind, pos);
                             }
                         } else {
                             conceptualRowIdCounter = processEntryForDateLiteral(condition, resultSoA, requirements, granularity, granularitySize, conceptualRowIdCounter, entryDate, positionList);
                         }
+                    } else {
+                        keysSkipped++;
                     }
+
+                    iterator.next();
                 }
+
+                strategyLogger.debug("NaiveTemporalStrategy: Processed {} keys, skipped {} non-matching keys within range", keysProcessed, keysSkipped);
+
             } catch (IOException | IndexAccessException e) {
                 strategyLogger.error("Error during NaiveTemporalStrategy execution: {}", e.getMessage(), e);
                 throw new QueryExecutionException("Error accessing date index or deserializing data.", e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
@@ -522,16 +562,98 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             return resultSoA;
         }
 
-        // DELETE THE OLD processEntry method (which was incorrectly renamed to processEntryForDateLiteral and contains the error).
-        // This method started around line 599 in the previous read_file output and had the signature:
-        // private int processEntryForDateLiteral(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
-        //                                          Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
-        //                                          LocalDate boundDate, String variableNameToBind, Object valueToBind,
-        //                                          Optional<FilteringContext> context)
-        // Its body contained the `else if (valueToBind instanceof Position)` block with the faulty `pos.getSynonymId()` call.
-        // The deletion should span the entire block of this old method.
+        /**
+         * Calculates the optimal iteration range for the date index based on the temporal condition.
+         * Converts dates to YYYYMMDD format keys and determines start/end bounds for efficient iteration.
+         */
+        private IterationRange calculateIterationRange(Temporal condition, TemporalPredicate type,
+                                                     Optional<LocalDateTime> queryStart, Optional<LocalDateTime> queryEnd) {
+            String startKey = null;
+            String endKey = null;
 
-        // The CORRECT processEntryForDateLiteral starts here:
+            // Convert query dates to LocalDate for key generation
+            LocalDate queryStartDate = queryStart.map(LocalDateTime::toLocalDate).orElse(null);
+            LocalDate queryEndDate = queryEnd.map(LocalDateTime::toLocalDate).orElse(null);
+
+            // For most predicates, we need to consider the query range
+            switch (type) {
+                case EQUAL:
+                    if (queryStartDate != null) {
+                        startKey = formatDateKey(queryStartDate);
+                        endKey = queryEndDate != null ? formatDateKey(queryEndDate) : startKey;
+                    }
+                    break;
+
+                case INTERSECT, CONTAINS, CONTAINED_BY:
+                    // For range predicates, iterate from start to end of query range
+                    if (queryStartDate != null) {
+                        startKey = formatDateKey(queryStartDate);
+                    }
+                    if (queryEndDate != null) {
+                        endKey = formatDateKey(queryEndDate);
+                    }
+                    break;
+
+                case AFTER:
+                    // For AFTER queries, start from the day after the reference date
+                    if (queryStartDate != null) {
+                        startKey = formatDateKey(queryStartDate.plusDays(1));
+                    }
+                    // No end key - iterate to the end of the index
+                    break;
+
+                case AFTER_EQUAL:
+                    // For AFTER_EQUAL, start from the reference date
+                    if (queryStartDate != null) {
+                        startKey = formatDateKey(queryStartDate);
+                    }
+                    // No end key - iterate to the end of the index
+                    break;
+
+                case BEFORE:
+                    // For BEFORE queries, iterate from beginning to day before reference date
+                    if (queryStartDate != null) {
+                        endKey = formatDateKey(queryStartDate.minusDays(1));
+                    }
+                    // No start key - iterate from the beginning of the index
+                    break;
+
+                case BEFORE_EQUAL:
+                    // For BEFORE_EQUAL, iterate from beginning to reference date
+                    if (queryStartDate != null) {
+                        endKey = formatDateKey(queryStartDate);
+                    }
+                    // No start key - iterate from the beginning of the index
+                    break;
+
+                case PROXIMITY:
+                    // For proximity, use the same range as INTERSECT
+                    if (queryStartDate != null) {
+                        startKey = formatDateKey(queryStartDate);
+                    }
+                    if (queryEndDate != null) {
+                        endKey = formatDateKey(queryEndDate);
+                    }
+                    break;
+
+                default:
+                    strategyLogger.warn("Unknown temporal predicate type: {}. Using full index scan.", type);
+                    // No start/end keys - full scan
+                    break;
+            }
+
+            strategyLogger.debug("Calculated iteration range for predicate {}: startKey={}, endKey={}", type, startKey, endKey);
+            return new IterationRange(startKey, endKey);
+        }
+
+        /**
+         * Formats a LocalDate as a YYYYMMDD key string for the date index.
+         */
+        private String formatDateKey(LocalDate date) {
+            return date.format(INDEX_DATE_FORMATTER);
+        }
+
+
         private int processEntryForDateLiteral(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
                                   Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
                                                LocalDate boundDate, PositionListSoA filteredPositions) {
@@ -552,7 +674,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             return currentConceptualRowId + 1;
         }
 
-        // The CORRECT processEntryForVariableBinding starts here:
         private int processEntryForVariableBinding(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
                                                  Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
                                                  LocalDate boundDate, String variableNameToBind, Position filteredPosition) {
@@ -658,6 +779,9 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
     // Helper record for tracking unique matches in NashTemporalStrategy
     private record UniqueTemporalMatch(Position position, LocalDate date) {}
+
+    // Helper record for defining iteration range in NaiveTemporalStrategy
+    private record IterationRange(String startKey, String endKey) {}
 
     /**
      * Maps a TemporalPredicate to a Nash.RangePredicate.

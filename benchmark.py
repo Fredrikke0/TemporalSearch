@@ -338,6 +338,12 @@ if __name__ == "__main__":
                 }
                 query_results_for_strategies_this_query.append(result_entry)
 
+                if final_stderr and not args.verbose: # Print stderr if not already shown by verbose and contains something
+                    # This print is for actual errors like timeouts, not verbose QueryCLI output
+                    print(f"  {progress_prefix} QueryCLI Errors/Info:\n{final_stderr}")
+            # ADDED: Append the results for this query/cache_mode combination to all_run_results
+            all_run_results.append(query_results_for_strategies_this_query)
+
     # Enhanced summary
     print("\n========== Benchmark Overall Summary ==========")
     for exec_idx, query_strategy_results in enumerate(all_run_results):
