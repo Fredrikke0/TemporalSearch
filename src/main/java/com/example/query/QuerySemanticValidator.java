@@ -444,11 +444,11 @@ public class QuerySemanticValidator {
         // Validate the join condition if present
         query.joinCondition().ifPresent(joinCondition -> {
             try {
-                // Validate left column exists in main query
+                // Validate both columns - each can belong to either main query or subquery
                 String leftQualified = joinCondition.leftColumn();
                 String rightQualified = joinCondition.rightColumn();
 
-                // Validate left column: must be qualified as mainAlias.var or $main.var
+                // Validate left column
                 if (leftQualified == null || !leftQualified.contains(".")) {
                     throw new QueryParseException("Left join column must be qualified (alias.var): " + leftQualified);
                 }
@@ -459,15 +459,18 @@ public class QuerySemanticValidator {
                 String leftAlias = leftParts[0];
                 String leftVar = leftParts[1];
                 VariableRegistry mainRegistry = query.variableRegistry();
-                if (query.mainAlias().isPresent() && query.mainAlias().get().equals(leftAlias)) {
-                    validateVariableInRegistry(leftQualified, mainRegistry, "main query (aliased as " + leftAlias + " for JOIN)");
-                } else if ("$main".equals(leftAlias)) {
-                    validateVariableInRegistry(leftQualified, mainRegistry, "main query ($main for JOIN)");
+
+                // Check if left column belongs to main query or subquery
+                if ((query.mainAlias().isPresent() && query.mainAlias().get().equals(leftAlias)) || "$main".equals(leftAlias)) {
+                    validateVariableInRegistry(leftQualified, mainRegistry, "main query (alias " + leftAlias + " for JOIN)");
+                } else if (subqueryMap.containsKey(leftAlias)) {
+                    VariableRegistry subqueryRegistry = subqueryMap.get(leftAlias).subquery().variableRegistry();
+                    validateVariableInRegistry(leftQualified, subqueryRegistry, "subquery '" + leftAlias + "' (for JOIN)");
                 } else {
                     throw new QueryParseException("Unknown alias '" + leftAlias + "' for left join column: " + leftQualified);
                 }
 
-                // Validate right column: must be qualified as subqueryAlias.var
+                // Validate right column
                 if (rightQualified == null || !rightQualified.contains(".")) {
                     throw new QueryParseException("Right join column must be qualified (alias.var): " + rightQualified);
                 }
@@ -477,11 +480,16 @@ public class QuerySemanticValidator {
                 }
                 String rightAlias = rightParts[0];
                 String rightVar = rightParts[1];
-                if (!subqueryMap.containsKey(rightAlias)) {
+
+                // Check if right column belongs to main query or subquery
+                if ((query.mainAlias().isPresent() && query.mainAlias().get().equals(rightAlias)) || "$main".equals(rightAlias)) {
+                    validateVariableInRegistry(rightQualified, mainRegistry, "main query (alias " + rightAlias + " for JOIN)");
+                } else if (subqueryMap.containsKey(rightAlias)) {
+                    VariableRegistry subqueryRegistry = subqueryMap.get(rightAlias).subquery().variableRegistry();
+                    validateVariableInRegistry(rightQualified, subqueryRegistry, "subquery '" + rightAlias + "' (for JOIN)");
+                } else {
                     throw new QueryParseException("Unknown alias '" + rightAlias + "' for right join column: " + rightQualified);
                 }
-                VariableRegistry subqueryRegistry = subqueryMap.get(rightAlias).subquery().variableRegistry();
-                validateVariableInRegistry(rightQualified, subqueryRegistry, "subquery '" + rightAlias + "' (for JOIN)");
 
                 // Validate proximity window if applicable
                 if (joinCondition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL &&
@@ -530,36 +538,77 @@ public class QuerySemanticValidator {
             boolean isStructural = Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID", "BEGIN", "END").contains(field.toUpperCase());
 
             if (isStructural) {
-                // For structural columns, check if alias is valid (main or a subquery)
-                if (!alias.equals(mainAlias) && !subqueryMap.containsKey(alias)) {
-                    throw new QueryParseException(String.format(
-                        "Invalid alias '%s' in GROUP BY item '%s'. Alias must be the main query alias or a subquery alias.",
-                        alias, groupByColumnName));
+                String structuralItemAlias = alias; // Alias from the structural item, e.g., "q1" from "q1.TITLE"
+
+                if (subqueryMap.isEmpty()) {
+              boolean aliasOk;
+                    if (query.mainAlias().isPresent()) { // validating main query with explicit alias
+                        aliasOk = structuralItemAlias.equals(query.mainAlias().get());
+                    } else {
+                        aliasOk = true; // Placeholder - this alias is effectively the current scope's alias
+                    }
+                    if (!aliasOk) {
+                         throw new QueryParseException(String.format(
+                            "Invalid alias '%s' for structural GROUP BY item '%s' in current query scope (expected '%s').",
+                            structuralItemAlias, groupByColumnName, query.mainAlias().orElse("$main_for_subquery_items")));
+                    }
+
+                } else {
+                    // Validating a main query that HAS subqueries.
+                    // Structural item's alias must be the main query's alias or a known subquery alias.
+                    if (!structuralItemAlias.equals(mainAlias) && !subqueryMap.containsKey(structuralItemAlias)) {
+                        throw new QueryParseException(String.format(
+                            "Invalid alias '%s' in structural GROUP BY item '%s'. Alias must be the main query alias ('%s') or a known subquery alias (%s).",
+                            structuralItemAlias, groupByColumnName, mainAlias, subqueryMap.keySet()));
+                    }
                 }
                 // Further validation for structural fields (e.g. field name is valid) is implicitly handled by parser/model
             } else {
-                // For variables, first determine the target registry
-                VariableRegistry targetRegistry;
-                String contextDesc;
-                if (alias.equals(mainAlias)) {
-                    targetRegistry = registry; // Main query registry
-                    contextDesc = String.format("main query (alias %s) for GROUP BY item '%s'", alias, groupByColumnName);
-                } else if (subqueryMap.containsKey(alias)) {
-                    targetRegistry = subqueryMap.get(alias).subquery().variableRegistry();
-                    contextDesc = String.format("subquery '%s' for GROUP BY item '%s'", alias, groupByColumnName);
+                // For variables...
+                String groupByItemAlias = alias; // e.g., "q1" from "q1.p"
+
+                VariableRegistry targetRegistryToUse;
+                String contextDescription;
+
+                if (subqueryMap.isEmpty()) {
+
+                    targetRegistryToUse = registry; // `registry` is query.variableRegistry() for this scope
+
+                    String currentScopeConceptualAlias = query.mainAlias().orElse(groupByItemAlias);
+                    contextDescription = String.format("current query scope (conceptual alias %s) for GROUP BY item '%s'",
+                                                       currentScopeConceptualAlias, groupByColumnName);
+
                 } else {
-                    throw new QueryParseException(String.format(
-                        "Unknown alias '%s' in GROUP BY item '%s'.", alias, groupByColumnName));
+                    if (groupByItemAlias.equals(mainAlias)) { // mainAlias is main query's actual alias or $main
+                        targetRegistryToUse = registry; // Main query's registry
+                        contextDescription = String.format("main query (alias %s) for GROUP BY item '%s'", mainAlias, groupByColumnName);
+                    } else if (subqueryMap.containsKey(groupByItemAlias)) {
+                        targetRegistryToUse = subqueryMap.get(groupByItemAlias).subquery().variableRegistry();
+                        contextDescription = String.format("subquery '%s' (referenced from main query) for GROUP BY item '%s'", groupByItemAlias, groupByColumnName);
+                    } else {
+                        throw new QueryParseException(String.format(
+                            "Unknown alias '%s' in GROUP BY item '%s' (when validating main query with subqueries). Main alias: '%s', Available subquery aliases: %s",
+                            groupByItemAlias, groupByColumnName, mainAlias, subqueryMap.keySet()));
+                    }
                 }
 
                 // Now, check if the variable is known in that registry before validating if it's produced
-                if (!targetRegistry.getAllVariableNames().contains(groupByColumnName)) {
+                if (!targetRegistryToUse.getAllVariableNames().contains(groupByColumnName)) {
+                    // Log details for easier debugging
+                    logger.warn("GROUP BY validation failure: Item '{}' not found in target registry. Context: {}", groupByColumnName, contextDescription);
+                    logger.warn("Target registry ({}) content: {}", targetRegistryToUse.hashCode(), targetRegistryToUse.getAllVariableNames());
+                    logger.warn("Main query registry ({}) content: {}", query.variableRegistry().hashCode(), query.variableRegistry().getAllVariableNames());
+                    if (!subqueryMap.isEmpty() && subqueryMap.containsKey(groupByItemAlias)) {
+                         logger.warn("Subquery '{}' registry ({}) content: {}", groupByItemAlias, subqueryMap.get(groupByItemAlias).subquery().variableRegistry().hashCode(), subqueryMap.get(groupByItemAlias).subquery().variableRegistry().getAllVariableNames());
+                    }
+
                     throw new QueryParseException(String.format(
-                        "GROUP BY column '%s' is not a known variable or structural column.", groupByColumnName
+                        "GROUP BY column '%s' is not a known variable in its scope (%s). Available variables in target scope: %s",
+                        groupByColumnName, contextDescription, targetRegistryToUse.getAllVariableNames()
                     ));
                 }
                 // If known, then validate it's produced (as it's not structural)
-                validateVariableInRegistry(groupByColumnName, targetRegistry, contextDesc);
+                validateVariableInRegistry(groupByColumnName, targetRegistryToUse, contextDescription);
             }
         }
         // If all GROUP BY items are valid, now proceed to validate SELECT columns.

@@ -137,6 +137,7 @@ public class SnippetColumn implements SelectColumn {
         }
 
         String textContent = fullText.substring(snippetStart, snippetEnd);
+        textContent = textContent.replaceAll("\\R", " "); // Replace all newline sequences with a space
 
         String prefix = (snippetStart > 0) ? "..." : "";
         String suffix = (snippetEnd < fullText.length()) ? "..." : "";

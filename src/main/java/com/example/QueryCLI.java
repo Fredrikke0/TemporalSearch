@@ -218,10 +218,8 @@ public class QueryCLI {
             // Check for granularity
             if (query.granularity() == Query.Granularity.SENTENCE) {
                 logger.info("Date query with sentence granularity detected");
-                System.out.println("Note: With sentence granularity, the query will return specific sentences containing date mentions in the specified range.");
-            } else {
+               } else {
                 logger.info("Date query with document granularity detected");
-                System.out.println("Note: With document granularity, the query will return documents containing date mentions in the specified range.");
             }
         }
     }

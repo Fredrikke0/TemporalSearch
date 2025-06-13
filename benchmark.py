@@ -1,15 +1,13 @@
 import argparse
-import itertools  # Added for strategy combinations
+import csv
+import itertools
 import os
-import random  # For cold cache shuffling
+import random
 import re
 import subprocess
-import time  # For potential delays
 
-# Assuming the QueryCLI.jar is in the target/ directory relative to the script
-# and the script is in the root of the java-nlp project.
 DEFAULT_JAR_PATH = "target/query-cli.jar"
-# This might need to be adjusted based on the actual JAR name and location
+QUERY_TIMEOUT_SECONDS = 15 * 60  # 15 minutes
 
 def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, pushdown_strategy_arg, stitch_strategy_arg, jar_path, export_path=None, is_verbose=False):
     """
@@ -46,9 +44,11 @@ def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, p
     if is_verbose:
         print(f"Executing command: {' '.join(command)}")
 
+    process = None # Initialize process to None
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        stdout, stderr = process.communicate()
+        stdout, _ = process.communicate(timeout=QUERY_TIMEOUT_SECONDS) # stderr is already DEVNULL
+        stderr_output = "" # Initialize as empty since we redirected original stderr
 
         benchmark_time_ms = None
         for line in stdout.splitlines():
@@ -57,15 +57,33 @@ def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, p
                 if match:
                     benchmark_time_ms = float(match.group(1))
                 break
+        return benchmark_time_ms, stdout, stderr_output
 
-        return benchmark_time_ms, stdout, stderr
+    except subprocess.TimeoutExpired:
+        timeout_msg = f"Query timed out after {QUERY_TIMEOUT_SECONDS} seconds."
+        if process:
+            process.kill()
+            try:
+                stdout_after_kill, _ = process.communicate(timeout=1)
+                stdout = stdout_after_kill if stdout_after_kill else ""
+            except Exception:
+                stdout = ""
+        else:
+            stdout = ""
+        return None, stdout, timeout_msg
 
     except FileNotFoundError:
-        print("Error: Java command not found. Ensure Java is installed and in your PATH.")
-        return None, stdout, stderr
+        error_msg = "Error: Java command not found. Ensure Java is installed and in your PATH."
+        return None, "", error_msg
     except Exception as e:
-        print(f"An error occurred: {e}")
-        return None, stdout, stderr
+        error_msg = f"An error occurred during query execution: {e}"
+        if process:
+            process.kill()
+            try:
+                process.communicate(timeout=1)
+            except Exception:
+                pass
+        return None, "", error_msg
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark QueryCLI.java. Runs all strategy combinations.")
@@ -79,24 +97,15 @@ if __name__ == "__main__":
     parser.add_argument("--db-file", required=True, help="Path to the QueryCLI database file (e.g., projects/nyt/nyt.db).")
     parser.add_argument("--index-dir", required=True, help="Path to the QueryCLI index directory (e.g., projects/nyt_indexes).")
 
-    # Cache strategy arguments
-    parser.add_argument("--cache-mode", choices=["none", "cold", "warm"], default="none",
-                        help="Caching strategy for benchmark runs (default: none). "
-                             "'none': 1 run per query/strategy. "
-                             "'cold': 1 run per query/strategy, queries shuffled. "
-                             "'warm': 1 warm-up run + N timed runs per query/strategy.")
-    parser.add_argument("--warm-runs", type=int, default=3,
-                        help="Number of timed runs after warm-up for 'warm' cache mode (default: 3).")
+    # Cache strategy arguments - SIMPLIFIED
+    parser.add_argument("--full", action="store_true", help="Run both cold and warm cache modes. Default: cold cache only.")
 
     # Output control
     parser.add_argument("--verbose", action="store_true", help="Print full QueryCLI stdout for each run.")
     parser.add_argument("--export-dir", help="Directory to save exported results from QueryCLI (one file per run).")
+    parser.add_argument("--benchmark-output", help="CSV filename to save benchmark results (e.g., benchmark_results.csv). If not provided, only console summary is shown.")
 
     args = parser.parse_args()
-
-    if args.cache_mode == "warm" and args.warm_runs <= 0:
-        print("Error: --warm-runs must be positive for 'warm' cache mode.")
-        exit(1)
 
     queries_to_run_orig = []
     if args.query_file:
@@ -143,11 +152,12 @@ if __name__ == "__main__":
     if args.projects_dir: # Only print if provided, as it's now optional
         print(f"Projects Dir (for other uses): {args.projects_dir}")
 
-    print(f"Cache Mode: {args.cache_mode}", end="")
-    if args.cache_mode == "warm":
-        print(f" (1 warm-up + {args.warm_runs} timed runs per query/strategy)")
+    # MODIFIED: Show cache mode info
+    if args.full:
+        print("Cache Mode: full (cold + warm with 3 timed runs each)")
     else:
-        print()
+        print("Cache Mode: cold (queries shuffled)")
+    print(f"Query timeout set to: {QUERY_TIMEOUT_SECONDS} seconds") # Print timeout info
     print(f"Verbose output: {args.verbose}")
     if args.export_dir:
         print(f"Exporting results to: {args.export_dir}")
@@ -169,78 +179,103 @@ if __name__ == "__main__":
 
     strategy_combinations = list(itertools.product(temporal_strategies, pushdown_strategies_list, stitch_strategies_list))
 
-    # Prepare queries based on cache mode
-    if args.cache_mode == "cold":
-        # queries_to_run_orig now contains (original_idx, query_text, expected_answer)
-        queries_to_run = list(queries_to_run_orig)
-        random.shuffle(queries_to_run)
-        print("Cold cache mode: Queries will be run in a random order for this benchmark execution.")
-    else:
-        queries_to_run = queries_to_run_orig
+    # MODIFIED: Cache mode logic
+    cache_modes_to_run = ["cold"]
+    if args.full:
+        cache_modes_to_run = ["cold", "warm"]
 
     all_run_results = []
-
-    total_query_strategy_combinations = len(queries_to_run) * len(strategy_combinations)
+    total_query_strategy_combinations = len(queries_to_run_orig) * len(strategy_combinations) * len(cache_modes_to_run)
     current_run_count = 0
 
-    # Enumerate provides exec_idx (execution order) and the tuple (original_idx, query_text, expected_answer)
-    for exec_idx, (original_idx, query_text, expected_answer) in enumerate(queries_to_run):
-        query_results_for_strategies = [] # Stores results for this query across all strategies
-        original_query_id_str = f"q{original_idx+1}" # 1-based ID for filenames and logging
+    for cache_mode in cache_modes_to_run:
+        print(f"\n========== Running {cache_mode.upper()} cache mode ==========")
 
-        print(f"========== Executing Query {exec_idx+1}/{len(queries_to_run)} (Original ID: {original_query_id_str}): {query_text} ==========")
-        if expected_answer:
-            print(f'  Expected to find: "{expected_answer}"')
+        # Prepare queries based on cache mode
+        if cache_mode == "cold":
+            queries_to_run = list(queries_to_run_orig)
+            random.shuffle(queries_to_run)
+            print("Cold cache mode: Queries will be run in a random order for this benchmark execution.")
+        else:  # warm mode
+            queries_to_run = queries_to_run_orig
 
-        for strat_idx, (temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val) in enumerate(strategy_combinations):
-            current_run_count +=1
-            # Update progress prefix to include original query ID
-            progress_prefix = f"[Exec Query {exec_idx+1}/{len(queries_to_run)} (Orig {original_query_id_str}), Strategy {strat_idx+1}/{len(strategy_combinations)} ({current_run_count}/{total_query_strategy_combinations})]"
+        # Enumerate provides exec_idx (execution order) and the tuple (original_idx, query_text, expected_answer)
+        for exec_idx, (original_idx, query_text, expected_answer) in enumerate(queries_to_run):
+            query_results_for_strategies_this_query = [] # Stores results for this query across all strategies
+            original_query_id_str = f"q{original_idx+1}" # 1-based ID for filenames and logging
 
-            print(f"{progress_prefix} Running with Strategies: T:{temporal_strategy_val}, P:{pushdown_strategy_val}, S:{stitch_strategy_val}")
+            print(f"========== Executing Query {exec_idx+1}/{len(queries_to_run)} (Original ID: {original_query_id_str}) [{cache_mode.upper()}]: {query_text} ==========")
 
-            timed_run_times_ms = []
-            final_stdout = ""
-            final_stderr = ""
-            verification_status_for_run = "SKIPPED" # Default if no expected answer or export issues
+            for strat_idx, (temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val) in enumerate(strategy_combinations):
+                current_run_count +=1
+                # Update progress prefix to include original query ID and cache mode
+                progress_prefix = f"[{cache_mode.upper()} - Exec Query {exec_idx+1}/{len(queries_to_run)} (Orig {original_query_id_str}), Strategy {strat_idx+1}/{len(strategy_combinations)} ({current_run_count}/{total_query_strategy_combinations})]"
 
-            # Determine export filename base
-            export_filename_base = None
-            if args.export_dir:
-                safe_query_part = re.sub(r'[^a-zA-Z0-9_-]', '_', query_text)[:50] # Sanitize query for filename
-                # Use original_query_id_str (e.g., "q1", "q2") for the filename prefix
-                export_filename_base = f"{original_query_id_str}_{safe_query_part}_T{temporal_strategy_val}_P{pushdown_strategy_val}_S{stitch_strategy_val}"
+                print(f"{progress_prefix} Running with Strategies: T:{temporal_strategy_val}, P:{pushdown_strategy_val}, S:{stitch_strategy_val}")
 
-            # --- Cache Mode Logic ---
-            if args.cache_mode == "warm":
-                # 1. Warm-up run
-                print(f"{progress_prefix}  Warm-up run 1/1...")
-                warmup_export_path_str = None
-                if export_filename_base: # Ensure export_dir is also checked by os.path.join
-                    warmup_export_path_str = os.path.join(args.export_dir, f"{export_filename_base}_warmup.csv")
+                timed_run_times_ms = []
+                final_stdout = ""
+                final_stderr = ""
+                verification_status_for_run = "SKIPPED" # Default if no expected answer or export issues
 
-                _, warmup_stdout, warmup_stderr = run_query_cli(
-                    query_text, args.db_file, args.index_dir,
-                    temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, warmup_export_path_str, is_verbose=args.verbose
-                )
-                if args.verbose and warmup_stdout: print(f"  Warm-up QueryCLI Output:\n{warmup_stdout}")
-                if warmup_stderr: final_stderr += warmup_stderr if warmup_stderr else "" # Collect stderr
+                # Determine export filename base
+                current_export_file_path = None # Will store the actual path to the CSV for the last timed run
+                export_filename_base = None
+                if args.export_dir:
+                    safe_query_part = re.sub(r'[^a-zA-Z0-9_-]', '_', query_text)[:50] # Sanitize query for filename
+                    # Use original_query_id_str (e.g., "q1", "q2") for the filename prefix
+                    # MODIFIED to include cache mode in filename
+                    export_filename_base = f"{original_query_id_str}_{safe_query_part}_T{temporal_strategy_val}_P{pushdown_strategy_val}_S{stitch_strategy_val}_{cache_mode}"
 
-                # Optional short delay after warm-up, can sometimes help ensure caches are fully "warmed"
-                # time.sleep(0.1)
+                # --- Cache Mode Logic ---
+                if cache_mode == "warm":
+                    warm_runs = 3  # HARDCODED
+                    # 1. Warm-up run
+                    warmup_export_path_str = None
+                    if export_filename_base: # Ensure export_dir is also checked by os.path.join
+                        warmup_export_path_str = os.path.join(args.export_dir, f"{export_filename_base}_warmup.csv")
 
-                # 2. Timed runs
-                for run_num in range(args.warm_runs):
-                    print(f"{progress_prefix}  Timed run {run_num + 1}/{args.warm_runs}...")
-                    timed_export_path_str = None
-                    if export_filename_base:
-                        timed_export_path_str = os.path.join(args.export_dir, f"{export_filename_base}_timed{run_num+1}.csv")
-                        if run_num == args.warm_runs -1 : # last timed run
+                    _, warmup_stdout, warmup_stderr = run_query_cli(
+                        query_text, args.db_file, args.index_dir,
+                        temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, warmup_export_path_str, is_verbose=args.verbose
+                    )
+                    if args.verbose and warmup_stdout: print(f"  Warm-up QueryCLI Output:\n{warmup_stdout}")
+                    if warmup_stderr: final_stderr += warmup_stderr if warmup_stderr else "" # Collect stderr
+
+                    # Optional short delay after warm-up, can sometimes help ensure caches are fully "warmed"
+                    # time.sleep(0.1)
+
+                    # 2. Timed runs
+                    for run_num in range(warm_runs):
+                        timed_export_path_str = os.path.join(args.export_dir, f"{export_filename_base}_timed{run_num+1}.csv") if export_filename_base else None
+                        if run_num == warm_runs - 1 and timed_export_path_str:
                             current_export_file_path = timed_export_path_str
+
+                        time_taken, stdout_output, stderr_output = run_query_cli(
+                            query_text, args.db_file, args.index_dir,
+                            temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, timed_export_path_str, is_verbose=args.verbose
+                        )
+                        if time_taken is not None:
+                            timed_run_times_ms.append(time_taken)
+                            print(f"{progress_prefix}    BENCHMARK_EXECUTION_TIME_MS: {time_taken:.3f}")
+                        else:
+                            print(f"{progress_prefix}    Failed to retrieve benchmark time for this run.")
+
+                        if args.verbose and stdout_output: final_stdout += stdout_output # Collect stdout if verbose
+                        if stderr_output: final_stderr += stderr_output # Collect all stderr
+                        if args.verbose and stdout_output: print(f"  Timed Run {run_num+1} QueryCLI Output:\n{stdout_output}")
+                        if stderr_output: print(f"  Timed Run {run_num+1} QueryCLI Errors:\n{stderr_output}")
+
+                else:  # cold mode
+                    # Single run for cold mode
+                    single_run_export_path_str = None
+                    if export_filename_base:
+                        single_run_export_path_str = os.path.join(args.export_dir, f"{export_filename_base}_run.csv")
+                        current_export_file_path = single_run_export_path_str # This is the file to check
 
                     time_taken, stdout_output, stderr_output = run_query_cli(
                         query_text, args.db_file, args.index_dir,
-                        temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, timed_export_path_str, is_verbose=args.verbose
+                        temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, single_run_export_path_str, is_verbose=args.verbose
                     )
                     if time_taken is not None:
                         timed_run_times_ms.append(time_taken)
@@ -248,93 +283,60 @@ if __name__ == "__main__":
                     else:
                         print(f"{progress_prefix}    Failed to retrieve benchmark time for this run.")
 
-                    if args.verbose and stdout_output: final_stdout += stdout_output # Collect stdout if verbose
-                    if stderr_output: final_stderr += stderr_output # Collect all stderr
-                    if args.verbose and stdout_output: print(f"  Timed Run {run_num+1} QueryCLI Output:\n{stdout_output}")
-                    if stderr_output: print(f"  Timed Run {run_num+1} QueryCLI Errors:\n{stderr_output}")
+                    if args.verbose and stdout_output: final_stdout = stdout_output
+                    if stderr_output: final_stderr = stderr_output
+                    if args.verbose and stdout_output: print(f"  Cold cache run QueryCLI Output:\n{stdout_output}")
+                    if stderr_output: print(f"  Cold cache run QueryCLI Errors:\n{stderr_output}")
 
-            elif args.cache_mode == "cold" or args.cache_mode == "none":
-                # Single run for 'cold' (after shuffling) or 'none' mode
-                run_label = "Cold cache run" if args.cache_mode == "cold" else "Standard run"
-                print(f"{progress_prefix}  {run_label} 1/1...")
-                single_run_export_path_str = None
-                if export_filename_base:
-                    single_run_export_path_str = os.path.join(args.export_dir, f"{export_filename_base}_run.csv")
-                    current_export_file_path = single_run_export_path_str # This is the file to check
+                # Calculate average time for this query/strategy combination
+                avg_time_ms = None
+                if timed_run_times_ms:
+                    avg_time_ms = sum(timed_run_times_ms) / len(timed_run_times_ms)
 
-                time_taken, stdout_output, stderr_output = run_query_cli(
-                    query_text, args.db_file, args.index_dir,
-                    temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, single_run_export_path_str, is_verbose=args.verbose
-                )
-                if time_taken is not None:
-                    timed_run_times_ms.append(time_taken)
-                    print(f"{progress_prefix}    BENCHMARK_EXECUTION_TIME_MS: {time_taken:.3f}")
-                else:
-                    print(f"{progress_prefix}    Failed to retrieve benchmark time for this run.")
-
-                if args.verbose and stdout_output: final_stdout = stdout_output
-                if stderr_output: final_stderr = stderr_output
-                if args.verbose and stdout_output: print(f"  {run_label} QueryCLI Output:\n{stdout_output}")
-                if stderr_output: print(f"  {run_label} QueryCLI Errors:\n{stderr_output}")
-
-            # Calculate average time for this query/strategy combination
-            avg_time_ms = None
-            if timed_run_times_ms:
-                avg_time_ms = sum(timed_run_times_ms) / len(timed_run_times_ms)
-
-            # --- Verification Step ---
-            if expected_answer:
-                content_to_verify = ""
-                source_of_verification = ""
-                if current_export_file_path and os.path.exists(current_export_file_path):
-                    try:
-                        with open(current_export_file_path, 'r', encoding='utf-8') as f_verify:
-                            content_to_verify = f_verify.read()
-                        source_of_verification = f"exported file ({os.path.basename(current_export_file_path)})"
-                    except Exception as e_verify:
-                        print(f"{progress_prefix}    Error reading export file {current_export_file_path} for verification: {e_verify}")
-                        verification_status_for_run = "ERROR_READING_EXPORT"
-                elif final_stdout: # Fallback to stdout if no export or export failed
-                    content_to_verify = final_stdout
-                    source_of_verification = "QueryCLI stdout"
-                else: # No export and no stdout (should be rare if query ran)
-                    verification_status_for_run = "NO_OUTPUT_TO_VERIFY"
-
-                if content_to_verify and verification_status_for_run not in ["ERROR_READING_EXPORT", "NO_OUTPUT_TO_VERIFY"]:
-                    # Perform case-insensitive search
-                    if expected_answer.lower() in content_to_verify.lower():
-                        verification_status_for_run = "PASSED"
+                # --- Verification Step ---
+                if avg_time_ms is None and "timed out" in final_stderr.lower():
+                    verification_status_for_run = "TIMEOUT"
+                elif expected_answer: # Proceed with normal verification if not a timeout that prevented any result
+                    content_to_verify = ""
+                    source_of_verification = ""
+                    if current_export_file_path and os.path.exists(current_export_file_path):
+                        try:
+                            with open(current_export_file_path, 'r', encoding='utf-8') as f_verify:
+                                content_to_verify = f_verify.read()
+                            source_of_verification = f"exported file ({os.path.basename(current_export_file_path)})"
+                        except Exception as e_verify:
+                            verification_status_for_run = "ERROR_READING_EXPORT"
+                    elif final_stdout: # Fallback to stdout if no export or export failed
+                        content_to_verify = final_stdout
+                        source_of_verification = "QueryCLI stdout"
                     else:
-                        verification_status_for_run = "FAILED"
-                    print(f'{progress_prefix}    Verification ({source_of_verification}): {verification_status_for_run} for expected "{expected_answer}"')
-                elif verification_status_for_run not in ["ERROR_READING_EXPORT", "NO_OUTPUT_TO_VERIFY"]: # Content was empty
-                     verification_status_for_run = "EMPTY_OUTPUT_CONTENT"
-                     print(f'{progress_prefix}    Verification ({source_of_verification}): {verification_status_for_run} for expected "{expected_answer}" (output was empty)')
+                        verification_status_for_run = "NO_OUTPUT_TO_VERIFY"
 
-            result_entry = {
-                "original_query_id": original_query_id_str, # Store the "qN" identifier
-                "original_idx": original_idx, # Store the 0-based original index
-                "query_text": query_text,
-                "expected_answer": expected_answer, # Store expected answer
-                "verification_status": verification_status_for_run, # Store verification status
-                "temporal_strategy": temporal_strategy_val,
-                "pushdown_strategy": pushdown_strategy_val,
-                "stitch_strategy": stitch_strategy_val,
-                "time_ms": avg_time_ms, # This is now an average for warm mode
-                "individual_times_ms": list(timed_run_times_ms), # Store all timed runs
-                "cache_mode": args.cache_mode,
-                # Storing full stdout/stderr can be memory intensive; only store if verbose or errors.
-                "stdout": final_stdout if args.verbose else ("See exported files" if args.export_dir and avg_time_ms is not None else ""),
-                "stderr": final_stderr if final_stderr else ""
-            }
-            query_results_for_strategies.append(result_entry)
+                    if content_to_verify and verification_status_for_run not in ["ERROR_READING_EXPORT", "NO_OUTPUT_TO_VERIFY", "TIMEOUT"]:
+                        if expected_answer.lower() in content_to_verify.lower():
+                            verification_status_for_run = "PASSED"
+                        else:
+                            verification_status_for_run = "FAILED"
+                    elif verification_status_for_run not in ["ERROR_READING_EXPORT", "NO_OUTPUT_TO_VERIFY", "TIMEOUT"]:
+                         verification_status_for_run = "EMPTY_OUTPUT_CONTENT"
 
-            if avg_time_ms is not None:
-                print(f"{progress_prefix}  Average BENCHMARK_EXECUTION_TIME_MS: {avg_time_ms:.3f} (from {len(timed_run_times_ms)} run(s))")
-            else:
-                print(f"{progress_prefix}  Failed to retrieve any benchmark execution times for this strategy combination.")
-            print("-------------------------------------")
-        all_run_results.append(query_results_for_strategies)
+                result_entry = {
+                    "original_query_id": original_query_id_str, # Store the "qN" identifier
+                    "original_idx": original_idx, # Store the 0-based original index
+                    "query_text": query_text,
+                    "expected_answer": expected_answer, # Store expected answer
+                    "verification_status": verification_status_for_run, # Store verification status
+                    "temporal_strategy": temporal_strategy_val,
+                    "pushdown_strategy": pushdown_strategy_val,
+                    "stitch_strategy": stitch_strategy_val,
+                    "time_ms": avg_time_ms, # This is now an average for warm mode
+                    "individual_times_ms": list(timed_run_times_ms), # Store all timed runs
+                    "cache_mode": cache_mode,
+                    # Storing full stdout/stderr can be memory intensive; only store if verbose or errors.
+                    "stdout": final_stdout if args.verbose else ("See exported files" if args.export_dir and avg_time_ms is not None else ""),
+                    "stderr": final_stderr if final_stderr else ""
+                }
+                query_results_for_strategies_this_query.append(result_entry)
 
     # Enhanced summary
     print("\n========== Benchmark Overall Summary ==========")
@@ -347,12 +349,12 @@ if __name__ == "__main__":
         first_result_for_query = query_strategy_results[0]
         original_id = first_result_for_query['original_query_id']
         q_text = first_result_for_query['query_text']
+        cache_mode = first_result_for_query['cache_mode']
 
-        print(f"\n--- Results for Query (Original ID: {original_id}, Exec Order: {exec_idx+1}): {q_text} ---")
-        print(f"  Cache Mode during these runs: {first_result_for_query['cache_mode']}")
-        if first_result_for_query['cache_mode'] == 'warm':
-            num_timed_runs = args.warm_runs
-            print(f"  (Warm mode: 1 warm-up run, {num_timed_runs} timed runs per strategy)")
+        print(f"\n--- Results for Query (Original ID: {original_id}, Cache: {cache_mode.upper()}): {q_text} ---")
+        print(f"  Cache Mode during these runs: {cache_mode}")
+        if cache_mode == 'warm':
+            print(f"  (Warm mode: 1 warm-up run, 3 timed runs per strategy)")
         print("  Strategy                            | Avg Time (ms) | Individual Times (ms) | Verification")
         print("  ------------------------------------|---------------|-----------------------|---------------")
 
@@ -416,8 +418,8 @@ if __name__ == "__main__":
         print(f"  {strat_key_str.ljust(45)}: {avg_time_for_combo_str.ljust(25)} Verification: {verification_summary_str}")
 
     total_expected_queries_for_full_run = 0
-    if queries_to_run: # Ensure queries_to_run is not empty
-        total_expected_queries_for_full_run = len(queries_to_run) * len(strategy_combinations)
+    if queries_to_run_orig: # Ensure queries_to_run_orig is not empty
+        total_expected_queries_for_full_run = len(queries_to_run_orig) * len(strategy_combinations) * len(cache_modes_to_run)
 
     total_successful_timed_runs = sum(1 for qr_list in all_run_results for r in qr_list if r['time_ms'] is not None)
     total_verified_passed = sum(1 for qr_list in all_run_results for r in qr_list if r.get('verification_status') == 'PASSED')
@@ -438,3 +440,41 @@ if __name__ == "__main__":
         print(f"Total verifications PASSED: {total_verified_passed}")
     else:
         print("No verification checks made (no expected answers provided in query file or all queries with them failed early).")
+
+    if args.benchmark_output:
+        print(f"\nExporting benchmark results to: {args.benchmark_output}")
+        try:
+            with open(args.benchmark_output, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'original_query_id', 'original_query_index', 'query_text', 'expected_answer',
+                    'temporal_strategy', 'pushdown_strategy', 'stitch_strategy',
+                    'cache_mode', 'avg_time_ms', 'individual_times_ms', 'verification_status',
+                    'execution_order', 'strategy_combination_index'
+                ]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+
+                for exec_idx, query_strategy_results in enumerate(all_run_results):
+                    for strat_idx, result in enumerate(query_strategy_results):
+                        individual_times_str = ';'.join([f"{t:.3f}" for t in result.get('individual_times_ms', [])])
+
+                        csv_row = {
+                            'original_query_id': result.get('original_query_id', ''),
+                            'original_query_index': result.get('original_idx', ''),
+                            'query_text': result.get('query_text', ''),
+                            'expected_answer': result.get('expected_answer', ''),
+                            'temporal_strategy': result.get('temporal_strategy', ''),
+                            'pushdown_strategy': result.get('pushdown_strategy', ''),
+                            'stitch_strategy': result.get('stitch_strategy', ''),
+                            'cache_mode': result.get('cache_mode', ''),
+                            'avg_time_ms': result.get('time_ms', ''),
+                            'individual_times_ms': individual_times_str,
+                            'verification_status': result.get('verification_status', ''),
+                            'execution_order': exec_idx + 1,
+                            'strategy_combination_index': strat_idx + 1
+                        }
+                        writer.writerow(csv_row)
+
+            print(f"Benchmark results successfully exported to {args.benchmark_output}")
+        except Exception as e:
+            print(f"Error exporting benchmark results to CSV: {e}")

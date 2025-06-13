@@ -335,6 +335,10 @@ subquery
       SELECT selectList
       FROM identifier
       whereClause?
+      groupByClause?
+      granularityClause?
+      orderByClause?
+      limitClause?
       RPAREN
       ALIAS alias=identifier
     ;

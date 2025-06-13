@@ -1,22 +1,29 @@
 package com.example.query;
 
-import com.example.query.model.*;
-import com.example.query.model.condition.Condition;
-import com.example.query.model.condition.Contains;
-import com.example.query.model.condition.Ner;
-import com.example.query.binding.VariableRegistry;
-import com.example.query.binding.VariableType;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.example.query.binding.VariableRegistry;
+import com.example.query.binding.VariableType;
+import com.example.query.model.CountColumn;
+import com.example.query.model.Query;
+import com.example.query.model.SelectColumn;
+import com.example.query.model.SnippetColumn;
+import com.example.query.model.SnippetNode;
+import com.example.query.model.VariableColumn;
+import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Contains;
+import com.example.query.model.condition.Ner;
 
 @DisplayName("Query Semantic Validator Tests")
 class QuerySemanticValidatorTest {
@@ -294,6 +301,9 @@ class QuerySemanticValidatorTest {
         Query query = createQuery(select, List.of(), registry, groupBy);
 
         QueryParseException exception = assertThrows(QueryParseException.class, () -> validator.validate(query));
-        assertTrue(exception.getMessage().contains("GROUP BY column '$main.colZ' is not a known variable or structural column."));
+        assertTrue(exception.getMessage().contains("GROUP BY column '$main.colZ' is not a known variable in its scope"),
+                   "Exception message should indicate that colZ is not known in its scope. Actual: " + exception.getMessage());
+        assertTrue(exception.getMessage().contains("Available variables in target scope: [$main.colA]"),
+                   "Exception message should list available variables. Actual: " + exception.getMessage());
     }
 }

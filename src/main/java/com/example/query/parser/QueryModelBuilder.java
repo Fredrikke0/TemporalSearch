@@ -1058,12 +1058,56 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             conditions.addAll(subqueryBuilder.visitConditionList(ctx.whereClause().conditionList(), DEFAULT_MAIN_ALIAS));
         }
 
+        // Process additional clauses
+        List<String> orderColumns = new ArrayList<>();
+        if (ctx.orderByClause() != null) {
+            orderColumns.addAll(subqueryBuilder.visitOrderByClause(ctx.orderByClause(), false)); // No qualification required within subquery
+        }
+
+        Optional<Integer> limit = Optional.empty();
+        if (ctx.limitClause() != null) {
+            limit = Optional.of(Integer.parseInt(ctx.limitClause().count.getText()));
+        }
+
+        Query.Granularity granularity = Query.Granularity.DOCUMENT;
+        Optional<Integer> granularitySize = Optional.empty();
+        if (ctx.granularityClause() != null) {
+            if (ctx.granularityClause().DOCUMENT() != null) {
+                granularity = Query.Granularity.DOCUMENT;
+            } else {
+                granularity = Query.Granularity.SENTENCE;
+                if (ctx.granularityClause().size != null) {
+                    granularitySize = Optional.of(Integer.parseInt(ctx.granularityClause().size.getText()));
+                }
+            }
+        }
+
+        List<String> groupByColumns = new ArrayList<>();
+        if (ctx.groupByClause() != null) {
+            groupByColumns.addAll(subqueryBuilder.visitGroupByClause(ctx.groupByClause(), DEFAULT_MAIN_ALIAS, false)); // No qualification required within subquery
+        }
+
         // Re-qualify all variables from $main. to subqueryAlias.
         subqueryBuilder.variableRegistry.requalifyVariables("$main.", subqueryAlias + ".");
 
         // Re-qualify conditions to update their variable names as well
         List<Condition> requalifiedConditions = conditions.stream()
             .map(condition -> requalifyCondition(condition, "$main.", subqueryAlias + "."))
+            .collect(java.util.stream.Collectors.toList());
+
+        // Re-qualify ORDER BY and GROUP BY columns
+        List<String> requalifiedOrderColumns = orderColumns.stream()
+            .map(col -> {
+                if (col.startsWith("-")) {
+                    return "-" + requalifyColumnName(col.substring(1), DEFAULT_MAIN_ALIAS + ".", subqueryAlias + ".");
+                } else {
+                    return requalifyColumnName(col, DEFAULT_MAIN_ALIAS + ".", subqueryAlias + ".");
+                }
+            })
+            .collect(java.util.stream.Collectors.toList());
+
+        List<String> requalifiedGroupByColumns = groupByColumns.stream()
+            .map(col -> requalifyColumnName(col, DEFAULT_MAIN_ALIAS + ".", subqueryAlias + "."))
             .collect(java.util.stream.Collectors.toList());
 
         // Also update select columns to use the new qualified names
@@ -1097,16 +1141,16 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         Query subquery = new Query(
             source,
             requalifiedConditions,
-            List.of(), // No ORDER BY within subquery definition
-            Optional.empty(), // No LIMIT within subquery definition
-            Query.Granularity.DOCUMENT, // Default granularity for subquery context? Or inherit? Let's assume default.
-            Optional.empty(), // Default granularity size
+            requalifiedOrderColumns, // Use parsed ORDER BY
+            limit, // Use parsed LIMIT
+            granularity, // Use parsed GRANULARITY
+            granularitySize, // Use parsed granularity size
             requalifiedSelectColumns,
             subqueryBuilder.variableRegistry, // Use the isolated registry (now requalified)
             List.of(), // No nested subqueries within this subquery's definition
             Optional.empty(), // No join condition within this subquery's definition
             Optional.empty(), // Subquery's internal Query object doesn't have a main alias itself
-            List.of() // Add empty list for groupByColumns for subquery's Query object
+            requalifiedGroupByColumns // Use parsed GROUP BY
         );
 
         // Return the SubquerySpec containing the Query object and its external alias
@@ -1391,6 +1435,16 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             case Logical logical -> logical.requalifyVariables(oldPrefix, newPrefix);
             case Not not -> not.requalifyVariables(oldPrefix, newPrefix);
         };
+    }
+
+    /**
+     * Helper method to requalify column names (used for ORDER BY and GROUP BY in subqueries)
+     */
+    private static String requalifyColumnName(String columnName, String oldPrefix, String newPrefix) {
+        if (columnName.startsWith(oldPrefix)) {
+            return columnName.replace(oldPrefix, newPrefix);
+        }
+        return columnName;
     }
 
     // Helper method to map comparison operator string to TemporalPredicate
