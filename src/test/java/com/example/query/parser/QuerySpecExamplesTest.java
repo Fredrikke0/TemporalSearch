@@ -1,13 +1,18 @@
 package com.example.query.parser;
 
-import org.antlr.v4.runtime.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+
+import java.util.List;
+
+import org.antlr.v4.runtime.BaseErrorListener;
+import org.antlr.v4.runtime.CharStream;
+import org.antlr.v4.runtime.CharStreams;
+import org.antlr.v4.runtime.CommonTokenStream;
+import org.antlr.v4.runtime.RecognitionException;
+import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import static org.junit.jupiter.api.Assertions.*;
-
-import java.util.List;
 
 /**
  * Tests to validate that all examples from the grammar specification document parse correctly.
@@ -61,7 +66,7 @@ public class QuerySpecExamplesTest {
     private final List<String> snippetExamples = List.of(
         "SELECT person, SNIPPET(person) FROM corpus WHERE NER(\"PERSON\") BIND person",
         "SELECT title, SNIPPET(text) FROM corpus WHERE CONTAINS(\"highlight\") BIND text",
-        "SELECT person, SNIPPET(person, WINDOW=10) FROM corpus WHERE NER(\"PERSON\") BIND person",
+        "SELECT person, SNIPPET(person, 10) FROM corpus WHERE NER(\"PERSON\") BIND person",
         "SELECT timestamp FROM corpus WHERE CONTAINS(\"event\") BIND event",
         "SELECT SNIPPET(var1) FROM corpus WHERE CONTAINS(\"word\") BIND var1"
     );
@@ -120,7 +125,7 @@ public class QuerySpecExamplesTest {
     );
 
     private final List<String> combinedFeaturesExamples = List.of(
-        "SELECT person, SNIPPET(person, WINDOW=5) FROM corpus " +
+        "SELECT person, SNIPPET(person, 5) FROM corpus " +
             "WHERE NER(\"PERSON\") BIND person AND DATE(> 2000) BIND date " +
             "GRANULARITY SENTENCE 3 ORDER BY person DESC LIMIT 5",
         "SELECT COUNT(DOCUMENTS) FROM corpus WHERE NER(LOCATION) AND CONTAINS(\"city\") LIMIT 1"
@@ -154,7 +159,7 @@ public class QuerySpecExamplesTest {
     @Test
     void snippetExamplesShouldBeValid() {
         assertSpecExampleValid("SELECT person, SNIPPET(person) FROM corpus WHERE NER(\"PERSON\") BIND person");
-        assertSpecExampleValid("SELECT person, SNIPPET(person, WINDOW=10) FROM corpus WHERE NER(\"PERSON\") BIND person");
+        assertSpecExampleValid("SELECT person, SNIPPET(person, 10) FROM corpus WHERE NER(\"PERSON\") BIND person");
     }
     @Test
     void aggregationExamplesShouldBeValid() {

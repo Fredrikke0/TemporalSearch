@@ -360,13 +360,19 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
              throw new IllegalStateException("Snippet expression target must be a variable or qualified identifier.");
         }
 
-        int windowSize = SnippetNode.DEFAULT_WINDOW_SIZE;
-        if (ctx.windowSize != null) { // Grammar rule name for window size is 'windowSize'
-            windowSize = Integer.parseInt(ctx.windowSize.getText());
+        int windowSizeForNode = -1; // Default to -1, to let SnippetColumn use its default
+        if (ctx.windowSize != null) { // ctx.windowSize is the INTEGER_LITERAL token from the new grammar
+            try {
+                windowSizeForNode = Integer.parseInt(ctx.windowSize.getText());
+            } catch (NumberFormatException e) {
+                logger.warn("Invalid integer format for snippet window size: '{}'. Defaulting to internal snippet window.", ctx.windowSize.getText());
+                // windowSizeForNode remains -1, relying on SnippetColumn's default logic
+            }
         }
 
-        // Call the simplified SnippetNode constructor
-        return new SnippetNode(qualifiedTargetName, windowSize);
+        // Call the SnippetNode constructor (assuming it's an intermediate helper class/record)
+        // This SnippetNode is then used by visitSnippetColumn to create the actual SnippetColumn model object.
+        return new SnippetNode(qualifiedTargetName, windowSizeForNode);
     }
 
 

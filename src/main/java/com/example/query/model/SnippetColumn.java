@@ -146,6 +146,6 @@ public class SnippetColumn implements SelectColumn {
 
     @Override
     public String toString() {
-        return "SNIPPET(" + qualifiedVariableName + ", CHAR_WINDOW=" + windowSize + ")";
+        return "SNIPPET(" + qualifiedVariableName + ", WINDOW=" + windowSize + ")";
     }
 }

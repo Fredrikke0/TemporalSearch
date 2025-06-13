@@ -149,7 +149,7 @@ selectColumn
     ;
 
 snippetExpression
-    : SNIPPET LPAREN (variable | qualifiedIdentifier) (COMMA WINDOW EQUALS windowSize=INTEGER_LITERAL)? RPAREN
+    : SNIPPET LPAREN (variable | qualifiedIdentifier) (COMMA windowSize=INTEGER_LITERAL)? RPAREN
     ;
 
 qualifiedStructuralColumn

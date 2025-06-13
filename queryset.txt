@@ -1,1 +1,0 @@
-SELECT DOCUMENT_ID FROM simplewiki WHERE CONTAINS('cat')

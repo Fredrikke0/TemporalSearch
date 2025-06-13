@@ -1065,7 +1065,7 @@ public class PositionListSoA {
 
         // If context is not present or is unrestricted, use the standard deserialization
         if (context.isEmpty() || context.get().isUnrestricted()) {
-            logger.debug("deserializeWithFilters: Context is empty or unrestricted, calling deserializeFromCompositeBlob.");
+            logger.trace("deserializeWithFilters: Context is empty or unrestricted, calling deserializeFromCompositeBlob.");
             return deserializeFromCompositeBlob(blob);
         }
 

@@ -81,7 +81,6 @@ public class Pipeline {
                 .required(false)
                 .help("Specify the document_id from which to start annotation. Overrides resume logic if provided.");
 
-        // Annotation stage group
         var annotateGroup = parser.addArgumentGroup("Annotation stage arguments (used in 'annotate' or 'all' stage)");
         annotateGroup.addArgument("-b", "--batch-size")
                 .setDefault(300)

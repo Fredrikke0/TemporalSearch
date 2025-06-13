@@ -40,7 +40,7 @@ public class QueryExecutor {
 
     private final ConditionExecutorFactory executorFactory;
     private TableResultService tableResultService;
-    private PushdownStrategy pushdownStrategy = PushdownStrategy.OPTIMIZED;
+    private PushdownStrategy pushdownStrategy = PushdownStrategy.NONE;
     private final String stitchStrategy;
     private Query currentQuery;
     private final SynonymManager synonymManager;

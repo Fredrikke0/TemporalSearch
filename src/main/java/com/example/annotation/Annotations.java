@@ -348,15 +348,10 @@ public class Annotations {
             }
 
             if (totalDocumentsToProcessThisRun == 0 && effectivelyNeedsProcessing) {
-                // If we thought we needed processing, but the count is 0, log and return.
-                // This might happen if getAnnotationStatus found a min unannotated ID, but it was fixed
-                // and the new max ID logic in runAnnotation estimates 0.
-                // Or if effectiveStartDocumentId itself doesn't exist.
                  logger.info("No documents to process in this run, despite 'effectivelyNeedsProcessing' being true. This might be due to ID fixing or an empty range from {}.", effectiveStartDocumentId);
                  return;
             }
             if (totalDocumentsToProcessThisRun == 0 && !effectivelyNeedsProcessing){
-                 // This is expected if getAnnotationStatus said no processing needed and no force flag.
                  logger.info("No documents to process in this run (effectivelyNeedsProcessing is false and count is 0).");
                  return;
             }
@@ -364,9 +359,8 @@ public class Annotations {
 
             final int FETCH_CHUNK_SIZE = batchSize * 10;
             int currentFetchStartId = effectiveStartDocumentId; // Use currentFetchStartId for query pagination
-            int totalProcessedInThisRun = 0; // Renamed from totalProcessed to avoid clash with AnnotationResult
+            int totalProcessedInThisRun = 0;
 
-            // Setup threading once
             int totalUserThreads = threads;
             int numCoreNLPInternalThreads;
             int numExecutorThreads;
@@ -375,7 +369,6 @@ public class Annotations {
                 numCoreNLPInternalThreads = 1;
                 numExecutorThreads = 1;
             } else {
-                // Prioritize executor threads slightly if rounding is an issue, ensure CoreNLP gets at least 1
                 numExecutorThreads = Math.max(1, (int) Math.ceil(totalUserThreads * 0.8));
                 numCoreNLPInternalThreads = Math.max(1, totalUserThreads - numExecutorThreads);
                 if (numCoreNLPInternalThreads == 0) {
@@ -443,13 +436,11 @@ public class Annotations {
 
                     for (DocumentData doc : documentsChunk) {
                         java.util.concurrent.Future<AnnotationResult> future = executor.submit(() -> {
-                            // processTextWithCoreNLP uses MAX_DOCUMENT_LENGTH for truncation
                             AnnotationResult result = processTextWithCoreNLP(pipeline, doc.text, doc.documentId, doc.timestamp);
                             return result;
                         });
                         futures.add(future);
                         docIdsInFlight.add(doc.documentId);
-                        // totalProcessedInThisRun++; // Increment *after* successful processing and adding to batchResults & pb.step()
 
                         if (futures.size() >= batchSize) {
                             for (int i = 0; i < futures.size(); i++) {
@@ -470,7 +461,7 @@ public class Annotations {
                             for (AnnotationResult result : batchResults) {
                                 insertData(conn, result.annotations, result.dependencies);
                                 committedAnnotationsInBatch++;
-                                totalProcessedInThisRun++; // Count successfully processed and inserted
+                                totalProcessedInThisRun++;
                                 pb.step();
                             }
 
@@ -492,7 +483,6 @@ public class Annotations {
                     }
                 }
 
-                // Process remaining futures
                 for (int i = 0; i < futures.size(); i++) {
                     java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
                     int docId = docIdsInFlight.get(i);
@@ -608,7 +598,7 @@ public class Annotations {
 
         String textToProcess = text;
         if (text.length() > MAX_DOCUMENT_LENGTH) {
-            logger.info("Document_id {} exceeds MAX_DOCUMENT_LENGTH ({} > {}). Truncating to {} characters.",
+            logger.debug("Document_id {} exceeds MAX_DOCUMENT_LENGTH ({} > {}). Truncating to {} characters.",
                         documentId, text.length(), MAX_DOCUMENT_LENGTH, MAX_DOCUMENT_LENGTH);
             textToProcess = text.substring(0, MAX_DOCUMENT_LENGTH);
         }
