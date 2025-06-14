@@ -146,7 +146,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     }
 
     // =========================================================================
-    // Concrete Strategy Implementations (Inner Classes for now)
+    // Strategy Implementations
     // =========================================================================
 
     /**
@@ -203,9 +203,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             String variableToBind = condition.variableName();
             if (variableToBind == null) {
                 strategyLogger.warn("No variable specified in Temporal condition for Nash strategy. Using default or skipping. Condition: {}", condition);
-                // Decide handling: use a default like "@temporal", or return if variable is essential.
-                // For now, let's assume it might be okay if the query structure allows it (e.g. EXISTS { ?s <temp_prop> ?date. ?date DATE(...) })
-                // If variableToBind is essential for result population, this needs stricter handling.
             }
 
             Optional<LocalDateTime> queryDateTimeStart = condition.startDate();

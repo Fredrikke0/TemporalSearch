@@ -47,7 +47,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         }
 
         try (Options options = createTestOptions()) {
-            this.indexAccess = new IndexAccess(indexBaseDir.resolve("pos"), "pos", options);
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("pos"), "pos", options, false);
         }
 
         SynonymManagerPath = sharedTempDir.resolve("pos_test_lookup.db");

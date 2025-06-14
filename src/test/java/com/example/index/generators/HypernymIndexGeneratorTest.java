@@ -37,7 +37,7 @@ public class HypernymIndexGeneratorTest extends BaseIndexTest {
 
         // Create IndexAccess instance first
         try (Options options = createTestOptions()) {
-            this.indexAccess = new IndexAccess(indexBaseDir.resolve("hypernym"), "hypernym", options);
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("hypernym"), "hypernym", options, false);
         }
 
         // Create generator

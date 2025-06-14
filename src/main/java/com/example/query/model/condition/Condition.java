@@ -19,7 +19,8 @@ public sealed interface Condition
             Ner,
             Not,
             Pos,
-            Temporal {
+            Temporal,
+            StitchedPairCondition {
 
     /**
      * Gets the type of the condition.

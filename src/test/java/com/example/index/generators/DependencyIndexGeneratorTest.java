@@ -37,7 +37,7 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
 
         // Create IndexAccess instance first
         try (Options options = createTestOptions()) {
-            this.indexAccess = new IndexAccess(indexBaseDir.resolve("dependency"), "dependency", options);
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("dependency"), "dependency", options, false);
         }
 
         // Create generator

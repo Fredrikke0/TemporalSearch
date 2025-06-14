@@ -169,7 +169,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     public void testBasicTrigramIndexing() throws Exception {
         // Create IndexAccess instance first
         try (Options options = createTestOptions();
-             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "trigram", options)) {
+             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "trigram", options, false)) {
             // Create and run trigram indexer
             try (TrigramIndexGenerator indexer = new TrigramIndexGenerator(
                     ia, TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
@@ -204,7 +204,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
     public void testSentenceBoundaries() throws Exception {
         // Create IndexAccess instance first
         try (Options options = createTestOptions();
-             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "trigram", options)) {
+             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "trigram", options, false)) {
             // Create and run trigram indexer
             try (TrigramIndexGenerator indexer = new TrigramIndexGenerator(
                     ia, TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
@@ -228,7 +228,7 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
 
         // Create IndexAccess instance first
         try (Options options = createTestOptions();
-            IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "trigram", options)) {
+            IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "trigram", options, false)) {
             // Create and run trigram indexer
             try (TrigramIndexGenerator indexer = new TrigramIndexGenerator(
                     ia, TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {

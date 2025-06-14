@@ -120,8 +120,7 @@ public class IndexRunner {
             typesBeingBuilt.addAll(List.of(
                 "unigram", "bigram", "trigram", "dependency", "hypernym",
                 "ner_date", "pos", "ner", "nash",
-                "stitch_unigram_date", "stitch_unigram_ner", "stitch_unigram_pos",
-                "stitch_bigram_pos", "stitch_trigram_pos",
+                "stitch_unigram_date", "stitch_unigram_ner",
                 "stitch_bigram_ner", "stitch_trigram_ner",
                 "stitch_bigram_date", "stitch_trigram_date"
             ));
@@ -174,7 +173,7 @@ public class IndexRunner {
                     }
 
                     try (Options options = RocksDBConfig.createOptimizedOptions();
-                         IndexAccessInterface indexAccess = new IndexAccess(specificIndexDir, type, options)) {
+                         IndexAccessInterface indexAccess = new IndexAccess(specificIndexDir, type, options, false)) {
 
                         if (type.equals("unigram")) {
                             metrics.startBatch(batchSize, "unigram");

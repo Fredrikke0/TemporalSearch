@@ -236,7 +236,7 @@ public class Pipeline {
 
             if (typesForPipelineLogic.contains("stitches")) {
                 typesForPipelineLogic.addAll(java.util.List.of(
-                    "unigram", "bigram", "trigram", "pos", "ner", "ner_date"
+                    "unigram", "bigram", "trigram", "ner", "ner_date"
                 ));
                  typesForPipelineLogic.add("stitches"); // Ensure it's there
             }

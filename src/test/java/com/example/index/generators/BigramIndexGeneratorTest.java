@@ -133,7 +133,7 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
     public void testBasicIndexing() throws Exception {
         // Create IndexAccess instance first
         try (Options options = createTestOptions();
-             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "bigram", options)) {
+             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "bigram", options, false)) {
             // Create and run bigram indexer, passing the IndexAccess instance
             try (BigramIndexGenerator indexer = new BigramIndexGenerator(
                     ia, TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
@@ -177,7 +177,7 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
     public void testSentenceBoundaries() throws Exception {
         // Create IndexAccess instance first
         try (Options options = createTestOptions();
-             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "bigram", options)) {
+             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "bigram", options, false)) {
             // Create and run bigram indexer, passing the IndexAccess instance
             try (BigramIndexGenerator indexer = new BigramIndexGenerator(
                     ia, TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {

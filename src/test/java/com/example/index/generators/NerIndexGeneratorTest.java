@@ -51,7 +51,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         }
 
         try (Options options = createTestOptions()) {
-            this.indexAccess = new IndexAccess(indexBaseDir.resolve("ner"), "ner", options);
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("ner"), "ner", options, false);
         }
 
         SynonymManagerPath = sharedTempDir.resolve("ner_test_lookup.db");

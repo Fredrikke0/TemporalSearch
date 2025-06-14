@@ -45,7 +45,7 @@ public class IndexAccessTest {
 
         options = RocksDBConfig.createOptimizedOptions();
 
-        indexAccess = new IndexAccess(indexPath, "test", options);
+        indexAccess = new IndexAccess(indexPath, "test", options, false);
     }
 
     @AfterEach

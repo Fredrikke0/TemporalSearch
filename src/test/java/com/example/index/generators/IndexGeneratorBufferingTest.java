@@ -134,7 +134,7 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
         Files.createDirectories(indexPath);
 
         try (Options options = RocksDBConfig.createOptimizedOptions();
-             IndexAccessInterface indexAccess = new IndexAccess(indexPath, "buffering-test", options);
+             IndexAccessInterface indexAccess = new IndexAccess(indexPath, "buffering-test", options, false);
              TestIndexGenerator generator = new TestIndexGenerator(
                  indexAccess, sqliteConn, new ProgressTracker(), customTempPath, numBatches)) {
 
@@ -189,7 +189,7 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
         Files.createDirectories(indexPath);
 
         try (Options options = RocksDBConfig.createOptimizedOptions();
-             IndexAccessInterface indexAccess = new IndexAccess(indexPath, "empty-test", options);
+             IndexAccessInterface indexAccess = new IndexAccess(indexPath, "empty-test", options, false);
              TestIndexGenerator generator = new TestIndexGenerator(
                  indexAccess, sqliteConn, new ProgressTracker(), customTempPath, 0)) {
 

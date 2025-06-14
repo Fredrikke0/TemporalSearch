@@ -16,6 +16,7 @@ import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
 import com.example.query.model.condition.Pos;
+import com.example.query.model.condition.StitchedPairCondition;
 import com.example.query.model.condition.Temporal;
 
 /**
@@ -135,6 +136,16 @@ public class ConditionExecutorFactory {
               };
               return (ConditionExecutor<T>) executorCache.computeIfAbsent(Not.class, factoryFunction);
           }
+        // ADDED CASE FOR StitchedPairCondition
+        if (condition instanceof StitchedPairCondition) {
+            // StitchedPairExecutor is stateful with SynonymManager but specific to the pair,
+            // so typically not a global singleton in the same way as TemporalExecutor.
+            // However, if we don't want to create too many, we could explore caching strategies
+            // or decide if it's lightweight enough to create each time.
+            // For now, creating a new one each time, as its state is tied to the specific StitchedPairCondition.
+            logger.debug("Creating StitchedPairExecutor instance.");
+            return (ConditionExecutor<T>) new StitchedPairExecutor(this.synonymManager);
+        }
         // Add cases for other condition types (Pos, Dependency, etc.)
 
         throw new IllegalArgumentException("No executor found for condition type: " + conditionClass.getSimpleName());

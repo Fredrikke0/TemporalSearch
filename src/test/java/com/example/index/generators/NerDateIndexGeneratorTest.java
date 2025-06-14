@@ -37,7 +37,7 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
 
         // Create IndexAccess instance first
         try (Options options = createTestOptions()) {
-            this.indexAccess = new IndexAccess(indexBaseDir.resolve("ner_date"), "ner_date", options);
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("ner_date"), "ner_date", options, false);
         }
 
         // Create generator

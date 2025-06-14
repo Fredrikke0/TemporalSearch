@@ -39,7 +39,7 @@ public class NashIndexGeneratorTest extends BaseIndexTest {
 
         // Create IndexAccess instance first
         try (Options options = createTestOptions()) {
-            this.indexAccess = new IndexAccess(indexBaseDir.resolve("nash"), "nash", options);
+            this.indexAccess = new IndexAccess(indexBaseDir.resolve("nash"), "nash", options, false);
         }
 
         generator = new NashIndexGenerator(

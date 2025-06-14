@@ -132,9 +132,10 @@ public class IndexManager implements AutoCloseable {
                 createdOptionsList.add(specificOptions);
                 specificOptions.setCreateIfMissing(false);
 
-                IndexAccessInterface indexAccess = new IndexAccess(indexPath, type, specificOptions);
+                // Pass true for readOnly when opening for querying
+                IndexAccessInterface indexAccess = new IndexAccess(indexPath, type, specificOptions, true);
                 indexes.put(type, indexAccess);
-                createdOptionsList.remove(specificOptions);
+                createdOptionsList.remove(specificOptions); // Option is now owned by IndexAccess
                 logger.info("Successfully initialized required {} index", type);
 
             } catch (IndexAccessException e) {

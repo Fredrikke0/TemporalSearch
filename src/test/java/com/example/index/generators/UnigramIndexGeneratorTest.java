@@ -70,7 +70,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
             // It seems the generator itself might be expecting to *receive* an IndexAccess instance
             // that it will then use, rather than a path to create one. Let's check UnigramIndexGenerator constructor.
             // Based on IndexGenerator superclass, it now takes IndexAccessInterface.
-            this.indexAccess = new IndexAccess(indexBaseDir, "unigram", options); // Create it here for the generator
+            this.indexAccess = new IndexAccess(indexBaseDir, "unigram", options, false); // Create it here for the generator
         }
 
         // Create generator, passing the already created IndexAccess instance
@@ -233,7 +233,8 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         // we should use this.indexBaseDir as the baseDir argument and "unigram" as the indexName argument.
 
         try (Options options = createTestOptions();
-             IndexAccess verificationIA = new IndexAccess(this.indexBaseDir, "unigram", options)) {
+             // Update to include readOnly=false
+             IndexAccess verificationIA = new IndexAccess(this.indexBaseDir, "unigram", options, false)) {
             // Verify index contents
             var testPositions = verificationIA.get("test".getBytes());
             assertTrue(testPositions.isPresent(), "Expected positions for 'test'");

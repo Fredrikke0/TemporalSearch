@@ -29,6 +29,7 @@ public class IndexAccess implements IndexAccessInterface {
     private final String indexType;
     private final AtomicBoolean isOpen;
     private final Options options; // Store options for closing
+    private final boolean readOnly; // Added to store read-only state
 
     /**
      * Creates a new IndexAccess instance for a specific index type.
@@ -36,17 +37,27 @@ public class IndexAccess implements IndexAccessInterface {
      * @param indexPath Full path to the index directory
      * @param indexType The type of index (e.g., "unigram", "bigram", "dependency")
      * @param options RocksDB options for this index
+     * @param readOnly true to open in read-only mode, false for read-write
      * @throws IndexAccessException if initialization fails
      */
-    public IndexAccess(Path indexPath, String indexType, Options options) throws IndexAccessException {
+    public IndexAccess(Path indexPath, String indexType, Options options, boolean readOnly) throws IndexAccessException {
         this.indexType = indexType;
         this.indexPath = indexPath.toString();
         this.isOpen = new AtomicBoolean(true);
         this.options = options;
+        this.readOnly = readOnly; // Store read-only mode
 
         try {
             File indexDir = new File(this.indexPath);
             if (!indexDir.exists()) {
+                if (readOnly) {
+                    // Cannot create directory if we intend to open read-only and it doesn't exist
+                    throw new IndexAccessException(
+                        "Index directory does not exist and cannot be created in read-only mode: " + this.indexPath,
+                        indexType,
+                        IndexAccessException.ErrorType.INITIALIZATION_ERROR
+                    );
+                }
                 if (!indexDir.mkdirs()) {
                     throw new IndexAccessException(
                         "Failed to create index directory: " + this.indexPath,
@@ -55,7 +66,14 @@ public class IndexAccess implements IndexAccessInterface {
                     );
                 }
             }
-            this.db = RocksDB.open(options, indexDir.getAbsolutePath());
+
+            if (readOnly) {
+                this.db = RocksDB.openReadOnly(options, indexDir.getAbsolutePath());
+                logger.debug("Opened IndexAccess in READ-ONLY mode for type {} at {}", indexType, this.indexPath);
+            } else {
+                this.db = RocksDB.open(options, indexDir.getAbsolutePath());
+                logger.debug("Opened IndexAccess in read-write mode for type {} at {}", indexType, this.indexPath);
+            }
             //logger.debug("Initialized IndexAccess for type {} at {}", indexType, this.indexPath);
         } catch (RocksDBException e) {
             this.isOpen.set(false); // Ensure isOpen reflects the failure
