@@ -69,7 +69,7 @@ public class LogicalConditionExecutorTest {
         lenient().when(mockFactory.getExecutor(eq(condition2_term2))).thenReturn(mockSubExecutor2);
         lenient().when(mockFactory.getExecutor(eq(condition3_term3))).thenReturn(mockSubExecutor3);
 
-        logicalExecutor = new LogicalExecutor(mockFactory);
+        logicalExecutor = new LogicalExecutor(mockFactory, "optimized", Query.Granularity.SENTENCE);
         indexes = Collections.emptyMap();
         testGranularity = Query.Granularity.DOCUMENT; // Default for most existing tests
         testGranularitySize = 0;

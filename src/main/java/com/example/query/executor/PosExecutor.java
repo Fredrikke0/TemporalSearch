@@ -46,6 +46,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                                  int granularitySize, String corpusName, AttributeRequirements requirements,
                                  Optional<FilteringContext> context)
             throws QueryExecutionException {
+        logger.debug(">>> Executing PosExecutor");
         logger.debug("Executing POS condition: {}, AttrReqs: {}, ContextIsPresent: {}",
                      condition, requirements, context.isPresent());
 

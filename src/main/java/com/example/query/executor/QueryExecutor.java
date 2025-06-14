@@ -21,10 +21,8 @@ import com.example.query.model.Query;
 import com.example.query.model.SubquerySpec;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.condition.Condition;
-import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Logical.LogicalOperator;
-import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Temporal;
 import com.example.query.result.TableResultService;
 
@@ -38,38 +36,52 @@ import com.example.query.result.TableResultService;
 public class QueryExecutor {
     private static final Logger logger = LoggerFactory.getLogger(QueryExecutor.class);
 
-    private final ConditionExecutorFactory executorFactory;
+    private ConditionExecutorFactory executorFactory;
     private TableResultService tableResultService;
     private PushdownStrategy pushdownStrategy = PushdownStrategy.NONE;
     private final String stitchStrategy;
     private Query currentQuery;
     private final SynonymManager synonymManager;
+    private final ConditionExecutorFactory injectedExecutorFactory;
 
     /**
      * Creates a new QueryExecutor.
      *
-     * @param executorFactory The factory to use for obtaining condition executors.
      * @param stitchStrategy The stitch execution strategy ("none" or "optimized")
      * @param synonymManager The SynonymManager instance for this query execution context.
      */
-    public QueryExecutor(ConditionExecutorFactory executorFactory, String stitchStrategy, SynonymManager synonymManager) {
-        this(executorFactory, new TableResultService(), stitchStrategy, synonymManager);
+    public QueryExecutor(String stitchStrategy, SynonymManager synonymManager) {
+        this(new TableResultService(), stitchStrategy, synonymManager, null);
     }
 
     /**
      * Constructor for testing purposes, allowing injection of mocks and specific SynonymManager.
      *
-     * @param executorFactory The factory to use for obtaining condition executors.
      * @param tableResultService Mocked TableResultService or actual instance.
      * @param stitchStrategy The stitch execution strategy ("none" or "optimized")
      * @param synonymManager The SynonymManager instance.
      */
-    public QueryExecutor(ConditionExecutorFactory executorFactory, TableResultService tableResultService, String stitchStrategy, SynonymManager synonymManager) {
-        this.executorFactory = executorFactory;
+    public QueryExecutor(TableResultService tableResultService, String stitchStrategy, SynonymManager synonymManager) {
+        this(tableResultService, stitchStrategy, synonymManager, null);
+    }
+
+    /**
+     * Full constructor for QueryExecutor, allowing injection of ConditionExecutorFactory for testing.
+     *
+     * @param tableResultService The TableResultService instance.
+     * @param stitchStrategy The stitch execution strategy.
+     * @param synonymManager The SynonymManager instance.
+     * @param injectedExecutorFactory An optional ConditionExecutorFactory to inject for testing.
+     */
+    public QueryExecutor(TableResultService tableResultService, String stitchStrategy, SynonymManager synonymManager, ConditionExecutorFactory injectedExecutorFactory) {
         this.synonymManager = synonymManager;
         this.tableResultService = tableResultService;
         this.stitchStrategy = (stitchStrategy == null || stitchStrategy.isBlank()) ? "none" : stitchStrategy;
-        logger.debug("Initialized QueryExecutor with stitch strategy: {} and provided SynonymManager and ExecutorFactory. Default pushdown strategy: {}", this.stitchStrategy, this.pushdownStrategy);
+        this.injectedExecutorFactory = injectedExecutorFactory;
+        logger.debug("Initialized QueryExecutor with stitch strategy: {}, provided SynonymManager, and {}injected factory. Default pushdown strategy: {}.",
+                this.stitchStrategy,
+                this.injectedExecutorFactory == null ? "no " : "",
+                this.pushdownStrategy);
     }
 
     /**
@@ -207,19 +219,22 @@ public class QueryExecutor {
      */
     private void executeSubqueries(List<SubquerySpec> subqueries, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext)
             throws QueryExecutionException {
-        for (SubquerySpec subquery : subqueries) {
-            if (subqueryContext.hasResults(subquery.alias())) {
-                logger.debug("Subquery with alias '{}' already executed, skipping", subquery.alias());
+        for (SubquerySpec subquerySpec : subqueries) {
+            if (subqueryContext.hasResults(subquerySpec.alias())) {
+                logger.debug("Subquery with alias '{}' already executed, skipping", subquerySpec.alias());
                 continue;
             }
 
-            logger.debug("Executing subquery: {}", subquery);
+            logger.debug("Executing subquery: {}", subquerySpec);
+            Query currentSubquery = subquerySpec.subquery();
+            AttributeRequirements subqueryRequirements = QueryAttributeAnalyzer.analyze(currentSubquery);
 
-            QueryResultSoA subqueryResults = executeWithContext(subquery.subquery(), indexes, subqueryContext);
+            // Call executeWithRequirements to ensure factory is set with subquery's granularity
+            QueryResultSoA subqueryResults = executeWithRequirements(currentSubquery, indexes, subqueryRequirements, subqueryContext);
 
-            subqueryContext.addQueryResult(subquery, subqueryResults);
+            subqueryContext.addQueryResult(subquerySpec, subqueryResults);
             logger.debug("Subquery '{}' executed, stored QueryResultSoA with {} matches.",
-                    subquery.alias(), subqueryResults.size());
+                    subquerySpec.alias(), subqueryResults.size());
         }
     }
 
@@ -299,88 +314,14 @@ public class QueryExecutor {
             AttributeRequirements requirements,
             Optional<FilteringContext> context)
             throws QueryExecutionException {
-        logger.debug("Executing condition: {} with granularity: {} and size: {}, contextIsPresent: {}",
-                condition, granularity, granularitySize, context.isPresent());
+        logger.debug("Executing condition: type={}, varName={}, contextIsPresent={}, granularity={}",
+                condition.getType(),
+                condition.getProducedVariables().stream().findFirst().orElse("N/A"),
+                context.isPresent(),
+                granularity);
 
-        // --- STITCH STRATEGY LOGIC --- START ---
-        if (this.stitchStrategy.equals("optimized") &&
-            this.currentQuery != null && // Ensure currentQuery is set
-            this.currentQuery.granularity() == Query.Granularity.SENTENCE &&
-            condition instanceof Logical logicalCondition &&
-            logicalCondition.operator() == Logical.LogicalOperator.AND) {
-
-            List<Condition> childConditions = logicalCondition.conditions();
-            if (childConditions.size() == 2) {
-                Condition child1 = childConditions.get(0);
-                Condition child2 = childConditions.get(1);
-
-                Contains containsCond = null;
-                Condition annotationCond = null;
-
-                if (child1 instanceof Contains && ((Contains) child1).terms().size() == 1) {
-                    containsCond = (Contains) child1;
-                    if (child2 instanceof Ner || child2 instanceof com.example.query.model.condition.Pos || child2 instanceof com.example.query.model.condition.Temporal) {
-                        annotationCond = child2;
-                    }
-                } else if (child2 instanceof Contains && ((Contains) child2).terms().size() == 1) {
-                    containsCond = (Contains) child2;
-                    if (child1 instanceof Ner || child1 instanceof com.example.query.model.condition.Pos || child1 instanceof com.example.query.model.condition.Temporal) {
-                        annotationCond = child1;
-                    }
-                }
-
-                if (containsCond != null && annotationCond != null) {
-                    logger.debug("Attempting stitch optimization for CONTAINS ({}) AND {} ({}) with contextIsPresent: {}",
-                                 containsCond.terms(), annotationCond.getType(), annotationCond, context.isPresent());
-                    StitchIntersectionExecutor stitchExecutor = new StitchIntersectionExecutor();
-                    try {
-                        QueryResultSoA stitchResult = stitchExecutor.execute(
-                            containsCond,
-                            annotationCond,
-                            indexes,
-                            this.synonymManager,
-                            granularity,
-                            granularitySize,
-                            source,
-                            requirements,
-                            this.currentQuery,
-                            context // Pass context to stitch executor
-                        );
-                        if (stitchResult != null) {
-                            logger.info("Stitch optimization successful for CONTAINS + {}. Result count: {}",
-                                        annotationCond.getType(), stitchResult.size()); // containsCond.terms() was used before, changed to annotationCond.getType() for brevity
-                            return stitchResult;
-                        } else {
-                            logger.warn("Stitch execution did not complete or apply for CONTAINS + {}. Falling back to standard AND execution.", annotationCond.getType());
-                        }
-                    } catch (QueryExecutionException e) {
-                        logger.warn("StitchIntersectionExecutor execution failed: {}. Falling back to standard AND execution.", e.getMessage());
-                        // Fall through to standard execution
-                    } catch (Exception e) {
-                        logger.error("Unexpected error during stitch execution: {}. Falling back to standard AND execution.", e.getMessage(), e);
-                        // Fall through for unexpected errors too
-                    }
-                }
-            }
-        }
-        // --- STITCH STRATEGY LOGIC --- END ---
-
-        try {
-            ConditionExecutor<Condition> executor = executorFactory.getExecutor(condition);
-
-            // Pass the received context to the actual condition executor
-            return executor.execute(condition, indexes, granularity, granularitySize, source, requirements, context);
-
-        } catch (QueryExecutionException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new QueryExecutionException(
-                "Error executing condition: " + e.getMessage(),
-                e,
-                condition.toString(),
-                QueryExecutionException.ErrorType.INTERNAL_ERROR
-            );
-        }
+        ConditionExecutor<Condition> executor = executorFactory.getExecutor(condition);
+        return executor.execute(condition, indexes, granularity, granularitySize, source, requirements, context);
     }
 
     /**
@@ -692,26 +633,17 @@ public class QueryExecutor {
     private QueryResultSoA executeWithRequirements(Query query, Map<String, IndexAccessInterface> indexes,
                                         AttributeRequirements requirements, SubqueryContext subqueryContext)
             throws QueryExecutionException {
-
-        logger.trace("Executing query with requirements: Query='{}', Requirements='{}'", query.toString(), requirements);
-
-        // Use existing executeWithContext method but with enhanced logging
-        long executionStart = System.nanoTime();
-
-        try {
-            QueryResultSoA result = executeWithContext(query, indexes, subqueryContext, requirements);
-
-            long executionTime = System.nanoTime() - executionStart;
-            logger.debug("Query execution with SoA optimization completed in {} ms",
-                        executionTime / 1_000_000.0);
-
-            return result;
-
-        } catch (QueryExecutionException e) {
-            long executionTime = System.nanoTime() - executionStart;
-            logger.warn("Query execution with SoA optimization failed after {} ms: {}",
-                       executionTime / 1_000_000.0, e.getMessage());
-            throw e;
+        logger.debug("Executing query with requirements: {}, Granularity: {}", query, query.granularity());
+        // Initialize the executor factory here, as it depends on the current query's granularity.
+        if (this.injectedExecutorFactory != null) {
+            this.executorFactory = this.injectedExecutorFactory;
+            logger.debug("Using injected ConditionExecutorFactory for query: {}", query.source());
+        } else {
+            this.executorFactory = new ConditionExecutorFactory(this.synonymManager, this.stitchStrategy, query.granularity());
+            logger.debug("Created new ConditionExecutorFactory for query: {} with stitchStrategy: {} and granularity: {}", query.source(), this.stitchStrategy, query.granularity());
         }
+        this.currentQuery = query; // Also ensure currentQuery is set here for this execution context
+
+        return executeWithContext(query, indexes, subqueryContext, requirements);
     }
 }

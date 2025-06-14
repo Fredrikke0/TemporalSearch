@@ -21,7 +21,8 @@ public sealed interface ConditionExecutor<T extends Condition>
             NerExecutor,
             PosExecutor,
             NotExecutor,
-            TemporalExecutor {
+            TemporalExecutor,
+            StitchedExecutor {
 
 
 

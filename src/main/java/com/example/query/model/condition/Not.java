@@ -66,6 +66,8 @@ public record Not(
             case Dependency dependency -> dependency.requalifyVariable(oldPrefix, newPrefix);
             case Logical logical -> logical.requalifyVariables(oldPrefix, newPrefix);
             case Not not -> not.requalifyVariables(oldPrefix, newPrefix);
+            case StitchedCondition stitched -> stitched.requalifyVariables(oldPrefix, newPrefix);
+            default -> throw new IllegalArgumentException("Unsupported condition type: " + condition.getClass().getSimpleName());
         };
     }
 }

@@ -11,5 +11,4 @@ public enum ValueType {
     DEPENDENCY, // A grammatical dependency relation
     POS_TERM,   // A term with its part-of-speech tag
     POS_TAG_TYPE, // Represents the POS tag type itself (e.g., "NN", "VB")
-    // Add other types as needed
 }

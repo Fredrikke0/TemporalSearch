@@ -90,7 +90,7 @@ class QueryExecutorTest {
         indexes.put("dependency", dependencyIndex);
         indexes.put("ner_date", nerDateIndex);
 
-        queryExecutor = new QueryExecutor(factory, mockTableResultService, "none", mockSynonymManager);
+        queryExecutor = new QueryExecutor(mockTableResultService, "none", mockSynonymManager, factory);
 
         // Mock IndexManager behavior
         lenient().when(mockIndexManager.getAllIndexes()).thenReturn(indexes);

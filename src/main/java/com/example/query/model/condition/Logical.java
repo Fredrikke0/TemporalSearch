@@ -116,7 +116,7 @@ public record Logical(
     /**
      * Helper method to requalify a single condition based on its type.
      */
-    private static Condition requalifyCondition(Condition condition, String oldPrefix, String newPrefix) {
+    public static Condition requalifyCondition(Condition condition, String oldPrefix, String newPrefix) {
         return switch (condition) {
             case Temporal temporal -> temporal.requalifyVariable(oldPrefix, newPrefix);
             case Ner ner -> ner.requalifyVariable(oldPrefix, newPrefix);
@@ -125,6 +125,7 @@ public record Logical(
             case Dependency dependency -> dependency.requalifyVariable(oldPrefix, newPrefix);
             case Logical logical -> logical.requalifyVariables(oldPrefix, newPrefix);
             case Not not -> not.requalifyVariables(oldPrefix, newPrefix);
+            case StitchedCondition stitched -> stitched.requalifyVariables(oldPrefix, newPrefix);
         };
     }
 }

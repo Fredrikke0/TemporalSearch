@@ -39,6 +39,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                                Optional<FilteringContext> context)
         throws QueryExecutionException {
 
+        logger.debug(">>> Executing DependencyExecutor");
         logger.debug("Executing DEPENDENCY condition with AttributeRequirements: {}, FilteringContext isPresent: {}",
                      requirements.getRequiredSoAAttributes(), context.isPresent());
 

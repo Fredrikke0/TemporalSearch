@@ -135,11 +135,24 @@ public class QueryEndToEndTest {
         File sourceIndexPath = tempDir.resolve("testIndexes/source").toFile();
         sourceIndexPath.mkdirs();
 
-        SqliteAccessor.initialize(indexBasePath.getAbsolutePath());
+        // Initialize SqliteAccessor - using an in-memory DB for tests to avoid file conflicts
+        // or ensure each test class/method uses a unique file if disk-based is needed.
+        // For simplicity, if your tests allow, ":memory:" is good.
+        // If not, ensure dbFilePath is unique. Here, using a file in tempDir.
+        String dbFilePath = tempDir.resolve("testQueryEndToEnd.db").toString();
+        SqliteAccessor.initialize(dbFilePath);
 
         // Initialize static mocks first
         staticMockSynonymManager = org.mockito.Mockito.mock(SynonymManager.class);
-        mockIndexManager = org.mockito.Mockito.mock(IndexManager.class);
+        mockIndexManager = org.mockito.Mockito.mock(IndexManager.class); // Mock IndexManager
+
+        // Set up the factory with default strategy and granularity for tests
+        // Tests needing specific granularity for LogicalExecutor fusion might need to adjust this
+        // or QueryExecutor needs to re-create factory if granularity changes per query.
+        // The current QueryExecutor design re-creates factory per query, so this factory instance
+        // might not be what's used by QueryExecutor if its internal query has a different granularity.
+        // However, some tests might use this factory directly.
+        factory = new ConditionExecutorFactory(staticMockSynonymManager, "optimized", Query.Granularity.SENTENCE);
 
         mockUnigramIndex = new MockIndexAccess("unigram");
         // Add test data sorted by document ID (just like real indexes would be)
@@ -307,35 +320,40 @@ public class QueryEndToEndTest {
             "nash", mockNashIndex
         );
 
-        // Stub mockIndexManager behavior (now that mockIndexes is populated)
+        // Mock IndexManager to return our mockIndexes and mockSynonymManager
         lenient().when(mockIndexManager.getAllIndexes()).thenReturn(mockIndexes);
-        lenient().when(mockIndexManager.getSynonymManager()).thenReturn(staticMockSynonymManager); // mockSynonymManager created above
+        lenient().when(mockIndexManager.getSynonymManager()).thenReturn(staticMockSynonymManager);
 
-        // NEW: Add lenient mocking for getTerms using an Answer to be dynamic
-        lenient().when(staticMockSynonymManager.getTerms(ArgumentMatchers.<Set<Integer>>any())).thenAnswer(invocation -> {
-            Set<Integer> idSet = invocation.getArgument(0);
-            Map<Integer, String> resultMap = new HashMap<>();
-            if (idSet != null) {
-                for (Integer id : idSet) {
-                    if (synIdToTermMap.containsKey(id)) {
-                        resultMap.put(id, synIdToTermMap.get(id));
-                    } else {
-                        // Optional: Log or handle cases where an ID is requested but not in synIdToTermMap
-                        // This might indicate an issue with test data setup if it occurs unexpectedly.
-                        logger.warn("QueryEndToEndTest: staticMockSynonymManager.getTerms was asked for id {} which is not in synIdToTermMap.", id);
+        // AFTER all calls to getOrAssignNerSynId (which populates synIdToTermMap and mocks individual getTerm/getId),
+        // set up the mock for the batch getTerms method.
+        try {
+            lenient().when(staticMockSynonymManager.getTerms(ArgumentMatchers.<Set<Integer>>any())).thenAnswer(invocation -> {
+                Set<Integer> idSet = invocation.getArgument(0);
+                Map<Integer, String> resultMap = new HashMap<>();
+                if (idSet != null) {
+                    for (Integer id : idSet) {
+                        if (synIdToTermMap.containsKey(id)) {
+                            resultMap.put(id, synIdToTermMap.get(id));
+                        }
+                        // If an ID is requested that wasn't in synIdToTermMap, it simply won't be in the result map,
+                        // which is the correct behavior (matches if SynonymManager can't find a term for an ID).
                     }
                 }
-            }
-            return resultMap;
-        });
-
-        // Initialize factory and executor (now using static mocks)
-        factory = new ConditionExecutorFactory(staticMockSynonymManager); // Updated
-        factory.setTemporalStrategy("naive"); // Set a default strategy
-        queryExecutor = new QueryExecutor(factory, "none", staticMockSynonymManager); // Updated
+                logger.debug("[staticMockSynonymManager.getTerms] Batch lookup for IDs: {}. Returning map: {}", idSet, resultMap);
+                return resultMap;
+            });
+        } catch (RocksDBException e) {
+            // This exception is declared on the getTerms method, so we need to handle it,
+            // even though our mock implementation doesn't throw it.
+            throw new RuntimeException("Error setting up mock for SynonymManager.getTerms", e);
+        }
 
         queryParser = new QueryParser();
-        tableResultService = new TableResultService(indexBasePath.getAbsolutePath());
+        tableResultService = new TableResultService(dbFilePath); // Use the temp db path
+
+        // QueryExecutor now creates its own factory.
+        // If tests need to inject a specific factory or tableResultService, use the other constructor.
+        queryExecutor = new QueryExecutor(tableResultService, "optimized", staticMockSynonymManager);
 
         defaultTestRequirements = new AttributeRequirements();
         defaultTestRequirements.needsDocumentId = true;

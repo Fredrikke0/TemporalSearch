@@ -1,5 +1,6 @@
 package com.example.query.executor;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -10,17 +11,25 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessInterface;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Condition;
+import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Logical.LogicalOperator;
+import com.example.query.model.condition.Ner;
+import com.example.query.model.condition.Pos;
+import com.example.query.model.condition.StitchedCondition;
+import com.example.query.model.condition.Temporal;
 
 /**
  * Executor for logical conditions (AND, OR).
  * Handles recursive execution and result combination of subconditions using QueryResultSoA.
+ * Also implements stitch fusion logic for AND conditions.
  */
 public final class LogicalExecutor implements ConditionExecutor<Logical> {
     private static final Logger logger = LoggerFactory.getLogger(LogicalExecutor.class);
 
     private final ConditionExecutorFactory executorFactory;
+    private final String stitchStrategy;
+    private final Query.Granularity queryGranularity;
 
     // Helper record for Sentence granularity keys
     private record DocSentIdPair(int docId, int sentId) {}
@@ -30,12 +39,14 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
      * executors for subconditions.
      *
      * @param executorFactory The factory to use for creating condition executors
+     * @param stitchStrategy The strategy for stitch optimization (e.g., "optimized", "none")
+     * @param queryGranularity The granularity of the query (e.g., SENTENCE, DOCUMENT)
      */
-    public LogicalExecutor(ConditionExecutorFactory executorFactory) {
+    public LogicalExecutor(ConditionExecutorFactory executorFactory, String stitchStrategy, Query.Granularity queryGranularity) {
         this.executorFactory = executorFactory;
+        this.stitchStrategy = stitchStrategy;
+        this.queryGranularity = queryGranularity;
     }
-
-
 
     private <C extends Condition> QueryResultSoA executeCondition(
         C condition,
@@ -69,6 +80,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                                       Optional<FilteringContext> context)
         throws QueryExecutionException {
 
+        logger.debug(">>> Executing LogicalExecutor (internally)");
         logger.debug("Executing logical condition internally: operator={}, subconditions={}, granularity={}, size={}, corpus={}, requirements={}, contextIsPresent={}",
                 condition.operator(), condition.conditions().size(), granularity, granularitySize, corpusName, requirements, context.isPresent());
 
@@ -91,7 +103,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
     /**
      * Executes a logical AND, operating on QueryResultSoA, with FilteringContext propagation.
      */
-    private QueryResultSoA executeAnd(List<Condition> conditions,
+    private QueryResultSoA executeAnd(List<Condition> originalConditionsFromParentLogicalNode,
             Map<String, IndexAccessInterface> indexes,
             Query.Granularity granularity,
             int granularitySize,
@@ -99,7 +111,25 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             AttributeRequirements requirements,
             Optional<FilteringContext> initialContext)
         throws QueryExecutionException {
-        if (conditions.isEmpty()) {
+
+        List<Condition> allOperandsForCurrentAndSequence = flattenAndConditions(originalConditionsFromParentLogicalNode);
+        List<Condition> conditionsToExecute = allOperandsForCurrentAndSequence;
+
+        if ("optimized".equals(this.stitchStrategy) && this.queryGranularity == Query.Granularity.SENTENCE) {
+            if (allOperandsForCurrentAndSequence.size() >= 2) {
+                logger.debug("Attempting to fuse stitchable pairs for AND with {} flattened conditions.", allOperandsForCurrentAndSequence.size());
+                conditionsToExecute = fuseAllNonOverlappingStitchablePairs(allOperandsForCurrentAndSequence);
+                if (conditionsToExecute.size() < allOperandsForCurrentAndSequence.size()) {
+                    logger.info("Fused {} flattened conditions down to {} conditions for AND execution.", allOperandsForCurrentAndSequence.size(), conditionsToExecute.size());
+                } else {
+                    logger.debug("No fusion occurred for {} flattened conditions.", allOperandsForCurrentAndSequence.size());
+                }
+            } else {
+                logger.debug("Skipping fusion for AND: less than 2 flattened conditions or stitch strategy/granularity not applicable. Flattened conditions count: {}", allOperandsForCurrentAndSequence.size());
+            }
+        }
+
+        if (conditionsToExecute.isEmpty()) {
             return new QueryResultSoA(granularity, granularitySize, requirements);
         }
 
@@ -108,10 +138,10 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         logger.debug("executeAnd: Initial FilteringContext isPresent: {}, isUnrestricted: {}",
                      currentContext.isPresent(), currentContext.map(FilteringContext::isUnrestricted).orElse(true));
 
-        QueryResultSoA firstResult = executeCondition(conditions.get(0), indexes, granularity, granularitySize, corpusName, requirements, currentContext);
+        QueryResultSoA firstResult = executeCondition(conditionsToExecute.get(0), indexes, granularity, granularitySize, corpusName, requirements, currentContext);
 
         if (firstResult.isEmpty()) {
-            logger.debug("executeAnd: First condition returned empty result. AND chain result is empty.");
+            logger.debug("executeAnd: First condition (or fused condition) returned empty result. AND chain result is empty.");
             return firstResult;
         }
 
@@ -127,9 +157,9 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
 
         QueryResultSoA cumulativeResult = firstResult;
 
-        for (int i = 1; i < conditions.size(); i++) {
-            logger.debug("executeAnd: Processing condition {} of {} with current context.", i + 1, conditions.size());
-            QueryResultSoA currentStepResult = executeCondition(conditions.get(i), indexes, granularity, granularitySize, corpusName, requirements, currentContext);
+        for (int i = 1; i < conditionsToExecute.size(); i++) {
+            logger.debug("executeAnd: Processing condition {} of {} with current context.", i + 1, conditionsToExecute.size());
+            QueryResultSoA currentStepResult = executeCondition(conditionsToExecute.get(i), indexes, granularity, granularitySize, corpusName, requirements, currentContext);
 
             if (currentStepResult.isEmpty()) {
                 logger.debug("executeAnd: Condition {} returned empty result. AND chain result is empty.", i + 1);
@@ -195,16 +225,16 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                      left.size(), right.size(), granularity);
 
         // DEBUG: Log the actual data being merged
-        logger.debug("LEFT data:");
-        for (int i = 0; i < left.size(); i++) {
-            logger.debug("  Left[{}]: docId={}, value={}, valueType={}",
-                        i, left.getDocumentIdAt(i), left.getValueAt(i), left.getValueTypeAt(i));
-        }
-        logger.debug("RIGHT data:");
-        for (int i = 0; i < right.size(); i++) {
-            logger.debug("  Right[{}]: docId={}, value={}, valueType={}",
-                        i, right.getDocumentIdAt(i), right.getValueAt(i), right.getValueTypeAt(i));
-        }
+        // logger.debug("LEFT data:");
+        // for (int i = 0; i < left.size(); i++) {
+        //     logger.debug("  Left[{}]: docId={}, value={}, valueType={}",
+        //                 i, left.getDocumentIdAt(i), left.getValueAt(i), left.getValueTypeAt(i));
+        // }
+        // logger.debug("RIGHT data:");
+        // for (int i = 0; i < right.size(); i++) {
+        //     logger.debug("  Right[{}]: docId={}, value={}, valueType={}",
+        //                 i, right.getDocumentIdAt(i), right.getValueAt(i), right.getValueTypeAt(i));
+        // }
 
         AttributeRequirements combinedReqs = new AttributeRequirements();
         combinedReqs.merge(left.getRequirements());
@@ -474,5 +504,106 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
 
         logger.debug("SoA OR operation complete. Result size: {}", resultSoA.size());
         return resultSoA;
+    }
+
+    /**
+     * New private helper method to fuse stitchable pairs.
+     * Logic: Greedy, Single-Pass, Multi-Fusion, Non-Adjacent.
+     */
+    private List<Condition> fuseAllNonOverlappingStitchablePairs(List<Condition> originalConditions) {
+        if (originalConditions.size() < 2) {
+            return originalConditions;
+        }
+
+        ArrayList<Condition> resultingConditions = new ArrayList<>();
+        boolean[] consumed = new boolean[originalConditions.size()];
+        // No need to initialize to false, default is false for boolean arrays
+
+        for (int i = 0; i < originalConditions.size(); i++) {
+            if (consumed[i]) {
+                continue;
+            }
+            Condition c1 = originalConditions.get(i);
+            boolean foundPairForC1 = false;
+
+            for (int j = i + 1; j < originalConditions.size(); j++) {
+                if (consumed[j]) {
+                    continue;
+                }
+                Condition c2 = originalConditions.get(j);
+
+                Contains containsPart = null;
+                Condition annotationPart = null;
+                String stitchType = null;
+
+                // Check c1 as Contains and c2 as Annotation
+                if (c1 instanceof Contains c && (c.terms().size() >= 1 && c.terms().size() <= 3)) {
+                    if (c2 instanceof Ner ner && !"DATE".equalsIgnoreCase(ner.entityType())) {
+                        containsPart = c;
+                        annotationPart = ner;
+                        stitchType = "CONTAINS_NER_STITCH";
+                    } else if (c2 instanceof Pos) {
+                        containsPart = c;
+                        annotationPart = (Pos) c2;
+                        stitchType = "CONTAINS_POS_STITCH";
+                    } else if (c2 instanceof Temporal) {
+                        containsPart = c;
+                        annotationPart = (Temporal) c2;
+                        stitchType = "CONTAINS_TEMPORAL_STITCH"; // Or CONTAINS_DATE_STITCH
+                    }
+                }
+
+                // Check c2 as Contains and c1 as Annotation (if not already found)
+                if (containsPart == null && c2 instanceof Contains c && (c.terms().size() >= 1 && c.terms().size() <= 3)) {
+                    if (c1 instanceof Ner ner && !"DATE".equalsIgnoreCase(ner.entityType())) {
+                        containsPart = c;
+                        annotationPart = ner;
+                        stitchType = "CONTAINS_NER_STITCH";
+                    } else if (c1 instanceof Pos) {
+                        containsPart = c;
+                        annotationPart = (Pos) c1;
+                        stitchType = "CONTAINS_POS_STITCH";
+                    } else if (c1 instanceof Temporal) {
+                        containsPart = c;
+                        annotationPart = (Temporal) c1;
+                        stitchType = "CONTAINS_TEMPORAL_STITCH";
+                    }
+                }
+
+                if (containsPart != null && annotationPart != null) {
+                    StitchedCondition fused = new StitchedCondition(containsPart, annotationPart, stitchType);
+                    resultingConditions.add(fused);
+                    consumed[i] = true;
+                    consumed[j] = true;
+                    foundPairForC1 = true;
+                    logger.debug("Fused condition: {} with {}. New fused condition: {}", c1, c2, fused);
+                    break; // Found a partner for c1, move to next i
+                }
+            }
+
+            if (!foundPairForC1) {
+                resultingConditions.add(c1); // Add c1 unmodified
+            }
+        }
+        // Add any remaining unconsumed conditions (should only happen if originalConditions.size() is odd and last one is not consumed)
+        // This loop is actually not needed if the outer loop goes to originalConditions.size() and checks !consumed[i] before adding c1
+        // The current logic of adding c1 if !foundPairForC1 handles all cases correctly.
+
+        if (resultingConditions.size() < originalConditions.size()) {
+            logger.info("Stitch fusion transformed {} conditions into {} conditions.", originalConditions.size(), resultingConditions.size());
+        }
+        return resultingConditions;
+    }
+
+    private List<Condition> flattenAndConditions(List<Condition> conditions) {
+        List<Condition> flattened = new ArrayList<>();
+        for (Condition cond : conditions) {
+            if (cond instanceof Logical logicalCond && logicalCond.operator() == LogicalOperator.AND) {
+                flattened.addAll(flattenAndConditions(logicalCond.conditions())); // Recurse
+            } else {
+                flattened.add(cond);
+            }
+        }
+        return flattened;
     }
 }

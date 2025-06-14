@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.index.util.SynonymManager;
+import com.example.query.model.Query;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
@@ -16,7 +17,7 @@ import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
 import com.example.query.model.condition.Pos;
-import com.example.query.model.condition.StitchedPairCondition;
+import com.example.query.model.condition.StitchedCondition;
 import com.example.query.model.condition.Temporal;
 
 /**
@@ -29,13 +30,17 @@ public class ConditionExecutorFactory {
     // Cache for singleton executors like TemporalExecutor
     private final Map<Class<? extends Condition>, ConditionExecutor<?>> executorCache = new ConcurrentHashMap<>();
     private final SynonymManager synonymManager;
+    private final String stitchStrategy;
+    private final Query.Granularity queryGranularity;
 
     // Configuration for TemporalExecutor strategy
     private String desiredTemporalStrategy = "naive"; // Default strategy
 
-    public ConditionExecutorFactory(SynonymManager synonymManager) {
+    public ConditionExecutorFactory(SynonymManager synonymManager, String stitchStrategy, Query.Granularity queryGranularity) {
         this.synonymManager = synonymManager;
-        logger.debug("Initialized condition executor factory with SynonymManager.");
+        this.stitchStrategy = stitchStrategy;
+        this.queryGranularity = queryGranularity;
+        logger.debug("Initialized condition executor factory with SynonymManager, stitchStrategy: {}, queryGranularity: {}.", stitchStrategy, queryGranularity);
     }
 
     /**
@@ -83,25 +88,22 @@ public class ConditionExecutorFactory {
     public <T extends Condition> ConditionExecutor<T> getExecutor(T condition) {
         Class<? extends Condition> conditionClass = condition.getClass();
 
-        // Handle specific types that should be singletons or require special setup
         if (conditionClass == Temporal.class) {
-            // Use computeIfAbsent for thread-safe singleton creation and configuration
             return (ConditionExecutor<T>) executorCache.computeIfAbsent(Temporal.class, k -> {
                 TemporalExecutor temporalExecutor = new TemporalExecutor();
                  try {
                      temporalExecutor.setActiveStrategy(desiredTemporalStrategy);
                  } catch (IllegalArgumentException e) {
                      logger.error("Failed to set initial strategy '{}' on new TemporalExecutor: {}. Defaulting might occur.", desiredTemporalStrategy, e.getMessage());
-                     // Let TemporalExecutor's constructor default handle it
                  }
                  logger.debug("Created and cached TemporalExecutor instance with initial strategy preference: {}", desiredTemporalStrategy);
                 return temporalExecutor;
             });
         }
 
-        // Handle other condition types (assuming non-singleton for now)
         if (condition instanceof Logical) {
-            return (ConditionExecutor<T>) new LogicalExecutor(this); // Pass factory for recursion
+            // Pass factory, stitchStrategy, and queryGranularity for recursion and fusion logic
+            return (ConditionExecutor<T>) new LogicalExecutor(this, this.stitchStrategy, this.queryGranularity);
         }
         if (condition instanceof Contains) {
             return (ConditionExecutor<T>) executorCache.computeIfAbsent(Contains.class, k -> {
@@ -136,19 +138,12 @@ public class ConditionExecutorFactory {
               };
               return (ConditionExecutor<T>) executorCache.computeIfAbsent(Not.class, factoryFunction);
           }
-        // ADDED CASE FOR StitchedPairCondition
-        if (condition instanceof StitchedPairCondition) {
-            // StitchedPairExecutor is stateful with SynonymManager but specific to the pair,
-            // so typically not a global singleton in the same way as TemporalExecutor.
-            // However, if we don't want to create too many, we could explore caching strategies
-            // or decide if it's lightweight enough to create each time.
-            // For now, creating a new one each time, as its state is tied to the specific StitchedPairCondition.
-            logger.debug("Creating StitchedPairExecutor instance.");
-            return (ConditionExecutor<T>) new StitchedPairExecutor(this.synonymManager);
+        if (condition instanceof StitchedCondition) {
+            logger.debug("Creating new StitchedExecutor instance.");
+            return (ConditionExecutor<T>) new StitchedExecutor(this.synonymManager);
         }
-        // Add cases for other condition types (Pos, Dependency, etc.)
 
-        throw new IllegalArgumentException("No executor found for condition type: " + conditionClass.getSimpleName());
+        throw new IllegalArgumentException("No executor found for condition type: " + conditionClass.getSimpleName() + " (Full type: " + condition.getClass().getName() + ")");
     }
 
      /**

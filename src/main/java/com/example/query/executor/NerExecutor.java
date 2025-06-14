@@ -48,9 +48,9 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                                AttributeRequirements requirements,
                                Optional<FilteringContext> context)
         throws QueryExecutionException {
-
-        logger.debug("Executing NER condition: {}, AttrReqs: {}, FilteringContext isPresent: {}",
-                     condition, requirements.getRequiredSoAAttributes(), context.isPresent());
+        logger.debug(">>> Executing NerExecutor");
+        logger.debug("Executing NER condition: {}, AttrReqs: {}, ContextIsPresent: {}",
+                     condition, requirements, context.isPresent());
         // TODO: Add early exit based on context if definitively empty
         // if (context.isPresent() && context.get().allowedDocumentIds().map(Set::isEmpty).orElse(false)) {
         //     logger.debug("FilteringContext indicates no allowed document IDs, returning empty result for NER.");

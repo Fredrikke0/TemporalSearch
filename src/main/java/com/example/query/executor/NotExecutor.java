@@ -161,15 +161,16 @@ public final class NotExecutor implements ConditionExecutor<Not> {
                                AttributeRequirements requirements,
                                Optional<FilteringContext> context)
         throws QueryExecutionException {
-
+        logger.debug(">>> Executing NotExecutor");
+        Condition subCondition = condition.condition();
+        AttributeRequirements subConditionRequirements = new AttributeRequirements();
         logger.debug("Executing NOT condition with AttributeRequirements: {}, ContextIsPresent: {}",
                      requirements.getRequiredSoAAttributes(), context.isPresent());
 
-        Condition operand = condition.condition();
-        ConditionExecutor<Condition> subExecutor = factory.getExecutor(operand);
+        ConditionExecutor<Condition> subExecutor = factory.getExecutor(subCondition);
 
         // Execute the sub-condition with the provided requirements AND context
-        QueryResultSoA subResult = subExecutor.execute(operand, indexes, granularity, granularitySize, corpusName, requirements, context);
+        QueryResultSoA subResult = subExecutor.execute(subCondition, indexes, granularity, granularitySize, corpusName, requirements, context);
 
         Set<?> subResultIds = extractIds(subResult, granularity);
         logger.debug("Sub-condition executed. Found {} entries, resulting in {} unique IDs for NOT logic.", subResult.size(), subResultIds.size());

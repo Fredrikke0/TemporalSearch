@@ -22,6 +22,7 @@ import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
 import com.example.query.model.condition.Pos;
+import com.example.query.model.condition.StitchedCondition;
 import com.example.query.model.condition.Temporal;
 import com.example.query.parser.util.ValidationUtils;
 import com.example.query.parser.util.VariableQualifier;
@@ -476,6 +477,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     public Object visitSingleCondition(QueryLangParser.SingleConditionContext ctx, String currentScopeAlias) {
         // Dispatch to the specific condition visitor (e.g., visitNerExpression), passing the alias
         if (ctx.nerExpression() != null) {
+             logger.debug("visitSingleCondition: ctx.nerExpression: {}", ctx.nerExpression());
              return visitNerExpression(ctx.nerExpression(), currentScopeAlias);
         } else if (ctx.containsExpression() != null) {
              return visitContainsExpression(ctx.containsExpression(), currentScopeAlias);
@@ -497,6 +499,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     private Object visit(ParseTree tree, String currentScopeAlias) {
          // Helper to dispatch visits for conditions needing the alias
+         logger.debug("visit: tree: {}, currentScopeAlias: {}", tree, currentScopeAlias);
          if (tree instanceof QueryLangParser.NerExpressionContext c) return visitNerExpression(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.ContainsExpressionContext c) return visitContainsExpression(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.DateComparisonExpressionContext c) return visitDateComparisonExpression(c, currentScopeAlias);
@@ -549,24 +552,30 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         String type = (String) visitEntityType(ctx.type);
         String qualifiedVariableName = null;
         boolean isVariable = false; // Flag
+        logger.debug("[QueryModelBuilder.visitNerExpression] Processing NER expression: {}. BIND present: {}, var present: {}", ctx.getText(), ctx.BIND() != null, ctx.var != null);
+
         if (ctx.BIND() != null && ctx.var != null) {
             String plainVarName = (String) visit(ctx.var);
             qualifiedVariableName = VariableQualifier.qualifyWithScope(plainVarName, currentScopeAlias);
             isVariable = true; // Set flag
             VariableType varType = determineNerVariableType(type);
-            logger.debug("Registering producer: {} type: {} for NER", qualifiedVariableName, varType);
+            logger.debug("[QueryModelBuilder.visitNerExpression] BIND clause detected. plainVarName: '{}', qualifiedVariableName: '{}', isVariable set to: {}, varType: {}", plainVarName, qualifiedVariableName, isVariable, varType);
             variableRegistry.registerProducer(qualifiedVariableName, varType, "NER");
+        } else {
+            logger.debug("[QueryModelBuilder.visitNerExpression] No BIND clause detected or var is null. isVariable remains: {}", isVariable);
         }
 
         String termValue = null;
         if (ctx.termValue != null) {
              Object termResult = visitTerm(ctx.termValue, currentScopeAlias); // Pass alias
              termValue = (String) termResult; // visitTerm now returns plain name if variable
+            logger.debug("[QueryModelBuilder.visitNerExpression] termValue present: '{}'", termValue);
              // Consumption registration happens within visitTerm
         }
 
-        // Model updated to store qualified name
-        return new Ner(type, termValue, qualifiedVariableName, isVariable); // Pass qualified name
+        Ner nerCondition = new Ner(type, termValue, qualifiedVariableName, isVariable); // Pass qualified name
+        logger.debug("[QueryModelBuilder.visitNerExpression] Constructed Ner condition: {}", nerCondition);
+        return nerCondition;
     }
 
     // Helper method to determine variable type from NER entity type
@@ -1434,6 +1443,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             case Dependency dependency -> dependency.requalifyVariable(oldPrefix, newPrefix);
             case Logical logical -> logical.requalifyVariables(oldPrefix, newPrefix);
             case Not not -> not.requalifyVariables(oldPrefix, newPrefix);
+            case StitchedCondition stitched -> stitched.requalifyVariables(oldPrefix, newPrefix);
+            default -> throw new IllegalArgumentException("Unsupported condition type: " + condition.getClass().getSimpleName());
         };
     }
 

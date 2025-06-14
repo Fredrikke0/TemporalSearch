@@ -126,16 +126,21 @@ public final class QueryResultSoA {
     public void add(Object value, ValueType valueType, String variableName,
                    int documentId, int sentenceId, int beginChar, int endChar, int synonymId, int conceptualRowId) {
 
-        logger.trace("QueryResultSoA add() (hashCode={}): BEFORE. current_size={}, current_nextConceptualRowIdGenerator={}. Adding: value={}, type={}, var={}, docId={}, conceptualRowId={}",
+        logger.trace("[QueryResultSoA add()] (hashCode={}): BEFORE. current_size={}, current_nextConceptualRowIdGenerator={}. Adding: value={}, type={}, var={}, docId={}, conceptualRowId={}, passedSynonymId={}",
                      System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator,
-                     value, valueType, variableName, documentId, conceptualRowId);
+                     value, valueType, variableName, documentId, conceptualRowId, synonymId);
 
         // Add to required position arrays
         documentIds.add(documentId);
         if (sentenceIds != null) sentenceIds.add(sentenceId);
         if (beginChars != null) beginChars.add(beginChar);
         if (endChars != null) endChars.add(endChar);
-        if (synonymIds != null) synonymIds.add(synonymId);
+        if (synonymIds != null) {
+            synonymIds.add(synonymId);
+            logger.trace("[QueryResultSoA add()] Added synonymId: {} to internal list.", synonymId);
+        } else {
+            logger.trace("[QueryResultSoA add()] Internal synonymIds list is null. Passed synonymId: {} was NOT added.", synonymId);
+        }
         if (conceptualRowIds != null) conceptualRowIds.add(conceptualRowId);
 
         // Deduplicate and store value
@@ -310,9 +315,12 @@ public final class QueryResultSoA {
     public int getSynonymIdAt(int index) {
         validateIndex(index);
         if (synonymIds == null) {
-            throw new IllegalStateException("Synonym IDs not available (not required by AttributeRequirements)");
+            logger.warn("[QueryResultSoA getSynonymIdAt({})] Internal synonymIds list is null. Returning -1. This might indicate AttributeRequirements.needsSynonymIds was false.", index);
+            return -1; // Or some other appropriate default if not required
         }
-        return synonymIds.getInt(index);
+        int synId = synonymIds.getInt(index);
+        logger.trace("[QueryResultSoA getSynonymIdAt({})] Returning synonymId: {}", index, synId);
+        return synId;
     }
 
     /**

@@ -138,6 +138,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                                Optional<FilteringContext> context)
         throws QueryExecutionException {
 
+        logger.debug(">>> Executing TemporalExecutor (delegating to strategy: {})", activeStrategyName);
         logger.debug("Executing TEMPORAL condition with active strategy: '{}', AttributeRequirements: {}, ContextIsPresent: {}",
             activeStrategyName, requirements.getRequiredSoAAttributes(), context.isPresent());
 
@@ -173,6 +174,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             Optional<FilteringContext> context)
             throws QueryExecutionException {
 
+            strategyLogger.debug(">>> Executing NashTemporalStrategy");
             strategyLogger.debug("Executing NashTemporalStrategy for condition: {}, ContextIsPresent: {}", condition, context.isPresent());
             QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
 
@@ -456,6 +458,8 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 AttributeRequirements requirements,
                 Optional<FilteringContext> context)
             throws QueryExecutionException {
+
+            strategyLogger.debug(">>> Executing NaiveTemporalStrategy");
             strategyLogger.debug("Executing NaiveTemporalStrategy for condition: {}, ContextIsPresent: {}", condition, context.isPresent());
             QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
             int conceptualRowIdCounter = 0;

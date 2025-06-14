@@ -115,8 +115,16 @@ public class QueryAttributeAnalyzer {
      */
     private static void analyzeCondition(Condition condition, AttributeRequirements requirements) {
         if (condition instanceof Ner ner && (ner.isVariable() || ner.target() != null)) {
-            logger.trace("Found NER condition with variable or target, requiring synonym IDs");
-            requirements.needsSynonymIds = true;
+            logger.debug("[QueryAttributeAnalyzer.analyzeCondition] Analyzing NER condition: {}", ner);
+            boolean isNerVariableOrHasTarget = ner.isVariable() || ner.target() != null;
+            logger.debug("[QueryAttributeAnalyzer.analyzeCondition] NER check: ner.isVariable() -> {}, ner.target() -> '{}', (ner.isVariable() || ner.target() != null) -> {}", ner.isVariable(), ner.target(), isNerVariableOrHasTarget);
+            if (isNerVariableOrHasTarget) {
+                logger.trace("Found NER condition with variable or target, requiring synonym IDs");
+                requirements.needsSynonymIds = true;
+            } else {
+                logger.debug("[QueryAttributeAnalyzer.analyzeCondition] NER condition '{}' does NOT meet criteria for needing synonym IDs (isVariable: {}, target: '{}')", ner, ner.isVariable(), ner.target());
+            }
+            logger.debug("[QueryAttributeAnalyzer.analyzeCondition] After NER check, requirements.needsSynonymIds: {}", requirements.needsSynonymIds);
         } else if (condition instanceof Pos pos && (pos.isVariable() || pos.term() != null)) {
             logger.trace("Found POS condition with variable or target, requiring synonym IDs");
             requirements.needsSynonymIds = true;

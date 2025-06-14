@@ -51,46 +51,103 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
         logger.debug("populateSpecificAnnotationSynonyms is a no-op for BigramNerStitchGenerator.");
     }
 
+    // Temporary internal record to hold raw annotation data including the token
+    private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag, int originalAnnotationEndChar) {}
+
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
-        List<AnnotationData> annotations = new ArrayList<>();
+        List<RawAnnotation> rawAnnotations = new ArrayList<>();
+        // Modified SQL to fetch 'token'
         String sql = String.format("""
-            SELECT sentence_id, begin_char, end_char, ner, normalized_ner
+            SELECT sentence_id, begin_char, end_char, token, ner
             FROM annotations
             WHERE document_id = ?
-                AND ner != ''
-                AND normalized_ner IS NOT NULL AND normalized_ner != ''
+                AND ner != '' AND ner IS NOT NULL
                 AND ner NOT IN %s
             ORDER BY sentence_id, begin_char
-        """, NerIndexGenerator.NER_TAGS_TO_EXCLUDE_SQL); // Use constant from NerIndexGenerator
+        """, NerIndexGenerator.NER_TAGS_TO_EXCLUDE_SQL);
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
             stmt.setInt(1, documentId);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    String nerTag = rs.getString("ner");
-                    String normalizedNer = rs.getString("normalized_ner");
-
-                    if (normalizedNer == null || normalizedNer.isEmpty() || nerTag == null || nerTag.isEmpty()) {
-                        logger.trace("Skipping NER annotation due to null/empty. Doc ID: {}, NER: '{}', Normalized: '{}'", documentId, nerTag, normalizedNer);
-                        continue;
-                    }
-
-                    annotations.add(new AnnotationData(
+                    rawAnnotations.add(new RawAnnotation(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
-                        rs.getInt("end_char"),
-                        nerTag.toUpperCase(),       // annotationKeyComponent
-                        normalizedNer.toLowerCase() // specificValueForSynonym
+                        rs.getInt("end_char"), // This is the end_char of the individual token
+                        rs.getString("token"),
+                        rs.getString("ner"),
+                        rs.getInt("end_char") // Store original end_char for adjacency check
                     ));
                 }
             }
         } catch (SQLException e) {
-            logger.error("SQLException in fetchAnnotationsForDocument for Bigram NER stitch, doc ID {}: {}", documentId, e.getMessage(), e);
+            logger.error("SQLException in fetchAnnotationsForDocument for Bigram NER stitch (raw fetch), doc ID {}: {}", documentId, e.getMessage(), e);
             throw e;
         }
-        // Optional: Add logging for fetched annotations
-        return annotations;
+
+        List<AnnotationData> groupedAnnotations = new ArrayList<>();
+        if (rawAnnotations.isEmpty()) {
+            return groupedAnnotations;
+        }
+
+        List<String> currentEntityRawTokens = new ArrayList<>();
+        String currentEntityType = null;
+        int currentEntitySentId = -1;
+        int currentEntityBeginChar = -1;
+        int previousTokenEndChar = -1; // To check for token adjacency
+
+        for (int i = 0; i < rawAnnotations.size(); i++) {
+            RawAnnotation currentAnnotation = rawAnnotations.get(i);
+            boolean entityBreak = false;
+
+            if (currentEntityType != null) {
+                if (!currentAnnotation.nerTag().equals(currentEntityType) ||
+                    currentAnnotation.sentenceId() != currentEntitySentId ||
+                    currentAnnotation.beginChar() > previousTokenEndChar + 1) { // Check for adjacency (allow 0 or 1 char gap, e.g. space)
+                    entityBreak = true;
+                }
+            }
+
+            if (entityBreak) {
+                if (!currentEntityRawTokens.isEmpty()) {
+                    String entityValue = String.join(" ", currentEntityRawTokens).toLowerCase();
+                    groupedAnnotations.add(new AnnotationData(
+                        currentEntitySentId,
+                        currentEntityBeginChar,
+                        previousTokenEndChar, // endChar is from the last token of the completed entity
+                        currentEntityType.toUpperCase(),
+                        entityValue
+                    ));
+                }
+                currentEntityRawTokens.clear();
+                currentEntityType = null; // Reset for the new entity or non-entity
+            }
+
+            // Start of a new entity or continuation
+            if (currentEntityType == null) { // Start a new entity group
+                currentEntityType = currentAnnotation.nerTag();
+                currentEntitySentId = currentAnnotation.sentenceId();
+                currentEntityBeginChar = currentAnnotation.beginChar();
+            }
+            currentEntityRawTokens.add(currentAnnotation.token());
+            previousTokenEndChar = currentAnnotation.originalAnnotationEndChar(); // Update for next adjacency check
+
+            // If it's the last annotation in the list, process any pending entity
+            if (i == rawAnnotations.size() - 1) {
+                if (!currentEntityRawTokens.isEmpty() && currentEntityType != null) {
+                    String entityValue = String.join(" ", currentEntityRawTokens).toLowerCase();
+                    groupedAnnotations.add(new AnnotationData(
+                        currentEntitySentId,
+                        currentEntityBeginChar,
+                        previousTokenEndChar, // endChar of the last token
+                        currentEntityType.toUpperCase(),
+                        entityValue
+                    ));
+                }
+            }
+        }
+        return groupedAnnotations;
     }
 
     @Override

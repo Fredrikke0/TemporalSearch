@@ -52,6 +52,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                                Optional<FilteringContext> context)
         throws QueryExecutionException {
 
+        logger.debug(">>> Executing ContainsExecutor");
         logger.debug("Executing CONTAINS condition with AttributeRequirements: {}, FilteringContext isPresent: {}",
                      requirements.getRequiredSoAAttributes(), context.isPresent());
         // TODO: If context is present and specifies empty doc/sentence IDs, can we early exit here?
