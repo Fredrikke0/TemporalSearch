@@ -1171,7 +1171,7 @@ public class PositionListSoA {
     public static byte[] mergeCompressedBlobs(byte[] blob1, byte[] blob2) throws IOException {
         if (blob1 == null || blob1.length == 0) {
             if (blob2 == null || blob2.length == 0) {
-                return new PositionListSoA().serializeToCompositeBlob(); // Return empty blob
+                return new PositionListSoA().serializeToCompositeBlob(CompressionOverride.DEFAULT);
             }
             return blob2;
         }
@@ -1179,51 +1179,55 @@ public class PositionListSoA {
             return blob1;
         }
 
-        // Get the number of positions from each blob
         int numPositions1 = getNumPositionsFromBlob(blob1);
         int numPositions2 = getNumPositionsFromBlob(blob2);
         int totalPositions = numPositions1 + numPositions2;
 
         if (totalPositions == 0) {
-            return new PositionListSoA().serializeToCompositeBlob();
+            // Both blobs might represent empty lists, or one/both are malformed to appear empty.
+            // Return a canonical empty blob.
+            return new PositionListSoA().serializeToCompositeBlob(CompressionOverride.DEFAULT);
         }
 
-        // Create a result container
-        PositionListSoA result = new PositionListSoA();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(totalPositions * 8);
+        try (DataOutputStream dos = new DataOutputStream(baos)) {
+            dos.writeInt(totalPositions);
 
-        // Merge each attribute array selectively to minimize memory usage
-        // 1. Document IDs
-        IntArrayList docIds1 = decompressDocIds(blob1);
-        IntArrayList docIds2 = decompressDocIds(blob2);
-        docIds1.addAll(docIds2);
-        result.documentIds = docIds1;
+            IntArrayList docIds1 = decompressDocIds(blob1);
+            IntArrayList docIds2 = decompressDocIds(blob2);
+            docIds1.addAll(docIds2);
+            writeCompressedIntArray(dos, docIds1.elements(), docIds1.size(), true, CompressionOverride.DEFAULT);
+            docIds1 = null;
+            docIds2 = null;
 
-        // 2. Sentence IDs
-        IntArrayList sentIds1 = decompressSentenceIds(blob1);
-        IntArrayList sentIds2 = decompressSentenceIds(blob2);
-        sentIds1.addAll(sentIds2);
-        result.sentenceIds = sentIds1;
+            IntArrayList sentIds1 = decompressSentenceIds(blob1);
+            IntArrayList sentIds2 = decompressSentenceIds(blob2);
+            sentIds1.addAll(sentIds2);
+            writeCompressedIntArray(dos, sentIds1.elements(), sentIds1.size(), true, CompressionOverride.DEFAULT);
+            sentIds1 = null;
+            sentIds2 = null;
 
-        // 3. Begin characters
-        IntArrayList beginChars1 = decompressBeginChars(blob1);
-        IntArrayList beginChars2 = decompressBeginChars(blob2);
-        beginChars1.addAll(beginChars2);
-        result.beginChars = beginChars1;
+            IntArrayList beginChars1 = decompressBeginChars(blob1);
+            IntArrayList beginChars2 = decompressBeginChars(blob2);
+            beginChars1.addAll(beginChars2);
+            writeCompressedIntArray(dos, beginChars1.elements(), beginChars1.size(), true, CompressionOverride.DEFAULT);
+            beginChars1 = null;
+            beginChars2 = null;
 
-        // 4. End characters
-        IntArrayList endChars1 = decompressEndChars(blob1);
-        IntArrayList endChars2 = decompressEndChars(blob2);
-        endChars1.addAll(endChars2);
-        result.endChars = endChars1;
+            IntArrayList endChars1 = decompressEndChars(blob1);
+            IntArrayList endChars2 = decompressEndChars(blob2);
+            endChars1.addAll(endChars2);
+            writeCompressedIntArray(dos, endChars1.elements(), endChars1.size(), true, CompressionOverride.DEFAULT);
+            endChars1 = null;
+            endChars2 = null;
 
-        // 5. Synonym IDs
-        IntArrayList synonymIds1 = decompressSynonymIds(blob1);
-        IntArrayList synonymIds2 = decompressSynonymIds(blob2);
-        synonymIds1.addAll(synonymIds2);
-        result.synonymIds = synonymIds1;
+            IntArrayList synonymIds1 = decompressSynonymIds(blob1);
+            IntArrayList synonymIds2 = decompressSynonymIds(blob2);
+            synonymIds1.addAll(synonymIds2);
+            writeCompressedIntArray(dos, synonymIds1.elements(), synonymIds1.size(), false, CompressionOverride.DEFAULT); // applyDelta = false
 
-        result.numPositions = totalPositions;
-
-        return result.serializeToCompositeBlob();
+            dos.flush();
+        }
+        return baos.toByteArray();
     }
 }

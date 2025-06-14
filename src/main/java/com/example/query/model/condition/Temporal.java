@@ -300,7 +300,6 @@ public record Temporal(
                 case BEFORE -> {
                     LocalDate dateOnly = comparisonDate.toLocalDate().minusDays(1);
                     if (dateOnly.isBefore(MIN_NASH_DATE)) dateOnly = MIN_NASH_DATE;
-                    // Ensure end date is not before MIN_NASH_DATE, and also not before actual MIN_NASH_DATE
                     LocalDate effectiveMinNash = MIN_NASH_DATE;
                     if (dateOnly.isBefore(effectiveMinNash)) dateOnly = effectiveMinNash; // Should not happen if MIN_NASH_DATE is truly min
 

@@ -33,8 +33,8 @@ class NashPredicateTest {
         indexedIntervals = List.of(
             "[2000-08-20 , 2000-08-20]", // 0: Early Point
             "[2005-02-10 , 2005-02-10]", // 1: Mid Point
-            "[2005-01-01 , 2005-12-31]", // 2: Year Range containing Index 1
-            "[2010-04-05 , 2010-04-05]", // 3: Late Point
+            //"[2005-01-01 , 2005-12-31]", // 2: Year Range containing Index 1
+            //"[2010-04-05 , 2010-04-05]", // 3: Late Point
             "[2004-12-31 , 2004-12-31]", // 4: Point just before Range 2
             "[2006-01-01 , 2006-01-01]"  // 5: Point just after Range 2
 

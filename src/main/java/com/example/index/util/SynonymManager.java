@@ -148,37 +148,39 @@ public class SynonymManager implements AutoCloseable {
 
     public Map<Integer, String> getTerms(Set<Integer> ids) throws RocksDBException {
         Map<Integer, String> result = new HashMap<>();
-        List<Integer> idsToFetchFromDB = new ArrayList<>(); // Using ArrayList, assuming set 'ids' isn't excessively large for this list
+        List<Integer> idsNotInCache = new ArrayList<>();
+        List<byte[]> keysToFetchFromDB = new ArrayList<>();
 
         for (Integer id : ids) {
             if (idToTermCache.containsKey(id)) {
                 result.put(id, idToTermCache.get(id));
             } else {
-                // This case suggests the idToTermCache might not be fully populated
-                // or the ID is invalid. Log a warning if unexpected.
-                logger.warn("Synonym ID {} not found in idToTermCache during getTerms. Will attempt DB lookup.", id);
-                idsToFetchFromDB.add(id);
+                idsNotInCache.add(id);
+                keysToFetchFromDB.add(("id:" + id).getBytes(StandardCharsets.UTF_8));
             }
         }
 
-        if (!idsToFetchFromDB.isEmpty()) {
-            logger.debug("Attempting to fetch {} terms from RocksDB for getTerms operation.", idsToFetchFromDB.size());
-            // Using individual gets as a fallback.
-            // Consider RocksDB.multiGet() if this path is hit frequently with many IDs.
-            for (Integer idToFetch : idsToFetchFromDB) {
-                byte[] idKey = ("id:" + idToFetch).getBytes(StandardCharsets.UTF_8);
-                byte[] termBytes = db.get(idKey);
+        if (!keysToFetchFromDB.isEmpty()) {
+            logger.debug("Attempting to fetch {} terms from RocksDB using multiGetAsList for getTerms operation.", keysToFetchFromDB.size());
+            List<byte[]> valuesFromDB = db.multiGetAsList(keysToFetchFromDB);
+
+            for (int i = 0; i < valuesFromDB.size(); i++) {
+                byte[] termBytes = valuesFromDB.get(i);
+                Integer idToFetch = idsNotInCache.get(i);
+
                 if (termBytes != null) {
                     String term = new String(termBytes, StandardCharsets.UTF_8);
                     result.put(idToFetch, term);
-                    // Populate caches for future lookups, be mindful of consistency
                     idToTermCache.put(idToFetch, term);
-                    if (!termToIdCache.containsKey(term)) { // Avoid overwriting if term maps to a different primary ID
+                    if (termToIdCache.containsKey(term) && termToIdCache.get(term).intValue() != idToFetch.intValue()) {
+                        logger.warn("SynonymManager cache conflict: Term '{}' (fetched for ID {}) already exists in termToIdCache with a different ID ({}). Caching new ID->Term mapping for {}.",
+                                    term, idToFetch, termToIdCache.get(term), idToFetch);
+                    } else if (!termToIdCache.containsKey(term)) {
                         termToIdCache.put(term, idToFetch);
                     }
-                     logger.trace("Fetched term '{}' for ID {} from DB and cached.", term, idToFetch);
+                    logger.trace("Fetched term '{}' for ID {} from DB via multiGetAsList and cached.", term, idToFetch);
                 } else {
-                    logger.warn("Synonym ID {} not found in RocksDB either during getTerms fallback.", idToFetch);
+                    logger.warn("Synonym ID {} not found in RocksDB during multiGetAsList operation for getTerms.", idToFetch);
                 }
             }
         }

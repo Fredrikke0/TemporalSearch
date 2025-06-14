@@ -433,7 +433,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 NASH_INTERVAL_FORMATTER.format(effectiveEnd));
         }
 
-        // Removed getDocIdsForMatchingDates as its logic is now integrated into execute
     }
 
     /**

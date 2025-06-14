@@ -160,11 +160,11 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         if (baseLocationToCreateIn != null) {
             uniqueTempDirForThisInstance = Files.createTempDirectory(baseLocationToCreateIn, instancePrefix);
             logMessagePrefix = "IndexGenerator for [" + indexNameForTempDir + "] using instance temp dir inside custom base '{}': {}";
-            logger.info(logMessagePrefix, baseLocationToCreateIn.toAbsolutePath(), uniqueTempDirForThisInstance.toAbsolutePath());
+            logger.debug(logMessagePrefix, baseLocationToCreateIn.toAbsolutePath(), uniqueTempDirForThisInstance.toAbsolutePath());
         } else { // System default
             uniqueTempDirForThisInstance = Files.createTempDirectory(instancePrefix);
             logMessagePrefix = "IndexGenerator for [" + indexNameForTempDir + "] using instance temp dir in system default location: {}";
-            logger.info(logMessagePrefix, uniqueTempDirForThisInstance.toAbsolutePath());
+            logger.debug(logMessagePrefix, uniqueTempDirForThisInstance.toAbsolutePath());
         }
         return uniqueTempDirForThisInstance;
     }

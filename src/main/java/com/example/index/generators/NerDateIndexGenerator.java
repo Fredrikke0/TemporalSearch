@@ -17,7 +17,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,9 +63,10 @@ import com.google.common.collect.ListMultimap;
  */
 public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(NerDateIndexGenerator.class);
-    private static final DateTimeFormatter INPUT_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter INPUT_FORMAT_FULL = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter INPUT_FORMAT_YEAR_MONTH = DateTimeFormatter.ofPattern("yyyy-MM");
+    private static final DateTimeFormatter INPUT_FORMAT_YEAR = DateTimeFormatter.ofPattern("yyyy");
     private static final DateTimeFormatter KEY_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
-    private static final Pattern DATE_PATTERN = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
 
     private Set<String> uniqueDatesProcessed = new HashSet<>();
 
@@ -103,25 +103,21 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String normalizedNer = rs.getString("normalized_ner");
-                    // Further validation for YYYY-MM-DD format
-                    if (normalizedNer != null && DATE_PATTERN.matcher(normalizedNer).matches()) {
-                        try {
-                            LocalDate.parse(normalizedNer); // Strict parse check
-                            batch.add(new AnnotationEntry(
-                                rs.getLong("annotation_id"),
-                                rs.getInt("document_id"),
-                                rs.getInt("sentence_id"),
-                                rs.getInt("begin_char"),
-                                rs.getInt("end_char"),
-                                rs.getString("token"), // Original token might be useful for context
-                                rs.getString("pos"),
-                                rs.getString("ner"),
-                                normalizedNer, // Key for this index is the normalized date string
-                                rs.getString("lemma")
-                            ));
-                        } catch (DateTimeParseException e) {
-                            logger.debug("Skipping entry with unparseable normalized_ner date: {}", normalizedNer);
-                        }
+                    // Lenient parsing will be handled by normalizeDate and processBatch
+                    // No strict check here anymore, just ensure it's not null/empty before adding
+                    if (normalizedNer != null && !normalizedNer.trim().isEmpty()) {
+                        batch.add(new AnnotationEntry(
+                            rs.getLong("annotation_id"),
+                            rs.getInt("document_id"),
+                            rs.getInt("sentence_id"),
+                            rs.getInt("begin_char"),
+                            rs.getInt("end_char"),
+                            rs.getString("token"),
+                            rs.getString("pos"),
+                            rs.getString("ner"),
+                            normalizedNer, // Pass the raw normalized_ner
+                            rs.getString("lemma")
+                        ));
                     }
                 }
             }
@@ -232,21 +228,48 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
      * Returns null if the input is not a valid date or not in the expected format.
      */
     private String normalizeDate(String date) {
-        if (date == null || !date.matches("\\d{4}-\\d{2}-\\d{2}")) {
+        if (date == null || date.trim().isEmpty()) {
             return null;
         }
-        // Extract year and check if it's "0000"
-        String year = date.substring(0, 4);
-        if ("0000".equals(year)) {
-            logger.debug("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", date);
+        String trimmedDate = date.trim();
+
+        // Check for "0000" year early, as it's invalid for LocalDate
+        if (trimmedDate.startsWith("0000")) {
+            logger.debug("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", trimmedDate);
             return null;
         }
+
+        LocalDate parsedDate;
         try {
-            LocalDate parsed = LocalDate.parse(date, INPUT_FORMAT);
-            return parsed.format(KEY_FORMAT);
-        } catch (DateTimeParseException e) {
-            return null;
+            // Attempt to parse as YYYY-MM-DD
+            parsedDate = LocalDate.parse(trimmedDate, INPUT_FORMAT_FULL);
+        } catch (DateTimeParseException e1) {
+            try {
+                // Attempt to parse as YYYY-MM
+                // LocalDate.parse with "yyyy-MM" pattern will parse "YYYY-MM" to the first day of that month.
+                java.time.YearMonth ym = java.time.YearMonth.parse(trimmedDate, INPUT_FORMAT_YEAR_MONTH);
+                parsedDate = ym.atDay(1);
+            } catch (DateTimeParseException e2) {
+                try {
+                    // Attempt to parse as YYYY
+                    // LocalDate.parse with "yyyy" pattern will parse "YYYY" to YYYY-01-01.
+                    // However, to be more explicit or handle cases where direct parsing "yyyy" isn't standard for LocalDate:
+                    java.time.Year year = java.time.Year.parse(trimmedDate, INPUT_FORMAT_YEAR);
+                    parsedDate = year.atDay(1); // First day of the year
+                } catch (DateTimeParseException e3) {
+                    logger.trace("Could not parse date string '{}' with available formats (YYYY-MM-DD, YYYY-MM, YYYY).", trimmedDate);
+                    return null;
+                }
+            }
         }
+
+        // Check again for year 0000 after parsing attempts (e.g. if a lenient parser somehow allowed it)
+        if (parsedDate.getYear() == 0) {
+             logger.debug("Parsed date resulted in year 0000 for input '{}', which is invalid.", trimmedDate);
+             return null;
+        }
+
+        return parsedDate.format(KEY_FORMAT);
     }
 
     @Override
