@@ -83,7 +83,7 @@ public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGe
                     java.time.Year year = java.time.Year.parse(trimmedDate, INPUT_FORMAT_YEAR);
                     parsedDate = year.atDay(1); // Normalize to the first day of that year
                 } catch (DateTimeParseException e3) {
-                    logger.warn("Could not parse date string '{}' with available formats (YYYY-MM-DD, YYYY-MM, YYYY): {}", trimmedDate, e3.getMessage());
+                    logger.trace("Could not parse date string '{}' with available formats (YYYY-MM-DD, YYYY-MM, YYYY): {}", trimmedDate, e3.getMessage());
                     return null;
                 }
             }

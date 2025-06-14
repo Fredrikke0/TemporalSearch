@@ -78,7 +78,7 @@ public final class BigramDateStitchGenerator extends AbstractNgramStitchGenerato
                     java.time.Year year = java.time.Year.parse(trimmedDate, INPUT_FORMAT_YEAR);
                     parsedDate = year.atDay(1);
                 } catch (DateTimeParseException e3) {
-                    logger.warn("Could not parse date string '{}' with available formats: {}", trimmedDate, e3.getMessage());
+                    logger.trace("Could not parse date string '{}' with available formats: {}", trimmedDate, e3.getMessage());
                     return null;
                 }
             }
