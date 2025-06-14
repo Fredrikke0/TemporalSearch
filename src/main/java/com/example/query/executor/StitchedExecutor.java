@@ -4,8 +4,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,28 +31,6 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
     private static final char DELIMITER_CHAR = IndexAccessInterface.DELIMITER;
 
     private final SynonymManager synonymManager;
-
-    // Define a record to hold all binding information temporarily for sorting
-    private record FullBinding(
-            Object value, ValueType valueType, String variableName,
-            int documentId, int sentenceId,
-            int beginChar, int endChar,
-            int synonymId, int conceptualRowId) implements Comparable<FullBinding> {
-
-        @Override
-        public int compareTo(FullBinding other) {
-            int docIdCompare = Integer.compare(this.documentId, other.documentId);
-            if (docIdCompare != 0) {
-                return docIdCompare;
-            }
-            // Sentence ID can be -1 if not applicable for the granularity or requirement
-            // Treat -1 as a smaller value or handle as per specific sorting needs if sentenceId can be mixed.
-            // For now, simple integer comparison.
-            return Integer.compare(this.sentenceId, other.sentenceId);
-            // Further sorting by beginChar or conceptualRowId could be added if necessary
-            // but docId/sentId is primary for merge join.
-        }
-    }
 
     public StitchedExecutor(SynonymManager synonymManager) {
         if (synonymManager == null) {
@@ -144,9 +120,6 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
         requirements.needsConceptualRowIds = true;
 
-        List<FullBinding> collectedBindings = new ArrayList<>();
-        int currentConceptualRowIdCounter = 0; // Manage conceptual IDs locally before adding to QueryResultSoA
-
         try {
             if (temporalConditionDetails != null) {
                 String searchPrefix = ngramTerm + DELIMITER_CHAR;
@@ -190,28 +163,28 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                             int termEndChar = positions.getEndCharAt(i);
                                             int annotationSpecificValueId = positions.getSynonymIdAt(i);
 
-                                            int conceptualRowIdForThisPair = currentConceptualRowIdCounter++;
+                                            int conceptualRowId = resultSoA.getNextConceptualRowId();
 
-                                            collectedBindings.add(new FullBinding(
+                                            resultSoA.add(
                                                 ngramTerm,
                                                 ValueType.TERM,
                                                 containsCondition.variableName(),
                                                 docId, sentenceId,
                                                 termBeginChar, termEndChar,
-                                                -1, // synonymId for term part
-                                                conceptualRowIdForThisPair
-                                            ));
+                                                -1,
+                                                conceptualRowId
+                                            );
 
                                             if (!annotationVarName.isBlank()) {
-                                                collectedBindings.add(new FullBinding(
-                                                    dateFromKey, // The actual LocalDate object
-                                                    annotationValueType, // DATE
+                                                resultSoA.add(
+                                                    dateFromKey,
+                                                    annotationValueType,
                                                     annotationVarName,
                                                     docId, sentenceId,
-                                                    -1, -1, // No specific char positions for the date value itself in this binding
-                                                    annotationSpecificValueId, // Could be date string or an ID; using what's from PositionListSoA
-                                                    conceptualRowIdForThisPair
-                                                ));
+                                                    -1, -1,
+                                                    annotationSpecificValueId,
+                                                    conceptualRowId
+                                                );
                                             }
                                         }
                                     }
@@ -250,17 +223,17 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         int termEndChar = positions.getEndCharAt(i);
                         int annotationSpecificValueId = positions.getSynonymIdAt(i);
 
-                        int conceptualRowIdForThisPair = currentConceptualRowIdCounter++;
+                        int conceptualRowId = resultSoA.getNextConceptualRowId();
 
-                        collectedBindings.add(new FullBinding(
+                        resultSoA.add(
                             ngramTerm,
                             ValueType.TERM,
                             containsCondition.variableName(),
                             docId, sentenceId,
                             termBeginChar, termEndChar,
-                            -1, // synonymId for term part
-                            conceptualRowIdForThisPair
-                        ));
+                            -1,
+                            conceptualRowId
+                        );
 
                         if (!annotationVarName.isBlank()) {
                             Object valueToAdd = null;
@@ -274,15 +247,15 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                             }
 
                             if (valueToAdd != null) {
-                                collectedBindings.add(new FullBinding(
-                                    valueToAdd, // Resolved NER string
-                                    annotationValueType, // ENTITY or POS_TERM
+                                resultSoA.add(
+                                    valueToAdd,
+                                    annotationValueType,
                                     annotationVarName,
                                     docId, sentenceId,
-                                    -1, -1, // No specific char positions for annotation value
-                                    annotationSpecificValueId, // Synonym ID of the resolved NER/POS value
-                                    conceptualRowIdForThisPair
-                                ));
+                                    -1, -1,
+                                    annotationSpecificValueId,
+                                    conceptualRowId
+                                );
                             }
                         }
                     }
@@ -301,27 +274,15 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
             throw new QueryExecutionException("IO error during stitch execution for " + stitchIndexName, e, sourceName, QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
 
-        // Sort collected bindings before populating QueryResultSoA
-        if (!collectedBindings.isEmpty()) {
-            logger.debug("Collected {} bindings, sorting now...", collectedBindings.size());
-            Collections.sort(collectedBindings); // Uses the compareTo method in FullBinding
-            for (FullBinding binding : collectedBindings) {
-                resultSoA.add(
-                    binding.value(),
-                    binding.valueType(),
-                    binding.variableName(),
-                    binding.documentId(),
-                    binding.sentenceId(),
-                    binding.beginChar(),
-                    binding.endChar(),
-                    binding.synonymId(),
-                    binding.conceptualRowId()
-                );
-            }
+        logger.debug("StitchedExecutor finished for type '{}', N-gram '{}', index '{}'. Found {} results.",
+                     stitchedCondition.stitchType(), ngramPrefix, stitchIndexName, resultSoA.size());
+
+        // Ensure results are sorted for subsequent merge joins
+        if (resultSoA.size() > 1) {
+            resultSoA.sort();
+            logger.debug("Sorted StitchedExecutor results. Size: {}", resultSoA.size());
         }
 
-        logger.debug("StitchedExecutor finished for type '{}', N-gram '{}', index '{}'. Found {} results (bindings in SoA).",
-                     stitchedCondition.stitchType(), ngramPrefix, stitchIndexName, resultSoA.size());
         return resultSoA;
     }
 }

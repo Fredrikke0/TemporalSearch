@@ -185,7 +185,6 @@ if __name__ == "__main__":
         cache_modes_to_run = ["cold", "warm"]
 
     all_run_results = []
-    total_query_strategy_combinations = len(queries_to_run_orig) * len(strategy_combinations) * len(cache_modes_to_run)
     current_run_count = 0
 
     for cache_mode in cache_modes_to_run:
@@ -206,10 +205,23 @@ if __name__ == "__main__":
 
             print(f"========== Executing Query {exec_idx+1}/{len(queries_to_run)} (Original ID: {original_query_id_str}) [{cache_mode.upper()}]: {query_text} ==========")
 
-            for strat_idx, (temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val) in enumerate(strategy_combinations):
+            # Filter strategy combinations based on query content
+            query_has_join = "JOIN" in query_text.upper()
+            if query_has_join:
+                current_strategy_combinations = strategy_combinations
+                print(f"Query contains JOIN - testing all pushdown strategies")
+            else:
+                # Filter out "optimized" pushdown strategies for queries without JOIN
+                current_strategy_combinations = [
+                    (temp, push, stitch) for temp, push, stitch in strategy_combinations
+                    if push == "none"
+                ]
+                print(f"Query does not contain JOIN - skipping optimized pushdown strategies")
+
+            for strat_idx, (temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val) in enumerate(current_strategy_combinations):
                 current_run_count +=1
                 # Update progress prefix to include original query ID and cache mode
-                progress_prefix = f"[{cache_mode.upper()} - Exec Query {exec_idx+1}/{len(queries_to_run)} (Orig {original_query_id_str}), Strategy {strat_idx+1}/{len(strategy_combinations)} ({current_run_count}/{total_query_strategy_combinations})]"
+                progress_prefix = f"[{cache_mode.upper()} - Exec Query {exec_idx+1}/{len(queries_to_run)} (Orig {original_query_id_str}), Strategy {strat_idx+1}/{len(current_strategy_combinations)}]"
 
                 print(f"{progress_prefix} Running with Strategies: T:{temporal_strategy_val}, P:{pushdown_strategy_val}, S:{stitch_strategy_val}")
 
@@ -423,10 +435,6 @@ if __name__ == "__main__":
         strat_key_str = f"T:{temp_strat}, P:{push_strat}, S:{stitch_strat}"
         print(f"  {strat_key_str.ljust(45)}: {avg_time_for_combo_str.ljust(25)} Verification: {verification_summary_str}")
 
-    total_expected_queries_for_full_run = 0
-    if queries_to_run_orig: # Ensure queries_to_run_orig is not empty
-        total_expected_queries_for_full_run = len(queries_to_run_orig) * len(strategy_combinations) * len(cache_modes_to_run)
-
     total_successful_timed_runs = sum(1 for qr_list in all_run_results for r in qr_list if r['time_ms'] is not None)
     total_verified_passed = sum(1 for qr_list in all_run_results for r in qr_list if r.get('verification_status') == 'PASSED')
 
@@ -438,7 +446,7 @@ if __name__ == "__main__":
                 total_verification_attempts +=1
 
     print(f"\nTotal benchmark strategy executions attempted: {current_run_count}")
-    print(f"(Expected full run to have {total_expected_queries_for_full_run} strategy executions if no query errors occurred before strategy loops)")
+    print(f"(Note: Queries without JOIN keyword skip optimized pushdown strategies)")
     print(f"Total successful timed primary metric calculations: {total_successful_timed_runs}")
 
     if total_verification_attempts > 0:

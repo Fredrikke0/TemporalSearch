@@ -11,7 +11,6 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,9 +25,10 @@ public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGe
     public static final String MY_INDEX_NAME = "stitch_unigram_date";
 
     // For parsing normalized_ner (YYYY-MM-DD) and formatting to key (YYYYMMDD)
-    private static final DateTimeFormatter INPUT_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static final DateTimeFormatter KEY_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
-    private static final Pattern DATE_INPUT_PATTERN = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
+    private static final DateTimeFormatter INPUT_FORMAT_FULL = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter INPUT_FORMAT_YEAR_MONTH = DateTimeFormatter.ofPattern("yyyy-MM");
+    private static final DateTimeFormatter INPUT_FORMAT_YEAR = DateTimeFormatter.ofPattern("yyyy");
+    private static final DateTimeFormatter KEY_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     public UnigramDateStitchIndexGenerator(
             IndexAccessInterface indexAccess,
@@ -55,24 +55,47 @@ public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGe
         return false; // Date strings (YYYYMMDD) are directly part of the key, not via synonym ID
     }
 
-    private String normalizeDateToKeyFormat(String yyyyDashMmDashDd) {
-        if (yyyyDashMmDashDd == null || !DATE_INPUT_PATTERN.matcher(yyyyDashMmDashDd).matches()) {
-            logger.trace("Input date string '{}' does not match YYYY-MM-DD pattern for normalization to key format.", yyyyDashMmDashDd);
+    private String normalizeDateToKeyFormat(String date) {
+        if (date == null || date.trim().isEmpty()) {
+            logger.trace("Input date string is null or empty.");
             return null;
         }
-        // Extract year and check if it's "0000"
-        String year = yyyyDashMmDashDd.substring(0, 4);
-        if ("0000".equals(year)) {
-            logger.debug("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", yyyyDashMmDashDd);
+        String trimmedDate = date.trim();
+
+        // Check for "0000" year early, as it's invalid for LocalDate
+        if (trimmedDate.startsWith("0000")) {
+            logger.debug("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", trimmedDate);
             return null;
         }
+
+        LocalDate parsedDate;
         try {
-            LocalDate parsedDate = LocalDate.parse(yyyyDashMmDashDd, INPUT_FORMATTER);
-            return parsedDate.format(KEY_FORMATTER); // Format to YYYYMMDD
-        } catch (DateTimeParseException e) {
-            logger.warn("Could not parse date string '{}' (expected YYYY-MM-DD) to LocalDate: {}", yyyyDashMmDashDd, e.getMessage());
-            return null;
+            // Attempt to parse as YYYY-MM-DD
+            parsedDate = LocalDate.parse(trimmedDate, INPUT_FORMAT_FULL);
+        } catch (DateTimeParseException e1) {
+            try {
+                // Attempt to parse as YYYY-MM
+                java.time.YearMonth ym = java.time.YearMonth.parse(trimmedDate, INPUT_FORMAT_YEAR_MONTH);
+                parsedDate = ym.atDay(1); // Normalize to the first day of that month
+            } catch (DateTimeParseException e2) {
+                try {
+                    // Attempt to parse as YYYY
+                    java.time.Year year = java.time.Year.parse(trimmedDate, INPUT_FORMAT_YEAR);
+                    parsedDate = year.atDay(1); // Normalize to the first day of that year
+                } catch (DateTimeParseException e3) {
+                    logger.warn("Could not parse date string '{}' with available formats (YYYY-MM-DD, YYYY-MM, YYYY): {}", trimmedDate, e3.getMessage());
+                    return null;
+                }
+            }
         }
+
+        // Check again for year 0000 after parsing attempts
+        if (parsedDate.getYear() == 0) {
+             logger.debug("Parsed date resulted in year 0000 for input '{}', which is invalid.", trimmedDate);
+             return null;
+        }
+
+        return parsedDate.format(KEY_FORMAT);
     }
 
     @Override

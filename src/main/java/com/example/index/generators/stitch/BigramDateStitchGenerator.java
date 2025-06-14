@@ -11,7 +11,6 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,9 +24,10 @@ public final class BigramDateStitchGenerator extends AbstractNgramStitchGenerato
     private static final Logger logger = LoggerFactory.getLogger(BigramDateStitchGenerator.class);
     public static final String MY_INDEX_NAME = "stitch_bigram_date";
 
-    private static final DateTimeFormatter INPUT_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter INPUT_FORMAT_FULL = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter INPUT_FORMAT_YEAR_MONTH = DateTimeFormatter.ofPattern("yyyy-MM");
+    private static final DateTimeFormatter INPUT_FORMAT_YEAR = DateTimeFormatter.ofPattern("yyyy");
     private static final DateTimeFormatter KEY_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
-    private static final Pattern DATE_INPUT_PATTERN = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
 
     public BigramDateStitchGenerator(
             IndexAccessInterface indexAccess,
@@ -54,23 +54,41 @@ public final class BigramDateStitchGenerator extends AbstractNgramStitchGenerato
         return false; // Date strings (YYYYMMDD) are directly part of the key
     }
 
-    private String normalizeDateToKeyFormat(String yyyyDashMmDashDd) {
-        if (yyyyDashMmDashDd == null || !DATE_INPUT_PATTERN.matcher(yyyyDashMmDashDd).matches()) {
-            logger.trace("Input date string '{}' does not match YYYY-MM-DD pattern.", yyyyDashMmDashDd);
+    private String normalizeDateToKeyFormat(String date) {
+        if (date == null || date.trim().isEmpty()) {
+            logger.trace("Input date string is null or empty.");
             return null;
         }
-        String year = yyyyDashMmDashDd.substring(0, 4);
-        if ("0000".equals(year)) {
-            logger.debug("Invalid year '0000' in date string '{}'.", yyyyDashMmDashDd);
+        String trimmedDate = date.trim();
+
+        if (trimmedDate.startsWith("0000")) {
+            logger.debug("Invalid year '0000' in date string '{}'.", trimmedDate);
             return null;
         }
+
+        LocalDate parsedDate;
         try {
-            LocalDate parsedDate = LocalDate.parse(yyyyDashMmDashDd, INPUT_FORMATTER);
-            return parsedDate.format(KEY_FORMATTER);
-        } catch (DateTimeParseException e) {
-            logger.warn("Could not parse date string '{}': {}", yyyyDashMmDashDd, e.getMessage());
-            return null;
+            parsedDate = LocalDate.parse(trimmedDate, INPUT_FORMAT_FULL);
+        } catch (DateTimeParseException e1) {
+            try {
+                java.time.YearMonth ym = java.time.YearMonth.parse(trimmedDate, INPUT_FORMAT_YEAR_MONTH);
+                parsedDate = ym.atDay(1);
+            } catch (DateTimeParseException e2) {
+                try {
+                    java.time.Year year = java.time.Year.parse(trimmedDate, INPUT_FORMAT_YEAR);
+                    parsedDate = year.atDay(1);
+                } catch (DateTimeParseException e3) {
+                    logger.warn("Could not parse date string '{}' with available formats: {}", trimmedDate, e3.getMessage());
+                    return null;
+                }
+            }
         }
+
+        if (parsedDate.getYear() == 0) {
+             logger.debug("Parsed date resulted in year 0000 for input '{}', which is invalid.", trimmedDate);
+             return null;
+        }
+        return parsedDate.format(KEY_FORMATTER);
     }
 
     @Override
