@@ -536,31 +536,81 @@ class PositionListSoATest {
 
     @Test
     void testMergeCompressedBlobs_LargeData() throws IOException {
-        // Test with larger datasets to ensure compression/decompression works correctly
-        PositionListSoA largeList1 = new PositionListSoA();
-        for (int i = 0; i < 100; i++) {
-            largeList1.add(i / 10, i % 5, i * 2, i * 2 + 5);
+        PositionListSoA list1 = new PositionListSoA();
+        for (int i = 0; i < 5000; i++) { // Increased size
+            list1.add(1, i, i * 10, i * 10 + 5, (i % 3 == 0) ? -1 : 1000 + i);
         }
 
-        PositionListSoA largeList2 = new PositionListSoA();
-        for (int i = 100; i < 200; i++) {
-            largeList2.add(i / 10, i % 5, i * 2, i * 2 + 5, 2000 + i);
+        PositionListSoA list2 = new PositionListSoA();
+        for (int i = 0; i < 60000; i++) { // Increased size, different
+            list2.add(2, i, i * 12, i * 12 + 6, (i % 4 == 0) ? -1 : 2000 + i);
         }
 
-        byte[] blob1 = largeList1.serializeToCompositeBlob();
-        byte[] blob2 = largeList2.serializeToCompositeBlob();
+        byte[] blob1 = list1.serializeToCompositeBlob();
+        byte[] blob2 = list2.serializeToCompositeBlob();
 
         byte[] mergedBlob = PositionListSoA.mergeCompressedBlobs(blob1, blob2);
         PositionListSoA mergedList = PositionListSoA.deserializeFromCompositeBlob(mergedBlob);
 
-        assertEquals(200, mergedList.getNumPositions());
+        assertEquals(list1.getNumPositions() + list2.getNumPositions(), mergedList.getNumPositions());
 
-        // Verify first few positions from list1
-        assertEquals(0, mergedList.getDocIdAt(0));
-        assertEquals(-1, mergedList.getSynonymIdAt(0));
+        // Basic check: Ensure all elements from list1 are present (order might change after a real merge with sorting)
+        // This test as-is primarily checks if merging two distinct docId sets works.
+        // A more robust check would involve sorting and comparing element-wise if merge included sorting.
+        // However, mergeCompressedBlobs is an append, so we can check sequentially for original elements.
+        for (int i = 0; i < list1.getNumPositions(); i++) {
+            assertEquals(list1.getDocIdAt(i), mergedList.getDocIdAt(i));
+            assertEquals(list1.getSentenceIdAt(i), mergedList.getSentenceIdAt(i));
+            assertEquals(list1.getSynonymIdAt(i), mergedList.getSynonymIdAt(i));
+        }
+        for (int i = 0; i < list2.getNumPositions(); i++) {
+            assertEquals(list2.getDocIdAt(i), mergedList.getDocIdAt(list1.getNumPositions() + i));
+            assertEquals(list2.getSentenceIdAt(i), mergedList.getSentenceIdAt(list1.getNumPositions() + i));
+            assertEquals(list2.getSynonymIdAt(i), mergedList.getSynonymIdAt(list1.getNumPositions() + i));
+        }
+    }
 
-        // Verify first few positions from list2 (should start at index 100)
-        assertEquals(10, mergedList.getDocIdAt(100)); // 100/10 = 10
-        assertEquals(2100, mergedList.getSynonymIdAt(100)); // 2000 + 100
+    @Test
+    void benchmarkMergeStrategies() throws IOException {
+        final int NUM_POSITIONS_PER_LIST = 750_000; // Number of positions for each list
+
+        PositionListSoA listA = new PositionListSoA();
+        for (int i = 0; i < NUM_POSITIONS_PER_LIST; i++) {
+            listA.add(100 + i % 10, i, i * 10, i * 10 + (i % 5 + 1), (i % 7 == 0) ? -1 : 5000 + i);
+        }
+
+        PositionListSoA listB = new PositionListSoA();
+        for (int i = 0; i < NUM_POSITIONS_PER_LIST; i++) {
+            listB.add(200 + i % 12, i, i * 11, i * 11 + (i % 6 + 1), (i % 8 == 0) ? -1 : 6000 + i);
+        }
+
+        byte[] blobA = listA.serializeToCompositeBlob();
+        byte[] blobB = listB.serializeToCompositeBlob();
+
+        // --- Test Strategy 1: mergeCompressedBlobs (selective decompression) ---
+        long startTimeSelective = System.nanoTime();
+        byte[] mergedBlobSelective = PositionListSoA.mergeCompressedBlobs(blobA, blobB);
+        long endTimeSelective = System.nanoTime();
+        PositionListSoA resultListSelective = PositionListSoA.deserializeFromCompositeBlob(mergedBlobSelective);
+        long durationSelectiveMs = (endTimeSelective - startTimeSelective) / 1_000_000;
+        System.out.printf("Merge Strategy 'mergeCompressedBlobs' (Selective Decompression) took: %d ms%n", durationSelectiveMs);
+
+        // --- Test Strategy 2: mergeBlobsByFullDeserialization (full deserialization) ---
+        long startTimeFull = System.nanoTime();
+        byte[] mergedBlobFull = PositionListSoA.mergeBlobsByFullDeserialization(blobA, blobB);
+        long endTimeFull = System.nanoTime();
+        PositionListSoA resultListFull = PositionListSoA.deserializeFromCompositeBlob(mergedBlobFull);
+        long durationFullMs = (endTimeFull - startTimeFull) / 1_000_000;
+        System.out.printf("Merge Strategy 'mergeBlobsByFullDeserialization' (Full Deserialization) took: %d ms%n", durationFullMs);
+
+        // --- Verification ---
+        assertEquals(NUM_POSITIONS_PER_LIST * 2, resultListSelective.getNumPositions(), "Selective merge count mismatch");
+        assertEquals(NUM_POSITIONS_PER_LIST * 2, resultListFull.getNumPositions(), "Full merge count mismatch");
+
+        // Assert that the contents are the same. Since addAll is used, order should be preserved.
+        // PositionListSoA does not override equals, so we need to compare elements.
+        assertSoaListsEqual(resultListSelective, resultListFull);
+
+        System.out.println("Benchmark complete. Both methods produced equivalent merged lists.");
     }
 }

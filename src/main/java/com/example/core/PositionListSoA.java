@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
@@ -1197,35 +1198,157 @@ public class PositionListSoA {
             IntArrayList docIds2 = decompressDocIds(blob2);
             docIds1.addAll(docIds2);
             writeCompressedIntArray(dos, docIds1.elements(), docIds1.size(), true, CompressionOverride.DEFAULT);
-            docIds1 = null;
-            docIds2 = null;
+            docIds1 = null; // Help GC
+            docIds2 = null; // Help GC
 
             IntArrayList sentIds1 = decompressSentenceIds(blob1);
             IntArrayList sentIds2 = decompressSentenceIds(blob2);
             sentIds1.addAll(sentIds2);
             writeCompressedIntArray(dos, sentIds1.elements(), sentIds1.size(), true, CompressionOverride.DEFAULT);
-            sentIds1 = null;
-            sentIds2 = null;
+            sentIds1 = null; // Help GC
+            sentIds2 = null; // Help GC
 
             IntArrayList beginChars1 = decompressBeginChars(blob1);
             IntArrayList beginChars2 = decompressBeginChars(blob2);
             beginChars1.addAll(beginChars2);
             writeCompressedIntArray(dos, beginChars1.elements(), beginChars1.size(), true, CompressionOverride.DEFAULT);
-            beginChars1 = null;
-            beginChars2 = null;
+            beginChars1 = null; // Help GC
+            beginChars2 = null; // Help GC
 
             IntArrayList endChars1 = decompressEndChars(blob1);
             IntArrayList endChars2 = decompressEndChars(blob2);
             endChars1.addAll(endChars2);
             writeCompressedIntArray(dos, endChars1.elements(), endChars1.size(), true, CompressionOverride.DEFAULT);
-            endChars1 = null;
-            endChars2 = null;
+            endChars1 = null; // Help GC
+            endChars2 = null; // Help GC
 
             IntArrayList synonymIds1 = decompressSynonymIds(blob1);
             IntArrayList synonymIds2 = decompressSynonymIds(blob2);
             synonymIds1.addAll(synonymIds2);
             writeCompressedIntArray(dos, synonymIds1.elements(), synonymIds1.size(), false, CompressionOverride.DEFAULT); // applyDelta = false
+            // synonymIds1 = null; // Help GC - these are the last ones, less critical but good practice
+            // synonymIds2 = null; // Help GC
 
+            dos.flush();
+        }
+        return baos.toByteArray();
+    }
+
+    /**
+     * Merges two compressed PositionListSoA blobs by fully deserializing them,
+     * adding all positions from the second to the first, and then re-serializing the result.
+     * This method might be faster for smaller lists or when memory is less constrained,
+     * as it avoids selective decompression/recompression but uses more peak memory.
+     *
+     * @param blob1 The first compressed blob.
+     * @param blob2 The second compressed blob to merge into the first.
+     * @return A new compressed blob containing the merged data.
+     * @throws IOException If an I/O error occurs during deserialization or serialization.
+     */
+    public static byte[] mergeBlobsByFullDeserialization(byte[] blob1, byte[] blob2) throws IOException {
+        if (blob1 == null || blob1.length == 0) {
+            if (blob2 == null || blob2.length == 0) {
+                // Both are empty, return a canonical empty blob
+                return new PositionListSoA().serializeToCompositeBlob(CompressionOverride.DEFAULT);
+            }
+            // Blob1 is empty, blob2 is not, return blob2
+            return blob2;
+        }
+        if (blob2 == null || blob2.length == 0) {
+            // Blob2 is empty, blob1 is not, return blob1
+            return blob1;
+        }
+
+        PositionListSoA list1 = deserializeFromCompositeBlob(blob1);
+        PositionListSoA list2 = deserializeFromCompositeBlob(blob2);
+
+        list1.addAll(list2); // Add all elements from list2 to list1
+
+        // Serialize the merged list1 back to a blob
+        return list1.serializeToCompositeBlob(CompressionOverride.DEFAULT);
+    }
+
+    /**
+     * Merges a list of compressed PositionListSoA blobs efficiently by processing
+     * attributes one at a time. This minimizes peak memory by not decompressing
+     * all attributes of all blobs simultaneously.
+     *
+     * @param blobsToMerge A list of byte arrays, each a serialized PositionListSoA.
+     * @param compressionOverride The compression strategy for the output blob.
+     * @return A new compressed blob containing the merged data.
+     * @throws IOException If an I/O error occurs.
+     */
+    public static byte[] mergeNCompressedBlobs(List<byte[]> blobsToMerge, CompressionOverride compressionOverride) throws IOException {
+        if (blobsToMerge == null || blobsToMerge.isEmpty()) {
+            return new PositionListSoA().serializeToCompositeBlob(compressionOverride);
+        }
+
+        // Filter out null or empty blobs and get total positions
+        List<byte[]> validBlobs = new java.util.ArrayList<>(); // Explicitly use java.util.ArrayList
+        int totalFinalPositions = 0;
+        for (byte[] blob : blobsToMerge) {
+            if (blob != null && blob.length > 0) {
+                validBlobs.add(blob);
+                // getNumPositionsFromBlob handles empty/short blobs returning 0 or throwing, which is fine.
+                totalFinalPositions += getNumPositionsFromBlob(blob);
+            }
+        }
+
+        if (totalFinalPositions == 0 && validBlobs.isEmpty()) { // Ensure if totalFinalPositions is 0 due to all blobs being empty/invalid, we return empty.
+             return new PositionListSoA().serializeToCompositeBlob(compressionOverride);
+        }
+         // If totalFinalPositions is 0 but validBlobs is not empty (e.g. contains blobs representing 0 positions),
+         // we should still proceed to write an empty PositionListSoA structure (num_positions = 0 followed by empty arrays).
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(Math.max(16, totalFinalPositions * 8)); // Min 16 bytes, estimate for others
+        try (DataOutputStream dos = new DataOutputStream(baos)) {
+            dos.writeInt(totalFinalPositions);
+
+            if (totalFinalPositions > 0) {
+                // Attribute-wise merge only if there are positions to merge
+                IntArrayList mergedDocIds = new IntArrayList(totalFinalPositions);
+                for (byte[] blob : validBlobs) {
+                    mergedDocIds.addAll(decompressDocIds(blob));
+                }
+                writeCompressedIntArray(dos, mergedDocIds.elements(), mergedDocIds.size(), true, compressionOverride);
+                mergedDocIds = null; // Help GC
+
+                IntArrayList mergedSentIds = new IntArrayList(totalFinalPositions);
+                for (byte[] blob : validBlobs) {
+                    mergedSentIds.addAll(decompressSentenceIds(blob));
+                }
+                writeCompressedIntArray(dos, mergedSentIds.elements(), mergedSentIds.size(), true, compressionOverride);
+                mergedSentIds = null;
+
+                IntArrayList mergedBeginChars = new IntArrayList(totalFinalPositions);
+                for (byte[] blob : validBlobs) {
+                    mergedBeginChars.addAll(decompressBeginChars(blob));
+                }
+                writeCompressedIntArray(dos, mergedBeginChars.elements(), mergedBeginChars.size(), true, compressionOverride);
+                mergedBeginChars = null;
+
+                IntArrayList mergedEndChars = new IntArrayList(totalFinalPositions);
+                for (byte[] blob : validBlobs) {
+                    mergedEndChars.addAll(decompressEndChars(blob));
+                }
+                writeCompressedIntArray(dos, mergedEndChars.elements(), mergedEndChars.size(), true, compressionOverride);
+                mergedEndChars = null;
+
+                IntArrayList mergedSynonymIds = new IntArrayList(totalFinalPositions);
+                for (byte[] blob : validBlobs) {
+                    mergedSynonymIds.addAll(decompressSynonymIds(blob));
+                }
+                writeCompressedIntArray(dos, mergedSynonymIds.elements(), mergedSynonymIds.size(), false, compressionOverride);
+                // mergedSynonymIds = null; // Last one
+            } else {
+                // If totalFinalPositions is 0, we still need to write out the structure for empty arrays.
+                // writeCompressedIntArray handles numElementsInArray == 0 correctly by writing a 0 marker.
+                writeCompressedIntArray(dos, new int[0], 0, true, compressionOverride); // docIds
+                writeCompressedIntArray(dos, new int[0], 0, true, compressionOverride); // sentIds
+                writeCompressedIntArray(dos, new int[0], 0, true, compressionOverride); // beginChars
+                writeCompressedIntArray(dos, new int[0], 0, true, compressionOverride); // endChars
+                writeCompressedIntArray(dos, new int[0], 0, false, compressionOverride); // synonymIds
+            }
             dos.flush();
         }
         return baos.toByteArray();

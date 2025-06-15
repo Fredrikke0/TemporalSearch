@@ -48,6 +48,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     public static final char ESCAPE_CHAR = '\u001F';
     private static final int MAX_POSITIONS_PER_SEGMENT = 50_000_000; // Max positions per term segment
     private static final int MAX_TEMP_FILES_BEFORE_MERGE = 15_000; // Merge temp files when we hit this limit
+
+    // Threshold for choosing merge strategy within a segment
+    private static final int AGGRESSIVE_MERGE_MAX_POSITIONS = MAX_POSITIONS_PER_SEGMENT / 2;
+
     protected final IndexAccessInterface indexAccess;
     protected final Connection sqliteConn;
     protected final ProgressTracker progress;
@@ -95,6 +99,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @throws SQLException if a database error occurs.
      */
     public abstract long getDocumentCountForIndex() throws SQLException;
+
+    // Helper record for returning multiple values from processTermBlobsAndAddToBatch
+    private record ProcessTermResult(org.rocksdb.WriteBatch batch, long currentBatchSizeBytes, int putsInCurrentBatch, long totalSegmentsWrittenAfterCall) {}
 
     // Primary constructor that all IndexGenerator implementations should use.
     @SuppressWarnings("this-escape") // For getDocumentCountForIndex and getIndexType in constructor
@@ -254,10 +261,137 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 tempFile.getAbsolutePath(), bytesWrittenToFile, e.getMessage(), e);
             throw e; // Re-throw the exception
         }
-        // logger.info("Successfully wrote batch to temp file: {}. Final size: {} bytes",
-        //     tempFile.getAbsolutePath(), tempFile.length());
-        //logger.info("Temp file {} written with {} bytes.", tempFile.getAbsolutePath(), bytesWrittenToFile);
-        return tempFile;
+         return tempFile;
+    }
+
+    private byte[] mergeBlobsForSegment(List<byte[]> blobs, String termForLogging) throws IOException {
+        if (blobs.isEmpty()) {
+            logger.warn("mergeBlobsForSegment called with empty list for term: {}", termForLogging);
+            return new PositionListSoA().serializeToCompositeBlob(PositionListSoA.CompressionOverride.DEFAULT);
+        }
+        if (blobs.size() == 1) {
+            return blobs.get(0);
+        }
+
+        long totalPositionsInThisSegment = 0;
+        for (byte[] blob : blobs) {
+            totalPositionsInThisSegment += PositionListSoA.getNumPositionsFromBlob(blob);
+        }
+
+        // Decide whether to use the aggressive (full deserialize & addAll) merge strategy.
+        boolean preferAggressiveMerge = totalPositionsInThisSegment < AGGRESSIVE_MERGE_MAX_POSITIONS;
+
+        if (preferAggressiveMerge) {
+            logger.trace("Using aggressive merge for term '{}' segment ({} blobs, {} positions)",
+                         termForLogging, blobs.size(), totalPositionsInThisSegment);
+            PositionListSoA mergedSoA = new PositionListSoA();
+            for (byte[] blob : blobs) {
+                PositionListSoA chunk = PositionListSoA.deserializeFromCompositeBlob(blob);
+                mergedSoA.addAll(chunk);
+            }
+            return mergedSoA.serializeToCompositeBlob(PositionListSoA.CompressionOverride.DEFAULT);
+        } else {
+            // Use memory-safe N-way compressed merge for larger segments.
+            logger.trace("Using N-way compressed merge for term '{}' segment ({} blobs, {} positions)",
+                         termForLogging, blobs.size(), totalPositionsInThisSegment);
+            return PositionListSoA.mergeNCompressedBlobs(blobs, PositionListSoA.CompressionOverride.DEFAULT);
+        }
+    }
+
+    private ProcessTermResult processTermBlobsAndAddToBatch(
+            String term,
+            List<byte[]> termBlobs,
+            org.rocksdb.WriteBatch currentBatch,
+            long currentSizeBytes,
+            int putsInBatch,
+            long runningTotalSegmentsWritten,
+            final long targetBatchBytes,
+            IndexAccessInterface idxAccess,
+            ProgressTracker prog,
+            int maxRetriesWriteBatch,
+            long delayMsWriteBatch
+    ) throws IOException, IndexAccessException {
+
+        if (termBlobs.isEmpty()) {
+            // No segments written for this term in this call, return current running total.
+            return new ProcessTermResult(currentBatch, currentSizeBytes, putsInBatch, runningTotalSegmentsWritten);
+        }
+
+        int segmentCounterForThisTerm = 0;
+        List<byte[]> blobsForCurrentSegment = new ArrayList<>();
+        int positionsInCurrentSegmentBuildConfig = 0;
+
+        for (int i = 0; i < termBlobs.size(); i++) {
+            byte[] chunkBlob = termBlobs.get(i);
+            int chunkPositions = PositionListSoA.getNumPositionsFromBlob(chunkBlob);
+
+            if (positionsInCurrentSegmentBuildConfig > 0 &&
+                (positionsInCurrentSegmentBuildConfig + chunkPositions > MAX_POSITIONS_PER_SEGMENT) &&
+                !blobsForCurrentSegment.isEmpty()) {
+
+                byte[] segmentToWrite = mergeBlobsForSegment(blobsForCurrentSegment, term);
+                // No longer checking positionsInFinalSegment > 0 here. We write what mergeBlobsForSegment gives.
+
+                String keyToWrite = (segmentCounterForThisTerm == 0) ? term : term + "#" + segmentCounterForThisTerm;
+                byte[] termKeyBytes = bytes(keyToWrite);
+                byte[] termValueBytes = segmentToWrite;
+
+                if (currentSizeBytes > 0 && (currentSizeBytes + termKeyBytes.length + termValueBytes.length > targetBatchBytes) && putsInBatch > 0) {
+                    writeBatchWithRetry(currentBatch, maxRetriesWriteBatch, delayMsWriteBatch, putsInBatch);
+                    prog.updateIndex(putsInBatch);
+                    currentBatch.close(); // Close old batch
+                    currentBatch = idxAccess.createWriteBatch(); // Create new batch
+                    putsInBatch = 0;
+                    currentSizeBytes = 0;
+                }
+                try {
+                    currentBatch.put(termKeyBytes, termValueBytes);
+                    putsInBatch++;
+                    currentSizeBytes += termKeyBytes.length + termValueBytes.length;
+                    runningTotalSegmentsWritten++; // Increment global counter
+                } catch (org.rocksdb.RocksDBException e) {
+                    throw new IOException("Failed to put to WriteBatch for term segment: " + keyToWrite, e);
+                }
+                segmentCounterForThisTerm++; // Increment for the next potential segment of THIS term
+
+                blobsForCurrentSegment.clear();
+                positionsInCurrentSegmentBuildConfig = 0;
+            }
+
+            // Add chunk to the segment being built
+            // (mergeBlobsForSegment and PositionListSoA serialization can handle blobs representing empty lists)
+            blobsForCurrentSegment.add(chunkBlob);
+            positionsInCurrentSegmentBuildConfig += chunkPositions; // Keep track of positions for segmentation decision
+        }
+
+        // Process the last (or only) segment for this term
+        if (!blobsForCurrentSegment.isEmpty()) {
+            byte[] segmentToWrite = mergeBlobsForSegment(blobsForCurrentSegment, term);
+            // No longer checking positionsInFinalSegment > 0 here.
+
+            String keyToWrite = (segmentCounterForThisTerm == 0) ? term : term + "#" + segmentCounterForThisTerm;
+            byte[] termKeyBytes = bytes(keyToWrite);
+            byte[] termValueBytes = segmentToWrite;
+
+            if (currentSizeBytes > 0 && (currentSizeBytes + termKeyBytes.length + termValueBytes.length > targetBatchBytes) && putsInBatch > 0) {
+                writeBatchWithRetry(currentBatch, maxRetriesWriteBatch, delayMsWriteBatch, putsInBatch);
+                prog.updateIndex(putsInBatch);
+                currentBatch.close();
+                currentBatch = idxAccess.createWriteBatch();
+                putsInBatch = 0;
+                currentSizeBytes = 0;
+            }
+            try {
+                currentBatch.put(termKeyBytes, termValueBytes);
+                putsInBatch++;
+                currentSizeBytes += termKeyBytes.length + termValueBytes.length;
+                runningTotalSegmentsWritten++; // Increment global counter
+                // segmentCounterForThisTerm++; // Not needed, it's the last segment for this term call
+            } catch (org.rocksdb.RocksDBException e) {
+                throw new IOException("Failed to put to WriteBatch for final term segment: " + keyToWrite, e);
+            }
+        }
+        return new ProcessTermResult(currentBatch, currentSizeBytes, putsInBatch, runningTotalSegmentsWritten);
     }
 
     /**
@@ -269,16 +403,14 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     protected void writeToLevelDB(File sortedFile) throws IOException {
         logger.info("Starting to write to RocksDB from sorted file: {}", sortedFile.getAbsolutePath());
-        String currentTerm = null;
         long totalTermsWritten = 0;
         long totalSegmentsWritten = 0;
         final long TARGET_BATCH_BYTES = 8 * 1024 * 1024;
         long currentBatchSizeBytes = 0;
-        int termsInCurrentBatch = 0;
+        int putsInCurrentBatch = 0;
 
-        byte[] currentTermCompressedBlob = null;
-        int numPositionsForCurrentTermSegment = 0;
-        int segmentCounter = 0;
+        String currentTerm = null;
+        List<byte[]> blobsForCurrentTerm = new ArrayList<>();
 
         org.rocksdb.WriteBatch batch = null;
         try {
@@ -300,105 +432,64 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     }
 
                     if (!termFromFile.equals(currentTerm)) {
-                        if (numPositionsForCurrentTermSegment > 0 && currentTermCompressedBlob != null) {
-                            String keyToWrite = (segmentCounter == 0) ? currentTerm : currentTerm + "#" + segmentCounter;
-                            byte[] termKeyBytes = bytes(keyToWrite);
-                            byte[] termValueBytes = currentTermCompressedBlob;
-
-                            if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES)) {
-                                writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
-                                progress.updateIndex(termsInCurrentBatch); // Update progress after batch write
-                                batch.close();
-                                batch = indexAccess.createWriteBatch();
-                                termsInCurrentBatch = 0;
-                                currentBatchSizeBytes = 0;
-                            }
-                            try {
-                                batch.put(termKeyBytes, termValueBytes);
-                                termsInCurrentBatch++;
-                                currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length;
-                                totalSegmentsWritten++;
-                            } catch (org.rocksdb.RocksDBException e) {
-                                throw new IOException("Failed to put to WriteBatch for term segment: " + keyToWrite, e);
-                            }
+                        // Term has changed, process the accumulated blobs for the previous 'currentTerm'
+                        if (!blobsForCurrentTerm.isEmpty()) {
+                            ProcessTermResult result = processTermBlobsAndAddToBatch(
+                                    currentTerm,
+                                    blobsForCurrentTerm,
+                                    batch,
+                                    currentBatchSizeBytes,
+                                    putsInCurrentBatch,
+                                    totalSegmentsWritten, // Pass current global total
+                                    TARGET_BATCH_BYTES,
+                                    this.indexAccess,
+                                    this.progress,
+                                    3,
+                                    1000L
+                            );
+                            batch = result.batch();
+                            currentBatchSizeBytes = result.currentBatchSizeBytes();
+                            putsInCurrentBatch = result.putsInCurrentBatch();
+                            totalSegmentsWritten = result.totalSegmentsWrittenAfterCall(); // Update global total
+                            totalTermsWritten++; // Increment for each term from file that had blobs
                         }
-                        if (segmentCounter > 0 || numPositionsForCurrentTermSegment > 0) { // Only count if something was written for this term
-                            totalTermsWritten++;
-                        }
-
+                        // Reset for the new term
                         currentTerm = termFromFile;
-                        currentTermCompressedBlob = null;
-                        numPositionsForCurrentTermSegment = 0;
-                        segmentCounter = 0;
+                        blobsForCurrentTerm.clear();
                     }
 
                     if (lineCompositeBlob != null && lineCompositeBlob.length > 0) {
-                        int chunkNumPositions = PositionListSoA.getNumPositionsFromBlob(lineCompositeBlob);
-                        if (chunkNumPositions > 0) {
-                            if (numPositionsForCurrentTermSegment + chunkNumPositions > MAX_POSITIONS_PER_SEGMENT && numPositionsForCurrentTermSegment > 0) {
-                                String keyToWrite = currentTerm + "#" + segmentCounter;
-                                byte[] termKeyBytes = bytes(keyToWrite);
-                                byte[] termValueBytes = currentTermCompressedBlob;
-
-                                if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES)) {
-                                    writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
-                                    progress.updateIndex(termsInCurrentBatch); // Update progress after batch write
-                                    batch.close();
-                                    batch = indexAccess.createWriteBatch();
-                                    termsInCurrentBatch = 0;
-                                    currentBatchSizeBytes = 0;
-                                }
-                                try {
-                                    batch.put(termKeyBytes, termValueBytes);
-                                    termsInCurrentBatch++;
-                                    currentBatchSizeBytes += termKeyBytes.length + termValueBytes.length;
-                                    totalSegmentsWritten++;
-                                } catch (org.rocksdb.RocksDBException e) {
-                                    throw new IOException("Failed to put to WriteBatch for term segment: " + keyToWrite, e);
-                                }
-
-                                currentTermCompressedBlob = null;
-                                numPositionsForCurrentTermSegment = 0;
-                                segmentCounter++;
-                            }
-
-                            // Merge current chunk with accumulated data using compressed blob merging
-                            currentTermCompressedBlob = PositionListSoA.mergeCompressedBlobs(currentTermCompressedBlob, lineCompositeBlob);
-                            numPositionsForCurrentTermSegment += chunkNumPositions;
-                        }
+                        blobsForCurrentTerm.add(lineCompositeBlob);
                     }
                 }
             }
 
-            if (currentTerm != null && numPositionsForCurrentTermSegment > 0 && currentTermCompressedBlob != null) {
-                String keyToWrite = (segmentCounter == 0) ? currentTerm : currentTerm + "#" + segmentCounter;
-                byte[] termKeyBytes = bytes(keyToWrite);
-                byte[] termValueBytes = currentTermCompressedBlob;
-
-                if (currentBatchSizeBytes > 0 && (currentBatchSizeBytes + termKeyBytes.length + termValueBytes.length > TARGET_BATCH_BYTES) && termsInCurrentBatch > 0) {
-                    writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
-                    progress.updateIndex(termsInCurrentBatch);
-                    batch.close();
-                    batch = indexAccess.createWriteBatch();
-                    logger.info("Written batch of {} DB entries (approx {:.2f} MB) to RocksDB before adding final term segment. Total unique terms written: {}, total segments: {}.",
-                                termsInCurrentBatch, currentBatchSizeBytes / (1024.0 * 1024.0), totalTermsWritten, totalSegmentsWritten);
-                    termsInCurrentBatch = 0;
-                    currentBatchSizeBytes = 0;
-                }
-                try {
-                    batch.put(termKeyBytes, termValueBytes);
-                    termsInCurrentBatch++;
-                    totalSegmentsWritten++;
-                } catch (org.rocksdb.RocksDBException e) {
-                    throw new IOException("Failed to put to WriteBatch for final term segment: " + keyToWrite, e);
-                }
-                totalTermsWritten++;
+            if (currentTerm != null && !blobsForCurrentTerm.isEmpty()) {
+                ProcessTermResult result = processTermBlobsAndAddToBatch(
+                        currentTerm,
+                        blobsForCurrentTerm,
+                        batch,
+                        currentBatchSizeBytes,
+                        putsInCurrentBatch,
+                        totalSegmentsWritten, // Pass current global total
+                        TARGET_BATCH_BYTES,
+                        this.indexAccess,
+                        this.progress,
+                        3,
+                        1000L
+                );
+                batch = result.batch();
+                currentBatchSizeBytes = result.currentBatchSizeBytes(); // Though not used after this, good to update
+                putsInCurrentBatch = result.putsInCurrentBatch();
+                totalSegmentsWritten = result.totalSegmentsWrittenAfterCall(); // Update global total
+                totalTermsWritten++; // Increment for the last term if it had blobs
             }
 
-            if (termsInCurrentBatch > 0) {
-                 writeBatchWithRetry(batch, 3, 1000, termsInCurrentBatch);
-                 progress.updateIndex(termsInCurrentBatch); // Update progress after final batch write
-                logger.info("Written final batch of {} DB entries to RocksDB. Total unique terms written: {}, total segments: {}", termsInCurrentBatch, totalTermsWritten, totalSegmentsWritten);
+            if (putsInCurrentBatch > 0) {
+                 writeBatchWithRetry(batch, 3, 1000, putsInCurrentBatch);
+                 progress.updateIndex(putsInCurrentBatch);
+                logger.info("Written final batch of {} DB entries to RocksDB. Total unique terms written: {}, total segments: {}",
+                        putsInCurrentBatch, totalTermsWritten, totalSegmentsWritten);
             }
 
         } catch (IOException e) {
@@ -418,8 +509,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         }
     }
 
-
-
     /**
      * Attempts to write a batch to the index, retrying on specific failures.
      */
@@ -431,7 +520,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 if (logger.isTraceEnabled()) {
                     logger.trace("Successfully wrote batch of {} entries to index [{}] on attempt {}", numEntries, getIndexName(), attempt + 1);
                 }
-                return; // Success
+                return;
             } catch (IndexAccessException e) {
                 attempt++;
                 logger.warn("Attempt {}/{} failed to write batch of {} entries to index [{}]: {}. Error Type: {}",
@@ -442,7 +531,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     throw new IOException("Failed to write batch of " + numEntries + " entries to index [" + getIndexName() + "] after " + attempt + " attempts", e);
                 }
                 try {
-                    Thread.sleep(delayMs * attempt); // Simple backoff
+                    Thread.sleep(delayMs * attempt);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new IOException("Interrupted during retry wait for batch write to index [" + getIndexName() + "]", ie);
@@ -464,17 +553,14 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     protected List<File> performIncrementalMerge(List<File> tempFiles) throws IOException {
         if (tempFiles.size() <= 1) {
-            return tempFiles; // Nothing to merge
+            return tempFiles;
         }
 
-        // Create a new intermediate merged file
         File mergedFile = Files.createTempFile(tempDir, "merged-", ".tmp").toFile();
 
-        // Merge all temp files into the new file
         ExternalSort.mergeSortedFiles(tempFiles, mergedFile, new PositionListComparator(),
                                      Charset.defaultCharset(), false);
 
-        // Clean up the original temp files
         for (File file : tempFiles) {
             try {
                 Files.deleteIfExists(file.toPath());
@@ -484,13 +570,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             }
         }
 
-        // Return a list with just the merged file
         List<File> result = new ArrayList<>();
         result.add(mergedFile);
         return result;
     }
-
-
 
     /**
      * Generates the index by processing documents in batches, sorting externally,
@@ -498,14 +581,14 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     public void generateIndex() throws SQLException, IOException {
         List<File> tempFiles = new ArrayList<>();
-        T lastProcessedEntry = null; // Keyset pagination: track last processed entry
+        T lastProcessedEntry = null;
         IndexingMetrics metrics = new IndexingMetrics();
         long totalRawEntriesFetched = 0;
         totalNGramsGenerated = 0;
 
         try {
             long totalCountForProgressBar = getDocumentCountForIndex();
-            progress.startIndex(getIndexName(), totalCountForProgressBar); // For the main phase
+            progress.startIndex(getIndexName(), totalCountForProgressBar);
 
             while (true) {
                 metrics.startBatch(this.batchSize, getIndexName());
@@ -533,7 +616,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     durationWriteTempNanos = System.nanoTime() - startTimeWriteTemp;
                     tempFiles.add(tempFile);
 
-                    // Incremental merge when we have too many temp files
                     if (tempFiles.size() >= MAX_TEMP_FILES_BEFORE_MERGE) {
                         logger.info("Reached {} temp files for index [{}]. Performing incremental merge...",
                                    tempFiles.size(), getIndexName());
@@ -560,7 +642,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 return;
             }
 
-            // File outputFile = new File(tempDir.toFile(), "sorted.tmp"); // This is now this.tempFilePathForSorting
             logger.info("Merging {} temporary files into {} for index [{}]...", tempFiles.size(), this.tempFilePathForSorting.toAbsolutePath(), getIndexName());
             long totalTempFilesSize = 0;
             for (File f : tempFiles) {
@@ -571,11 +652,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             ExternalSort.mergeSortedFiles(tempFiles, this.tempFilePathForSorting.toFile(), new PositionListComparator(), Charset.defaultCharset(), false);
 
             logger.info("Writing merged entries from {} to RocksDB index [{}]...", this.tempFilePathForSorting.toAbsolutePath(), getIndexName());
-            // --- Start Progress for writeToRocksDB ---
-            progress.startIndex(getIndexName() + " - Writing to DB", 0); // 0 or -1 for indeterminate
+            progress.startIndex(getIndexName() + " - Writing to DB", 0);
             writeToLevelDB(this.tempFilePathForSorting.toFile());
-            progress.completeIndex(); // Complete this sub-stage
-            // --- End Progress for writeToRocksDB ---
+            progress.completeIndex();
 
             metrics.logIndexingMetrics();
 
@@ -588,8 +667,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     logger.debug("Could not delete temp batch file: {} for index [{}]. Error: {}", file.getAbsolutePath(), getIndexName(), e.getMessage());
                 }
             }
-            // The main sorted.tmp (this.tempFilePathForSorting) will be cleaned by the close() method
-            // when this.tempDir is recursively deleted.
             logger.debug("Temporary batch file cleanup complete for index [{}]. Main sorted file and instance temp dir will be cleaned by close().", getIndexName());
         }
     }
@@ -616,29 +693,19 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
     @Override
     public void close() throws IOException {
-        // The IndexAccessInterface instance (this.indexAccess) is provided by the caller.
-        // The caller is responsible for its lifecycle (e.g., closing it).
-        // This generator should not close an externally managed IndexAccessInterface.
-
-        // Clean up the unique temporary directory created by this generator instance.
-        // This directory contains all temporary files, including any remaining batch files
-        // and the final sorted.tmp (this.tempFilePathForSorting).
         if (this.tempDir != null && Files.exists(this.tempDir)) {
             logger.info("Cleaning up instance temporary directory for index [{}]: {}", getIndexName(), this.tempDir.toAbsolutePath());
             try (Stream<Path> walk = Files.walk(this.tempDir)) {
-                walk.sorted(Comparator.reverseOrder()) // Delete contents before the directory itself
+                walk.sorted(Comparator.reverseOrder())
                     .forEach(path -> {
                         try {
                             Files.delete(path);
                         } catch (IOException e) {
-                            // Log as warn, as this might indicate a lock or permission issue
                             logger.warn("Failed to delete temporary path {} during cleanup of {} for index [{}]. Error: {}",
                                         path.toAbsolutePath(), this.tempDir.toAbsolutePath(), getIndexName(), e.getMessage());
                         }
                     });
-                // logger.info("Successfully cleaned up instance temporary directory for index [{}]: {}", getIndexName(), this.tempDir.toAbsolutePath());
             } catch (IOException e) {
-                // Log an error if walking the directory fails, as files might be left over.
                 logger.error("Error during recursive deletion of instance temporary directory {} for index [{}]. Some temporary files may remain. Error: {}",
                              this.tempDir.toAbsolutePath(), getIndexName(), e.getMessage(), e);
             }
