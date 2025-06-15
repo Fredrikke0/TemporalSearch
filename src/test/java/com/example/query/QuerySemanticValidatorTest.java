@@ -230,7 +230,10 @@ class QuerySemanticValidatorTest {
             Query.Granularity.DOCUMENT,
             Optional.empty(),
             columns,
-            registry  // Registry with person as consumer only
+            registry,  // Registry with person as consumer only
+            List.of(), // joinSteps
+            Optional.empty(), // mainAlias
+            Collections.emptyList() // groupByColumns
         );
 
         QueryParseException exception = assertThrows(
@@ -263,8 +266,7 @@ class QuerySemanticValidatorTest {
             Optional.empty(),  // granularitySize (Snippet size is handled in SnippetColumn)
             columns,       // selectColumns
             registry,       // variable registry
-            List.of(),      // subqueries
-            Optional.empty(), // joinCondition
+            List.of(),      // joinSteps
             Optional.empty(), // mainAlias
             Collections.emptyList() // groupByColumns - Default to empty list
         );
@@ -283,8 +285,7 @@ class QuerySemanticValidatorTest {
             Optional.empty(),  // granularitySize
             columns,       // selectColumns
             registry,       // variable registry
-            List.of(),      // subqueries
-            Optional.empty(), // joinCondition
+            List.of(),      // joinSteps
             Optional.empty(), // mainAlias
             groupByColumns  // groupByColumns
         );
@@ -301,9 +302,9 @@ class QuerySemanticValidatorTest {
         Query query = createQuery(select, List.of(), registry, groupBy);
 
         QueryParseException exception = assertThrows(QueryParseException.class, () -> validator.validate(query));
-        assertTrue(exception.getMessage().contains("GROUP BY column '$main.colZ' is not a known variable in its scope"),
+        assertTrue(exception.getMessage().contains("Variable '$main.colZ' not found in scope (current query (alias '$main') for GROUP BY '$main.colZ')"),
                    "Exception message should indicate that colZ is not known in its scope. Actual: " + exception.getMessage());
-        assertTrue(exception.getMessage().contains("Available variables in target scope: [$main.colA]"),
+        assertTrue(exception.getMessage().contains("Available: [$main.colA]"),
                    "Exception message should list available variables. Actual: " + exception.getMessage());
     }
 }

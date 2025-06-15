@@ -18,11 +18,11 @@ import com.example.index.generators.NerIndexGenerator;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 
-public final class UnigramNerStitchIndexGenerator extends AbstractNgramStitchGenerator {
-    private static final Logger logger = LoggerFactory.getLogger(UnigramNerStitchIndexGenerator.class);
+public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerator {
+    private static final Logger logger = LoggerFactory.getLogger(UnigramNerStitchGenerator.class);
     public static final String MY_INDEX_NAME = "stitch_unigram_ner";
 
-    public UnigramNerStitchIndexGenerator(
+    public UnigramNerStitchGenerator(
             IndexAccessInterface indexAccess,
             String stopwordsPath,
             Connection sqliteConn,
@@ -52,11 +52,17 @@ public final class UnigramNerStitchIndexGenerator extends AbstractNgramStitchGen
     }
 
     // Temporary internal record to hold raw annotation data including the token
-    private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag, int originalAnnotationEndChar) {}
+    private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag, int originalAnnotationEndChar) implements SentenceSpanFilterable {
+        @Override
+        public String getFilterLogDetail() {
+            return "NER: " + nerTag + ", Token: " + token;
+        }
+        // sentenceId() and beginChar() are implicitly provided by the record components
+    }
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
-        List<RawAnnotation> rawAnnotations = new ArrayList<>();
+        List<RawAnnotation> rawAnnotationsFromDb = new ArrayList<>();
         // Modified SQL to fetch 'token' and ensure ner is not null
         String sql = String.format("""
             SELECT sentence_id, begin_char, end_char, token, ner
@@ -71,7 +77,7 @@ public final class UnigramNerStitchIndexGenerator extends AbstractNgramStitchGen
             stmt.setInt(1, documentId);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    rawAnnotations.add(new RawAnnotation(
+                    rawAnnotationsFromDb.add(new RawAnnotation(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"), // This is the end_char of the individual token
@@ -86,8 +92,11 @@ public final class UnigramNerStitchIndexGenerator extends AbstractNgramStitchGen
             throw e;
         }
 
+        // Filter rawAnnotations using the centralized method
+        List<RawAnnotation> filteredRawAnnotations = filterAnnotationsBySentenceCharacterSpan(rawAnnotationsFromDb, documentId, "Unigram NER");
+
         List<AnnotationData> groupedAnnotations = new ArrayList<>();
-        if (rawAnnotations.isEmpty()) {
+        if (filteredRawAnnotations.isEmpty()) {
             logger.trace("No NER annotations found or all filtered for document ID {} for {} index.", documentId, MY_INDEX_NAME);
             return groupedAnnotations;
         }
@@ -98,8 +107,8 @@ public final class UnigramNerStitchIndexGenerator extends AbstractNgramStitchGen
         int currentEntityBeginChar = -1;
         int previousTokenEndChar = -1;
 
-        for (int i = 0; i < rawAnnotations.size(); i++) {
-            RawAnnotation currentAnnotation = rawAnnotations.get(i);
+        for (int i = 0; i < filteredRawAnnotations.size(); i++) { // Iterate over filtered list
+            RawAnnotation currentAnnotation = filteredRawAnnotations.get(i); // Use filtered list
             boolean entityBreak = false;
 
             if (currentEntityType != null) {
@@ -133,7 +142,7 @@ public final class UnigramNerStitchIndexGenerator extends AbstractNgramStitchGen
             currentEntityRawTokens.add(currentAnnotation.token());
             previousTokenEndChar = currentAnnotation.originalAnnotationEndChar();
 
-            if (i == rawAnnotations.size() - 1) {
+            if (i == filteredRawAnnotations.size() - 1) { // Check against filtered list size
                 if (!currentEntityRawTokens.isEmpty() && currentEntityType != null) {
                     String entityValue = String.join(" ", currentEntityRawTokens).toLowerCase();
                     groupedAnnotations.add(new AnnotationData(

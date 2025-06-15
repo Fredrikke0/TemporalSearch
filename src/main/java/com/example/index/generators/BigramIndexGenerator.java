@@ -7,10 +7,14 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
@@ -27,6 +31,7 @@ import com.google.common.collect.ListMultimap;
  * This implementation is now RocksDB-based (see IndexGenerator).
  */
 public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
+    private static final Logger logger = LoggerFactory.getLogger(BigramIndexGenerator.class);
 
     public BigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
@@ -86,7 +91,23 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
 
     @Override
     protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
-        List<AnnotationEntry> filteredBatch = batch.stream()
+        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
+            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
+                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
+
+        List<AnnotationEntry> sentenceSpanFilteredTokens = new ArrayList<>();
+
+        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
+            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
+                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
+
+                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
+                    sentenceTokens, documentId, sentenceId, "BigramIndexGenerator", logger);
+                sentenceSpanFilteredTokens.addAll(filteredSentenceTokens);
+            });
+        });
+
+        List<AnnotationEntry> fullyFilteredBatch = sentenceSpanFilteredTokens.stream()
             .filter(entry -> entry != null && entry.getToken() != null && !entry.getToken().isEmpty())
             .map(entry -> {
                 String lowerToken = entry.getToken().toLowerCase();
@@ -103,9 +124,9 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> positionLists = new HashMap<>();
 
-        for (int i = 0; i < filteredBatch.size() - 1; i++) {
-            AnnotationEntry firstEntry = filteredBatch.get(i);
-            AnnotationEntry secondEntry = filteredBatch.get(i + 1);
+        for (int i = 0; i < fullyFilteredBatch.size() - 1; i++) {
+            AnnotationEntry firstEntry = fullyFilteredBatch.get(i);
+            AnnotationEntry secondEntry = fullyFilteredBatch.get(i + 1);
 
             if (firstEntry.getDocumentId() == secondEntry.getDocumentId() &&
                 firstEntry.getSentenceId() == secondEntry.getSentenceId()) {

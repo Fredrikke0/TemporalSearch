@@ -7,9 +7,11 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
@@ -35,7 +37,7 @@ import com.google.common.collect.ListMultimap;
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(POSIndexGenerator.class);
 
-    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '``', '''','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-', 'FW', '', '''''', 'DT', 'WDT', 'CC', 'PRP$', 'POS', '``', 'EX', 'UH', 'IN')";
+    public static final String POS_TAGS_TO_EXCLUDE_SQL = "(',', '.', ':', '`', '''','$','SYM','HYPH','NFP','AFX','LS','X','-LRB-','-RRB-', 'FW', '', '''''', 'DT', 'WDT', 'CC', 'PRP$', 'POS', '`', 'EX', 'UH', 'IN')";
     private final SynonymManager synonymManager;
 
     public POSIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize,
@@ -107,7 +109,30 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
 
-        for (AnnotationEntry entry : batch) {
+        // 1. Group by document_id and then sentence_id
+        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
+            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
+                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
+
+        List<AnnotationEntry> sentenceSpanFilteredTokens = new ArrayList<>();
+
+        // 2. For each sentence: sort tokens, filter by span, and collect
+        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
+            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
+                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
+                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
+                    sentenceTokens, documentId, sentenceId, "POSIndexGenerator", logger);
+                sentenceSpanFilteredTokens.addAll(filteredSentenceTokens);
+            });
+        });
+
+        if (sentenceSpanFilteredTokens.isEmpty() && !batch.isEmpty()) {
+            logger.trace("All POS annotations filtered out by sentence span limit. Original batch size: {}", batch.size());
+            // No return here, allow tempAggregator to remain empty, resulting in empty index for this batch
+        }
+
+        // 3. Process the sentenceSpanFilteredTokens
+        for (AnnotationEntry entry : sentenceSpanFilteredTokens) {
             if (entry.getPos() == null || entry.getPos().isEmpty() || entry.getToken() == null || entry.getToken().isEmpty()) {
                 continue;
             }

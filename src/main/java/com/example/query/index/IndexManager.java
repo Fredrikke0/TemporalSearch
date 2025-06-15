@@ -25,7 +25,6 @@ import com.example.core.IndexAccessInterface;
 import com.example.index.RocksDBConfig;
 import com.example.index.util.SynonymManager;
 import com.example.query.model.Query;
-import com.example.query.model.SubquerySpec;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Dependency;
@@ -184,10 +183,10 @@ public class IndexManager implements AutoCloseable {
             query.conditions().forEach(condition -> collectIndexesForCondition(condition, required));
         }
 
-        // 2. Analyze subquery conditions (if JOIN exists)
-        if (!query.subqueries().isEmpty()) {
-            for (SubquerySpec subSpec : query.subqueries()) {
-                Query subquery = subSpec.subquery();
+        // 2. Analyze subquery conditions from JoinSteps
+        if (!query.joinSteps().isEmpty()) {
+            for (com.example.query.model.JoinStep step : query.joinSteps()) {
+                Query subquery = step.subquery();
                 if (subquery.conditions() != null) {
                      subquery.conditions().forEach(condition -> collectIndexesForCondition(condition, required));
                 }
@@ -220,11 +219,11 @@ public class IndexManager implements AutoCloseable {
 
                 // Determine the N-gram levels present in CONTAINS conditions
                 Set<Integer> ngramLevels = new HashSet<>();
-                collectContainsNgramLevels(query.conditions(), ngramLevels);
-                if (!query.subqueries().isEmpty()) {
-                    for (SubquerySpec subSpec : query.subqueries()) {
-                        if (subSpec.subquery().conditions() != null) {
-                            collectContainsNgramLevels(subSpec.subquery().conditions(), ngramLevels);
+                collectContainsNgramLevels(query.conditions(), ngramLevels); // For main query
+                if (!query.joinSteps().isEmpty()) { // For subqueries in JoinSteps
+                    for (com.example.query.model.JoinStep step : query.joinSteps()) {
+                        if (step.subquery().conditions() != null) {
+                            collectContainsNgramLevels(step.subquery().conditions(), ngramLevels);
                         }
                     }
                 }
@@ -305,10 +304,10 @@ public class IndexManager implements AutoCloseable {
          if (query.conditions() != null && containsTemporalCondition(query.conditions())) {
              return true;
          }
-         // Check subqueries
-         if (!query.subqueries().isEmpty()) {
-             for (SubquerySpec subSpec : query.subqueries()) {
-                 Query subquery = subSpec.subquery();
+         // Check subqueries in JoinSteps
+         if (!query.joinSteps().isEmpty()) {
+             for (com.example.query.model.JoinStep step : query.joinSteps()) {
+                 Query subquery = step.subquery();
                  if (subquery.conditions() != null && containsTemporalCondition(subquery.conditions())) {
                      return true;
                  }
@@ -327,10 +326,10 @@ public class IndexManager implements AutoCloseable {
           if (query.conditions() != null && containsNerDateCondition(query.conditions())) {
               return true;
           }
-          // Check subqueries
-          if (!query.subqueries().isEmpty()) {
-             for (SubquerySpec subSpec : query.subqueries()) {
-                 Query subquery = subSpec.subquery();
+          // Check subqueries in JoinSteps
+          if (!query.joinSteps().isEmpty()) {
+             for (com.example.query.model.JoinStep step : query.joinSteps()) {
+                 Query subquery = step.subquery();
                  if (subquery.conditions() != null && containsNerDateCondition(subquery.conditions())) {
                      return true;
                  }
@@ -397,10 +396,10 @@ public class IndexManager implements AutoCloseable {
         if (query.conditions() != null && checkConditionList(query.conditions(), predicate)) {
             return true;
         }
-        // Check subqueries
-        if (!query.subqueries().isEmpty()) {
-            for (SubquerySpec subSpec : query.subqueries()) {
-                Query subquery = subSpec.subquery();
+        // Check subqueries in JoinSteps
+        if (!query.joinSteps().isEmpty()) {
+            for (com.example.query.model.JoinStep step : query.joinSteps()) {
+                Query subquery = step.subquery();
                 if (subquery.conditions() != null && checkConditionList(subquery.conditions(), predicate)) {
                     return true;
                 }

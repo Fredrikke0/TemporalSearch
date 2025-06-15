@@ -136,8 +136,10 @@ class TableResultServiceTest {
         // This simulates how QueryParser/QueryModelBuilder would populate them.
         query = new Query(query.source(), query.conditions(), query.orderBy(), query.limit(),
                         query.granularity(), query.granularitySize(), querySelectColumns,
-                        query.variableRegistry(), query.subqueries(), query.joinCondition(),
-                        Optional.of("$main"), query.groupByColumns());
+                        query.variableRegistry(),
+                        Collections.emptyList(), // joinSteps (9th argument)
+                        Optional.of("$main"), // mainAlias (10th argument)
+                        query.groupByColumns());
 
         List<TestDataEntry> entries = new ArrayList<>();
         // Conceptual Row 0: $main.DOCUMENT_ID=1, $main.SENTENCE_ID=1, $main.v1="hello"
@@ -202,8 +204,10 @@ class TableResultServiceTest {
         );
         query = new Query(query.source(), query.conditions(), query.orderBy(), query.limit(),
                         query.granularity(), query.granularitySize(), querySelectColumns,
-                        query.variableRegistry(), query.subqueries(), query.joinCondition(),
-                        Optional.of("$main"), query.groupByColumns());
+                        query.variableRegistry(),
+                        Collections.emptyList(), // joinSteps (9th argument)
+                        Optional.of("$main"), // mainAlias (10th argument)
+                        query.groupByColumns());
 
         QueryResultSoA emptySoA = createSoAForTest(Collections.emptyList(), Query.Granularity.DOCUMENT);
 
@@ -239,8 +243,10 @@ class TableResultServiceTest {
         );
         query = new Query(query.source(), query.conditions(), query.orderBy(), query.limit(),
                         query.granularity(), query.granularitySize(), querySelectColumns,
-                        query.variableRegistry(), query.subqueries(), query.joinCondition(),
-                        Optional.of("$main"), query.groupByColumns());
+                        query.variableRegistry(),
+                        Collections.emptyList(), // joinSteps (9th argument)
+                        Optional.of("$main"), // mainAlias (10th argument)
+                        query.groupByColumns());
 
         List<TestDataEntry> entries = new ArrayList<>();
         entries.add(new TestDataEntry("termA", ValueType.TERM, "$main.v1", 10, 1, 0, 5, -1, 0));

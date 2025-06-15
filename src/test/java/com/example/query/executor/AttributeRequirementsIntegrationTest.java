@@ -46,7 +46,6 @@ class AttributeRequirementsIntegrationTest {
             registry,
             List.of(),
             Optional.empty(),
-            Optional.empty(),
             List.of()
         );
 

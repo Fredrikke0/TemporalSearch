@@ -29,10 +29,20 @@ import com.google.common.collect.ListMultimap;
 
 public abstract class AbstractNgramStitchGenerator extends IndexGenerator<AbstractNgramStitchGenerator.NgramStitchEntry> {
     private static final Logger logger = LoggerFactory.getLogger(AbstractNgramStitchGenerator.class);
+    protected static final int MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN = 120;
 
     protected final SynonymManager synonymManager;
     protected final int N; // Size of the N-gram (e.g., 1 for unigram, 2 for bigram, 3 for trigram)
     private Integer lastProcessedDocumentId = null;
+
+    /**
+     * Interface for annotation records that can be filtered by sentence character span.
+     */
+    protected interface SentenceSpanFilterable {
+        int sentenceId();
+        int beginChar();
+        String getFilterLogDetail(); // For providing context (e.g., NER tag, POS tag) in log messages
+    }
 
     // Moved AnnotationData here from AbstractUnigramStitchGenerator
     public record AnnotationData(
@@ -41,7 +51,13 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         int endChar,
         String annotationKeyComponent, // e.g., "NNP", "PERSON", "20230101"
         String specificValueForSynonym // e.g., "castro", "john doe", or "20230101" for dates
-    ) {}
+    ) implements SentenceSpanFilterable {
+        @Override
+        public String getFilterLogDetail() {
+            return annotationKeyComponent; // Or specificValueForSynonym, depending on desired log detail
+        }
+        // Note: sentenceId() and beginChar() are implicitly provided by the record components
+    }
 
     // Record to hold processed token information before forming N-grams or for unigrams
     private record ProcessedTokenInfo(String token, int beginChar, int endChar) {}
@@ -119,6 +135,55 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
     protected abstract List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException;
     protected abstract boolean requiresSynonymIdForAnnotationValue();
     protected abstract AnnotationType getManagedAnnotationType();
+
+    /**
+     * Filters a list of annotation records, removing those that fall outside the
+     * MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN limit within each sentence.
+     *
+     * @param rawAnnotations The list of raw annotation records to filter.
+     * @param documentId The ID of the document being processed (for logging).
+     * @param generatorTypeForLog A string indicating the type of generator (e.g., "Unigram NER", "Bigram Date") for logging.
+     * @param <T> The type of the annotation record, must implement SentenceSpanFilterable.
+     * @return A new list containing only the filtered annotation records.
+     */
+    protected <T extends SentenceSpanFilterable> List<T> filterAnnotationsBySentenceCharacterSpan(
+            List<T> rawAnnotations, int documentId, String generatorTypeForLog) {
+
+        if (rawAnnotations.isEmpty()) {
+            return new ArrayList<>(); // Return empty list if input is empty
+        }
+
+        List<T> filteredAnnotations = new ArrayList<>();
+        java.util.Map<Integer, Integer> firstTokenBeginCharPerSentence = new java.util.HashMap<>();
+        java.util.Set<Integer> truncatedSentencesLog = new java.util.HashSet<>(); // To log truncation only once per sentence
+
+        for (T rawAnno : rawAnnotations) {
+            int sentenceId = rawAnno.sentenceId();
+            int currentTokenBeginChar = rawAnno.beginChar();
+
+            if (!firstTokenBeginCharPerSentence.containsKey(sentenceId)) {
+                firstTokenBeginCharPerSentence.put(sentenceId, currentTokenBeginChar);
+            }
+
+            int firstCharInSentence = firstTokenBeginCharPerSentence.get(sentenceId);
+            if (currentTokenBeginChar <= firstCharInSentence + MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN) {
+                filteredAnnotations.add(rawAnno);
+            } else {
+                if (!truncatedSentencesLog.contains(sentenceId)) {
+                    logger.trace("Sentence (doc_id: {}, sentence_id: {}) annotation processing truncated for {}. Token with begin_char {} (detail: '{}') exceeded limit (first_token_begin_char {} + span {}).",
+                            documentId,
+                            sentenceId,
+                            generatorTypeForLog,
+                            currentTokenBeginChar,
+                            rawAnno.getFilterLogDetail(),
+                            firstCharInSentence,
+                            MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN);
+                    truncatedSentencesLog.add(sentenceId);
+                }
+            }
+        }
+        return filteredAnnotations;
+    }
 
     @Override
     protected List<NgramStitchEntry> fetchBatch(NgramStitchEntry lastStitchEntryFromPreviousOverallBatch) throws SQLException {
@@ -242,30 +307,55 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
 
         Map<Integer, List<NgramData>> ngramsBySentence = new HashMap<>();
         for (Map.Entry<Integer, List<ProcessedTokenInfo>> entry : tokensBySentence.entrySet()) {
-            List<ProcessedTokenInfo> sentenceTokens = entry.getValue();
-            if (sentenceTokens.size() < N) {
+            List<ProcessedTokenInfo> originalSentenceTokens = entry.getValue();
+            Integer sentenceId = entry.getKey(); // Get sentenceId for logging
+
+            if (originalSentenceTokens.isEmpty()) {
+                continue;
+            }
+
+            List<ProcessedTokenInfo> effectiveSentenceTokens = new ArrayList<>();
+            int firstTokenBeginChar = originalSentenceTokens.get(0).beginChar();
+
+            for (ProcessedTokenInfo tokenInfo : originalSentenceTokens) {
+                if (tokenInfo.beginChar() > firstTokenBeginChar + MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN) {
+                    logger.debug("Sentence (doc_id: {}, sentence_id: {}) truncated for indexing. Token with begin_char {} (text: '{}') exceeded limit (first_token_begin_char {} + span {}). Last token included had begin_char: {}.",
+                        documentId,
+                        sentenceId,
+                        tokenInfo.beginChar(),
+                        tokenInfo.token(), // Added token text for better logging
+                        firstTokenBeginChar,
+                        MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN,
+                        (effectiveSentenceTokens.isEmpty() ? "N/A" : effectiveSentenceTokens.get(effectiveSentenceTokens.size()-1).beginChar())
+                    );
+                    break; // Stop adding tokens from this sentence
+                }
+                effectiveSentenceTokens.add(tokenInfo);
+            }
+
+            if (effectiveSentenceTokens.size() < N) {
                 continue;
             }
 
             List<NgramData> sentenceNgrams = new ArrayList<>();
             if (N == 1) { // Handle Unigrams
-                for (ProcessedTokenInfo tokenInfo : sentenceTokens) {
+                for (ProcessedTokenInfo tokenInfo : effectiveSentenceTokens) { // Use effective list
                     sentenceNgrams.add(new NgramData(tokenInfo.beginChar(), tokenInfo.endChar(), tokenInfo.token()));
                 }
             } else { // Handle N-grams (N > 1)
-                for (int i = 0; i <= sentenceTokens.size() - N; i++) {
+                for (int i = 0; i <= effectiveSentenceTokens.size() - N; i++) { // Use effective list
                     List<String> ngramComponentTokens = new ArrayList<>();
                     for (int j = 0; j < N; j++) {
-                        ngramComponentTokens.add(sentenceTokens.get(i + j).token());
+                        ngramComponentTokens.add(effectiveSentenceTokens.get(i + j).token()); // Use effective list
                     }
                     String ngramKey = String.join(String.valueOf(IndexAccessInterface.DELIMITER), ngramComponentTokens);
-                    int ngramBeginChar = sentenceTokens.get(i).beginChar();
-                    int ngramEndChar = sentenceTokens.get(i + N - 1).endChar();
+                    int ngramBeginChar = effectiveSentenceTokens.get(i).beginChar(); // Use effective list
+                    int ngramEndChar = effectiveSentenceTokens.get(i + N - 1).endChar(); // Use effective list
                     sentenceNgrams.add(new NgramData(ngramBeginChar, ngramEndChar, ngramKey));
                 }
             }
             if (!sentenceNgrams.isEmpty()) {
-                ngramsBySentence.put(entry.getKey(), sentenceNgrams);
+                ngramsBySentence.put(sentenceId, sentenceNgrams);
             }
         }
         return ngramsBySentence;

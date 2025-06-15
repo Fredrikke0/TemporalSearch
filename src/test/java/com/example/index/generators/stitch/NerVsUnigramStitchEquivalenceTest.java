@@ -37,7 +37,7 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
 
     private SynonymManager synonymManager;
     private NerIndexGenerator nerIndexGenerator;
-    private UnigramNerStitchIndexGenerator unigramStitchGenerator;
+    private UnigramNerStitchGenerator unigramStitchGenerator;
 
     @Mock
     private IndexAccessInterface mockIndexAccess; // NerIndexGenerator and Unigram need this
@@ -67,7 +67,7 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
 
         // Initialize generators (they are final, so no subclassing)
         nerIndexGenerator = new NerIndexGenerator(mockIndexAccess, dummyStopwordsFile.toString(), sqliteConn, mockProgressTracker, 10, synonymManager);
-        unigramStitchGenerator = new UnigramNerStitchIndexGenerator(mockIndexAccess, dummyStopwordsFile.toString(), sqliteConn, mockProgressTracker, 10, classLevelTempDir.resolve("stitchtemp_equiv"), synonymManager);
+        unigramStitchGenerator = new UnigramNerStitchGenerator(mockIndexAccess, dummyStopwordsFile.toString(), sqliteConn, mockProgressTracker, 10, classLevelTempDir.resolve("stitchtemp_equiv"), synonymManager);
 
         // Create annotations table (if not handled by BaseIndexTest setUp)
         // Assuming BaseIndexTest only provides connection, not schema.
@@ -144,7 +144,7 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
     // Helper method for reflection to call protected UnigramNerStitchIndexGenerator.fetchAnnotationsForDocument
     @SuppressWarnings("unchecked")
     private List<AbstractNgramStitchGenerator.AnnotationData> invokeUnigramFetchAnnotations(int docId) throws Exception {
-        Method method = UnigramNerStitchIndexGenerator.class.getDeclaredMethod("fetchAnnotationsForDocument", int.class);
+        Method method = UnigramNerStitchGenerator.class.getDeclaredMethod("fetchAnnotationsForDocument", int.class);
         method.setAccessible(true);
         return (List<AbstractNgramStitchGenerator.AnnotationData>) method.invoke(unigramStitchGenerator, docId);
     }

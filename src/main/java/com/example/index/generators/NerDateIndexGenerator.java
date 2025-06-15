@@ -10,13 +10,13 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -132,8 +132,37 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
             return index;
         }
 
-        // Sort by document, sentence, and then start position to correctly group consecutive entities.
-        Collections.sort(batch, Comparator
+        // 1. Group by document_id and then sentence_id
+        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
+            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
+                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
+
+        List<AnnotationEntry> sentenceSpanFilteredBatch = new ArrayList<>();
+
+        // 2. For each sentence: sort tokens, filter by span, and collect
+        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
+            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
+                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
+                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
+                    sentenceTokens, documentId, sentenceId, "NerDateIndexGenerator", logger);
+                sentenceSpanFilteredBatch.addAll(filteredSentenceTokens);
+            });
+        });
+
+        if (sentenceSpanFilteredBatch.isEmpty()) {
+            // Log if filtering removed all tokens, but original batch had some
+            if(!batch.isEmpty()){
+                logger.trace("All DATE annotations filtered out by sentence span limit. Original batch size: {}", batch.size());
+            }
+            return index;
+        }
+
+        // 3. Existing date entity merging logic now operates on sentenceSpanFilteredBatch
+        // Ensure it's sorted as the original logic expected (if sentenceSpanFilteredBatch isn't already)
+        // The grouping and per-sentence sorting + collection might not preserve the overall batch sort order
+        // that the original merging logic relied upon if it spanned across sentences after filtering.
+        // The original sort was: docId, sentId, beginChar. This is re-established here for the filtered list.
+        sentenceSpanFilteredBatch.sort(Comparator
             .comparingInt(AnnotationEntry::getDocumentId)
             .thenComparingInt(AnnotationEntry::getSentenceId)
             .thenComparingInt(AnnotationEntry::getBeginChar));
@@ -141,8 +170,8 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
         List<AnnotationEntry> currentMergedEntityTokens = new ArrayList<>();
 
-        for (int i = 0; i < batch.size(); i++) {
-            AnnotationEntry currentEntry = batch.get(i);
+        for (int i = 0; i < sentenceSpanFilteredBatch.size(); i++) {
+            AnnotationEntry currentEntry = sentenceSpanFilteredBatch.get(i);
             String rawNormalizedDate = currentEntry.getNormalizedNer(); // This is YYYY-MM-DD
 
             if (rawNormalizedDate == null || rawNormalizedDate.isEmpty()) {

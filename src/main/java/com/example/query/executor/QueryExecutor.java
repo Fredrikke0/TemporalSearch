@@ -1,8 +1,6 @@
 package com.example.query.executor;
 
-import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -17,13 +15,11 @@ import com.example.core.IndexAccessInterface;
 import com.example.index.util.SynonymManager;
 import com.example.query.index.IndexManager;
 import com.example.query.model.JoinCondition;
+import com.example.query.model.JoinStep;
 import com.example.query.model.Query;
-import com.example.query.model.SubquerySpec;
-import com.example.query.model.TemporalPredicate;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Logical.LogicalOperator;
-import com.example.query.model.condition.Temporal;
 import com.example.query.result.TableResultService;
 
 /**
@@ -168,52 +164,86 @@ public class QueryExecutor {
             logger.debug("No main query conditions found.");
             mainConditionsResult = new QueryResultSoA(granularity, granularitySize, requirements);
         }
-        // --- PUSHDOWN STRATEGY BRANCHING ---
-        if (query.joinCondition().isPresent()) {
-            JoinCondition joinCondition = query.joinCondition().get();
-            String mainAlias = query.mainAlias().orElse("$main");
-            subqueryContext.addQueryResult(mainAlias, mainConditionsResult);
-            if (this.pushdownStrategy == PushdownStrategy.OPTIMIZED &&
-                joinCondition.type() == JoinCondition.JoinType.INNER &&
-                (joinCondition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL)) {
-                logger.info("Using OPTIMIZED pushdown strategy: attempting dependent join flow for query: {}", query.toString());
-                return executeDependentJoin(query, indexes, subqueryContext, mainAlias, mainConditionsResult, requirements);
-            } else {
-                if (this.pushdownStrategy == PushdownStrategy.NONE) {
-                    logger.info("Using NONE pushdown strategy: using independent join flow for query: {}", query.toString());
-                } else {
-                    // This case handles OPTIMIZED strategy but not meeting dependent join criteria
-                    logger.info("Using OPTIMIZED pushdown strategy, but not a dependent temporal join: using independent join flow for query: {}", query.toString());
+
+        // --- NEW ITERATIVE JOIN LOGIC ---
+        if (!query.joinSteps().isEmpty()) {
+            logger.info("Starting chained join execution with {} steps.", query.joinSteps().size());
+            QueryResultSoA currentLhsSoA = mainConditionsResult;
+            String currentLhsAlias = query.mainAlias().orElse(com.example.query.parser.QueryModelBuilder.DEFAULT_MAIN_ALIAS);
+            subqueryContext.addQueryResult(currentLhsAlias, currentLhsSoA); // Add initial LHS to context
+
+            logger.debug("Initial LHS for join chain: alias='{}', size={}", currentLhsAlias, currentLhsSoA.size());
+
+            for (com.example.query.model.JoinStep step : query.joinSteps()) {
+                logger.debug("Processing JoinStep: Left='{}' ({}), Right='{}', Type='{}', ON='{}'",
+                             step.leftSourceAlias(), currentLhsAlias, step.rightSourceAlias(), step.joinType(), step.onCondition());
+
+                if (!step.leftSourceAlias().equals(currentLhsAlias)) {
+                    throw new QueryExecutionException(
+                        String.format("Join chain integrity error: Expected LHS alias '%s' for current step, but JoinStep specifies '%s'. This indicates a mismatch between the accumulated join result alias and the next step's expectation.",
+                                      currentLhsAlias, step.leftSourceAlias()),
+                        query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR
+                    );
                 }
-                return executeIndependentJoin(query, indexes, subqueryContext, requirements);
+
+                Query rhsQuery = step.subquery();
+                String rhsAlias = step.rightSourceAlias();
+                AttributeRequirements rhsRequirements = QueryAttributeAnalyzer.analyze(rhsQuery);
+                QueryResultSoA rhsSoA;
+
+                // --- Pushdown Logic for this step ---
+                boolean eligibleForPushdown = this.pushdownStrategy == PushdownStrategy.OPTIMIZED &&
+                                              step.joinType() == JoinCondition.JoinType.INNER &&
+                                              step.onCondition().operatorType() == JoinCondition.JoinOperatorType.TEMPORAL;
+
+                if (eligibleForPushdown) {
+                    logger.info("Attempting OPTIMIZED pushdown for JoinStep: LHS='{}', RHS Query Source='{}' (alias '{}'), ON {}", currentLhsAlias, rhsQuery.source(), rhsAlias, step.onCondition());
+                    try {
+                        // Pass parentRequirements (overall query requirements) for context, but executed subquery will have its own.
+                        rhsSoA = executeSingleDependentStep(currentLhsSoA, currentLhsAlias, rhsQuery, rhsAlias, step.onCondition(), indexes, subqueryContext, requirements, query.granularity(), query.granularitySize().orElse(0));
+                    } catch (QueryExecutionException qe) {
+                        logger.warn("Dependent execution for step (LHS: '{}', RHS: '{}') failed with QueryExecutionException: {}. Falling back to independent execution for this step.", currentLhsAlias, rhsAlias, qe.getMessage());
+                        rhsSoA = executeWithRequirements(rhsQuery, indexes, rhsRequirements, new SubqueryContext()); // Execute independently with fresh context
+                    } catch (Exception e) {
+                        logger.warn("Dependent execution for step (LHS: '{}', RHS: '{}') failed with generic Exception: {}. Falling back to independent execution for this step.", currentLhsAlias, rhsAlias, e.getMessage(), e);
+                        rhsSoA = executeWithRequirements(rhsQuery, indexes, rhsRequirements, new SubqueryContext()); // Execute independently with fresh context
+                    }
+                } else {
+                    logger.info("Executing RHS subquery '{}' (source: '{}') independently for JoinStep.", rhsAlias, rhsQuery.source());
+                    rhsSoA = executeWithRequirements(rhsQuery, indexes, rhsRequirements, new SubqueryContext()); // Execute independently with fresh context for RHS
+                }
+
+                subqueryContext.addQueryResult(rhsAlias, rhsSoA);
+                logger.debug("Executed RHS '{}' for JoinStep, size={}", rhsAlias, rhsSoA.size());
+
+                // Perform binary join
+                JoinHandler joinHandler = new JoinHandler();
+                logger.debug("Calling JoinHandler.performBinaryJoin: LHS='{}'({}), RHS='{}'({}), Type={}, Condition={}",
+                    currentLhsAlias, currentLhsSoA.size(), rhsAlias, rhsSoA.size(), step.joinType(), step.onCondition());
+
+                currentLhsSoA = joinHandler.performBinaryJoin(
+                    currentLhsSoA,          // lhsSoA
+                    currentLhsAlias,        // lhsAlias
+                    rhsSoA,                 // rhsSoA
+                    rhsAlias,               // rhsAlias (which is step.rightSourceAlias())
+                    step.onCondition(),     // condition
+                    step.joinType(),        // joinType
+                    query.granularity(),    // outputGranularity (from main query)
+                    query.granularitySize().orElse(0), // outputGranularitySize (from main query)
+                    requirements            // outputRequirements (overall requirements for the main query)
+                );
+                logger.debug("JoinHandler.performBinaryJoin completed. Result size: {}", currentLhsSoA.size());
+
+                currentLhsAlias = rhsAlias; // The result of the join is now identified by the RHS alias for the next step
+                subqueryContext.addQueryResult(currentLhsAlias, currentLhsSoA); // Update context with the new intermediate result
+                logger.debug("JoinStep completed. New currentLhsAlias='{}', size={}", currentLhsAlias, currentLhsSoA.size());
             }
+            logger.info("Chained join execution completed. Final result alias: '{}', size: {}", currentLhsAlias, currentLhsSoA.size());
+            return currentLhsSoA; // This is the final result after all joins
         } else {
-            // No JOIN
+            // No JOIN steps
+            logger.debug("No join steps in query. Returning main conditions result.");
             return mainConditionsResult;
-        }
-    }
-
-    /**
-     * Executes all subqueries and adds their results to the subquery context.
-     */
-    private void executeSubqueries(List<SubquerySpec> subqueries, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext)
-            throws QueryExecutionException {
-        for (SubquerySpec subquerySpec : subqueries) {
-            if (subqueryContext.hasResults(subquerySpec.alias())) {
-                logger.debug("Subquery with alias '{}' already executed, skipping", subquerySpec.alias());
-                continue;
-            }
-
-            logger.debug("Executing subquery: {}", subquerySpec);
-            Query currentSubquery = subquerySpec.subquery();
-            AttributeRequirements subqueryRequirements = QueryAttributeAnalyzer.analyze(currentSubquery);
-
-            // Call executeWithRequirements to ensure factory is set with subquery's granularity
-            QueryResultSoA subqueryResults = executeWithRequirements(currentSubquery, indexes, subqueryRequirements, subqueryContext);
-
-            subqueryContext.addQueryResult(subquerySpec, subqueryResults);
-            logger.debug("Subquery '{}' executed, stored QueryResultSoA with {} matches.",
-                    subquerySpec.alias(), subqueryResults.size());
         }
     }
 
@@ -317,46 +347,31 @@ public class QueryExecutor {
     }
 
     /**
-     * Executes the current (independent) join logic.
+     * @deprecated This method is deprecated. Join logic has been refactored into an iterative process within {@link #executeWithContext}.
      */
+    @Deprecated
     QueryResultSoA executeIndependentJoin(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext, AttributeRequirements requirements) throws QueryExecutionException {
-        logger.debug("Executing independent join...");
-        JoinCondition joinCondition = query.joinCondition().orElseThrow(() ->
-                new QueryExecutionException("Join condition missing for independent join strategy",
-                                            query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR));
-
-        // Ensure all subqueries involved in the join are executed
-        List<SubquerySpec> allSubqueries = new ArrayList<>(query.subqueries());
-        // Add subqueries specified directly in join condition if not already in the main list (e.g. FROM subqueryA JOIN subqueryB)
-        // This part might be redundant if Query model ensures all involved subqueries are in query.subqueries()
-        // For now, let's assume query.subqueries() is comprehensive or executeSubqueries handles all necessary ones.
-
-        executeSubqueries(allSubqueries, indexes, subqueryContext); // Make sure all defined subqueries are processed
-
-        // Now, perform the join using the JoinHandler, which expects QueryResultSoA from the context
-        JoinHandler joinHandler = new JoinHandler();
-        AttributeRequirements joinOutputRequirements = new AttributeRequirements(); // JoinHandler will derive its own output reqs
-        joinOutputRequirements.merge(subqueryContext.getQueryResult(JoinHandler.extractAliasFromColumnName(joinCondition.leftColumn())).getRequirements());
-        joinOutputRequirements.merge(subqueryContext.getQueryResult(JoinHandler.extractAliasFromColumnName(joinCondition.rightColumn())).getRequirements());
-        joinOutputRequirements.needsConceptualRowIds = true;
-
-        // The JoinHandler now takes care of creating the final QueryResultSoA
-        return joinHandler.handleJoin(query, subqueryContext);
+        logger.warn("executeIndependentJoin is DEPRECATED and will be removed. Join logic is now iterative within executeWithContext.");
+        if (query.joinSteps().isEmpty()) {
+             throw new QueryExecutionException("executeIndependentJoin (DEPRECATED) called without join steps.", query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+        // Fallback or error, as this path should not be taken.
+        // For safety during transition, try to return something if forced.
+        executeJoinStepSubqueries(query.joinSteps(), indexes, subqueryContext); // Ensure subqueries are run if this path is hit
+        // Cannot perform a meaningful join here as the iterative logic is elsewhere.
+        // Return the result of the first subquery if available and forced into this path.
+        logger.error("executeIndependentJoin (DEPRECATED) was called. This indicates an issue in the execution flow. Attempting to return a placeholder result.");
+        JoinStep firstStep = query.joinSteps().get(0);
+        if (subqueryContext.hasResults(firstStep.rightSourceAlias())) {
+            return subqueryContext.getQueryResult(firstStep.rightSourceAlias());
+        }
+        return new QueryResultSoA(query.granularity(), query.granularitySize().orElse(0), requirements); // Empty result
     }
 
     /**
-     * Executes a join where the right-hand side subquery depends on the results of the left-hand side (main query or another subquery).
-     * This is typical for certain temporal joins or correlated subqueries, though the latter is not fully supported.
-     *
-     * @param query The main query.
-     * @param indexes Available indexes.
-     * @param subqueryContext Context for subquery results.
-     * @param mainAlias Alias for the main query part (LHS of the join).
-     * @param mainConditionsResult Results of the main query conditions.
-     * @param requirements Attribute requirements for the main query.
-     * @return QueryResultSoA from the join operation.
-     * @throws QueryExecutionException If an error occurs.
+     * @deprecated This method is deprecated. Dependent join logic is being integrated into the iterative process within {@link #executeWithContext} using a new helper method if applicable for a step.
      */
+    @Deprecated
     QueryResultSoA executeDependentJoin(Query query,
                                     Map<String, IndexAccessInterface> indexes,
                                     SubqueryContext subqueryContext,
@@ -364,242 +379,34 @@ public class QueryExecutor {
                                     QueryResultSoA mainConditionsResult, // Already executed main part
                                     AttributeRequirements requirements)
             throws QueryExecutionException {
-        logger.debug("Executing dependent join strategy for mainAlias: {}, query: {}", mainAlias, query.toString());
-        JoinCondition joinCondition = query.joinCondition().orElseThrow(() ->
-            new QueryExecutionException("Join condition missing for dependent join strategy",
-                                        query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR));
-
-        // 1. Identify Sides and Keys
-        String leftColumn = joinCondition.leftColumn();
-        String rightColumn = joinCondition.rightColumn();
-
-        String leadingAlias;
-        String dependentAlias;
-        String leadingDateKeyName;
-        String dependentDateKeyName;
-
-        String leftColAlias = JoinHandler.extractAliasFromColumnName(leftColumn);
-        String rightColAlias = JoinHandler.extractAliasFromColumnName(rightColumn);
-
-        if (leftColAlias.equals(mainAlias) || (leftColAlias.isEmpty() && JoinHandler.extractKeyFromColumnName(leftColumn).equals(mainAlias))) {
-            leadingAlias = mainAlias;
-            dependentAlias = rightColAlias;
-            if (dependentAlias.isEmpty()) { // If rightColAlias is empty, rightColumn might be the alias itself
-                dependentAlias = JoinHandler.extractKeyFromColumnName(rightColumn);
-            }
-            leadingDateKeyName = JoinHandler.extractKeyFromColumnName(leftColumn);
-            dependentDateKeyName = JoinHandler.extractKeyFromColumnName(rightColumn);
-        } else if (rightColAlias.equals(mainAlias) || (rightColAlias.isEmpty() && JoinHandler.extractKeyFromColumnName(rightColumn).equals(mainAlias))) {
-            leadingAlias = mainAlias;
-            dependentAlias = leftColAlias;
-            if (dependentAlias.isEmpty()) { // If leftColAlias is empty, leftColumn might be the alias itself
-                 dependentAlias = JoinHandler.extractKeyFromColumnName(leftColumn);
-            }
-            leadingDateKeyName = JoinHandler.extractKeyFromColumnName(rightColumn);
-            dependentDateKeyName = JoinHandler.extractKeyFromColumnName(leftColumn);
-        } else {
-            logger.error("Could not determine leading/dependent side for dependent join. mainAlias: '{}', left: '{}', right: '{}'. Falling back.",
-                        mainAlias, leftColumn, rightColumn);
-            return executeIndependentJoin(query, indexes, subqueryContext, requirements);
+        logger.warn("executeDependentJoin is DEPRECATED and will be removed. Dependent join logic is now part of the iterative flow in executeWithContext.");
+        if (query.joinSteps().isEmpty()) {
+            throw new QueryExecutionException("executeDependentJoin (DEPRECATED) called without join steps.", query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
-
-        // Ensure dependentAlias is a valid subquery alias if it was derived from a key
-        final String finalDependentAlias = dependentAlias;
-        if (query.subqueries().stream().noneMatch(sq -> sq.alias().equals(finalDependentAlias))) {
-             logger.warn("Resolved dependentAlias '{}' does not match any known subquery alias. Attempting to find by key '{}' as alias. Join might fail or be incorrect.", finalDependentAlias, dependentAlias );
-             // This logic might need to be more robust if dependentAlias can be something other than a subquery alias directly.
-        }
-
-        logger.debug("Dependent Join: Leading Alias='{}', Dependent Alias='{}', Leading Date Key='{}', Dependent Date Key='{}'",
-            leadingAlias, finalDependentAlias, leadingDateKeyName, dependentDateKeyName);
-
-        try {
-            // 2. Extract Date Range from Leading Results (mainConditionsResult)
-            Set<LocalDate> leadingDatesSet = new HashSet<>();
-            if (mainConditionsResult != null && mainConditionsResult.size() > 0) {
-                for (int i = 0; i < mainConditionsResult.size(); i++) {
-                    String varName = mainConditionsResult.getVariableNameAt(i);
-                    boolean nameMatch = (varName != null &&
-                                         (varName.equals(leadingDateKeyName) ||
-                                          (leadingDateKeyName.startsWith("$") && varName.equals(leadingDateKeyName.substring(1))) ||
-                                          (!leadingDateKeyName.startsWith("$") && varName.equals("$" + leadingDateKeyName))
-                                         )
-                                        );
-                    if (nameMatch) {
-                        Object value = mainConditionsResult.getValueAt(i);
-                        if (value instanceof LocalDate) {
-                            leadingDatesSet.add((LocalDate) value);
-                        }
-                    } else if (SoAJoinOptimizer.isStructuralDateKey(leadingDateKeyName)) {
-                         if (mainConditionsResult.getValueTypeAt(i) == com.example.query.binding.ValueType.DATE) {
-                             Object value = mainConditionsResult.getValueAt(i);
-                             if (value instanceof LocalDate) {
-                                 leadingDatesSet.add((LocalDate) value);
-                             }
-                         }
-                    }
-                }
-            }
-            List<LocalDate> leadingDates = new ArrayList<>(leadingDatesSet);
-
-            if (leadingDates.isEmpty()) {
-                logger.info("Leading side for dependent join (alias: '{}', key: '{}') resulted in no usable dates (or was empty). INNER JOIN will yield no results.",
-                            leadingAlias, leadingDateKeyName);
-                return new QueryResultSoA(query.granularity(), query.granularitySize().orElse(0), requirements);
-            }
-
-            LocalDate minLeadingDate = Collections.min(leadingDates);
-            LocalDate maxLeadingDate = Collections.max(leadingDates);
-            logger.debug("Leading date range for dependent filter: {} to {}", minLeadingDate, maxLeadingDate);
-
-            // 3. Construct New Temporal Filter for Dependent Query
-            TemporalPredicate originalPredicate = joinCondition.temporalPredicate().orElseThrow(() ->
-                new QueryExecutionException("Temporal predicate missing in a temporal join for dependent strategy.", query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR)
-            );
-
-            Temporal newFilterCondition;
-            // The qualifiedVariableName for the new filter condition should be the dependentDateKeyName
-            // It might need to be prefixed with '$' if not already, or handled by Temporal constructor/logic.
-            // For now, passing it as is, assuming Temporal or downstream logic handles qualification if needed.
-            String qVNDependent = dependentDateKeyName.startsWith("$") ? dependentDateKeyName : "$" + dependentDateKeyName;
-
-            switch (originalPredicate) {
-                case BEFORE:
-                    newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.empty(), Optional.of(qVNDependent), Optional.empty(), TemporalPredicate.AFTER);
-                    break;
-                case AFTER:
-                    newFilterCondition = new Temporal(Optional.of(maxLeadingDate.atStartOfDay()), Optional.empty(), Optional.of(qVNDependent), Optional.empty(), TemporalPredicate.BEFORE);
-                    break;
-                case EQUAL:
-                    newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.of(maxLeadingDate.atStartOfDay()), Optional.of(qVNDependent), Optional.empty(), TemporalPredicate.INTERSECT);
-                    break;
-                case INTERSECT:
-                    newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.of(maxLeadingDate.atStartOfDay()), Optional.of(qVNDependent), Optional.empty(), TemporalPredicate.INTERSECT);
-                    break;
-                case CONTAINS:
-                case CONTAINED_BY:
-                     newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.of(maxLeadingDate.atStartOfDay()), Optional.of(qVNDependent), Optional.empty(), TemporalPredicate.INTERSECT);
-                     logger.debug("Mapped original predicate {} to INTERSECT for dependent filter.", originalPredicate);
-                     break;
-                case BEFORE_EQUAL:
-                    newFilterCondition = new Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.empty(), Optional.of(qVNDependent), Optional.empty(), TemporalPredicate.AFTER_EQUAL);
-                    break;
-                case AFTER_EQUAL:
-                    newFilterCondition = new Temporal(Optional.of(maxLeadingDate.atStartOfDay()), Optional.empty(), Optional.of(qVNDependent), Optional.empty(), TemporalPredicate.BEFORE_EQUAL);
-                    break;
-                case PROXIMITY:
-                default:
-                    logger.warn("Dependent join strategy does not support temporal predicate '{}' for precise pre-filtering. Falling back to independent join.", originalPredicate);
-                    return executeIndependentJoin(query, indexes, subqueryContext, requirements);
-            }
-            logger.debug("Constructed new temporal filter for dependent subquery (key: '{}'): {}", dependentDateKeyName, newFilterCondition);
-
-            // 4. Modify and Execute Dependent Subquery
-            SubquerySpec dependentSubquerySpec = query.subqueries().stream()
-                .filter(sq -> sq.alias().equals(finalDependentAlias))
-                .findFirst()
-                .orElseThrow(() -> new QueryExecutionException("Dependent subquery spec not found for alias: " + finalDependentAlias, query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR));
-
-            Query originalDependentQuery = dependentSubquerySpec.subquery();
-            List<Condition> newConditions = new ArrayList<>(originalDependentQuery.conditions());
-            boolean merged = false;
-
-            // The dependentBaseKey should be just the variable name, without alias, for matching inside the subquery conditions.
-            String dependentBaseKeyForFilter = dependentDateKeyName.startsWith("$") ? dependentDateKeyName : "$" + dependentDateKeyName;
-
-            for (int i = 0; i < newConditions.size(); i++) {
-                Condition currentCond = newConditions.get(i);
-                if (currentCond instanceof Temporal existingTemporalCond) {
-                    Optional<String> existingVarNameOpt = existingTemporalCond.qualifiedVariableName();
-                    if (existingVarNameOpt.isPresent()) {
-                        String existingQualifiedVar = existingVarNameOpt.get();
-                        // Extract base variable name (e.g., $date from subAlias.$date)
-                        String existingBaseKey = existingQualifiedVar.contains(".")
-                                               ? existingQualifiedVar.substring(existingQualifiedVar.indexOf('.') + 1)
-                                               : existingQualifiedVar;
-                        if (!existingBaseKey.startsWith("$")) existingBaseKey = "$" + existingBaseKey;
-
-                        if (dependentBaseKeyForFilter.equals(existingBaseKey)) {
-                            Optional<Temporal> mergedTemporalOpt = existingTemporalCond.intersectWith(newFilterCondition);
-                            if (mergedTemporalOpt.isPresent()) {
-                                newConditions.set(i, mergedTemporalOpt.get());
-                                merged = true;
-                                break;
-                            }
-                        }
-                    }
-                } else if (currentCond instanceof Logical logicalCond && logicalCond.operator() == Logical.LogicalOperator.AND) {
-                    List<Condition> subConditions = new ArrayList<>(logicalCond.conditions());
-                    boolean subMerged = false;
-                    for (int j = 0; j < subConditions.size(); j++) {
-                        Condition subCond = subConditions.get(j);
-                        if (subCond instanceof Temporal existingSubTemporalCond) {
-                            Optional<String> existingVarNameOpt = existingSubTemporalCond.qualifiedVariableName();
-                            if (existingVarNameOpt.isPresent()) {
-                                String existingQualifiedVar = existingVarNameOpt.get();
-                                String existingBaseKey = existingQualifiedVar.contains(".")
-                                                       ? existingQualifiedVar.substring(existingQualifiedVar.indexOf('.') + 1)
-                                                       : existingQualifiedVar;
-                                if (!existingBaseKey.startsWith("$")) existingBaseKey = "$" + existingBaseKey;
-
-                                if (dependentBaseKeyForFilter.equals(existingBaseKey)) {
-                                    Optional<Temporal> mergedTemporalOpt = existingSubTemporalCond.intersectWith(newFilterCondition);
-                                    if (mergedTemporalOpt.isPresent()) {
-                                        subConditions.set(j, mergedTemporalOpt.get());
-                                        newConditions.set(i, new Logical(Logical.LogicalOperator.AND, subConditions));
-                                        merged = true;
-                                        subMerged = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (subMerged) break;
-                }
-            }
-
-            if (!merged) {
-                newConditions.add(newFilterCondition);
-            }
-
-            Query modifiedDependentQuery = new Query(
-                originalDependentQuery.source(), newConditions, originalDependentQuery.orderBy(),
-                originalDependentQuery.limit(), originalDependentQuery.granularity(), originalDependentQuery.granularitySize(),
-                originalDependentQuery.selectColumns(), originalDependentQuery.variableRegistry(),
-                originalDependentQuery.subqueries(), originalDependentQuery.joinCondition(),
-                originalDependentQuery.mainAlias(), originalDependentQuery.groupByColumns()
-            );
-
-            QueryResultSoA modifiedSubqueryResult;
-            logger.debug("Executing modified dependent subquery for alias '{}': {}", finalDependentAlias, modifiedDependentQuery.toString());
-            modifiedSubqueryResult = this.executeWithContext(modifiedDependentQuery, indexes, new SubqueryContext()); // Execute with a new context
-            logger.info("Modified dependent subquery for alias '{}' executed. Found {} matches.", finalDependentAlias, modifiedSubqueryResult.size());
-
-            subqueryContext.addQueryResult(finalDependentAlias, modifiedSubqueryResult);
-            logger.debug("Updated main subquery context with filtered results for dependent alias '{}'.", finalDependentAlias);
-
-            List<SubquerySpec> remainingSubquerySpecs = query.subqueries().stream()
-                .filter(sq -> !sq.alias().equals(finalDependentAlias) && !sq.alias().equals(mainAlias))
-                .collect(Collectors.toList());
-
-            if (!remainingSubquerySpecs.isEmpty()) {
-                executeSubqueries(remainingSubquerySpecs, indexes, subqueryContext);
-            }
-
-            return new JoinHandler().handleJoin(query, subqueryContext);
-
-        } catch (QueryExecutionException qe) {
-            logger.warn("QueryExecutionException during dependent join for query {}. Error: {}. Falling back to independent join.", query.toString(), qe.getMessage(), qe);
-            subqueryContext.addQueryResult(mainAlias, mainConditionsResult);
-            return executeIndependentJoin(query, indexes, subqueryContext, requirements);
-        } catch (Exception e) {
-            logger.error("Unexpected exception during dependent join for query {}. Error: {}. Falling back to independent join.", query.toString(), e.getMessage(), e);
-            subqueryContext.addQueryResult(mainAlias, mainConditionsResult);
-            return executeIndependentJoin(query, indexes, subqueryContext, requirements);
-        }
+        // This method should no longer be called. The logic for dependent steps will be
+        // handled within the main loop of executeWithContext, possibly by a new helper.
+        // Returning mainConditionsResult as a fallback to avoid breaking flow if called.
+        logger.error("executeDependentJoin (DEPRECATED) was called. This indicates an issue in the execution flow. Returning mainConditionsResult as placeholder.");
+        return mainConditionsResult;
     }
 
+    /**
+     * @deprecated This method is deprecated. Subquery execution is now handled within the iterative join logic in {@link #executeWithContext}.
+     */
+    @Deprecated
+    private void executeJoinStepSubqueries(List<com.example.query.model.JoinStep> joinSteps, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext)
+            throws QueryExecutionException {
+        logger.warn("executeJoinStepSubqueries is DEPRECATED and should not be called directly.");
+        // Minimal logic to avoid breaking if called unexpectedly during refactoring transition
+        for (com.example.query.model.JoinStep step : joinSteps) {
+            if (!subqueryContext.hasResults(step.rightSourceAlias())) {
+                 Query subquery = step.subquery();
+                 AttributeRequirements subqueryRequirements = QueryAttributeAnalyzer.analyze(subquery);
+                 QueryResultSoA subqueryResults = executeWithRequirements(subquery, indexes, subqueryRequirements, new SubqueryContext());
+                 subqueryContext.addQueryResult(step.rightSourceAlias(), subqueryResults);
+            }
+        }
+    }
 
     private QueryResultSoA executeWithRequirements(Query query, Map<String, IndexAccessInterface> indexes,
                                         AttributeRequirements requirements, SubqueryContext subqueryContext)
@@ -616,5 +423,168 @@ public class QueryExecutor {
         this.currentQuery = query; // Also ensure currentQuery is set here for this execution context
 
         return executeWithContext(query, indexes, subqueryContext, requirements);
+    }
+
+    /**
+     * Executes a single step of a dependent join, specifically for temporal pushdown.
+     * Modifies the dependent (RHS) query based on date ranges from the leading (LHS) SoA.
+     *
+     * @param leadingSoA The QueryResultSoA from the leading (LHS) side of the join.
+     * @param leadingAlias The alias of the leadingSoA.
+     * @param dependentQuery The original Query object for the dependent (RHS) side.
+     * @param dependentAlias The alias for the RHS subquery.
+     * @param condition The JoinCondition for this specific step.
+     * @param indexes Map of available indexes.
+     * @param overallSubqueryContext The main subquery context (used for logging, not for execution of modified query).
+     * @param parentRequirements Attribute requirements from the parent query (for context).
+     * @param granularity Granularity of the parent query.
+     * @param granularitySize Granularity size of the parent query.
+     * @return QueryResultSoA of the (potentially modified) dependent query.
+     * @throws QueryExecutionException if errors occur during dependent execution setup or sub-execution.
+     */
+    private QueryResultSoA executeSingleDependentStep(
+            QueryResultSoA leadingSoA,
+            String leadingAlias,
+            Query dependentQuery,
+            String dependentAlias,
+            JoinCondition condition,
+            Map<String, IndexAccessInterface> indexes,
+            SubqueryContext overallSubqueryContext, // Avoid using this for execution, use new SubqueryContext()
+            AttributeRequirements parentRequirements,
+            Query.Granularity granularity, // Not directly used for subquery, but for context
+            int granularitySize) // Not directly used for subquery, but for context
+            throws QueryExecutionException {
+        logger.debug("Executing single dependent step: LeadingSoA (alias: '{}', size: {}) -> DependentQuery (alias: '{}', source: '{}') ON {}",
+                     leadingAlias, leadingSoA.size(), dependentAlias, dependentQuery.source(), condition);
+
+        String leftColumn = condition.leftColumn();
+        String rightColumn = condition.rightColumn();
+
+        String leadingDateKeyName;    // Key name (e.g., $date, q1.date) within the leadingSoA
+        String dependentDateKeyName;  // Key name (e.g., $date, q2.eventDate) within the dependentQuery that needs filtering
+
+        String leftColAliasPart = JoinHandler.extractAliasFromColumnName(leftColumn);
+        String rightColAliasPart = JoinHandler.extractAliasFromColumnName(rightColumn);
+
+        if (leftColAliasPart.equals(leadingAlias)) {
+            leadingDateKeyName = JoinHandler.extractKeyFromColumnName(leftColumn);
+            // The dependentDateKeyName is the one on the *other* side of the condition, belonging to the subquery being modified.
+            dependentDateKeyName = JoinHandler.extractKeyFromColumnName(rightColumn);
+        } else if (rightColAliasPart.equals(leadingAlias)) {
+            leadingDateKeyName = JoinHandler.extractKeyFromColumnName(rightColumn);
+            dependentDateKeyName = JoinHandler.extractKeyFromColumnName(leftColumn);
+        } else {
+            throw new QueryExecutionException(String.format(
+                "Could not determine leading/dependent side for dependent join step. Leading alias: '%s', Left col: '%s' (alias '%s'), Right col: '%s' (alias '%s'). Condition: %s",
+                leadingAlias, leftColumn, leftColAliasPart, rightColumn, rightColAliasPart, condition),
+                dependentQuery.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+        logger.debug("Dependent Step Details: LeadingDateKey='{}' (from alias '{}'), DependentDateKeyToFilter='{}' (within query for alias '{}')",
+                     leadingDateKeyName, leadingAlias, dependentDateKeyName, dependentAlias);
+
+        Set<java.time.LocalDate> leadingDatesSet = new HashSet<>();
+        if (leadingSoA != null && leadingSoA.size() > 0) {
+            for (int i = 0; i < leadingSoA.size(); i++) {
+                String varNameInLhsSoA = leadingSoA.getVariableNameAt(i);
+                // Check if varNameInLhsSoA (e.g., $date, main.date) matches leadingDateKeyName (e.g., $date, main.date)
+                boolean nameMatch = (varNameInLhsSoA != null && varNameInLhsSoA.equals(leadingDateKeyName)) ||
+                                    (varNameInLhsSoA != null && leadingDateKeyName.startsWith("$") && varNameInLhsSoA.equals(leadingDateKeyName.substring(1))) ||
+                                    (varNameInLhsSoA != null && !leadingDateKeyName.startsWith("$") && varNameInLhsSoA.equals("$" + leadingDateKeyName)) ||
+                                    (varNameInLhsSoA == null && com.example.query.executor.SoAJoinOptimizer.isStructuralDateKey(leadingDateKeyName)); // Handle structural keys if varName is null
+
+                if (nameMatch && leadingSoA.getValueTypeAt(i) == com.example.query.binding.ValueType.DATE) {
+                    Object value = leadingSoA.getValueAt(i);
+                    if (value instanceof java.time.LocalDate) {
+                        leadingDatesSet.add((java.time.LocalDate) value);
+                    }
+                } else if (com.example.query.executor.SoAJoinOptimizer.isStructuralDateKey(leadingDateKeyName) &&
+                           varNameInLhsSoA == null && // ensure it's a structural key column in SoA
+                           leadingSoA.getValueTypeAt(i) == com.example.query.binding.ValueType.DATE) {
+                     Object value = leadingSoA.getValueAt(i);
+                     if (value instanceof java.time.LocalDate) {
+                         leadingDatesSet.add((java.time.LocalDate) value);
+                     }
+                }
+            }
+        }
+
+        if (leadingDatesSet.isEmpty()) {
+            logger.info("Leading side (alias: '{}', key: '{}') for dependent step provided no usable dates. Dependent subquery '{}' (source: '{}') will execute without temporal pre-filter for this step. Join may yield few/no results if INNER.",
+                        leadingAlias, leadingDateKeyName, dependentAlias, dependentQuery.source());
+            return executeWithRequirements(dependentQuery, indexes, QueryAttributeAnalyzer.analyze(dependentQuery), new SubqueryContext());
+        }
+
+        java.time.LocalDate minLeadingDate = java.util.Collections.min(leadingDatesSet);
+        java.time.LocalDate maxLeadingDate = java.util.Collections.max(leadingDatesSet);
+        logger.debug("Leading date range for dependent filter (alias '{}'): {} to {}", dependentAlias, minLeadingDate, maxLeadingDate);
+
+        com.example.query.model.TemporalPredicate originalPredicate = condition.temporalPredicate().orElseThrow(() ->
+            new QueryExecutionException("Temporal predicate missing in a temporal join eligible for dependent step.", dependentQuery.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR)
+        );
+
+        // The qualifiedVariableName for the new filter condition should be the dependentDateKeyName.
+        // This name must be recognizable *within* the dependentQuery (e.g., subAlias.$date or just $date if no alias there).
+        // For now, using it directly. If dependentDateKeyName is like "q2.date", Temporal condition will use that.
+        // If it's just "$date", it applies to the default alias within the subquery.
+        String keyForNewFilterInDependent = dependentDateKeyName;
+
+        com.example.query.model.condition.Temporal newFilterCondition;
+        switch (originalPredicate) {
+             case BEFORE: newFilterCondition = new com.example.query.model.condition.Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.empty(), Optional.of(keyForNewFilterInDependent), Optional.empty(), com.example.query.model.TemporalPredicate.AFTER); break;
+             case AFTER: newFilterCondition = new com.example.query.model.condition.Temporal(Optional.of(maxLeadingDate.atStartOfDay()), Optional.empty(), Optional.of(keyForNewFilterInDependent), Optional.empty(), com.example.query.model.TemporalPredicate.BEFORE); break;
+             case EQUAL: newFilterCondition = new com.example.query.model.condition.Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.of(maxLeadingDate.atStartOfDay()), Optional.of(keyForNewFilterInDependent), Optional.empty(), com.example.query.model.TemporalPredicate.INTERSECT); break;
+             case INTERSECT: newFilterCondition = new com.example.query.model.condition.Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.of(maxLeadingDate.atStartOfDay()), Optional.of(keyForNewFilterInDependent), Optional.empty(), com.example.query.model.TemporalPredicate.INTERSECT); break;
+             case CONTAINS: case CONTAINED_BY: newFilterCondition = new com.example.query.model.condition.Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.of(maxLeadingDate.atStartOfDay()), Optional.of(keyForNewFilterInDependent), Optional.empty(), com.example.query.model.TemporalPredicate.INTERSECT); logger.debug("Mapped original predicate {} to INTERSECT for dependent filter.", originalPredicate); break;
+             case BEFORE_EQUAL: newFilterCondition = new com.example.query.model.condition.Temporal(Optional.of(minLeadingDate.atStartOfDay()), Optional.empty(), Optional.of(keyForNewFilterInDependent), Optional.empty(), com.example.query.model.TemporalPredicate.AFTER_EQUAL); break;
+             case AFTER_EQUAL: newFilterCondition = new com.example.query.model.condition.Temporal(Optional.of(maxLeadingDate.atStartOfDay()), Optional.empty(), Optional.of(keyForNewFilterInDependent), Optional.empty(), com.example.query.model.TemporalPredicate.BEFORE_EQUAL); break;
+             case PROXIMITY: default:
+                logger.warn("Dependent join step does not support temporal predicate '{}' for precise pre-filtering. Executing dependent query '{}' (source: '{}') without this specific temporal modification.", originalPredicate, dependentAlias, dependentQuery.source());
+                return executeWithRequirements(dependentQuery, indexes, QueryAttributeAnalyzer.analyze(dependentQuery), new SubqueryContext());
+        }
+        logger.debug("Constructed new temporal filter for dependent query '{}' (key to filter: '{}'): {}", dependentAlias, keyForNewFilterInDependent, newFilterCondition);
+
+        List<Condition> newConditionsForDependent = new ArrayList<>(dependentQuery.conditions());
+        boolean merged = false;
+        // The dependentDateKeyName might be qualified (e.g. sq2.date) or unqualified (e.g. $date)
+        // The merging logic needs to compare against the qualifiedVariableName in existing Temporal conditions of the subquery.
+
+        for (int i = 0; i < newConditionsForDependent.size(); i++) {
+            Condition currentCond = newConditionsForDependent.get(i);
+            if (currentCond instanceof com.example.query.model.condition.Temporal existingTemporalCond) {
+                Optional<String> existingVarNameOpt = existingTemporalCond.qualifiedVariableName();
+                if (existingVarNameOpt.isPresent() && existingVarNameOpt.get().equals(keyForNewFilterInDependent)) {
+                    Optional<com.example.query.model.condition.Temporal> mergedTemporalOpt = existingTemporalCond.intersectWith(newFilterCondition);
+                    if (mergedTemporalOpt.isPresent()) {
+                        newConditionsForDependent.set(i, mergedTemporalOpt.get());
+                        logger.debug("Merged new temporal filter with existing one on key '{}' in dependent query '{}'", keyForNewFilterInDependent, dependentAlias);
+                        merged = true; break;
+                    }
+                }
+            } // TODO: Add logic for merging into Logical.AND conditions as in original executeDependentJoin if necessary
+        }
+        if (!merged) {
+            newConditionsForDependent.add(newFilterCondition);
+            logger.debug("Added new temporal filter to dependent query '{}' conditions list.", dependentAlias);
+        }
+
+        Query modifiedDependentQuery = new Query(
+            dependentQuery.source(),
+            newConditionsForDependent,
+            dependentQuery.orderBy(),
+            dependentQuery.limit(),
+            dependentQuery.granularity(),
+            dependentQuery.granularitySize(),
+            dependentQuery.selectColumns(),
+            dependentQuery.variableRegistry(), // Use original registry, new filter is on existing or new vars
+            List.of(), // No further chained joins within this modified execution
+            Optional.empty(), // No explicit main alias for this internal modified query
+            dependentQuery.groupByColumns()
+        );
+
+        logger.debug("Executing modified dependent query for alias '{}' (source '{}'): {}", dependentAlias, modifiedDependentQuery.source(), modifiedDependentQuery.toString());
+        // Execute with a new SubqueryContext to isolate this modified execution
+        QueryResultSoA result = executeWithRequirements(modifiedDependentQuery, indexes, QueryAttributeAnalyzer.analyze(modifiedDependentQuery), new SubqueryContext());
+        logger.info("Modified dependent query for alias '{}' executed. Found {} matches.", dependentAlias, result.size());
+        return result;
     }
 }

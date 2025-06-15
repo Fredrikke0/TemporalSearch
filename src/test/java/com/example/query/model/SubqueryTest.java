@@ -1,21 +1,24 @@
 package com.example.query.model;
 
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.DisplayName;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-
-import com.example.query.binding.VariableRegistry;
-import com.example.query.model.condition.Contains;
-import com.example.query.model.JoinCondition.JoinType;
-import com.example.query.model.JoinCondition.JoinOperatorType;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import com.example.query.binding.VariableRegistry;
+import com.example.query.model.JoinCondition.JoinOperatorType;
+import com.example.query.model.JoinCondition.JoinType;
+import com.example.query.model.condition.Contains;
 
 /**
  * Tests for SubquerySpec and JoinCondition interactions.
@@ -58,8 +61,12 @@ class SubqueryTest {
         SubquerySpec subquerySpec = new SubquerySpec(subquery, "sub");
         VariableRegistry mainRegistry = new VariableRegistry();
 
+        JoinType actualJoinType = JoinType.INNER; // Define the JoinType
         // Use factory for equality join
-        JoinCondition joinCondition = JoinCondition.createEqualityJoin("main.id", "sub.id", JoinType.INNER);
+        JoinCondition joinCondition = JoinCondition.createEqualityJoin("main.id", "sub.id", actualJoinType);
+
+        // Create a JoinStep, passing actualJoinType directly
+        JoinStep joinStep = new JoinStep("sub", subquerySpec.subquery(), joinCondition, actualJoinType, "main");
 
         Query mainQuery = new Query(
             "source",
@@ -70,15 +77,16 @@ class SubqueryTest {
             Optional.empty(), // granularitySize
             List.of(), // No select columns in this test
             mainRegistry, // variableRegistry
-            List.of(subquerySpec), // subqueries
-            Optional.of(joinCondition), // joinCondition
+            List.of(joinStep), // joinSteps
             Optional.of("main"), // Explicit main alias
             List.of() // groupByColumns
         );
 
-        assertEquals(1, mainQuery.subqueries().size());
-        assertTrue(mainQuery.joinCondition().isPresent());
-        assertEquals(joinCondition, mainQuery.joinCondition().get());
+        assertEquals(1, mainQuery.joinSteps().size());
+        JoinStep retrievedJoinStep = mainQuery.joinSteps().get(0);
+        assertEquals(joinStep, retrievedJoinStep);
+        assertEquals(joinCondition, retrievedJoinStep.onCondition());
+        assertEquals(actualJoinType, retrievedJoinStep.joinType()); // Assert the joinType on the JoinStep
     }
 
     @Test
@@ -88,8 +96,12 @@ class SubqueryTest {
         SubquerySpec subquerySpec = new SubquerySpec(subquery, "sub");
         VariableRegistry mainRegistry = new VariableRegistry();
 
-        // Use full constructor for temporal join with INTERSECT, but do NOT specify a window (should be empty)
-        JoinCondition joinCondition = new JoinCondition("main.date", "sub.date", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT), Optional.empty());
+        JoinType actualJoinType = JoinType.INNER; // Define the JoinType
+        // Use full constructor for temporal join with INTERSECT
+        JoinCondition joinCondition = new JoinCondition("main.date", "sub.date", actualJoinType, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT), Optional.empty());
+
+        // Create a JoinStep, passing actualJoinType directly
+        JoinStep joinStep = new JoinStep("sub", subquerySpec.subquery(), joinCondition, actualJoinType, "main");
 
         Query mainQuery = new Query(
             "source",
@@ -100,15 +112,16 @@ class SubqueryTest {
             Optional.empty(), // granularitySize
             List.of(), // No select columns
             mainRegistry, // variableRegistry
-            List.of(subquerySpec), // subqueries
-            Optional.of(joinCondition), // joinCondition
+            List.of(joinStep), // joinSteps
             Optional.of("main"), // mainAlias
             List.of() // groupByColumns
         );
 
-        assertEquals(1, mainQuery.subqueries().size());
-        assertTrue(mainQuery.joinCondition().isPresent());
-        assertEquals(joinCondition, mainQuery.joinCondition().get());
+        assertEquals(1, mainQuery.joinSteps().size());
+        JoinStep retrievedJoinStep = mainQuery.joinSteps().get(0);
+        assertEquals(joinStep, retrievedJoinStep);
+        assertEquals(joinCondition, retrievedJoinStep.onCondition());
+        assertEquals(actualJoinType, retrievedJoinStep.joinType()); // Assert the joinType on the JoinStep
     }
 
     @Test

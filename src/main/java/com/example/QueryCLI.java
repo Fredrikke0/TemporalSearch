@@ -135,7 +135,7 @@ public class QueryCLI {
 
                 if (execResult != null) {
                     matchCount = execResult.size();
-                    if (query.joinCondition().isPresent()) {
+                    if (!query.joinSteps().isEmpty()) {
                         matchUnit = "conceptual joined rows";
                     } else {
                         matchUnit = (queryGranularity == Query.Granularity.DOCUMENT) ? "documents" : "sentences";

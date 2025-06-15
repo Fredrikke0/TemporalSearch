@@ -18,11 +18,11 @@ import com.example.index.generators.NerDateIndexGenerator;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 
-public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGenerator {
-    private static final Logger logger = LoggerFactory.getLogger(UnigramDateStitchIndexGenerator.class);
+public final class UnigramDateStitchGenerator extends AbstractNgramStitchGenerator {
+    private static final Logger logger = LoggerFactory.getLogger(UnigramDateStitchGenerator.class);
     public static final String MY_INDEX_NAME = "stitch_unigram_date";
 
-    public UnigramDateStitchIndexGenerator(
+    public UnigramDateStitchGenerator(
             IndexAccessInterface indexAccess,
             String stopwordsPath,
             Connection sqliteConn,
@@ -59,7 +59,7 @@ public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGe
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
-        List<AnnotationData> rawAnnotationsList = new ArrayList<>();
+        List<AnnotationData> rawAnnotationsListFromDb = new ArrayList<>();
         String sql = """
             SELECT sentence_id, begin_char, end_char, ner, normalized_ner
             FROM annotations
@@ -87,7 +87,7 @@ public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGe
                         continue;
                     }
 
-                    rawAnnotationsList.add(new AnnotationData(
+                    rawAnnotationsListFromDb.add(new AnnotationData(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
@@ -101,17 +101,27 @@ public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGe
             throw e;
         }
 
-        if (rawAnnotationsList.isEmpty()) {
-            logger.trace("No valid raw DATE annotations found or all filtered for document ID {} for {} index.", documentId, MY_INDEX_NAME);
-            return rawAnnotationsList;
+        // Filter the raw list before any merging specific to Date annotations
+        List<AnnotationData> filteredAnnotations = filterAnnotationsBySentenceCharacterSpan(
+            rawAnnotationsListFromDb, documentId, "Unigram Date");
+
+        if (filteredAnnotations.isEmpty()) {
+            // Log based on whether original fetch was empty or filtering emptied it
+            if (!rawAnnotationsListFromDb.isEmpty()) {
+                logger.trace("No valid DATE annotations remaining after span filtering for document ID {} for {} index.", documentId, MY_INDEX_NAME);
+            } else {
+                logger.trace("No valid raw DATE annotations found for document ID {} for {} index.", documentId, MY_INDEX_NAME);
+            }
+            return new ArrayList<>(); // Return empty list
         }
 
+        // The rest of the method uses 'filteredAnnotations' for merging
         List<AnnotationData> mergedAnnotations = new ArrayList<>();
         List<AnnotationData> currentProcessingGroup = new ArrayList<>();
-        currentProcessingGroup.add(rawAnnotationsList.get(0));
+        currentProcessingGroup.add(filteredAnnotations.get(0)); // Start with the first from the filtered list
 
-        for (int i = 1; i < rawAnnotationsList.size(); i++) {
-            AnnotationData currentAnnotation = rawAnnotationsList.get(i);
+        for (int i = 1; i < filteredAnnotations.size(); i++) {
+            AnnotationData currentAnnotation = filteredAnnotations.get(i);
             AnnotationData lastAnnotationInGroup = currentProcessingGroup.get(currentProcessingGroup.size() - 1);
 
             // Check if currentAnnotation can extend the currentProcessingGroup
@@ -148,11 +158,11 @@ public final class UnigramDateStitchIndexGenerator extends AbstractNgramStitchGe
             ));
         }
 
-        if (mergedAnnotations.isEmpty() && !rawAnnotationsList.isEmpty()) {
-             logger.trace("All raw DATE annotations for document ID {} resulted in an empty merged list for {} index. Raw count: {}", documentId, MY_INDEX_NAME, rawAnnotationsList.size());
+        if (mergedAnnotations.isEmpty() && !filteredAnnotations.isEmpty()) { // Check against filteredAnnotations
+             logger.trace("All filtered DATE annotations for document ID {} resulted in an empty merged list for {} index. Filtered count: {}", documentId, MY_INDEX_NAME, filteredAnnotations.size());
         } else {
-            logger.trace("Fetched {} raw DATE annotations, merged into {} annotations for document ID {} for {} index.",
-                         rawAnnotationsList.size(), mergedAnnotations.size(), documentId, MY_INDEX_NAME);
+            logger.trace("Fetched {} raw DATE annotations, filtered to {}, merged into {} annotations for document ID {} for {} index.",
+                         rawAnnotationsListFromDb.size(), filteredAnnotations.size(), mergedAnnotations.size(), documentId, MY_INDEX_NAME);
         }
         return mergedAnnotations;
     }

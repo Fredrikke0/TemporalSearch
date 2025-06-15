@@ -7,9 +7,11 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
@@ -103,6 +105,36 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             return resultMultimap;
         }
 
+        // 1. Group by document_id and then sentence_id
+        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
+            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
+                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
+
+        List<AnnotationEntry> sentenceSpanFilteredBatch = new ArrayList<>();
+
+        // 2. For each sentence: sort tokens, filter by span, and collect
+        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
+            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
+                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
+                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
+                    sentenceTokens, documentId, sentenceId, "NerIndexGenerator", logger);
+                sentenceSpanFilteredBatch.addAll(filteredSentenceTokens);
+            });
+        });
+
+        if (sentenceSpanFilteredBatch.isEmpty()) {
+            if(!batch.isEmpty()){
+                logger.trace("All NER annotations filtered out by sentence span limit. Original batch size: {}", batch.size());
+            }
+            return resultMultimap;
+        }
+
+        // 3. Re-sort the sentenceSpanFilteredBatch as the entity merging logic expects overall sorted order
+        sentenceSpanFilteredBatch.sort(Comparator
+            .comparingInt(AnnotationEntry::getDocumentId)
+            .thenComparingInt(AnnotationEntry::getSentenceId)
+            .thenComparingInt(AnnotationEntry::getBeginChar));
+
         Map<String, PositionListSoA> currentBatchEntityPositions = new HashMap<>();
 
         AnnotationEntry prevEntry = null;
@@ -112,7 +144,8 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         int currentEntitySentId = -1;
         int currentEntityBeginChar = -1;
 
-        for (AnnotationEntry entry : batch) {
+        // 4. Entity merging logic now uses sentenceSpanFilteredBatch
+        for (AnnotationEntry entry : sentenceSpanFilteredBatch) {
             String nerTag = entry.getNer();
             boolean entityBreak = false;
 

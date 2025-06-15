@@ -57,7 +57,7 @@ public final class TrigramDateStitchGenerator extends AbstractNgramStitchGenerat
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
-        List<AnnotationData> rawAnnotationsList = new ArrayList<>();
+        List<AnnotationData> rawAnnotationsListFromDb = new ArrayList<>();
         String sql = """
             SELECT sentence_id, begin_char, end_char, ner, normalized_ner
             FROM annotations
@@ -77,7 +77,7 @@ public final class TrigramDateStitchGenerator extends AbstractNgramStitchGenerat
                         logger.trace("Skipping DATE annotation due to failed normalization of '{}' for doc ID {}.", originalNormalizedDate, documentId);
                         continue;
                     }
-                    rawAnnotationsList.add(new AnnotationData(
+                    rawAnnotationsListFromDb.add(new AnnotationData(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
@@ -91,16 +91,26 @@ public final class TrigramDateStitchGenerator extends AbstractNgramStitchGenerat
             throw e;
         }
 
-        if (rawAnnotationsList.isEmpty()) {
-            return rawAnnotationsList;
+        // Filter the raw list before any merging specific to Date annotations
+        List<AnnotationData> filteredAnnotations = filterAnnotationsBySentenceCharacterSpan(
+            rawAnnotationsListFromDb, documentId, "Trigram Date");
+
+        if (filteredAnnotations.isEmpty()) {
+            if (!rawAnnotationsListFromDb.isEmpty()) {
+                logger.trace("No valid DATE annotations remaining after span filtering for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
+            } else {
+                logger.trace("No valid raw DATE annotations found for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
+            }
+            return new ArrayList<>();
         }
 
+        // The rest of the method uses 'filteredAnnotations' for merging
         List<AnnotationData> mergedAnnotations = new ArrayList<>();
         List<AnnotationData> currentProcessingGroup = new ArrayList<>();
-        currentProcessingGroup.add(rawAnnotationsList.get(0));
+        currentProcessingGroup.add(filteredAnnotations.get(0)); // Start with the first from the filtered list
 
-        for (int i = 1; i < rawAnnotationsList.size(); i++) {
-            AnnotationData currentAnnotation = rawAnnotationsList.get(i);
+        for (int i = 1; i < filteredAnnotations.size(); i++) {
+            AnnotationData currentAnnotation = filteredAnnotations.get(i);
             AnnotationData lastAnnotationInGroup = currentProcessingGroup.get(currentProcessingGroup.size() - 1);
 
             if (currentAnnotation.annotationKeyComponent().equals(lastAnnotationInGroup.annotationKeyComponent()) &&
@@ -131,6 +141,14 @@ public final class TrigramDateStitchGenerator extends AbstractNgramStitchGenerat
                 firstTokenOfGroup.annotationKeyComponent(),
                 firstTokenOfGroup.specificValueForSynonym()
             ));
+        }
+
+        // Logging after merging
+        if (mergedAnnotations.isEmpty() && !filteredAnnotations.isEmpty()) {
+            logger.trace("All filtered DATE annotations for document ID {} resulted in an empty merged list for {} (Trigram) index. Filtered count: {}", documentId, MY_INDEX_NAME, filteredAnnotations.size());
+        } else {
+            logger.trace("Fetched {} raw DATE annotations, filtered to {}, merged into {} annotations for document ID {} for {} (Trigram) index.",
+                         rawAnnotationsListFromDb.size(), filteredAnnotations.size(), mergedAnnotations.size(), documentId, MY_INDEX_NAME);
         }
         return mergedAnnotations;
     }

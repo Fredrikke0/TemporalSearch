@@ -13,16 +13,17 @@ import org.slf4j.LoggerFactory;
 import com.example.query.binding.VariableRegistry;
 import com.example.query.model.CountColumn;
 import com.example.query.model.JoinCondition;
+import com.example.query.model.JoinStep;
 import com.example.query.model.Query;
 import com.example.query.model.SelectColumn;
 import com.example.query.model.SnippetColumn;
 import com.example.query.model.StructuralColumn;
-import com.example.query.model.SubquerySpec;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.VariableColumn;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Ner;
+import com.example.query.parser.QueryModelBuilder;
 
 /**
  * Validates the semantic correctness of a query using the new VariableRegistry system.
@@ -53,8 +54,6 @@ public class QuerySemanticValidator {
                 conditionType, fieldName, term
             ));
         }
-        // New check: if term is "*", it implies other parts of a multi-part field should be effectively absent or also wildcards
-        // This logic will be handled in validateConditionConstraints where the context of multiple terms/fields is available.
     }
 
     /**
@@ -66,25 +65,16 @@ public class QuerySemanticValidator {
     public void validate(Query query) throws QueryParseException {
         logger.debug("Starting semantic validation for query: {}", query);
 
-        // Get the variable registry from the query
         VariableRegistry registry = query.variableRegistry();
         if (registry == null) {
             throw new QueryParseException("Query does not have a variable registry");
         }
 
-        // Validate condition structures and constraints
         validateConditionConstraints(query.conditions());
-
-        // Validate NER types in conditions *before* validating variable usage
         validateNerTypes(query.conditions());
-
-        // Validate variable dependencies and types
         validateVariableDependencies(registry);
-
-        // Validate select columns
         validateSelectColumns(query, registry);
 
-        // Validate limit value
         query.limit().ifPresent(limit -> {
             try {
                 validateLimit(limit);
@@ -93,21 +83,17 @@ public class QuerySemanticValidator {
             }
         });
 
-        // Validate snippet window sizes
         validateSnippetWindowSizes(query);
 
-        // Validate subqueries and join conditions if present
         if (query.hasSubqueries()) {
             validateSubqueries(query);
             validateJoinConditions(query);
         }
 
-        // Validate GROUP BY clause if present
         if (!query.groupByColumns().isEmpty()) {
             validateGroupByClause(query);
         }
 
-        // Validate ORDER BY clause if present
         if (!query.orderBy().isEmpty()) {
             validateOrderByClause(query);
         }
@@ -115,19 +101,11 @@ public class QuerySemanticValidator {
         logger.debug("Semantic validation completed successfully");
     }
 
-    /**
-     * Validates that any NER conditions use a recognized entity type.
-     *
-     * @param conditions The list of conditions to check.
-     * @throws QueryParseException If an invalid NER type is found.
-     */
     private void validateNerTypes(List<Condition> conditions) throws QueryParseException {
         for (Condition condition : conditions) {
             if (condition instanceof Ner nerCondition) {
                 String entityType = nerCondition.entityType();
-                // Use uppercase for case-insensitive comparison, except for wildcard '*'
                 String comparisonType = "*".equals(entityType) ? "*" : entityType.toUpperCase();
-
                 if (!VALID_NER_TYPES.contains(comparisonType)) {
                     String validTypesString = String.join(", ", VALID_NER_TYPES);
                     throw new QueryParseException(String.format(
@@ -136,20 +114,9 @@ public class QuerySemanticValidator {
                     ));
                 }
             }
-            // Recursively check nested conditions (e.g., inside NOT or logical operators)
-            // This part might need adjustment based on how complex condition structures are handled.
-            // For now, assuming a flat list or structure handled by the Query object itself.
-            // If conditions can be nested (e.g., AND(NER(...), NOT(POS(...)))),
-            // a recursive traversal might be needed here.
         }
     }
 
-    /**
-     * Validates structural constraints on conditions.
-     *
-     * @param conditions The list of conditions to validate.
-     * @throws QueryParseException If a condition violates structural constraints.
-     */
     private void validateConditionConstraints(List<Condition> conditions) throws QueryParseException {
         for (Condition condition : conditions) {
             if (condition instanceof Contains containsCondition) {
@@ -163,48 +130,32 @@ public class QuerySemanticValidator {
                 if (terms.isEmpty()) {
                     throw new QueryParseException("CONTAINS condition must have at least one term");
                 }
-
-                // Stricter wildcard validation for CONTAINS:
-                // If any term is "*", it must be the ONLY term.
                 boolean hasStandaloneWildcard = terms.stream().anyMatch(t -> "*".equals(t));
                 if (hasStandaloneWildcard && terms.size() > 1) {
                     throw new QueryParseException(String.format(
                         "Invalid wildcard usage in CONTAINS: If '*' is used as a term, it must be the only term. Found: %s", terms
                     ));
                 }
-
-                // Validate each term for general wildcard rules (e.g., not like "*abc")
                 for (int i = 0; i < terms.size(); i++) {
                     validateTerm(terms.get(i), "CONTAINS", "term[" + i + "]");
                 }
-
             } else if (condition instanceof com.example.query.model.condition.Dependency dependencyCondition) {
-                // Stricter wildcard validation for DEPENDS:
-                // For governor, relation, dependent: if one is "*", others should not be specific literals.
-                // This means a query like DEP(*, 'nsubj', 'cat') is disallowed.
-                // It should be DEP(*, ?, ?) or DEP(?, 'nsubj', ?) or DEP(?, ?, 'cat').
-                // Or, if using '*', it's more like a general placeholder, e.g. DEP(*, ?, ?).
-
                 String gov = dependencyCondition.governor();
                 String rel = dependencyCondition.relation();
                 String dep = dependencyCondition.dependent();
-
                 boolean govIsWildcard = "*".equals(gov);
-                boolean relIsWildcard = "*".equals(rel); // Relation usually isn't a variable, but can be '*'
+                boolean relIsWildcard = "*".equals(rel);
                 boolean depIsWildcard = "*".equals(dep);
-
                 boolean govIsVariable = gov != null && gov.startsWith("?");
                 boolean relIsVariable = rel != null && rel.startsWith("?");
                 boolean depIsVariable = dep != null && dep.startsWith("?");
 
-                // Check: if a component is "*", are other non-variable components also effectively wildcards (or variables)?
-                // Simplified: if one component is "*", and another is a specific literal (not a variable, not null, not "*"), it's an error.
                 if (govIsWildcard) {
                     if ((rel != null && !relIsVariable && !relIsWildcard) || (dep != null && !depIsVariable && !depIsWildcard)) {
                         throw new QueryParseException("Invalid DEPENDS: If governor is '*', other specific non-variable relation/dependent parts are not allowed. Use variables (e.g., DEP(*, ?, ?)) or ensure other parts are also '*'.");
                     }
                 }
-                if (relIsWildcard) { // Though relation typically isn't '*', this ensures consistency
+                if (relIsWildcard) {
                     if ((gov != null && !govIsVariable && !govIsWildcard) || (dep != null && !depIsVariable && !depIsWildcard)) {
                         throw new QueryParseException("Invalid DEPENDS: If relation is '*', other specific non-variable governor/dependent parts are not allowed. Use variables or ensure other parts are also '*'.");
                     }
@@ -214,532 +165,326 @@ public class QuerySemanticValidator {
                         throw new QueryParseException("Invalid DEPENDS: If dependent is '*', other specific non-variable governor/relation parts are not allowed. Use variables or ensure other parts are also '*'.");
                     }
                 }
-
-
-                // General term validation (e.g. not "*abc")
                 if (gov != null && !govIsVariable) validateTerm(gov, "DEPENDS", "governor");
                 if (rel != null && !relIsVariable) validateTerm(rel, "DEPENDS", "relation");
                 if (dep != null && !depIsVariable) validateTerm(dep, "DEPENDS", "dependent");
             }
-
-            // Add other condition constraint validations here as needed
-            // For example: POS conditions, temporal conditions, etc.
         }
     }
 
-    /**
-     * Validates variable dependencies ensuring all consumed variables are produced.
-     * Also performs type checking on variable usage.
-     */
     private void validateVariableDependencies(VariableRegistry registry) throws QueryParseException {
-        // The registry's validate method checks that all consumed variables are produced
         Set<String> registryErrors = registry.validate();
         if (!registryErrors.isEmpty()) {
             throw new QueryParseException("Variable validation errors: " + String.join(", ", registryErrors));
         }
-
-        // Additional dependency checks could be added here if needed
-        // For now, we rely on the registry's validate method
     }
 
-    /**
-     * Validates the select columns, ensuring all column references are valid.
-     * Handles both unqualified variables (from the main query) and qualified variables
-     * (e.g., `alias.var` from subqueries or the aliased main query).
-     */
-    private void validateSelectColumns(Query query, VariableRegistry mainRegistry) throws QueryParseException {
+    private void validateSelectColumns(Query query, VariableRegistry currentQueryRegistryContext) throws QueryParseException {
         if (query.selectColumns().isEmpty()) {
             throw new QueryParseException("Query must select at least one column");
         }
 
-        // Create a map for quick lookup of subqueries by alias
-        Map<String, SubquerySpec> subqueryMap = query.subqueries().stream()
-                .collect(Collectors.toMap(SubquerySpec::alias, sq -> sq));
+        Map<String, Query> subqueryAliasToQueryMap = query.joinSteps().stream()
+                .collect(Collectors.toMap(JoinStep::rightSourceAlias, JoinStep::subquery));
 
-        logger.debug("Subquery aliases available: {}", subqueryMap.keySet());
-        logger.debug("SELECT columns: {}", query.selectColumns().stream().map(SelectColumn::getColumnName).toList());
+        logger.debug("Subquery aliases for SELECT validation (current scope '{}'): {}", query.mainAlias().orElse("subquery_itself"), subqueryAliasToQueryMap.keySet());
 
-        String mainAlias = query.mainAlias().orElse("$main"); // Use $main if no explicit alias
+        String currentQueryEffectiveAlias = query.mainAlias().orElse(QueryModelBuilder.DEFAULT_MAIN_ALIAS);
 
         for (SelectColumn column : query.selectColumns()) {
-            String fullColumnName; // This will hold the name as it appears in SELECT/SNIPPET
-            String context; // For error messages
+            String fullColumnName;
+            String contextType;
 
-            // Explicitly handle different column types
             if (column instanceof VariableColumn variableColumn) {
-                fullColumnName = variableColumn.getColumnName(); // e.g., q1.date or $main.date
-                context = "SELECT (Variable)";
-                 logger.trace("Validating VariableColumn: {}", fullColumnName);
-                 // Proceed to validation logic below...
+                fullColumnName = variableColumn.getColumnName();
+                contextType = "SELECT (Variable)";
             } else if (column instanceof SnippetColumn snippetColumn) {
-                fullColumnName = snippetColumn.getVariableName(); // e.g., q1.person or $main.person
-                context = "SNIPPET";
-                logger.trace("Validating SnippetColumn for variable: {}", fullColumnName);
-                 // Proceed to validation logic below...
-            } else if (column instanceof StructuralColumn structuralColumn) {
-                // Structural columns (e.g., q1.TITLE) don't rely on VariableRegistry bindings
-                 logger.trace("Skipping VariableRegistry validation for StructuralColumn: {}", structuralColumn.getColumnName());
-                continue; // Skip VariableRegistry validation for this column
-            } else if (column instanceof CountColumn) {
-                 // Count columns might need specific validation later, but not VariableRegistry lookup
-                 logger.trace("Skipping VariableRegistry validation for CountColumn: {}", column.getColumnName());
-                continue; // Skip non-variable columns (COUNT, TITLE, etc.)
+                fullColumnName = snippetColumn.getVariableName();
+                contextType = "SNIPPET";
+            } else if (column instanceof StructuralColumn || column instanceof CountColumn) {
+                continue;
             } else {
-                // Unknown column type - log a warning or throw an error?
-                 logger.warn("Skipping VariableRegistry validation for unknown SelectColumn type: {}", column.getClass().getName());
+                logger.warn("Skipping validation for unknown SelectColumn type: {}", column.getClass().getName());
                  continue;
             }
 
-            String alias; // Alias part extracted from fullColumnName
-            String plainVariableName; // Variable part extracted
-            String registryKey; // The key expected in the VariableRegistry (internally qualified)
-            VariableRegistry targetRegistry; // The registry to check
+            logger.trace("Validating {} column: {}", contextType, fullColumnName);
+
+            String aliasPart;
+            String variablePart;
+            VariableRegistry registryToValidateAgainst;
+            String validationContextDescription;
+            String registryKeyToLookup = fullColumnName;
 
             if (fullColumnName.contains(".")) {
-                // Qualified variable: alias.var
                 String[] parts = fullColumnName.split("\\.", 2);
                 if (parts.length != 2) {
-                    throw new QueryParseException(String.format(
-                        "Invalid qualified variable format in %s: %s. Expected format: alias.variable",
-                        context, fullColumnName));
+                    throw new QueryParseException(String.format("Invalid qualified format in %s: %s", contextType, fullColumnName));
                 }
-                alias = parts[0];
-                plainVariableName = parts[1];
+                aliasPart = parts[0];
+                variablePart = parts[1];
 
-                logger.debug("Validating qualified {} variable: {} from alias {}", context, plainVariableName, alias);
-
-                // Determine target registry and registry key
-                if (subqueryMap.isEmpty()) {
-                    // We are inside the subquery's own validation context.
-                    // The mainRegistry *is* the subquery's registry (already requalified).
-                    // The fullColumnName (e.g., "q2.person") should exist directly in this registry.
-                    targetRegistry = mainRegistry;
-                    registryKey = fullColumnName; // Use the full qualified name as the key
-                    validateVariableInRegistry(registryKey, targetRegistry, String.format("subquery '%s' internal validation for %s", alias, context));
-                } else if (alias.equals(mainAlias) || (alias.equals("$main") && !query.mainAlias().isPresent())) {
-                    // Belongs to main query (explicitly or implicitly via $main)
-                    targetRegistry = mainRegistry;
-                    registryKey = mainAlias + "." + plainVariableName; // Key uses main alias ($main or explicit)
-                    validateVariableInRegistry(registryKey, targetRegistry, String.format("main query (alias %s) for %s", mainAlias, context));
-                } else if (subqueryMap.containsKey(alias)) {
-                    // Belongs to a subquery (validation running in the main query context)
-                    SubquerySpec subquerySpec = subqueryMap.get(alias);
-                    targetRegistry = subquerySpec.subquery().variableRegistry();
-                    registryKey = alias + "." + plainVariableName; // Key uses subquery alias
-                    validateVariableInRegistry(registryKey, targetRegistry, String.format("subquery '%s' for %s", alias, context));
+                if (query.joinSteps().isEmpty()) {
+                    if (!aliasPart.equals(currentQueryEffectiveAlias)) {
+                         throw new QueryParseException(String.format("Alias mismatch for %s '%s'. Alias '%s' vs current scope '%s'.", contextType, fullColumnName, aliasPart, currentQueryEffectiveAlias));
+                    }
+                    registryToValidateAgainst = currentQueryRegistryContext;
+                    validationContextDescription = String.format("current query (alias %s) for %s", currentQueryEffectiveAlias, contextType);
                 } else {
-                    // This case should ideally not be reached if the logic above is correct
-                    throw new QueryParseException(String.format("Unknown alias '%s' in %s column: %s", alias, context, fullColumnName));
+                    if (aliasPart.equals(currentQueryEffectiveAlias)) {
+                        registryToValidateAgainst = currentQueryRegistryContext;
+                        validationContextDescription = String.format("main query (alias %s) for %s", currentQueryEffectiveAlias, contextType);
+                    } else if (subqueryAliasToQueryMap.containsKey(aliasPart)) {
+                        registryToValidateAgainst = subqueryAliasToQueryMap.get(aliasPart).variableRegistry();
+                        validationContextDescription = String.format("joined subquery '%s' for %s", aliasPart, contextType);
+                    } else {
+                        throw new QueryParseException(String.format("Unknown alias '%s' in %s: %s. Main: '%s', Subqueries: %s", aliasPart, contextType, fullColumnName, currentQueryEffectiveAlias, subqueryAliasToQueryMap.keySet()));
                 }
+                }
+                 registryKeyToLookup = fullColumnName; // Qualified name is the direct key
+            } else { // Unqualified column name
+                if (query.isQualificationRequired()) {
+                    // This applies to VariableColumn and SnippetColumn's variable.
+                    // StructuralColumn or CountColumn would have been 'continue'd earlier.
+                    String exampleSubqueryAlias = query.joinSteps().isEmpty() ? "some_sub_alias_for_example" : query.joinSteps().get(0).rightSourceAlias();
+                    throw new QueryParseException(String.format(
+                        "Unqualified column '%s' in %s is ambiguous. Qualification with an alias (e.g., '%s.%s' or '%s.%s') is required when joins are present or a main alias is specified.",
+                        fullColumnName, contextType, currentQueryEffectiveAlias, fullColumnName, exampleSubqueryAlias, fullColumnName
+                    ));
+                }
+                // If qualification is NOT required (original logic for this block was similar):
+                aliasPart = currentQueryEffectiveAlias; // Default to current context's alias
+                variablePart = fullColumnName;
+                registryToValidateAgainst = currentQueryRegistryContext;
+                // Construct the fully qualified key for registry lookup, as unqualified names are stored
+                // under the context's effective alias in the registry.
+                registryKeyToLookup = aliasPart + "." + variablePart;
+                validationContextDescription = String.format("current query (alias %s, unqualified var '%s') for %s", aliasPart, variablePart, contextType);
+    }
 
-            } else {
-                // Unqualified variable: var - must belong to main query's scope
-                alias = mainAlias; // Implicitly belongs to main scope
-                plainVariableName = fullColumnName;
-                targetRegistry = mainRegistry;
-                registryKey = mainAlias + "." + plainVariableName; // Key uses main alias ($main or explicit)
-                logger.debug("Validating unqualified {} variable: {} (using alias {})", context, plainVariableName, alias);
-                validateVariableInRegistry(registryKey, targetRegistry, String.format("main query (alias %s) for %s", mainAlias, context));
-            }
+            // At this point, registryKeyToLookup is the fully qualified name for registry interaction.
+            // For VariableColumn and SnippetColumn, we proceed to validate against the registry.
+            // StructuralColumn and CountColumn types would have been skipped by the 'continue' statement.
+            validateVariableInRegistry(registryKeyToLookup, registryToValidateAgainst, validationContextDescription);
         }
     }
 
-    /**
-     * Validates that a specific internally qualified variable name is produced within the given registry.
-     *
-     * @param internalQualifiedName The fully qualified name expected in the registry (e.g., $main.var, alias.var)
-     * @param registry The VariableRegistry to check.
-     * @param contextDescription A description of the context for error messages.
-     * @throws QueryParseException If the variable is not found or not produced.
-     */
     private void validateVariableInRegistry(String internalQualifiedName, VariableRegistry registry, String contextDescription) throws QueryParseException {
-        // Check if the variable exists and is produced in the registry using isProduced
         if (!registry.isProduced(internalQualifiedName)) {
-            // Need to differentiate between "not found" and "found but not produced"
-            // Let's check existence using getAllVariableNames for a better error message
             if (!registry.getAllVariableNames().contains(internalQualifiedName)) {
-                 throw new QueryParseException(String.format(
-                    "Variable '%s' not found in its scope (%s). Available: %s",
-                    internalQualifiedName, contextDescription, registry.getAllVariableNames()
-                ));
+                 throw new QueryParseException(String.format("Variable '%s' not found in scope (%s). Available: %s", internalQualifiedName, contextDescription, registry.getAllVariableNames()));
             } else {
-                 throw new QueryParseException(String.format(
-                    "Variable '%s' is consumed in %s but is never produced (bound).",
-                    internalQualifiedName, contextDescription
-                ));
+                 throw new QueryParseException(String.format("Variable '%s' consumed in %s but never produced.", internalQualifiedName, contextDescription));
             }
         }
-
         logger.debug("Variable '{}' validated successfully in context: {}", internalQualifiedName, contextDescription);
     }
 
-    /**
-     * Validates that all snippet window sizes are within acceptable limits.
-     */
     private void validateSnippetWindowSizes(Query query) throws QueryParseException {
         for (SelectColumn column : query.selectColumns()) {
             if (column instanceof SnippetColumn snippetColumn) {
-                int windowSize = snippetColumn.getWindowSize(); // This is now character-based
-
+                int windowSize = snippetColumn.getWindowSize();
                 if (windowSize > MAX_SNIPPET_WINDOW_SIZE) {
                     throw new QueryParseException(String.format(
                         "Snippet window size %d characters exceeds maximum allowed size of %d characters",
                         windowSize, MAX_SNIPPET_WINDOW_SIZE
                     ));
                 }
-                // Minimum window size validation (e.g., must be >= 0) is handled by SnippetColumn constructor logic
             }
         }
     }
 
-    /**
-     * Validates the limit value.
-     */
     private void validateLimit(int limit) throws QueryParseException {
         if (limit <= 0) {
             throw new QueryParseException("LIMIT value must be greater than 0");
         }
     }
 
-    /**
-     * Validates all subqueries in a query.
-     * Each subquery is validated independently.
-     */
     private void validateSubqueries(Query query) throws QueryParseException {
-        for (SubquerySpec subquery : query.subqueries()) {
-            // Validate the subquery itself
-            validate(subquery.subquery());
-
-            // Validate the alias (should be non-empty, but this is already checked in the constructor)
-            if (subquery.alias().isEmpty()) {
-                throw new QueryParseException("Subquery alias cannot be empty");
+        if (query.joinSteps().size() > MAX_JOIN_DEPTH) {
+            throw new QueryParseException(String.format("Exceeded max joins: %d", MAX_JOIN_DEPTH));
             }
-
-            // Validate projected columns if specified
-            subquery.projectedColumns().ifPresent(columns -> {
-                if (columns.isEmpty()) {
-                    throw new RuntimeException(new QueryParseException("Subquery projected columns list cannot be empty"));
-                }
-
-                // Verify that all projected columns exist in the subquery
-                // This would require more context about column availability in subqueries
-                // For now, we'll defer this validation until execution time
-            });
+        for (JoinStep step : query.joinSteps()) {
+            validate(step.subquery());
+            if (step.rightSourceAlias().isEmpty()) {
+                throw new QueryParseException("Subquery alias in JoinStep cannot be empty: " + step);
         }
     }
+    }
 
-    /**
-     * Validates join conditions between the main query and subqueries.
-     */
     private void validateJoinConditions(Query query) throws QueryParseException {
-        // Join condition is required if there are subqueries
-        if (!query.subqueries().isEmpty() && query.joinCondition().isEmpty()) {
-            throw new QueryParseException("Query with subqueries must have a join condition");
-        }
+        if (query.joinSteps().isEmpty()) return;
 
-        // Create a map for quick lookup of subqueries by alias
-        Map<String, SubquerySpec> subqueryMap = query.subqueries().stream()
-                .collect(Collectors.toMap(SubquerySpec::alias, sq -> sq));
+        Map<String, VariableRegistry> aliasToRegistryMap = query.joinSteps().stream()
+            .collect(Collectors.toMap(JoinStep::rightSourceAlias, step -> step.subquery().variableRegistry()));
+        String mainQueryEffectiveAlias = query.mainAlias().orElse(QueryModelBuilder.DEFAULT_MAIN_ALIAS);
+        aliasToRegistryMap.put(mainQueryEffectiveAlias, query.variableRegistry());
 
-        // Validate the join condition if present
-        query.joinCondition().ifPresent(joinCondition -> {
-            try {
-                // Validate both columns - each can belong to either main query or subquery
-                String leftQualified = joinCondition.leftColumn();
-                String rightQualified = joinCondition.rightColumn();
+        Set<String> allKnownAliasesForStructuralCheck = new HashSet<>(aliasToRegistryMap.keySet());
 
-                // Validate left column
-                if (leftQualified == null || !leftQualified.contains(".")) {
-                    throw new QueryParseException("Left join column must be qualified (alias.var): " + leftQualified);
-                }
-                String[] leftParts = leftQualified.split("\\.", 2);
-                if (leftParts.length != 2) {
-                    throw new QueryParseException("Invalid qualified variable format for left join column: " + leftQualified);
-                }
-                String leftAlias = leftParts[0];
-                String leftVar = leftParts[1];
-                VariableRegistry mainRegistry = query.variableRegistry();
-
-                // Check if left column belongs to main query or subquery
-                if ((query.mainAlias().isPresent() && query.mainAlias().get().equals(leftAlias)) || "$main".equals(leftAlias)) {
-                    validateVariableInRegistry(leftQualified, mainRegistry, "main query (alias " + leftAlias + " for JOIN)");
-                } else if (subqueryMap.containsKey(leftAlias)) {
-                    VariableRegistry subqueryRegistry = subqueryMap.get(leftAlias).subquery().variableRegistry();
-                    validateVariableInRegistry(leftQualified, subqueryRegistry, "subquery '" + leftAlias + "' (for JOIN)");
-                } else {
-                    throw new QueryParseException("Unknown alias '" + leftAlias + "' for left join column: " + leftQualified);
-                }
-
-                // Validate right column
-                if (rightQualified == null || !rightQualified.contains(".")) {
-                    throw new QueryParseException("Right join column must be qualified (alias.var): " + rightQualified);
-                }
-                String[] rightParts = rightQualified.split("\\.", 2);
-                if (rightParts.length != 2) {
-                    throw new QueryParseException("Invalid qualified variable format for right join column: " + rightQualified);
-                }
-                String rightAlias = rightParts[0];
-                String rightVar = rightParts[1];
-
-                // Check if right column belongs to main query or subquery
-                if ((query.mainAlias().isPresent() && query.mainAlias().get().equals(rightAlias)) || "$main".equals(rightAlias)) {
-                    validateVariableInRegistry(rightQualified, mainRegistry, "main query (alias " + rightAlias + " for JOIN)");
-                } else if (subqueryMap.containsKey(rightAlias)) {
-                    VariableRegistry subqueryRegistry = subqueryMap.get(rightAlias).subquery().variableRegistry();
-                    validateVariableInRegistry(rightQualified, subqueryRegistry, "subquery '" + rightAlias + "' (for JOIN)");
-                } else {
-                    throw new QueryParseException("Unknown alias '" + rightAlias + "' for right join column: " + rightQualified);
-                }
-
-                // Validate proximity window if applicable
-                if (joinCondition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL &&
-                    joinCondition.temporalPredicate().isPresent() &&
-                    joinCondition.temporalPredicate().get() == TemporalPredicate.PROXIMITY) {
-                    joinCondition.proximityWindow().ifPresent(window -> {
-                        if (window <= 0) {
-                            throw new RuntimeException(new QueryParseException("Proximity window must be greater than 0"));
-                        }
-                        if (window > MAX_TEMPORAL_PROXIMITY_WINDOW) {
-                            throw new RuntimeException(new QueryParseException(
-                                String.format("Proximity window %d exceeds maximum allowed size of %d days",
-                                             window, MAX_TEMPORAL_PROXIMITY_WINDOW)));
-                        }
-                    });
-                }
-            } catch (QueryParseException e) {
-                throw new RuntimeException(e);
+        for (JoinStep step : query.joinSteps()) {
+            JoinCondition condition = step.onCondition();
+            validateSingleJoinColumn(condition.leftColumn(), step.leftSourceAlias(), aliasToRegistryMap, "left", query.mainAlias(), query.joinSteps(), allKnownAliasesForStructuralCheck, step);
+            validateSingleJoinColumn(condition.rightColumn(), step.rightSourceAlias(), aliasToRegistryMap, "right", query.mainAlias(), query.joinSteps(), allKnownAliasesForStructuralCheck, step);
+            if (condition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL && condition.temporalPredicate().orElse(null) == TemporalPredicate.PROXIMITY) {
+                condition.proximityWindow().ifPresent(window -> {
+                    if (window <= 0) throw new RuntimeException(new QueryParseException("Proximity window > 0"));
+                    if (window > MAX_TEMPORAL_PROXIMITY_WINDOW) throw new RuntimeException(new QueryParseException(String.format("Proximity window %d > max %d", window, MAX_TEMPORAL_PROXIMITY_WINDOW)));
+                });
             }
-        });
+        }
     }
 
-    // New: Method to validate the GROUP BY clause
+    private void validateSingleJoinColumn(String qualifiedColumnName, String expectedAliasContext, Map<String, VariableRegistry> aliasToRegistryMap, String side, Optional<String> mainQueryAliasForStructuralCheck, List<JoinStep> allJoinStepsForStructuralCheck, Set<String> allKnownAliasesForStructuralCheck, JoinStep currentStep) throws QueryParseException {
+        if (qualifiedColumnName == null || !qualifiedColumnName.contains(".")) {
+            throw new QueryParseException(String.format("%s join column '%s' must be qualified (alias.var). Current step: %s", side, qualifiedColumnName, currentStep));
+                }
+        String[] parts = qualifiedColumnName.split("\\.", 2);
+        if (parts.length != 2) { throw new QueryParseException(String.format("Invalid qualified format for %s join column: %s", side, qualifiedColumnName)); }
+        String aliasPart = parts[0];
+
+        if (!aliasPart.equals(expectedAliasContext)) {
+            throw new QueryParseException(String.format("Alias mismatch for %s join column '%s'. Column alias '%s' != expected context '%s'. Step: %s", side, qualifiedColumnName, aliasPart, expectedAliasContext, currentStep));
+        }
+        VariableRegistry targetRegistry = aliasToRegistryMap.get(aliasPart);
+        if (targetRegistry == null) { throw new QueryParseException(String.format("No registry for alias '%s' (%s join column '%s'). Step: %s", aliasPart, side, qualifiedColumnName, currentStep)); }
+
+        boolean isStructural = isStructuralColumn(qualifiedColumnName, mainQueryAliasForStructuralCheck, allJoinStepsForStructuralCheck, allKnownAliasesForStructuralCheck);
+        boolean isProducedInTarget = targetRegistry.isProduced(qualifiedColumnName);
+
+        if (!isStructural && !isProducedInTarget) {
+             if (!targetRegistry.getAllVariableNames().contains(qualifiedColumnName)) {
+                 throw new QueryParseException(String.format("%s join column '%s' not in scope (alias '%s'). Available: %s. Step: %s", side, qualifiedColumnName, aliasPart, targetRegistry.getAllVariableNames(), currentStep));
+                } else {
+                 throw new QueryParseException(String.format("%s join column '%s' (alias '%s') consumed but not produced. Step: %s", side, qualifiedColumnName, aliasPart, currentStep));
+            }
+        }
+        logger.debug("Successfully validated {} join column: {} for step: {}", side, qualifiedColumnName, currentStep);
+            }
+
     private void validateGroupByClause(Query query) throws QueryParseException {
         logger.debug("Validating GROUP BY clause: {}", query.groupByColumns());
-        VariableRegistry registry = query.variableRegistry();
+        VariableRegistry currentQueryRegistry = query.variableRegistry();
         List<String> groupByColumns = query.groupByColumns();
-        Set<String> groupBySet = new HashSet<>(groupByColumns); // For efficient lookup
-
-        // 2. Validate that each GROUP BY item is a valid, selectable column (MOVED TO TOP)
-        // This means it must be a known variable or a known structural column.
-        String mainAlias = query.mainAlias().orElse("$main");
-        Map<String, SubquerySpec> subqueryMap = query.subqueries().stream()
-                .collect(Collectors.toMap(SubquerySpec::alias, sq -> sq));
+        Set<String> groupBySet = new HashSet<>(groupByColumns);
+        String currentQueryEffectiveAlias = query.mainAlias().orElse(QueryModelBuilder.DEFAULT_MAIN_ALIAS);
+        Map<String, Query> subqueryAliasToQueryMap = query.joinSteps().stream()
+                .collect(Collectors.toMap(JoinStep::rightSourceAlias, JoinStep::subquery));
+        Set<String> allKnownAliasesInScope = new HashSet<>(subqueryAliasToQueryMap.keySet());
+        allKnownAliasesInScope.add(currentQueryEffectiveAlias);
 
         for (String groupByColumnName : groupByColumns) {
-            // Attempt to parse as alias.field
             String[] parts = groupByColumnName.split("\\.", 2);
-            if (parts.length != 2) {
-                throw new QueryParseException(String.format(
-                    "Invalid GROUP BY item '%s'. Expected format: alias.variable or alias.FIELD", groupByColumnName));
-            }
+            if (parts.length != 2) { throw new QueryParseException(String.format("Invalid GROUP BY item '%s'. Expected alias.field", groupByColumnName));}
             String alias = parts[0];
-            String field = parts[1];
-
-            boolean isStructural = Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID", "BEGIN", "END").contains(field.toUpperCase());
-
-            if (isStructural) {
-                String structuralItemAlias = alias; // Alias from the structural item, e.g., "q1" from "q1.TITLE"
-
-                if (subqueryMap.isEmpty()) {
-              boolean aliasOk;
-                    if (query.mainAlias().isPresent()) { // validating main query with explicit alias
-                        aliasOk = structuralItemAlias.equals(query.mainAlias().get());
-                    } else {
-                        aliasOk = true; // Placeholder - this alias is effectively the current scope's alias
-                    }
-                    if (!aliasOk) {
-                         throw new QueryParseException(String.format(
-                            "Invalid alias '%s' for structural GROUP BY item '%s' in current query scope (expected '%s').",
-                            structuralItemAlias, groupByColumnName, query.mainAlias().orElse("$main_for_subquery_items")));
-                    }
-
-                } else {
-                    // Validating a main query that HAS subqueries.
-                    // Structural item's alias must be the main query's alias or a known subquery alias.
-                    if (!structuralItemAlias.equals(mainAlias) && !subqueryMap.containsKey(structuralItemAlias)) {
-                        throw new QueryParseException(String.format(
-                            "Invalid alias '%s' in structural GROUP BY item '%s'. Alias must be the main query alias ('%s') or a known subquery alias (%s).",
-                            structuralItemAlias, groupByColumnName, mainAlias, subqueryMap.keySet()));
-                    }
-                }
-                // Further validation for structural fields (e.g. field name is valid) is implicitly handled by parser/model
-            } else {
-                // For variables...
-                String groupByItemAlias = alias; // e.g., "q1" from "q1.p"
+            boolean isStructural = isStructuralColumn(groupByColumnName, query.mainAlias(), query.joinSteps(), allKnownAliasesInScope);
+            if (isStructural) continue;
 
                 VariableRegistry targetRegistryToUse;
                 String contextDescription;
+            String registryKeyToLookup = groupByColumnName;
 
-                if (subqueryMap.isEmpty()) {
-
-                    targetRegistryToUse = registry; // `registry` is query.variableRegistry() for this scope
-
-                    String currentScopeConceptualAlias = query.mainAlias().orElse(groupByItemAlias);
-                    contextDescription = String.format("current query scope (conceptual alias %s) for GROUP BY item '%s'",
-                                                       currentScopeConceptualAlias, groupByColumnName);
-
+            if (query.joinSteps().isEmpty()) {
+                if (!alias.equals(currentQueryEffectiveAlias)) { throw new QueryParseException(String.format("Alias mismatch in GROUP BY '%s'. Alias '%s' vs current scope '%s'.", groupByColumnName, alias, currentQueryEffectiveAlias));}
+                targetRegistryToUse = currentQueryRegistry;
+                contextDescription = String.format("current query (alias '%s') for GROUP BY '%s'", currentQueryEffectiveAlias, groupByColumnName);
+            } else {
+                if (alias.equals(currentQueryEffectiveAlias)) {
+                    targetRegistryToUse = currentQueryRegistry;
+                    contextDescription = String.format("main query (alias %s) for GROUP BY '%s'", currentQueryEffectiveAlias, groupByColumnName);
+                } else if (subqueryAliasToQueryMap.containsKey(alias)) {
+                    targetRegistryToUse = subqueryAliasToQueryMap.get(alias).variableRegistry();
+                    contextDescription = String.format("subquery '%s' (via main) for GROUP BY '%s'", alias, groupByColumnName);
                 } else {
-                    if (groupByItemAlias.equals(mainAlias)) { // mainAlias is main query's actual alias or $main
-                        targetRegistryToUse = registry; // Main query's registry
-                        contextDescription = String.format("main query (alias %s) for GROUP BY item '%s'", mainAlias, groupByColumnName);
-                    } else if (subqueryMap.containsKey(groupByItemAlias)) {
-                        targetRegistryToUse = subqueryMap.get(groupByItemAlias).subquery().variableRegistry();
-                        contextDescription = String.format("subquery '%s' (referenced from main query) for GROUP BY item '%s'", groupByItemAlias, groupByColumnName);
-                    } else {
-                        throw new QueryParseException(String.format(
-                            "Unknown alias '%s' in GROUP BY item '%s' (when validating main query with subqueries). Main alias: '%s', Available subquery aliases: %s",
-                            groupByItemAlias, groupByColumnName, mainAlias, subqueryMap.keySet()));
+                    throw new QueryParseException(String.format("Unknown alias '%s' in GROUP BY '%s'. Main: '%s', Subs: %s", alias, groupByColumnName, currentQueryEffectiveAlias, subqueryAliasToQueryMap.keySet()));
                     }
-                }
-
-                // Now, check if the variable is known in that registry before validating if it's produced
-                if (!targetRegistryToUse.getAllVariableNames().contains(groupByColumnName)) {
-                    // Log details for easier debugging
-                    logger.warn("GROUP BY validation failure: Item '{}' not found in target registry. Context: {}", groupByColumnName, contextDescription);
-                    logger.warn("Target registry ({}) content: {}", targetRegistryToUse.hashCode(), targetRegistryToUse.getAllVariableNames());
-                    logger.warn("Main query registry ({}) content: {}", query.variableRegistry().hashCode(), query.variableRegistry().getAllVariableNames());
-                    if (!subqueryMap.isEmpty() && subqueryMap.containsKey(groupByItemAlias)) {
-                         logger.warn("Subquery '{}' registry ({}) content: {}", groupByItemAlias, subqueryMap.get(groupByItemAlias).subquery().variableRegistry().hashCode(), subqueryMap.get(groupByItemAlias).subquery().variableRegistry().getAllVariableNames());
-                    }
-
-                    throw new QueryParseException(String.format(
-                        "GROUP BY column '%s' is not a known variable in its scope (%s). Available variables in target scope: %s",
-                        groupByColumnName, contextDescription, targetRegistryToUse.getAllVariableNames()
-                    ));
-                }
-                // If known, then validate it's produced (as it's not structural)
-                validateVariableInRegistry(groupByColumnName, targetRegistryToUse, contextDescription);
             }
-        }
-        // If all GROUP BY items are valid, now proceed to validate SELECT columns.
-
-        // 1. Validate SELECT columns against the GROUP BY clause (NOW SECOND)
-        for (SelectColumn selectColumn : query.selectColumns()) {
-            if (selectColumn instanceof CountColumn) {
-                // Aggregate functions are always allowed with GROUP BY
+            validateVariableInRegistry(registryKeyToLookup, targetRegistryToUse, contextDescription);
+            }
+        for (SelectColumn sc : query.selectColumns()) {
+            if (sc instanceof CountColumn) {
                 continue;
-            } else if (selectColumn instanceof SnippetColumn snippetColumn) {
-                String snippetVarName = snippetColumn.getVariableName(); // This is qualified, e.g., $main.date
+            } else if (sc instanceof SnippetColumn snippetColumn) {
+                String snippetVarName = snippetColumn.getVariableName();
                 if (!groupBySet.contains(snippetVarName)) {
                     throw new QueryParseException(String.format(
                         "SNIPPET variable '%s' must be included in the GROUP BY clause when GROUP BY is present.",
                         snippetVarName));
                 }
-            } else if (selectColumn instanceof VariableColumn variableColumn) {
-                String varName = variableColumn.getColumnName(); // This is qualified, e.g., $main.date
+            } else if (sc instanceof VariableColumn variableColumn) {
+                String varName = variableColumn.getColumnName();
                 if (!groupBySet.contains(varName)) {
                     throw new QueryParseException(String.format(
                         "SELECT column '%s' must be an aggregate function or appear in the GROUP BY clause.",
                         varName));
                 }
-            } else if (selectColumn instanceof StructuralColumn structuralColumn) {
-                String structName = structuralColumn.getColumnName(); // This is qualified, e.g., $main.TITLE
+            } else if (sc instanceof StructuralColumn structuralColumn) {
+                String structName = structuralColumn.getColumnName();
                 if (!groupBySet.contains(structName)) {
                     throw new QueryParseException(String.format(
                         "SELECT column '%s' must be an aggregate function or appear in the GROUP BY clause.",
                         structName));
                 }
             } else {
-                // Should not happen if all SelectColumn types are handled
-                throw new QueryParseException("Unknown SelectColumn type encountered during GROUP BY validation: " + selectColumn.getClass().getName());
+                throw new QueryParseException("Unknown SelectColumn type encountered during GROUP BY validation: " + sc.getClass().getName());
             }
         }
         logger.debug("GROUP BY clause validated successfully.");
     }
 
-    // New method: validateOrderByClause
     private void validateOrderByClause(Query query) throws QueryParseException {
-        VariableRegistry registry = query.variableRegistry();
-        List<String> groupByColumnNames = query.groupByColumns(); // These are already fully qualified
-        Set<String> groupByKeySet = new HashSet<>(groupByColumnNames);
+        VariableRegistry currentQueryRegistry = query.variableRegistry();
+        Set<String> groupByKeySet = new HashSet<>(query.groupByColumns());
+        String currentQueryEffectiveAlias = query.mainAlias().orElse(QueryModelBuilder.DEFAULT_MAIN_ALIAS);
+        Map<String, Query> subqueryAliasToQueryMap = query.joinSteps().stream()
+            .collect(Collectors.toMap(JoinStep::rightSourceAlias, JoinStep::subquery));
+        Set<String> allKnownAliasesInScope = new HashSet<>(subqueryAliasToQueryMap.keySet());
+        allKnownAliasesInScope.add(currentQueryEffectiveAlias);
 
         for (String orderSpecifier : query.orderBy()) {
             String rawColumnName = orderSpecifier.startsWith("-") ? orderSpecifier.substring(1) : orderSpecifier;
-
-            // crude check for aggregate, expand if more aggregates are supported.
-            boolean isAggregate = rawColumnName.startsWith("COUNT(");
-
-            if (isAggregate) {
-                if (groupByColumnNames.isEmpty()) {
-                    // If ordering by aggregate without GROUP BY, all SELECT items should also be aggregates.
-                    // This is a common SQL rule to prevent ambiguity.
-                    boolean allSelectAlsoAggregates = query.selectColumns().stream()
-                        .allMatch(sc -> sc instanceof CountColumn /* || other aggregate types like SumColumn, AvgColumn */);
-
-                    // More precise: if there's any non-aggregate in SELECT, it's an error.
+            if (rawColumnName.startsWith("COUNT(")) {
                     boolean hasNonAggregateInSelect = query.selectColumns().stream()
-                        .anyMatch(sc -> !(sc instanceof CountColumn /* || other aggregate types */));
+                    .anyMatch(sc -> !(sc instanceof CountColumn));
 
-                    if (hasNonAggregateInSelect) {
+                    if (hasNonAggregateInSelect && query.groupByColumns().isEmpty()) {
                         throw new QueryParseException(String.format(
-                            "Cannot ORDER BY aggregate function '%s' without a GROUP BY clause when non-aggregate columns are present in the SELECT list.", rawColumnName
+                            "Cannot ORDER BY aggregate function '%s' when non-aggregate columns are present in the SELECT list and no GROUP BY clause is specified.", rawColumnName
                         ));
                     }
-                }
-                // If GROUP BY is present, or if no GROUP BY but SELECT list is all aggregates, then it's fine.
                 continue;
             }
 
-            // If not an aggregate, it's a column/variable name.
-            // The name `rawColumnName` from `orderColumns` list should be fully qualified by QueryModelBuilder.
+            boolean isStructCol = isStructuralColumn(rawColumnName, query.mainAlias(), query.joinSteps(), allKnownAliasesInScope);
+            VariableRegistry registryForVarCheck;
+            String aliasFromColumn = rawColumnName.contains(".") ? rawColumnName.split("\\.", 2)[0] : currentQueryEffectiveAlias;
 
-            boolean isKnownVar = registry.isProduced(rawColumnName);
-            boolean isStructCol = isStructuralColumn(rawColumnName, query.mainAlias(), query.subqueries());
-
-            // If it's a structural column, it's always valid for ORDER BY.
-            // Otherwise, it must be a known (produced) variable.
-            if (!isStructCol && !isKnownVar) {
-                // Before throwing, check if it matches a SELECT column alias (if we support that).
-                // For now, assuming rawColumnName must be a direct resolvable item or aggregate.
-                throw new QueryParseException(String.format(
-                    "ORDER BY column '%s' is not a recognized variable, structural column, or aggregate function.", rawColumnName
-                ));
+            if (query.joinSteps().isEmpty() || aliasFromColumn.equals(currentQueryEffectiveAlias)) {
+                 registryForVarCheck = currentQueryRegistry;
+            } else if (subqueryAliasToQueryMap.containsKey(aliasFromColumn)) {
+                 registryForVarCheck = subqueryAliasToQueryMap.get(aliasFromColumn).variableRegistry();
+            } else {
+                 if (!isStructCol) { throw new QueryParseException(String.format("ORDER BY '%s' uses unknown alias '%s'.", rawColumnName, aliasFromColumn)); }
+                 registryForVarCheck = null;
             }
-
-            // If GROUP BY is present, non-aggregate ORDER BY items must be in GROUP BY keys.
-            if (!groupByColumnNames.isEmpty()) {
-                if (!groupByKeySet.contains(rawColumnName)) {
-                    throw new QueryParseException(String.format(
-                        "ORDER BY column '%s' must be in the GROUP BY clause or be an aggregate function when GROUP BY is present.", rawColumnName
-                    ));
-                }
+            boolean isKnownVar = registryForVarCheck != null && registryForVarCheck.isProduced(rawColumnName);
+            if (!isStructCol && !isKnownVar) { throw new QueryParseException(String.format("ORDER BY '%s' not recognized in scope.", rawColumnName)); }
+            if (!query.groupByColumns().isEmpty() && !groupByKeySet.contains(rawColumnName)) { throw new QueryParseException(String.format("ORDER BY '%s' must be in GROUP BY if present.", rawColumnName)); }
             }
-            // If no GROUP BY, ordering by a regular valid column (var or struct) is fine.
-        }
     }
 
-    // New helper method: isStructuralColumn
-    private boolean isStructuralColumn(String qualifiedName, Optional<String> mainAliasOpt, List<SubquerySpec> subqueries) {
+    private boolean isStructuralColumn(String qualifiedName, Optional<String> mainAliasOpt, List<JoinStep> joinSteps, Set<String> allKnownAliases) {
         if (qualifiedName == null) return false;
-        String[] parts = qualifiedName.split("\\.", 2); // Use \\. for literal dot in regex
-        if (parts.length != 2) {
-            return false; // Not in alias.FIELD format
-        }
+        String[] parts = qualifiedName.split("\\.", 2);
+        if (parts.length != 2) return false;
         String aliasFromColumn = parts[0];
-        String field = parts[1].toUpperCase(); // Structural fields are typically case-insensitive or stored uppercase
-
-        // Define known structural fields
+        String field = parts[1].toUpperCase();
         Set<String> knownStructuralFields = Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID", "BEGIN", "END");
-        if (!knownStructuralFields.contains(field)) {
+        if (!knownStructuralFields.contains(field)) return false;
+        if (!allKnownAliases.contains(aliasFromColumn)) {
+            logger.warn("Structural column '{}' has alias '{}' not in known aliases: {}", qualifiedName, aliasFromColumn, allKnownAliases);
             return false;
         }
-
-        // Check if the aliasFromColumn refers to the main query
-        if (mainAliasOpt.isPresent()) {
-            // Main query has an explicit alias (e.g., "q1" from "FROM source ALIAS q1").
-            // The column's alias must match this explicit alias.
-            if (aliasFromColumn.equals(mainAliasOpt.get())) {
                 return true;
-            }
-        } else {
-            // Main query has no explicit alias. Its implicit/default alias is "$main".
-            // The column's alias must be "$main". (Assuming QueryModelBuilder uses "$main" for implicit qualification)
-            if (aliasFromColumn.equals("$main")) {
-                return true;
-            }
-        }
-
-        // If not matched with main query, check if it's an alias of a subquery.
-        return subqueries.stream().anyMatch(sq -> sq.alias().equals(aliasFromColumn));
     }
 }

@@ -40,9 +40,9 @@ import com.example.index.generators.stitch.BigramPosStitchGenerator;
 import com.example.index.generators.stitch.TrigramDateStitchGenerator;
 import com.example.index.generators.stitch.TrigramNerStitchGenerator;
 import com.example.index.generators.stitch.TrigramPosStitchGenerator;
-import com.example.index.generators.stitch.UnigramDateStitchIndexGenerator;
-import com.example.index.generators.stitch.UnigramNerStitchIndexGenerator;
-import com.example.index.generators.stitch.UnigramPosStitchIndexGenerator;
+import com.example.index.generators.stitch.UnigramDateStitchGenerator;
+import com.example.index.generators.stitch.UnigramNerStitchGenerator;
+import com.example.index.generators.stitch.UnigramPosStitchGenerator;
 import com.example.index.util.SynonymManager;
 import com.example.logging.IndexingMetrics;
 import com.example.logging.ProgressTracker;
@@ -58,6 +58,23 @@ public class IndexRunner {
     private static final Logger logger = LoggerFactory.getLogger(IndexRunner.class);
     private static final String GLOBAL_VALUE_LOOKUP_DB_NAME = "global_values_lookup.db";
 
+    private static final List<String> ALL_STITCH_INDEX_TYPES = List.of(
+        UnigramDateStitchGenerator.MY_INDEX_NAME,
+        UnigramNerStitchGenerator.MY_INDEX_NAME,
+        //UnigramPosStitchIndexGenerator.MY_INDEX_NAME,
+        BigramDateStitchGenerator.MY_INDEX_NAME,
+        BigramNerStitchGenerator.MY_INDEX_NAME,
+        //BigramPosStitchGenerator.MY_INDEX_NAME,
+        TrigramDateStitchGenerator.MY_INDEX_NAME,
+        TrigramNerStitchGenerator.MY_INDEX_NAME
+        //TrigramPosStitchGenerator.MY_INDEX_NAME
+    );
+
+    private static final List<String> ALL_NON_STITCH_INDEX_TYPES = List.of(
+        "unigram", "bigram", "trigram", "dependency", "hypernym",
+        "ner_date", "pos", "ner", "nash"
+    );
+
     public static void main(String[] args) {
         ArgumentParser parser = ArgumentParsers.newFor("IndexRunner").build()
                 .defaultHelp(true)
@@ -66,15 +83,20 @@ public class IndexRunner {
         parser.addArgument("--index-dir").setDefault("indexes").help("Directory for storing indexes (default: 'indexes')");
         parser.addArgument("--stopwords").setDefault("stopwords.txt").help("Path to stopwords file (default: stopwords.txt)");
         parser.addArgument("--batch-size").setDefault(1000).type(Integer.class).help("Batch size for processing (default: 1000)");
+
+        List<String> allPossibleTypes = new ArrayList<>();
+        allPossibleTypes.add("all");
+        allPossibleTypes.add("stitches");
+        allPossibleTypes.addAll(ALL_NON_STITCH_INDEX_TYPES);
+        allPossibleTypes.addAll(ALL_STITCH_INDEX_TYPES);
+
         parser.addArgument("-t", "--type")
-                .choices("all", "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash",
-                         "stitch_unigram_date", "stitch_unigram_ner", "stitch_unigram_pos",
-                         "stitch_bigram_pos", "stitch_trigram_pos",
-                         "stitch_bigram_ner", "stitch_trigram_ner",
-                         "stitch_bigram_date", "stitch_trigram_date")
+                .choices(allPossibleTypes.toArray(new String[0]))
                 .setDefault(List.of("all"))
                 .nargs("+")
-                .help("Type of index to generate (can specify multiple, space-separated)");
+                .help("Type of index to generate (can specify multiple, space-separated). " +
+                      "'all' processes all known types. " +
+                      "'stitches' processes all stitch-combination types.");
         parser.addArgument("--custom-temp-dir").dest("custom_temp_dir").type(String.class).required(false)
                 .help("Path to a custom directory for temporary files during index generation.");
         parser.addArgument("--force").action(Arguments.storeTrue()).help("Force re-generation of indexes, overwriting existing ones.");
@@ -116,23 +138,27 @@ public class IndexRunner {
         }
 
         Set<String> typesBeingBuilt = new LinkedHashSet<>();
-        if (cliRequestedIndexTypes.contains("all")) {
-            typesBeingBuilt.addAll(List.of(
-                "unigram", "bigram", "trigram", "dependency", "hypernym",
-                "ner_date", "pos", "ner", "nash",
-                "stitch_unigram_date", "stitch_unigram_ner",
-                "stitch_bigram_ner", "stitch_trigram_ner",
-                "stitch_bigram_date", "stitch_trigram_date"
-            ));
+        boolean expandAll = cliRequestedIndexTypes.contains("all");
+        boolean expandStitches = cliRequestedIndexTypes.contains("stitches");
+
+        if (expandAll) {
+            typesBeingBuilt.addAll(ALL_NON_STITCH_INDEX_TYPES);
+            typesBeingBuilt.addAll(ALL_STITCH_INDEX_TYPES);
         } else {
-            typesBeingBuilt.addAll(cliRequestedIndexTypes);
+            for (String requestedType : cliRequestedIndexTypes) {
+                if (requestedType.equals("stitches")) {
+                    typesBeingBuilt.addAll(ALL_STITCH_INDEX_TYPES);
+                } else {
+                    typesBeingBuilt.add(requestedType); // Add other specific types
+                }
+            }
         }
 
         Set<String> indexTypesToProcess = typesBeingBuilt.stream()
                                               .map(String::toLowerCase)
                                               .collect(Collectors.toCollection(LinkedHashSet::new));
 
-        logger.debug("Effective index types to process by IndexRunner: {}", indexTypesToProcess);
+        logger.info("Effective index types to process by IndexRunner: {}", indexTypesToProcess);
         setupIndexDirectories(indexDir, new ArrayList<>(indexTypesToProcess), force);
 
         Stopwatch totalTime = Stopwatch.createStarted();
@@ -311,9 +337,9 @@ public class IndexRunner {
                             }
                         }
 
-                        if (type.equals(UnigramDateStitchIndexGenerator.MY_INDEX_NAME)) {
+                        if (type.equals(UnigramDateStitchGenerator.MY_INDEX_NAME)) {
                             metrics.startBatch(batchSize, type);
-                            try (UnigramDateStitchIndexGenerator gen = new UnigramDateStitchIndexGenerator(
+                            try (UnigramDateStitchGenerator gen = new UnigramDateStitchGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
@@ -326,9 +352,9 @@ public class IndexRunner {
                             }
                         }
 
-                        if (type.equals(UnigramNerStitchIndexGenerator.MY_INDEX_NAME)) {
+                        if (type.equals(UnigramNerStitchGenerator.MY_INDEX_NAME)) {
                             metrics.startBatch(batchSize, type);
-                            try (UnigramNerStitchIndexGenerator gen = new UnigramNerStitchIndexGenerator(
+                            try (UnigramNerStitchGenerator gen = new UnigramNerStitchGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
@@ -341,9 +367,9 @@ public class IndexRunner {
                             }
                         }
 
-                        if (type.equals(UnigramPosStitchIndexGenerator.MY_INDEX_NAME)) {
+                        if (type.equals(UnigramPosStitchGenerator.MY_INDEX_NAME)) {
                             metrics.startBatch(batchSize, type);
-                            try (UnigramPosStitchIndexGenerator gen = new UnigramPosStitchIndexGenerator(
+                            try (UnigramPosStitchGenerator gen = new UnigramPosStitchGenerator(
                                     indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager)) {
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();

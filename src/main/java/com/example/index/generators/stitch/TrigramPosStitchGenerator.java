@@ -52,7 +52,7 @@ public final class TrigramPosStitchGenerator extends AbstractNgramStitchGenerato
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
-        List<AnnotationData> annotations = new ArrayList<>();
+        List<AnnotationData> rawAnnotationsFromDb = new ArrayList<>();
         String sql = String.format("""
             SELECT sentence_id, begin_char, end_char, token, pos
             FROM annotations
@@ -73,7 +73,7 @@ public final class TrigramPosStitchGenerator extends AbstractNgramStitchGenerato
                         continue;
                     }
 
-                    annotations.add(new AnnotationData(
+                    rawAnnotationsFromDb.add(new AnnotationData(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
@@ -86,8 +86,26 @@ public final class TrigramPosStitchGenerator extends AbstractNgramStitchGenerato
             logger.error("SQLException in fetchAnnotationsForDocument for Trigram POS stitch, doc ID {}: {}", documentId, e.getMessage(), e);
             throw e;
         }
-        // Logging for fetched annotations can be added here if needed
-        return annotations;
+
+        // Filter the annotations before returning
+        List<AnnotationData> filteredAnnotations = filterAnnotationsBySentenceCharacterSpan(
+            rawAnnotationsFromDb, documentId, "Trigram POS");
+
+        if (filteredAnnotations.isEmpty()) {
+            if (!rawAnnotationsFromDb.isEmpty()) {
+                logger.trace("No POS annotations remaining after span filtering for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
+            } else {
+                logger.trace("No POS annotations found for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
+            }
+        } else {
+            if (rawAnnotationsFromDb.size() != filteredAnnotations.size()) {
+                 logger.trace("Fetched {} raw POS annotations, filtered to {} for document ID {} for {} (Trigram) index.",
+                         rawAnnotationsFromDb.size(), filteredAnnotations.size(), documentId, MY_INDEX_NAME);
+            } else {
+                 logger.trace("Fetched {} POS annotations (no filtering needed) for document ID {} for {} (Trigram) index.", filteredAnnotations.size(), documentId, MY_INDEX_NAME);
+            }
+        }
+        return filteredAnnotations;
     }
 
     @Override

@@ -64,6 +64,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         // Determine the effective alias for this scope
         String effectiveMainAlias = explicitMainAlias.orElse(DEFAULT_MAIN_ALIAS);
+        String currentLeftSourceAlias = effectiveMainAlias; // Initialize for the first join
 
         List<Condition> conditions = new ArrayList<>();
         List<String> orderColumns = new ArrayList<>();
@@ -71,8 +72,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         Query.Granularity granularity = Query.Granularity.DOCUMENT;
         Optional<Integer> granularitySize = Optional.empty();
         List<SelectColumn> selectColumns = new ArrayList<>();
-        List<SubquerySpec> subqueries = new ArrayList<>();
-        Optional<JoinCondition> joinCondition = Optional.empty();
+        List<JoinStep> joinSteps = new ArrayList<>(); // Changed from subqueries and joinCondition
         List<String> groupByColumns = new ArrayList<>();
 
         // Process join clauses first to determine if qualification is needed early
@@ -80,22 +80,32 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             for (QueryLangParser.JoinClauseContext joinCtx : ctx.joinClause()) {
                  // Pass qualification requirement to visitJoinClause
                  // Qualification is required if there's an explicit main alias OR if there are joins
-                boolean qualificationRequired = explicitMainAlias.isPresent() || !ctx.joinClause().isEmpty();
-                Object[] joinResult = visitJoinClause(joinCtx, qualificationRequired); // Pass flag
-                SubquerySpec subquery = (SubquerySpec) joinResult[0];
-                JoinCondition jc = (JoinCondition) joinResult[1];
+                boolean qualificationRequiredForJoin = explicitMainAlias.isPresent() || !ctx.joinClause().isEmpty(); // this flag is for join condition columns
+                Object[] joinResult = visitJoinClause(joinCtx, qualificationRequiredForJoin); // Pass flag
+                SubquerySpec subquerySpec = (SubquerySpec) joinResult[0];
+                JoinCondition specificJoinCondition = (JoinCondition) joinResult[1];
 
-                subqueries.add(subquery);
-                joinCondition = Optional.of(jc); // Use the last join condition
+                JoinStep joinStep = new JoinStep(
+                    subquerySpec.alias(),         // rightSourceAlias
+                    subquerySpec.subquery(),      // subquery Query object
+                    specificJoinCondition,        // onCondition for this step
+                    specificJoinCondition.type(), // JoinType for this step (obtained from JoinCondition)
+                    currentLeftSourceAlias        // leftSourceAlias (main query or previous step's rightSourceAlias)
+                );
+                joinSteps.add(joinStep);
+
+                // Update leftSourceAlias for the next iteration
+                currentLeftSourceAlias = subquerySpec.alias();
 
                 // Register subquery's produced variables as available in main query scope
-                VariableRegistry subqueryRegistry = subquery.subquery().variableRegistry();
+                VariableRegistry subqueryRegistry = subquerySpec.subquery().variableRegistry();
                 for (String varName : subqueryRegistry.getAllVariableNames()) {
                     if (subqueryRegistry.isProduced(varName)) {
                         // Get the type from the subquery registry
                         VariableType varType = subqueryRegistry.getInferredType(varName);
                         // Register it as a producer in the main registry
-                        variableRegistry.registerProducer(varName, varType, "SUBQUERY_" + subquery.alias());
+                        // The varName here is already qualified with the subquery's alias (e.g., q1.date)
+                        variableRegistry.registerProducer(varName, varType, "SUBQUERY_" + subquerySpec.alias());
                         logger.debug("Registered subquery variable '{}' as producer in main registry with type {}", varName, varType);
                     }
                 }
@@ -103,7 +113,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
 
         // Determine if qualification is required in SELECT, ORDER BY, GROUP BY
-        boolean qualificationRequired = VariableQualifier.isQualificationRequired(explicitMainAlias, !ctx.joinClause().isEmpty(), !subqueries.isEmpty());
+        // Qualification is needed if there's an explicit main alias or if there are any join steps.
+        boolean qualificationRequired = VariableQualifier.isQualificationRequired(explicitMainAlias, !joinSteps.isEmpty(), !joinSteps.isEmpty());
 
         // Extract select columns, passing qualification requirement
         if (ctx.selectClause() != null && ctx.selectClause().selectList() != null) {
@@ -148,7 +159,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         // The Query object stores the user-provided alias, or empty if none.
         // Internal logic uses effectiveMainAlias ($main or explicit).
-        return new Query(source, conditions, orderColumns, limit, granularity, granularitySize, selectColumns, variableRegistry, subqueries, joinCondition, explicitMainAlias, groupByColumns);
+        return new Query(source, conditions, orderColumns, limit, granularity, granularitySize, selectColumns, variableRegistry, joinSteps, explicitMainAlias, groupByColumns);
     }
 
     // Overload visitSelectList to accept qualification requirement
@@ -1056,21 +1067,24 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         logger.debug("Creating subquery with alias: {}", subqueryAlias);
 
         // Determine if qualification is required WITHIN the subquery
-        boolean subqueryQualificationRequired = false; // Assume false for now
+        // A subquery, as per the current grammar rule, cannot have its own JOIN clauses.
+        // Therefore, internal qualification driven by joins is not applicable here.
+        boolean subqueryInternalQualificationRequired = false;
 
         // Visit the subquery's select list
-        List<SelectColumn> selectColumns = subqueryBuilder.visitSelectList(ctx.selectList(), subqueryQualificationRequired);
+        List<SelectColumn> selectColumns = subqueryBuilder.visitSelectList(ctx.selectList(), subqueryInternalQualificationRequired);
 
         List<Condition> conditions = new ArrayList<>();
         if (ctx.whereClause() != null) {
-            // Visit the subquery's WHERE clause using DEFAULT scope first
-            conditions.addAll(subqueryBuilder.visitConditionList(ctx.whereClause().conditionList(), DEFAULT_MAIN_ALIAS));
+            // Visit the subquery's WHERE clause using subquery's effective alias
+            // For subquery internal conditions, the alias is its own alias.
+            conditions.addAll(subqueryBuilder.visitConditionList(ctx.whereClause().conditionList(), subqueryAlias));
         }
 
         // Process additional clauses
         List<String> orderColumns = new ArrayList<>();
         if (ctx.orderByClause() != null) {
-            orderColumns.addAll(subqueryBuilder.visitOrderByClause(ctx.orderByClause(), false)); // No qualification required within subquery
+            orderColumns.addAll(subqueryBuilder.visitOrderByClause(ctx.orderByClause(), subqueryInternalQualificationRequired));
         }
 
         Optional<Integer> limit = Optional.empty();
@@ -1093,25 +1107,26 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         List<String> groupByColumns = new ArrayList<>();
         if (ctx.groupByClause() != null) {
-            groupByColumns.addAll(subqueryBuilder.visitGroupByClause(ctx.groupByClause(), DEFAULT_MAIN_ALIAS, false)); // No qualification required within subquery
+            groupByColumns.addAll(subqueryBuilder.visitGroupByClause(ctx.groupByClause(), subqueryAlias, subqueryInternalQualificationRequired));
         }
 
-        // Re-qualify all variables from $main. to subqueryAlias.
-        subqueryBuilder.variableRegistry.requalifyVariables("$main.", subqueryAlias + ".");
+        // Important: Re-qualify variables bound within this subquery to use its *external* alias.
+        // E.g., if subquery is `(SELECT NER(PERSON) BIND p FROM docs) ALIAS q1`,
+        // internally `p` might be `$main.p` during subqueryBuilder's processing (if no ALIAS on docs).
+        // It needs to become `q1.p` in the subqueryBuilder.variableRegistry that is part of the returned Query object.
+        subqueryBuilder.variableRegistry.requalifyVariables(DEFAULT_MAIN_ALIAS + ".", subqueryAlias + ".");
 
         // Re-qualify conditions to update their variable names as well
         List<Condition> requalifiedConditions = conditions.stream()
-            .map(condition -> requalifyCondition(condition, "$main.", subqueryAlias + "."))
+            .map(condition -> requalifyCondition(condition, DEFAULT_MAIN_ALIAS + ".", subqueryAlias + "."))
             .collect(java.util.stream.Collectors.toList());
 
         // Re-qualify ORDER BY and GROUP BY columns
         List<String> requalifiedOrderColumns = orderColumns.stream()
             .map(col -> {
-                if (col.startsWith("-")) {
-                    return "-" + requalifyColumnName(col.substring(1), DEFAULT_MAIN_ALIAS + ".", subqueryAlias + ".");
-                } else {
-                    return requalifyColumnName(col, DEFAULT_MAIN_ALIAS + ".", subqueryAlias + ".");
-                }
+                String baseCol = col.startsWith("-") ? col.substring(1) : col;
+                String requalifiedBase = requalifyColumnName(baseCol, DEFAULT_MAIN_ALIAS + ".", subqueryAlias + ".");
+                return col.startsWith("-") ? "-" + requalifiedBase : requalifiedBase;
             })
             .collect(java.util.stream.Collectors.toList());
 
@@ -1123,26 +1138,24 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         List<SelectColumn> requalifiedSelectColumns = selectColumns.stream()
             .map(col -> {
                 if (col instanceof VariableColumn varCol) {
-                    String oldName = varCol.getColumnName();
+                    String oldName = varCol.getColumnName(); // e.g., $main.p or an already qualified name if subquery had ALIAS
                     String plainName = VariableQualifier.extractPlainName(oldName);
-                    // Construct the target qualified name using the subquery's alias
-                    String targetQualifiedName = subqueryAlias + "." + plainName;
-                    // Check if this variable is actually produced in the requalified registry
-                    // If not produced, validation will catch it later. We construct the expected name here.
+                    String targetQualifiedName = subqueryAlias + "." + plainName; // e.g., q1.p
                     return new VariableColumn(targetQualifiedName);
-
                 } else if (col instanceof SnippetColumn snipCol) {
                     String oldName = snipCol.getVariableName();
-                     String plainName = VariableQualifier.extractPlainName(oldName);
-                    // Construct the target qualified name using the subquery's alias
+                    String plainName = VariableQualifier.extractPlainName(oldName);
                     String targetQualifiedName = subqueryAlias + "." + plainName;
-                     // Check if this variable is actually produced in the requalified registry
-                     // If not produced, validation will catch it later. We construct the expected name here.
-                     return new SnippetColumn(targetQualifiedName, snipCol.getWindowSize());
-
+                    return new SnippetColumn(targetQualifiedName, snipCol.getWindowSize());
+                } else if (col instanceof StructuralColumn structCol) {
+                    // If structural column refers to $main (e.g. $main.TITLE from subquery `(SELECT TITLE FROM docs) ALIAS q1`)
+                    // it needs to be requalified to use the subquery's alias (e.g. q1.TITLE)
+                    if (DEFAULT_MAIN_ALIAS.equals(structCol.getAlias())) {
+                         return new StructuralColumn(subqueryAlias, structCol.getFieldName());
+                    }
+                    // If it's already qualified with some other alias (e.g. from a nested sub-subquery), leave it.
                 }
-                // Handle other column types like TitleColumn, CountColumn etc. if necessary
-                return col; // Return non-variable/snippet columns unchanged
+                return col; // Return other column types (CountColumn, already correctly qualified StructuralColumn) unchanged
             })
             .collect(java.util.stream.Collectors.toList());
 
@@ -1150,16 +1163,15 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         Query subquery = new Query(
             source,
             requalifiedConditions,
-            requalifiedOrderColumns, // Use parsed ORDER BY
-            limit, // Use parsed LIMIT
-            granularity, // Use parsed GRANULARITY
-            granularitySize, // Use parsed granularity size
+            requalifiedOrderColumns,
+            limit,
+            granularity,
+            granularitySize,
             requalifiedSelectColumns,
             subqueryBuilder.variableRegistry, // Use the isolated registry (now requalified)
-            List.of(), // No nested subqueries within this subquery's definition
-            Optional.empty(), // No join condition within this subquery's definition
-            Optional.empty(), // Subquery's internal Query object doesn't have a main alias itself
-            requalifiedGroupByColumns // Use parsed GROUP BY
+            List.of(), // Subqueries within a subquery are not part of this model change for JoinStep
+            Optional.empty(), // Subquery itself has an EXPLICIT alias, not a mainAlias in the Query record sense
+            requalifiedGroupByColumns
         );
 
         // Return the SubquerySpec containing the Query object and its external alias

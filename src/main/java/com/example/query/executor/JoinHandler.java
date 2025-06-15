@@ -32,6 +32,159 @@ public class JoinHandler {
         // Constructor remains simple
     }
 
+    /**
+     * Performs a binary join between two QueryResultSoA objects based on the provided condition and type.
+     *
+     * @param lhsSoA The QueryResultSoA for the left-hand side of the join.
+     * @param lhsAlias The alias for the left-hand side.
+     * @param rhsSoA The QueryResultSoA for the right-hand side of the join.
+     * @param rhsAlias The alias for the right-hand side.
+     * @param condition The JoinCondition specifying how to join.
+     * @param joinType The type of join (INNER, LEFT, etc.).
+     * @param outputGranularity The granularity for the output QueryResultSoA.
+     * @param outputGranularitySize The granularity size for the output.
+     * @param outputRequirements The attribute requirements for the output SoA.
+     * @return A new QueryResultSoA representing the result of the binary join.
+     * @throws QueryExecutionException If an error occurs during join processing.
+     */
+    public QueryResultSoA performBinaryJoin(
+            QueryResultSoA lhsSoA,
+            String lhsAlias,
+            QueryResultSoA rhsSoA,
+            String rhsAlias,
+            JoinCondition condition,
+            JoinCondition.JoinType joinType,
+            Query.Granularity outputGranularity,
+            int outputGranularitySize,
+            AttributeRequirements outputRequirements
+    ) throws QueryExecutionException {
+        logger.debug("Performing binary {} JOIN between LHS ('{}', {} entries) and RHS ('{}', {} entries) ON {}",
+                     joinType, lhsAlias, lhsSoA.size(), rhsAlias, rhsSoA.size(), condition);
+
+        if (lhsSoA == null) {
+            throw new QueryExecutionException(
+                String.format("LHS QueryResultSoA for alias '%s' is null in performBinaryJoin.", lhsAlias),
+                "join", QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+        if (rhsSoA == null) {
+            throw new QueryExecutionException(
+                String.format("RHS QueryResultSoA for alias '%s' is null in performBinaryJoin.", rhsAlias),
+                "join", QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+
+        // Ensure input SoAs have conceptualRowIds if required by their own internal state/needs
+        // The outputRequirements passed in should already reflect that the output needs conceptualRowIds.
+        if (!lhsSoA.getRequirements().needsConceptualRowIds || !rhsSoA.getRequirements().needsConceptualRowIds) {
+             logger.warn("CRITICAL: One or both input QueryResultSoA for JOIN are missing conceptualRowIds. Left: {}, Right: {}. This might impact join accuracy if optimizer relies on them internally, though buildConceptualIdToRowIndicesMap handles it.",
+                lhsSoA.getRequirements().needsConceptualRowIds, rhsSoA.getRequirements().needsConceptualRowIds);
+        }
+
+        // Base keys for result construction logic later
+        String leftKey = extractKeyFromColumnName(condition.leftColumn());
+        String rightKey = extractKeyFromColumnName(condition.rightColumn());
+
+        // Qualified keys for SoAJoinOptimizer
+        String qualifiedLeftKey = condition.leftColumn();
+        String qualifiedRightKey = condition.rightColumn();
+
+        JoinCondition.JoinOperatorType operatorType = condition.operatorType();
+        Optional<TemporalPredicate> temporalPredicateOpt = condition.temporalPredicate();
+
+        List<SoAJoinOptimizer.SoAJoinKeyMatch> matchingConceptualIdPairs = Collections.emptyList();
+
+        // SoAJoinOptimizer is for INNER joins.
+        if (joinType == JoinCondition.JoinType.INNER) {
+            if (operatorType == JoinCondition.JoinOperatorType.EQUALITY) {
+                logger.debug("Invoking SoAOptimizer for INNER EQUALITY JOIN on keys: {} == {}",
+                             qualifiedLeftKey, qualifiedRightKey);
+                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedHashJoin(
+                    lhsSoA, rhsSoA, qualifiedLeftKey, qualifiedRightKey); // Use qualified keys
+            } else if (operatorType == JoinCondition.JoinOperatorType.TEMPORAL) {
+                TemporalPredicate predicate = temporalPredicateOpt.orElseThrow(() ->
+                    new QueryExecutionException("Temporal predicate is required for TEMPORAL join type",
+                            "join", QueryExecutionException.ErrorType.INTERNAL_ERROR));
+                logger.debug("Invoking SoAOptimizer for INNER TEMPORAL JOIN with predicate {} on keys: {} {} {}",
+                             predicate, qualifiedLeftKey, predicate, qualifiedRightKey); // Use qualified keys
+                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedTemporalJoin(
+                    lhsSoA, rhsSoA, qualifiedLeftKey, qualifiedRightKey, predicate.toString()); // Use qualified keys
+            } else {
+                logger.error("Unhandled JoinOperatorType for INNER JOIN: {}. Returning empty result.", operatorType);
+                // matchingConceptualIdPairs remains empty
+            }
+        } else {
+             logger.warn("Join type {} not yet fully implemented in performBinaryJoin. Defaulting to INNER join behavior or empty if optimizer doesn't support. Optimizer might only produce INNER results.", joinType);
+             if (operatorType == JoinCondition.JoinOperatorType.EQUALITY) {
+                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedHashJoin(lhsSoA, rhsSoA, qualifiedLeftKey, qualifiedRightKey); // Use qualified keys
+             } else if (operatorType == JoinCondition.JoinOperatorType.TEMPORAL && temporalPredicateOpt.isPresent()){
+                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedTemporalJoin(lhsSoA, rhsSoA, qualifiedLeftKey, qualifiedRightKey, temporalPredicateOpt.get().toString()); // Use qualified keys
+             } else {
+                 logger.error("Cannot attempt non-INNER join for operator type {} or missing temporal predicate. Returning empty.", operatorType);
+             }
+        }
+
+        logger.debug("SoAJoinOptimizer returned {} matching conceptual ID pairs.", matchingConceptualIdPairs.size());
+
+        QueryResultSoA finalJoinedResultSoA = new QueryResultSoA(outputGranularity, outputGranularitySize, outputRequirements);
+        int nextOutputConceptualId = 0;
+
+        Map<Integer, List<Integer>> leftConceptualIdToIndices = buildConceptualIdToRowIndicesMap(lhsSoA);
+        Map<Integer, List<Integer>> rightConceptualIdToIndices = buildConceptualIdToRowIndicesMap(rhsSoA);
+
+        for (SoAJoinOptimizer.SoAJoinKeyMatch pair : matchingConceptualIdPairs) {
+            int currentOutputConceptualId = nextOutputConceptualId++;
+            Set<String> addedVariablesInCurrentOutputRow = new HashSet<>();
+
+            List<Integer> leftIndices = leftConceptualIdToIndices.getOrDefault(pair.leftConceptualRowId(), Collections.emptyList());
+            for (int leftIdx : leftIndices) {
+                String variableName = lhsSoA.getVariableNameAt(leftIdx);
+                if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) continue;
+
+                Object valueToAdd = lhsSoA.getValueAt(leftIdx);
+                ValueType typeToAdd = lhsSoA.getValueTypeAt(leftIdx);
+
+                if (operatorType == JoinCondition.JoinOperatorType.EQUALITY && variableName.equals(lhsAlias + "." + leftKey)) {
+                    valueToAdd = pair.joinKeyValue();
+                    if (valueToAdd instanceof LocalDate) typeToAdd = ValueType.DATE;
+                    else if (valueToAdd instanceof String || valueToAdd instanceof Number) typeToAdd = ValueType.TERM;
+                }
+                finalJoinedResultSoA.add(valueToAdd, typeToAdd, variableName,
+                                           lhsSoA.getDocumentIdAt(leftIdx),
+                                           outputRequirements.needsSentenceId ? lhsSoA.getSentenceIdAt(leftIdx) : -1,
+                                           outputRequirements.needsPositions ? lhsSoA.getBeginCharAt(leftIdx) : -1,
+                                           outputRequirements.needsPositions ? lhsSoA.getEndCharAt(leftIdx) : -1,
+                                           outputRequirements.needsSynonymIds ? lhsSoA.getSynonymIdAt(leftIdx) : -1,
+                                           currentOutputConceptualId);
+                addedVariablesInCurrentOutputRow.add(variableName);
+            }
+
+            List<Integer> rightIndices = rightConceptualIdToIndices.getOrDefault(pair.rightConceptualRowId(), Collections.emptyList());
+            for (int rightIdx : rightIndices) {
+                String variableName = rhsSoA.getVariableNameAt(rightIdx);
+                if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) continue;
+
+                Object valueToAdd = rhsSoA.getValueAt(rightIdx);
+                ValueType typeToAdd = rhsSoA.getValueTypeAt(rightIdx);
+                if (operatorType == JoinCondition.JoinOperatorType.EQUALITY && variableName.equals(rhsAlias + "." + rightKey)) {
+                    valueToAdd = pair.joinKeyValue(); // For RHS, this ensures consistency if joinKey was from LHS
+                    if (valueToAdd instanceof LocalDate) typeToAdd = ValueType.DATE;
+                    else if (valueToAdd instanceof String || valueToAdd instanceof Number) typeToAdd = ValueType.TERM;
+                }
+                finalJoinedResultSoA.add(valueToAdd, typeToAdd, variableName,
+                                           rhsSoA.getDocumentIdAt(rightIdx),
+                                           outputRequirements.needsSentenceId ? rhsSoA.getSentenceIdAt(rightIdx) : -1,
+                                           outputRequirements.needsPositions ? rhsSoA.getBeginCharAt(rightIdx) : -1,
+                                           outputRequirements.needsPositions ? rhsSoA.getEndCharAt(rightIdx) : -1,
+                                           outputRequirements.needsSynonymIds ? rhsSoA.getSynonymIdAt(rightIdx) : -1,
+                                           currentOutputConceptualId);
+                addedVariablesInCurrentOutputRow.add(variableName);
+            }
+        }
+
+        logger.info("Binary join processed. Output QueryResultSoA has {} entries, representing {} conceptual output rows.",
+                    finalJoinedResultSoA.size(), nextOutputConceptualId);
+        return finalJoinedResultSoA;
+    }
+
     private Map<Integer, List<Integer>> buildConceptualIdToRowIndicesMap(QueryResultSoA soa) {
         Map<Integer, List<Integer>> map = new HashMap<>();
         if (soa == null || !soa.getRequirements().needsConceptualRowIds) {
@@ -45,194 +198,33 @@ public class JoinHandler {
     }
 
     /**
-     * Executes the join specified in the query using pre-computed subquery QueryResultSoA instances.
-     * The method now returns a single QueryResultSoA representing the unified result of the join.
-     *
-     * @param query           The query containing the join condition and subquery definitions.
-     * @param subqueryContext Context containing the results of executed subqueries as QueryResultSoA.
-     * @return A QueryResultSoA representing the result of the join.
-     * @throws QueryExecutionException if the join execution fails.
+     * @deprecated This method is deprecated. Use {@link #performBinaryJoin(QueryResultSoA, String, QueryResultSoA, String, JoinCondition, JoinCondition.JoinType, Query.Granularity, int, AttributeRequirements)} instead.
+     * The new method handles a single binary join step directly.
      */
+    @Deprecated
     public QueryResultSoA handleJoin(
-            Query query,
+            Query query, // query parameter is problematic for a generic binary join handler
             SubqueryContext subqueryContext)
             throws QueryExecutionException {
 
-        logger.debug("Handling JOIN operation with QueryResultSoA inputs.");
+        logger.error("DEPRECATED JoinHandler.handleJoin(Query, SubqueryContext) was called. This method can no longer function correctly due to Query model changes (removal of single joinCondition). " +
+                     "The caller (QueryExecutor) must be updated to use performBinaryJoin() for each JoinStep. Returning an empty result to prevent crashes.");
 
-        JoinCondition joinCondition = query.joinCondition().orElseThrow(() ->
-                new QueryExecutionException("Join condition is required but missing in JoinHandler",
-                        "join", QueryExecutionException.ErrorType.INTERNAL_ERROR));
+        // Cannot reliably get a single JoinCondition from the new Query model.
+        // The old logic here is no longer valid.
+        // Return an empty QueryResultSoA based on the query's primary granularity and requirements.
 
-        String leftAlias = extractAliasFromColumnName(joinCondition.leftColumn());
-        String rightAlias = extractAliasFromColumnName(joinCondition.rightColumn());
-        String leftKey = extractKeyFromColumnName(joinCondition.leftColumn());
-        String rightKey = extractKeyFromColumnName(joinCondition.rightColumn());
-
-        logger.debug("Joining subquery SoA '{}' with subquery SoA '{}' on keys: {}.{} {} {}.{}",
-                     leftAlias, rightAlias, leftAlias, leftKey, joinCondition.operatorType(), rightAlias, rightKey);
-
-        QueryResultSoA leftSoA = subqueryContext.getQueryResult(leftAlias);
-        QueryResultSoA rightSoA = subqueryContext.getQueryResult(rightAlias);
-
-        if (leftSoA == null) {
-            throw new QueryExecutionException(
-                String.format("Missing QueryResultSoA for left subquery '%s' in JOIN context", leftAlias),
-                "join", QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        AttributeRequirements fallbackRequirements = new AttributeRequirements();
+        if (query.mainAlias().isPresent() && subqueryContext.hasResults(query.mainAlias().get())) {
+            fallbackRequirements.merge(subqueryContext.getQueryResult(query.mainAlias().get()).getRequirements());
+        } else if (!query.joinSteps().isEmpty() && subqueryContext.hasResults(query.joinSteps().get(0).rightSourceAlias())) {
+            // Fallback: try to get requirements from the first subquery if main alias results not present
+             QueryResultSoA firstSubSoA = subqueryContext.getQueryResult(query.joinSteps().get(0).rightSourceAlias());
+             if (firstSubSoA != null) fallbackRequirements.merge(firstSubSoA.getRequirements());
         }
-        if (rightSoA == null) {
-            throw new QueryExecutionException(
-                String.format("Missing QueryResultSoA for right subquery '%s' in JOIN context", rightAlias),
-                "join", QueryExecutionException.ErrorType.INTERNAL_ERROR);
-        }
+        fallbackRequirements.needsConceptualRowIds = true; // Joins typically need this
 
-        if (!leftSoA.getRequirements().needsConceptualRowIds || !rightSoA.getRequirements().needsConceptualRowIds) {
-             logger.error("CRITICAL: One or both input QueryResultSoA for JOIN are missing conceptualRowIds. Left: {}, Right: {}. Join results will be incorrect.",
-                leftSoA.getRequirements().needsConceptualRowIds, rightSoA.getRequirements().needsConceptualRowIds);
-            // Depending on strictness, could throw an exception or return empty.
-            // For now, proceed but results will be flawed if conceptual IDs are missing.
-        }
-
-        logger.debug("Left SoA ('{}') has {} entries, Right SoA ('{}') has {} entries",
-                     leftAlias, leftSoA.size(), rightAlias, rightSoA.size());
-
-        List<SoAJoinOptimizer.SoAJoinKeyMatch> matchingConceptualIdPairs = Collections.emptyList();
-        JoinCondition.JoinType joinType = joinCondition.type(); // Only INNER JOIN currently fully supported by SoAJoinOptimizer refactor
-        JoinCondition.JoinOperatorType operatorType = joinCondition.operatorType();
-        Optional<TemporalPredicate> temporalPredicateOpt = joinCondition.temporalPredicate();
-
-        if (joinType == JoinCondition.JoinType.INNER) {
-            if (operatorType == JoinCondition.JoinOperatorType.EQUALITY) {
-                logger.debug("Invoking SoAOptimizer for INNER EQUALITY JOIN on keys: {}.{} == {}.{}",
-                             leftAlias, leftKey, rightAlias, rightKey);
-                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedHashJoin(
-                    leftSoA, rightSoA, leftKey, rightKey);
-
-            } else if (operatorType == JoinCondition.JoinOperatorType.TEMPORAL) {
-                TemporalPredicate predicate = temporalPredicateOpt.orElseThrow(() ->
-                    new QueryExecutionException("Temporal predicate is required for TEMPORAL join type",
-                            "join", QueryExecutionException.ErrorType.INTERNAL_ERROR));
-
-                logger.debug("Invoking SoAOptimizer for INNER TEMPORAL JOIN with predicate {} on keys: {}.{} {} {}.{}",
-                             predicate, leftAlias, leftKey, predicate, rightAlias, rightKey);
-
-                // Note: SoAJoinOptimizer.performOptimizedTemporalJoin is currently a stub
-                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedTemporalJoin(
-                    leftSoA, rightSoA, leftKey, rightKey, predicate.toString());
-            } else {
-                logger.error("Unhandled JoinOperatorType for INNER JOIN: {}. Returning empty result.", operatorType);
-            }
-        } else {
-             logger.warn("Join type {} not yet fully implemented for SoA pipeline. Returning empty result.", joinType);
-        }
-
-        logger.debug("SoAJoinOptimizer returned {} matching conceptual ID pairs.", matchingConceptualIdPairs.size());
-
-        // Granularity of the output QueryResultSoA should match the original query's granularity.
-        // AttributeRequirements for the output SoA are determined by merging inputs.
-        AttributeRequirements finalOutputRequirements = new AttributeRequirements();
-        finalOutputRequirements.merge(leftSoA.getRequirements());
-        finalOutputRequirements.merge(rightSoA.getRequirements());
-        finalOutputRequirements.needsConceptualRowIds = true; // Output of a join MUST have conceptual IDs
-
-        QueryResultSoA finalJoinedResultSoA = new QueryResultSoA(query.granularity(), query.granularitySize().orElse(0), finalOutputRequirements);
-        int nextOutputConceptualId = 0;
-
-        Map<Integer, List<Integer>> leftConceptualIdToIndices = buildConceptualIdToRowIndicesMap(leftSoA);
-        Map<Integer, List<Integer>> rightConceptualIdToIndices = buildConceptualIdToRowIndicesMap(rightSoA);
-
-        for (SoAJoinOptimizer.SoAJoinKeyMatch pair : matchingConceptualIdPairs) {
-            int currentOutputConceptualId = nextOutputConceptualId++;
-            // Using a single set to track all variables added to this specific output conceptual row
-            // to prevent adding the same qualified variable (e.g., "q1.date") multiple times if it's
-            // present in multiple raw entries that map to the same leftConceptualRowId.
-            Set<String> addedVariablesInCurrentOutputRow = new HashSet<>();
-
-            List<Integer> leftIndices = leftConceptualIdToIndices.getOrDefault(pair.leftConceptualRowId(), Collections.emptyList());
-            for (int leftIdx : leftIndices) {
-                String variableName = leftSoA.getVariableNameAt(leftIdx); // Expected to be fully qualified, e.g., "q1.date"
-                if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) {
-                    continue; // Skip null variable names or if already added for this output row
-                }
-
-                Object valueToAdd = leftSoA.getValueAt(leftIdx);
-                ValueType typeToAdd = leftSoA.getValueTypeAt(leftIdx);
-
-                // For EQUALITY joins on a specific key (e.g. q1.date = q2.date),
-                // if this variable IS the join key, use the matched joinKeyValue.
-                // This ensures the output reflects the value that caused the equality.
-                // The joinKeyValue itself comes from the left side's map in combineMaps for equality.
-                if (operatorType == JoinCondition.JoinOperatorType.EQUALITY &&
-                    variableName.equals(leftAlias + "." + leftKey)) {
-                    valueToAdd = pair.joinKeyValue();
-                    // Infer type from joinKeyValue if possible, otherwise keep original
-                    if (valueToAdd instanceof LocalDate) {
-                        typeToAdd = ValueType.DATE;
-                    } else if (valueToAdd instanceof String) {
-                        typeToAdd = ValueType.TERM; // Or TERM, etc. - needs robust type inference or carry-over
-                    } else if (valueToAdd instanceof Number) {
-                        typeToAdd = ValueType.TERM;
-                    }
-                    // else keep original typeToAdd from leftSoA.getValueTypeAt(leftIdx)
-                }
-
-                finalJoinedResultSoA.add(
-                    valueToAdd,
-                    typeToAdd,
-                    variableName, // Use the fully qualified variable name from SoA
-                    leftSoA.getDocumentIdAt(leftIdx),
-                    finalOutputRequirements.needsSentenceId ? leftSoA.getSentenceIdAt(leftIdx) : -1,
-                    finalOutputRequirements.needsPositions ? leftSoA.getBeginCharAt(leftIdx) : -1,
-                    finalOutputRequirements.needsPositions ? leftSoA.getEndCharAt(leftIdx) : -1,
-                    finalOutputRequirements.needsSynonymIds ? leftSoA.getSynonymIdAt(leftIdx) : -1,
-                    currentOutputConceptualId
-                );
-                addedVariablesInCurrentOutputRow.add(variableName);
-            }
-
-            List<Integer> rightIndices = rightConceptualIdToIndices.getOrDefault(pair.rightConceptualRowId(), Collections.emptyList());
-            for (int rightIdx : rightIndices) {
-                String variableName = rightSoA.getVariableNameAt(rightIdx); // Expected to be fully qualified
-                if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) {
-                    continue;
-                }
-
-                Object valueToAdd = rightSoA.getValueAt(rightIdx);
-                ValueType typeToAdd = rightSoA.getValueTypeAt(rightIdx);
-
-                // For EQUALITY joins, if this variable IS the right join key, use the matched joinKeyValue.
-                if (operatorType == JoinCondition.JoinOperatorType.EQUALITY &&
-                    variableName.equals(rightAlias + "." + rightKey)) {
-                    valueToAdd = pair.joinKeyValue();
-                     // Infer type from joinKeyValue
-                    if (valueToAdd instanceof LocalDate) {
-                        typeToAdd = ValueType.DATE;
-                    } else if (valueToAdd instanceof String) {
-                        typeToAdd = ValueType.TERM;
-                    } else if (valueToAdd instanceof Number) {
-                        typeToAdd = ValueType.TERM;
-                    }
-                    // else keep original typeToAdd from rightSoA.getValueTypeAt(rightIdx)
-                }
-
-                finalJoinedResultSoA.add(
-                    valueToAdd,
-                    typeToAdd,
-                    variableName, // Use the fully qualified variable name from SoA
-                    rightSoA.getDocumentIdAt(rightIdx),
-                    finalOutputRequirements.needsSentenceId ? rightSoA.getSentenceIdAt(rightIdx) : -1,
-                    finalOutputRequirements.needsPositions ? rightSoA.getBeginCharAt(rightIdx) : -1,
-                    finalOutputRequirements.needsPositions ? rightSoA.getEndCharAt(rightIdx) : -1,
-                    finalOutputRequirements.needsSynonymIds ? rightSoA.getSynonymIdAt(rightIdx) : -1,
-                    currentOutputConceptualId
-                );
-                addedVariablesInCurrentOutputRow.add(variableName);
-            }
-        }
-
-        logger.info("Join execution completed. Final unified QueryResultSoA has {} entries, representing {} conceptual output rows.",
-                    finalJoinedResultSoA.size(), nextOutputConceptualId);
-        return finalJoinedResultSoA;
+        return new QueryResultSoA(query.granularity(), query.granularitySize().orElse(0), fallbackRequirements);
     }
 
     // Static helper methods previously here for MatchDetail are now part of SoAJoinOptimizer or handled by QueryResultSoA accessors.

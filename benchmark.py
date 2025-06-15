@@ -7,7 +7,7 @@ import re
 import subprocess
 
 DEFAULT_JAR_PATH = "target/query-cli.jar"
-QUERY_TIMEOUT_SECONDS = 15 * 60  # 15 minutes
+QUERY_TIMEOUT_SECONDS = 60 * 60  # 1 hour
 
 def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, pushdown_strategy_arg, stitch_strategy_arg, jar_path, export_path=None, is_verbose=False):
     """
@@ -39,7 +39,7 @@ def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, p
     ]
 
     if export_path:
-        command.extend(["--export", f"csv:{export_path}"]) # Assuming CSV for now, can be made configurable
+        command.extend(["--export", f"csv:{export_path}"])
 
     if is_verbose:
         print(f"Executing command: {' '.join(command)}")
@@ -72,9 +72,6 @@ def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, p
             stdout = ""
         return None, stdout, timeout_msg
 
-    except FileNotFoundError:
-        error_msg = "Error: Java command not found. Ensure Java is installed and in your PATH."
-        return None, "", error_msg
     except Exception as e:
         error_msg = f"An error occurred during query execution: {e}"
         if process:
@@ -97,10 +94,8 @@ if __name__ == "__main__":
     parser.add_argument("--db-file", required=True, help="Path to the QueryCLI database file (e.g., projects/nyt/nyt.db).")
     parser.add_argument("--index-dir", required=True, help="Path to the QueryCLI index directory (e.g., projects/nyt_indexes).")
 
-    # Cache strategy arguments - SIMPLIFIED
     parser.add_argument("--full", action="store_true", help="Run both cold and warm cache modes. Default: cold cache only.")
 
-    # Output control
     parser.add_argument("--verbose", action="store_true", help="Print full QueryCLI stdout for each run.")
     parser.add_argument("--export-dir", help="Directory to save exported results from QueryCLI (one file per run).")
     parser.add_argument("--benchmark-output", help="CSV filename to save benchmark results (e.g., benchmark_results.csv). If not provided, only console summary is shown.")
@@ -114,7 +109,7 @@ if __name__ == "__main__":
                 queries_to_run_orig = []
                 for idx, line in enumerate(f):
                     line = line.strip()
-                    if not line or line.startswith('#'): # Skip empty lines and comments
+                    if not line or line.startswith('#'):
                         continue
                     parts = line.split(' ::: ', 1)
                     query_text = parts[0]
@@ -130,8 +125,6 @@ if __name__ == "__main__":
             print(f"Error reading query file {args.query_file}: {e}")
             exit(1)
     elif args.query:
-        # For a single query, original index is 0, no expected answer through CLI arg directly for now
-        # User would have to use a file for expected answers with single queries.
         queries_to_run_orig.append((0, args.query, None))
 
     if not queries_to_run_orig:
@@ -152,7 +145,6 @@ if __name__ == "__main__":
     if args.projects_dir: # Only print if provided, as it's now optional
         print(f"Projects Dir (for other uses): {args.projects_dir}")
 
-    # MODIFIED: Show cache mode info
     if args.full:
         print("Cache Mode: full (cold + warm with 3 timed runs each)")
     else:
@@ -179,7 +171,6 @@ if __name__ == "__main__":
 
     strategy_combinations = list(itertools.product(temporal_strategies, pushdown_strategies_list, stitch_strategies_list))
 
-    # MODIFIED: Cache mode logic
     cache_modes_to_run = ["cold"]
     if args.full:
         cache_modes_to_run = ["cold", "warm"]
@@ -190,7 +181,6 @@ if __name__ == "__main__":
     for cache_mode in cache_modes_to_run:
         print(f"\n========== Running {cache_mode.upper()} cache mode ==========")
 
-        # Prepare queries based on cache mode
         if cache_mode == "cold":
             queries_to_run = list(queries_to_run_orig)
             random.shuffle(queries_to_run)
@@ -279,26 +269,34 @@ if __name__ == "__main__":
                         if stderr_output: print(f"  Timed Run {run_num+1} QueryCLI Errors:\n{stderr_output}")
 
                 else:  # cold mode
-                    # Single run for cold mode
-                    single_run_export_path_str = None
-                    if export_filename_base:
-                        single_run_export_path_str = os.path.join(args.export_dir, f"{export_filename_base}_run.csv")
-                        current_export_file_path = single_run_export_path_str # This is the file to check
+                    cold_runs = 3 # Number of timed runs for cold mode
+                    for run_num in range(cold_runs):
+                        # Each cold run gets its own export file if export_dir is specified
+                        cold_run_export_path_str = None
+                        if export_filename_base:
+                            cold_run_export_path_str = os.path.join(args.export_dir, f"{export_filename_base}_cold_run{run_num+1}.csv")
+                            if run_num == cold_runs - 1: # Last run's export path for verification
+                                current_export_file_path = cold_run_export_path_str
 
-                    time_taken, stdout_output, stderr_output = run_query_cli(
-                        query_text, args.db_file, args.index_dir,
-                        temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, single_run_export_path_str, is_verbose=args.verbose
-                    )
-                    if time_taken is not None:
-                        timed_run_times_ms.append(time_taken)
-                        print(f"{progress_prefix}    BENCHMARK_EXECUTION_TIME_MS: {time_taken:.3f}")
-                    else:
-                        print(f"{progress_prefix}    Failed to retrieve benchmark time for this run.")
+                        time_taken, stdout_output, stderr_output = run_query_cli(
+                            query_text, args.db_file, args.index_dir,
+                            temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, cold_run_export_path_str, is_verbose=args.verbose
+                        )
+                        if time_taken is not None:
+                            timed_run_times_ms.append(time_taken)
+                            print(f"{progress_prefix}    BENCHMARK_EXECUTION_TIME_MS (Cold Run {run_num+1}): {time_taken:.3f}")
+                        else:
+                            print(f"{progress_prefix}    Failed to retrieve benchmark time for Cold Run {run_num+1}.")
 
-                    if args.verbose and stdout_output: final_stdout = stdout_output
-                    if stderr_output: final_stderr = stderr_output
-                    if args.verbose and stdout_output: print(f"  Cold cache run QueryCLI Output:\n{stdout_output}")
-                    if stderr_output: print(f"  Cold cache run QueryCLI Errors:\n{stderr_output}")
+                        if args.verbose and stdout_output:
+                            if run_num == 0: final_stdout = "" # Clear previous stdout for cold mode runs if verbose
+                            final_stdout += f"--- Cold Run {run_num+1} Output ---\n{stdout_output}\n"
+                        if stderr_output:
+                            if run_num == 0: final_stderr = "" # Clear previous stderr for cold mode runs
+                            final_stderr += f"--- Cold Run {run_num+1} Errors ---\n{stderr_output}\n"
+
+                        if args.verbose and stdout_output: print(f"  Cold Run {run_num+1} QueryCLI Output:\n{stdout_output}")
+                        if stderr_output: print(f"  Cold Run {run_num+1} QueryCLI Errors:\n{stderr_output}")
 
                 # Calculate average time for this query/strategy combination
                 avg_time_ms = None
@@ -373,6 +371,8 @@ if __name__ == "__main__":
         print(f"  Cache Mode during these runs: {cache_mode}")
         if cache_mode == 'warm':
             print(f"  (Warm mode: 1 warm-up run, 3 timed runs per strategy)")
+        elif cache_mode == 'cold':
+            print(f"  (Cold mode: 3 timed runs per strategy)")
         print("  Strategy                            | Avg Time (ms) | Individual Times (ms) | Verification")
         print("  ------------------------------------|---------------|-----------------------|---------------")
 

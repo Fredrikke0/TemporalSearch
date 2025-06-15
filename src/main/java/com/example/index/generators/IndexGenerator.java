@@ -45,6 +45,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     private static final Logger logger = LoggerFactory.getLogger(IndexGenerator.class);
     public static final String DELIMITER = "\0";
     public static final char ESCAPE_CHAR = '\u001F';
+    public static final int MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN = 120;
     private static final int MAX_POSITIONS_PER_SEGMENT = 50_000_000; // Max positions per term segment
     private static final int MAX_TEMP_FILES_BEFORE_MERGE = 15_000; // Merge temp files when we hit this limit
 

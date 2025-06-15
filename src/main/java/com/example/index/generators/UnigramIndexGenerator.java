@@ -7,9 +7,14 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
@@ -24,6 +29,7 @@ import com.google.common.collect.ListMultimap;
  * Uses streaming processing and external sorting for efficient memory usage.
  */
 public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
+    private static final Logger logger = LoggerFactory.getLogger(UnigramIndexGenerator.class);
 
     public UnigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
@@ -88,7 +94,23 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
 
-        for (AnnotationEntry entry : batch) {
+        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
+            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
+                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
+
+        List<AnnotationEntry> allFilteredTokens = new ArrayList<>();
+
+        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
+            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
+                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
+
+                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
+                    sentenceTokens, documentId, sentenceId, "UnigramIndexGenerator", logger);
+                allFilteredTokens.addAll(filteredSentenceTokens);
+            });
+        });
+
+        for (AnnotationEntry entry : allFilteredTokens) {
             if (entry.getToken() == null || entry.getToken().isEmpty()) {
                 continue;
             }

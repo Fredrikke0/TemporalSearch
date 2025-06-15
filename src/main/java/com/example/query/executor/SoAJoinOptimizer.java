@@ -200,7 +200,6 @@ public class SoAJoinOptimizer {
             QueryResultSoA leftSoA, QueryResultSoA rightSoA,
             String leftKey, String rightKey, String predicate)
             throws QueryExecutionException {
-        // Removed AttributeRequirements requirements parameter
         logger.debug("Performing SoA-based Temporal Join for predicate '{}' on keys: {} (left) vs {} (right)", predicate, leftKey, rightKey);
 
         if (!leftSoA.getRequirements().needsConceptualRowIds || !rightSoA.getRequirements().needsConceptualRowIds) {

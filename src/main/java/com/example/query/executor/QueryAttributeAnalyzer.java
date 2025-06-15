@@ -43,14 +43,16 @@ public class QueryAttributeAnalyzer {
         // Analyze conditions for stitch requirements
         analyzeConditions(query.conditions(), requirements);
 
-        // Analyze join conditions
-        if (query.joinCondition().isPresent()) {
-            analyzeJoinCondition(query.joinCondition().get(), requirements);
+        // Analyze join conditions from JoinSteps
+        if (!query.joinSteps().isEmpty()) {
+            for (com.example.query.model.JoinStep step : query.joinSteps()) {
+                analyzeJoinCondition(step.onCondition(), requirements);
+            }
         }
 
-        // Analyze subqueries recursively
-        for (var subquery : query.subqueries()) {
-            requirements.merge(analyze(subquery.subquery()));
+        // Analyze subqueries recursively from JoinSteps
+        for (com.example.query.model.JoinStep step : query.joinSteps()) {
+            requirements.merge(analyze(step.subquery()));
         }
 
         logger.trace("Query analysis complete. Requirements: {}", requirements);

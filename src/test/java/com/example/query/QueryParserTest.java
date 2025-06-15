@@ -19,8 +19,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import com.example.query.model.JoinCondition;
+import com.example.query.model.JoinStep;
 import com.example.query.model.Query;
-import com.example.query.model.SubquerySpec;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.VariableColumn;
 import com.example.query.model.condition.Condition;
@@ -426,18 +426,20 @@ class QueryParserTest {
         // Basic checks after parsing
         assertEquals("wikipedia", query.source());
         assertEquals("t1", query.mainAlias().orElse(null));
-        assertEquals(1, query.subqueries().size());
-        assertTrue(query.joinCondition().isPresent());
+        assertEquals(1, query.joinSteps().size());
+        assertFalse(query.joinSteps().isEmpty());
 
-        SubquerySpec subquery = query.subqueries().get(0);
-        assertEquals("sub", subquery.alias());
-        assertEquals("archive", subquery.subquery().source());
-        assertTrue(subquery.subquery().conditions().get(0) instanceof Contains);
+        JoinStep joinStep = query.joinSteps().get(0);
+        Query subqueryAst = joinStep.subquery();
 
-        JoinCondition join = query.joinCondition().get();
-        assertEquals("t1.DOCUMENT_ID", join.leftColumn()); // Expect qualified column names
-        assertEquals("sub.DOCUMENT_ID", join.rightColumn()); // Expect qualified column names
-        assertEquals(TemporalPredicate.CONTAINS, join.temporalPredicate().orElse(null));
+        assertEquals("sub", joinStep.rightSourceAlias());
+        assertEquals("archive", subqueryAst.source());
+        assertTrue(subqueryAst.conditions().get(0) instanceof Contains);
+
+        JoinCondition joinCondition = joinStep.onCondition();
+        assertEquals("t1.DOCUMENT_ID", joinCondition.leftColumn());
+        assertEquals("sub.DOCUMENT_ID", joinCondition.rightColumn());
+        assertEquals(TemporalPredicate.CONTAINS, joinCondition.temporalPredicate().orElse(null));
     }
 
     @Test

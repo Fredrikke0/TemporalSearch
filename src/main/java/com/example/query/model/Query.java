@@ -20,8 +20,7 @@ import com.example.query.model.condition.Condition;
  * - Optional granularity size
  * - List of columns to select
  * - Variable binding metadata
- * - Optional subqueries
- * - Optional join condition
+ * - A list of join steps for chained joins
  * - Optional group by columns
  */
 public record Query(
@@ -33,8 +32,7 @@ public record Query(
     Optional<Integer> granularitySize,
     List<SelectColumn> selectColumns,
     VariableRegistry variableRegistry,
-    List<SubquerySpec> subqueries,
-    Optional<JoinCondition> joinCondition,
+    List<JoinStep> joinSteps,
     Optional<String> mainAlias,
     List<String> groupByColumns
 ) {
@@ -55,8 +53,7 @@ public record Query(
         Objects.requireNonNull(granularitySize, "Granularity size cannot be null");
         Objects.requireNonNull(selectColumns, "Select columns cannot be null");
         Objects.requireNonNull(variableRegistry, "Variable registry cannot be null");
-        Objects.requireNonNull(subqueries, "Subqueries cannot be null");
-        Objects.requireNonNull(joinCondition, "Join condition cannot be null");
+        Objects.requireNonNull(joinSteps, "Join steps cannot be null");
         Objects.requireNonNull(mainAlias, "Main alias cannot be null");
         Objects.requireNonNull(groupByColumns, "Group by columns cannot be null");
 
@@ -64,7 +61,7 @@ public record Query(
         conditions = List.copyOf(conditions);
         orderBy = List.copyOf(orderBy);
         selectColumns = List.copyOf(selectColumns);
-        subqueries = List.copyOf(subqueries);
+        joinSteps = List.copyOf(joinSteps);
         groupByColumns = List.copyOf(groupByColumns);
     }
 
@@ -72,25 +69,25 @@ public record Query(
      * Creates a query with just a source.
      */
     public Query(String source) {
-        this(source, List.of(), List.of(), Optional.empty(), Granularity.DOCUMENT, Optional.empty(), List.of(), new VariableRegistry(), List.of(), Optional.empty(), Optional.empty(), List.of());
+        this(source, List.of(), List.of(), Optional.empty(), Granularity.DOCUMENT, Optional.empty(), List.of(), new VariableRegistry(), List.of(), Optional.empty(), List.of());
     }
 
     /**
      * Creates a query with source and conditions.
      */
     public Query(String source, List<Condition> conditions) {
-        this(source, conditions, List.of(), Optional.empty(), Granularity.DOCUMENT, Optional.empty(), List.of(), new VariableRegistry(), List.of(), Optional.empty(), Optional.empty(), List.of());
+        this(source, conditions, List.of(), Optional.empty(), Granularity.DOCUMENT, Optional.empty(), List.of(), new VariableRegistry(), List.of(), Optional.empty(), List.of());
     }
 
     /**
      * Creates a query with source, conditions, and granularity.
      */
     public Query(String source, List<Condition> conditions, Granularity granularity) {
-        this(source, conditions, List.of(), Optional.empty(), granularity, Optional.empty(), List.of(), new VariableRegistry(), List.of(), Optional.empty(), Optional.empty(), List.of());
+        this(source, conditions, List.of(), Optional.empty(), granularity, Optional.empty(), List.of(), new VariableRegistry(), List.of(), Optional.empty(), List.of());
     }
 
     /**
-     * Creates a query with all parameters except variable registry, subqueries, and join condition.
+     * Creates a query with all parameters except variable registry, join steps.
      */
     public Query(
         String source,
@@ -101,11 +98,11 @@ public record Query(
         Optional<Integer> granularitySize,
         List<SelectColumn> selectColumns
     ) {
-        this(source, conditions, orderBy, limit, granularity, granularitySize, selectColumns, new VariableRegistry(), List.of(), Optional.empty(), Optional.empty(), List.of());
+        this(source, conditions, orderBy, limit, granularity, granularitySize, selectColumns, new VariableRegistry(), List.of(), Optional.empty(), List.of());
     }
 
     /**
-     * Creates a query with all parameters except subqueries and join condition.
+     * Creates a query with all parameters except join steps.
      */
     public Query(
         String source,
@@ -117,7 +114,7 @@ public record Query(
         List<SelectColumn> selectColumns,
         VariableRegistry variableRegistry
     ) {
-        this(source, conditions, orderBy, limit, granularity, granularitySize, selectColumns, variableRegistry, List.of(), Optional.empty(), Optional.empty(), List.of());
+        this(source, conditions, orderBy, limit, granularity, granularitySize, selectColumns, variableRegistry, List.of(), Optional.empty(), List.of());
     }
 
     /**
@@ -181,12 +178,22 @@ public record Query(
     }
 
     /**
-     * Checks if this query has subqueries.
+     * Checks if this query has subqueries (now interpreted as join steps).
      *
-     * @return true if the query has one or more subqueries, false otherwise
+     * @return true if the query has one or more join steps, false otherwise
      */
-    public boolean hasSubqueries() {
-        return !subqueries.isEmpty();
+    public boolean hasSubqueries() { // Renamed conceptually, method name kept for compatibility if used widely
+        return !joinSteps.isEmpty();
+    }
+
+    /**
+     * Determines if select column qualification is required.
+     * Qualification is required if the query has an explicit main alias or involves joins.
+     *
+     * @return true if qualification is required, false otherwise.
+     */
+    public boolean isQualificationRequired() {
+        return mainAlias.isPresent() || !joinSteps.isEmpty();
     }
 
     @Override
@@ -211,11 +218,12 @@ public record Query(
         mainAlias.ifPresent(alias -> sb.append(" BIND ").append(alias));
 
         // Add JOIN clauses (if any)
-        if (!subqueries.isEmpty()) {
-            for (SubquerySpec subquery : subqueries) {
-                sb.append(" JOIN ").append(subquery);
+        if (!joinSteps.isEmpty()) {
+            for (JoinStep step : joinSteps) {
+                sb.append(" ").append(step.joinType()).append(" JOIN (").append(step.subquery().toString())
+                  .append(") BIND ").append(step.rightSourceAlias())
+                  .append(" ON ").append(step.onCondition().toString());
             }
-            joinCondition.ifPresent(jc -> sb.append(" ON ").append(jc));
         }
 
         // Add WHERE clause

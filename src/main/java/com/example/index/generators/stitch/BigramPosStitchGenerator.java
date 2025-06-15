@@ -55,7 +55,7 @@ public final class BigramPosStitchGenerator extends AbstractNgramStitchGenerator
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
-        List<AnnotationData> annotations = new ArrayList<>();
+        List<AnnotationData> rawAnnotationsFromDb = new ArrayList<>();
         String sql = String.format("""
             SELECT sentence_id, begin_char, end_char, token, pos
             FROM annotations
@@ -77,7 +77,7 @@ public final class BigramPosStitchGenerator extends AbstractNgramStitchGenerator
                         continue;
                     }
 
-                    annotations.add(new AnnotationData(
+                    rawAnnotationsFromDb.add(new AnnotationData(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
@@ -90,12 +90,26 @@ public final class BigramPosStitchGenerator extends AbstractNgramStitchGenerator
             logger.error("SQLException in fetchAnnotationsForDocument for Bigram POS stitch, doc ID {}: {}", documentId, e.getMessage(), e);
             throw e;
         }
-        if (annotations.isEmpty()) {
-            logger.trace("No POS annotations found or all filtered for document ID {} for {} index.", documentId, MY_INDEX_NAME);
+
+        // Filter the annotations before returning
+        List<AnnotationData> filteredAnnotations = filterAnnotationsBySentenceCharacterSpan(
+            rawAnnotationsFromDb, documentId, "Bigram POS");
+
+        if (filteredAnnotations.isEmpty()) {
+            if (!rawAnnotationsFromDb.isEmpty()) {
+                logger.trace("No POS annotations remaining after span filtering for document ID {} for {} (Bigram) index.", documentId, MY_INDEX_NAME);
+            } else {
+                logger.trace("No POS annotations found for document ID {} for {} (Bigram) index.", documentId, MY_INDEX_NAME);
+            }
         } else {
-            logger.trace("Fetched {} POS annotations for document ID {} for {} index.", annotations.size(), documentId, MY_INDEX_NAME);
+            if (rawAnnotationsFromDb.size() != filteredAnnotations.size()) {
+                 logger.trace("Fetched {} raw POS annotations, filtered to {} for document ID {} for {} (Bigram) index.",
+                         rawAnnotationsFromDb.size(), filteredAnnotations.size(), documentId, MY_INDEX_NAME);
+            } else {
+                 logger.trace("Fetched {} POS annotations (no filtering needed) for document ID {} for {} (Bigram) index.", filteredAnnotations.size(), documentId, MY_INDEX_NAME);
+            }
         }
-        return annotations;
+        return filteredAnnotations;
     }
 
     @Override

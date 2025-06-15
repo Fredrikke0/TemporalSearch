@@ -19,6 +19,19 @@ import net.sourceforge.argparse4j.inf.Namespace;
 public class Pipeline {
     private static final Logger logger = LoggerFactory.getLogger(Pipeline.class);
 
+    // Consistent lists of index types, mirroring IndexRunner
+    private static final java.util.List<String> ALL_STITCH_OUTPUT_TYPES = java.util.List.of(
+        "stitch_unigram_date", "stitch_unigram_ner", //"stitch_unigram_pos",
+        "stitch_bigram_date", "stitch_bigram_ner", //"stitch_bigram_pos",
+        "stitch_trigram_date", "stitch_trigram_ner" //"stitch_trigram_pos"
+    );
+
+    private static final java.util.List<String> ALL_NON_STITCH_INDEX_TYPES = java.util.List.of(
+        "unigram", "bigram", "trigram", "dependency", "hypernym",
+        "ner_date", "pos", "ner", "nash"
+    );
+    private static final String TEMP_STITCH_GEN_DIR_NAME = "temp_stitch_gen";
+
     public static void main(String[] args) {
         try {
             runPipeline(args);
@@ -110,22 +123,20 @@ public class Pipeline {
                 .type(Integer.class)
                 .help("Number of documents to fetch from DB at a time by an index generator.");
 
+        java.util.List<String> allPossibleIndexTypes = new java.util.ArrayList<>();
+        allPossibleIndexTypes.add("all");
+        allPossibleIndexTypes.add("stitches"); // Meta-type for all stitch combinations
+        allPossibleIndexTypes.addAll(ALL_NON_STITCH_INDEX_TYPES);
+        allPossibleIndexTypes.addAll(ALL_STITCH_OUTPUT_TYPES); // Individual stitch types
+
         indexGroup.addArgument("-y", "--index-type")
-                .choices("unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash", "all", "stitches")
+                .choices(allPossibleIndexTypes.toArray(new String[0]))
                 .setDefault(java.util.List.of("all"))
                 .nargs("+")
                 .help("Type of index to generate (can specify multiple, space-separated): " +
-                      "unigram - Single word index; " +
-                      "bigram - Two word phrases; " +
-                      "trigram - Three word phrases; " +
-                      "dependency - Grammatical dependencies; " +
-                      "ner_date - Named entity dates; " +
-                      "ner - Named entity recognition; " +
-                      "pos - Part-of-speech tagging; " +
-                      "hypernym - Word hypernyms; " +
-                      "nash - Efficient index for searching for dates; " +
-                      "stitches - Generates all N-gram/Annotation stitch combinations (e.g., bigram-date, unigram-ner, etc.); " +
-                      "all - Generate all available index types.");
+                      "unigram, bigram, trigram, dependency, ner_date, ner, pos, hypernym, nash, " +
+                      "various stitch_* types (e.g., stitch_unigram_date), " +
+                      "'stitches' (for all stitch combinations), 'all' (for all available types).");
 
         indexGroup.addArgument("--custom-temp-dir")
                 .dest("custom_temp_dir")
@@ -222,31 +233,18 @@ public class Pipeline {
         if (stage.equals("all") || stage.equals("index")) {
             logger.info("--- Indexing Stage ---");
 
-            // Determine the effective set of index types for Pipeline's own logic (e.g., cleanup)
-            // This logic mirrors the one in IndexRunner for consistency.
-            java.util.Set<String> typesForPipelineLogic = new java.util.LinkedHashSet<>();
-            if (cliRequestedIndexTypes.contains("all")) {
-                typesForPipelineLogic.addAll(java.util.List.of(
-                    "unigram", "bigram", "trigram", "dependency", "hypernym",
-                    "ner_date", "pos", "ner", "nash", "stitches"
+            // This set is for understanding potential underlying dependencies for stitch generation if needed by other logic.
+            // It is NOT directly used for --force cleanup decisions for individual types anymore.
+            java.util.Set<String> baseIndexesPotentiallyNeeded = new java.util.LinkedHashSet<>();
+            if (cliRequestedIndexTypes.contains("all") || cliRequestedIndexTypes.contains("stitches")) {
+                baseIndexesPotentiallyNeeded.addAll(java.util.List.of(
+                    "unigram", "bigram", "trigram", "ner", "ner_date", "pos"
                 ));
-            } else {
-                typesForPipelineLogic.addAll(cliRequestedIndexTypes);
             }
-
-            if (typesForPipelineLogic.contains("stitches")) {
-                typesForPipelineLogic.addAll(java.util.List.of(
-                    "unigram", "bigram", "trigram", "ner", "ner_date"
-                ));
-                 typesForPipelineLogic.add("stitches"); // Ensure it's there
-            }
-
-            // Convert all to lowercase for consistency in pipeline logic
-            java.util.Set<String> effectiveIndexTypesForPipeline = typesForPipelineLogic.stream()
-                                                                    .map(String::toLowerCase)
-                                                                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
-
-            logger.debug("Effective index types for Pipeline internal logic (e.g. cleanup): {}", effectiveIndexTypesForPipeline);
+            cliRequestedIndexTypes.stream()
+                .filter(type -> !type.equals("all") && !type.equals("stitches"))
+                .forEach(baseIndexesPotentiallyNeeded::add);
+            logger.debug("Base index types potentially relevant for the requested operations: {}", baseIndexesPotentiallyNeeded);
 
             String stopwordsPath = ns.getString("stopwords");
             int indexBatchSize = ns.getInt("idx_batch_size");
@@ -270,29 +268,55 @@ public class Pipeline {
             if (force) {
                  logger.info("--force specified. Indexing will proceed and overwrite existing data. Cleanup handled by Pipeline before calling IndexRunner.");
 
-                 if (cliRequestedIndexTypes.contains("all")) { // Use cliRequested for the 'all' check for outer cleanup
+                 if (cliRequestedIndexTypes.contains("all")) {
                      logger.warn("Deleting all contents of index base directory due to --force and 'all' type: {}", indexBasePath.toAbsolutePath());
                      deleteDirectoryRecursively(indexBasePath);
-                     Files.createDirectories(indexBasePath);
+                     Files.createDirectories(indexBasePath); // Recreate base directory
+                     // also recreate the default temp dir if it was under indexBasePath and got deleted
+                     if (customTempDirArg == null || customTempDirArg.isBlank()) {
+                        Path defaultTempDirForForceAll = indexBasePath.resolve("temp");
+                        if (!Files.exists(defaultTempDirForForceAll)) {
+                            Files.createDirectories(defaultTempDirForForceAll);
+                            logger.info("Recreated default temporary directory after 'all' force delete: {}", defaultTempDirForForceAll.toAbsolutePath());
+                        }
+                     }
                  } else {
-                     for (String typeToClean : effectiveIndexTypesForPipeline) { // Iterate using the expanded set for pipeline logic
-                         if (typeToClean.equalsIgnoreCase("stitches")) {
-                            logger.warn("--force specified for stitches. Deleting all potential stitch output directories and temp_stitch_gen directory.");
-                            for (com.example.index.NgramType nt : com.example.index.NgramType.values()) {
-                                for (com.example.index.AnnotationTypeSource ats : com.example.index.AnnotationTypeSource.values()) {
-                                    String dirName = "stitch_" + nt.name().toLowerCase() + "_" + ats.getTypeIdentifier();
-                                    Path dirToDelete = indexBasePath.resolve(dirName);
-                                    deleteDirectoryRecursively(dirToDelete);
-                                }
-                            }
-                            Path tempStitchGenDir = indexBasePath.resolve("temp_stitch_gen");
-                            deleteDirectoryRecursively(tempStitchGenDir);
+                     logger.info("Processing --force for specific index types: {}", cliRequestedIndexTypes);
+                     java.util.Set<String> directoriesToClean = new java.util.LinkedHashSet<>();
+                     boolean cleanTempStitchGen = false;
+
+                     for (String requestedType : cliRequestedIndexTypes) {
+                         String typeLower = requestedType.toLowerCase();
+                         if (typeLower.equals("stitches")) {
+                             directoriesToClean.addAll(ALL_STITCH_OUTPUT_TYPES);
+                             cleanTempStitchGen = true; // Mark for specific deletion
+                             logger.warn("--force specified for 'stitches'. Queuing all stitch output directories and '{}' for deletion.", TEMP_STITCH_GEN_DIR_NAME);
+                         } else if (ALL_NON_STITCH_INDEX_TYPES.contains(typeLower) || ALL_STITCH_OUTPUT_TYPES.contains(typeLower)) {
+                             directoriesToClean.add(typeLower);
+                         } else if (!typeLower.equals("all")) { // "all" is handled above
+                             logger.warn("Requested type '{}' for --force is not a known primary or stitch output type. It will be ignored for pipeline cleanup unless it's a custom index directory name.", requestedType);
+                             // Allow custom names to be cleaned if they exist
+                             directoriesToClean.add(typeLower);
+                         }
+                     }
+
+                     for (String dirToCleanName : directoriesToClean) {
+                         Path specificDirToClean = indexBasePath.resolve(dirToCleanName);
+                         if (Files.exists(specificDirToClean)) {
+                             logger.warn("Deleting existing index directory due to --force: {}", specificDirToClean.toAbsolutePath());
+                             deleteDirectoryRecursively(specificDirToClean);
                          } else {
-                             Path specificIndexDirToClean = indexBasePath.resolve(typeToClean);
-                             if (Files.exists(specificIndexDirToClean)) {
-                                 logger.warn("Deleting existing index directory due to --force: {}", specificIndexDirToClean.toAbsolutePath());
-                                 deleteDirectoryRecursively(specificIndexDirToClean);
-                             }
+                             logger.info("Directory '{}' for type '{}' does not exist. No cleanup needed.", specificDirToClean.toAbsolutePath(), dirToCleanName);
+                         }
+                     }
+
+                     if (cleanTempStitchGen) {
+                         Path tempStitchGenPath = indexBasePath.resolve(TEMP_STITCH_GEN_DIR_NAME);
+                         if (Files.exists(tempStitchGenPath)) {
+                            logger.warn("Deleting '{}' directory due to --force on 'stitches': {}", TEMP_STITCH_GEN_DIR_NAME, tempStitchGenPath.toAbsolutePath());
+                            deleteDirectoryRecursively(tempStitchGenPath);
+                         } else {
+                            logger.info("Directory '{}' does not exist. No cleanup needed.", tempStitchGenPath.toAbsolutePath());
                          }
                      }
                  }

@@ -1,23 +1,22 @@
 package com.example.query.executor;
 
-import com.example.query.model.Query;
-import com.example.query.model.SelectColumn;
-import com.example.query.model.SnippetColumn;
-import com.example.query.model.StructuralColumn;
-import com.example.query.model.VariableColumn;
-import com.example.query.model.CountColumn;
-import com.example.query.model.condition.Condition;
-import com.example.query.model.condition.Ner;
-import com.example.query.model.condition.Contains;
-import com.example.query.binding.VariableRegistry;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.DisplayName;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.example.query.binding.VariableRegistry;
+import com.example.query.model.CountColumn;
+import com.example.query.model.Query;
+import com.example.query.model.SnippetColumn;
+import com.example.query.model.StructuralColumn;
+import com.example.query.model.VariableColumn;
+import com.example.query.model.condition.Contains;
+import com.example.query.model.condition.Ner;
 
 @DisplayName("Query Attribute Analyzer Tests")
 class QueryAttributeAnalyzerTest {
@@ -35,7 +34,6 @@ class QueryAttributeAnalyzerTest {
             List.of(CountColumn.countAll()),
             new VariableRegistry(),
             List.of(),
-            Optional.empty(),
             Optional.empty(),
             List.of()
         );
@@ -61,7 +59,6 @@ class QueryAttributeAnalyzerTest {
             List.of(CountColumn.countAll()),
             new VariableRegistry(),
             List.of(),
-            Optional.empty(),
             Optional.empty(),
             List.of()
         );
@@ -90,7 +87,6 @@ class QueryAttributeAnalyzerTest {
             registry,
             List.of(),
             Optional.empty(),
-            Optional.empty(),
             List.of()
         );
 
@@ -114,7 +110,6 @@ class QueryAttributeAnalyzerTest {
             List.of(new StructuralColumn("$main", "SENTENCE_ID")),
             new VariableRegistry(),
             List.of(),
-            Optional.empty(),
             Optional.empty(),
             List.of()
         );
@@ -143,7 +138,6 @@ class QueryAttributeAnalyzerTest {
             registry,
             List.of(),
             Optional.empty(),
-            Optional.empty(),
             List.of()
         );
 
@@ -170,7 +164,6 @@ class QueryAttributeAnalyzerTest {
             List.of(new SnippetColumn("$main.term", 5)),
             registry,
             List.of(),
-            Optional.empty(),
             Optional.empty(),
             List.of()
         );

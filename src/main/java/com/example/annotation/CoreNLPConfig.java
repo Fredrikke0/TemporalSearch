@@ -93,6 +93,7 @@ public class CoreNLPConfig {
 
         // Length constraints - balanced for speed
         props.setProperty("pos.maxlen", String.valueOf(MAX_SENTENCE_LENGTH));
+        props.setProperty("ner.maxlen", String.valueOf(MAX_SENTENCE_LENGTH));
 
         // Tokenizer settings
         props.setProperty("tokenize.options", String.join(",",

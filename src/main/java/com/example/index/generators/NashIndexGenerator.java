@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import org.apache.pig.impl.util.MultiMap;
 import org.slf4j.Logger;
@@ -83,90 +84,132 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
         List<LocalDate> idToDate = new ArrayList<>();
         List<String> intervalStrings = new ArrayList<>();
         Map<Integer, List<NashDateEntryWithId>> listIndexToEntries = new HashMap<>();
-        long rawAnnotationsProcessed = 0;
+        long rawAnnotationsFetched = 0;
 
-        int currentDocId = -1;
-        int currentSentId = -1;
-        String currentNormalizedNer = null;
-        int currentStartChar = -1;
-        int currentEndChar = -1;
-        int currentDateId = -1;
-
-        logger.info("Fetching all DATE annotations from database...");
+        logger.info("Fetching all DATE annotations from database for Nash index...");
         String query = "SELECT a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
-                       "a.normalized_ner " +
+                       "a.normalized_ner, a.token, a.pos, a.ner, a.lemma, a.annotation_id " +
                        "FROM annotations a " +
                        "WHERE a.ner = 'DATE' AND a.normalized_ner IS NOT NULL " +
                        "ORDER BY a.document_id, a.sentence_id, a.begin_char";
 
+        List<AnnotationEntry> allDateAnnotations = new ArrayList<>();
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query); ResultSet rs = stmt.executeQuery()) {
             while (rs.next()) {
-                rawAnnotationsProcessed++;
-                int docId = rs.getInt("document_id");
-                int sentId = rs.getInt("sentence_id");
-                int beginChar = rs.getInt("begin_char");
-                int endChar = rs.getInt("end_char");
-                String normalizedNer = rs.getString("normalized_ner");
+                rawAnnotationsFetched++;
+                allDateAnnotations.add(new AnnotationEntry(
+                    rs.getLong("annotation_id"),
+                    rs.getInt("document_id"),
+                    rs.getInt("sentence_id"),
+                    rs.getInt("begin_char"),
+                    rs.getInt("end_char"),
+                    rs.getString("token"),
+                    rs.getString("pos"),
+                    rs.getString("ner"),
+                    rs.getString("normalized_ner"),
+                    rs.getString("lemma")
+                ));
+            }
+        }
+        logger.info("Finished fetching {} raw DATE annotations from DB.", rawAnnotationsFetched);
 
-                if (docId == currentDocId && sentId == currentSentId && Objects.equals(normalizedNer, currentNormalizedNer)) {
-                    currentEndChar = endChar;
-                } else {
-                    if (currentDocId != -1 && currentDateId != -1) {
-                        Position finalizedPosition = new Position(
-                                currentDocId,
-                                currentSentId,
-                                currentStartChar,
-                                currentEndChar
-                        );
-                        listIndexToEntries.get(currentDateId).add(new NashDateEntryWithId(finalizedPosition, currentDateId));
-                    }
-                    currentDocId = docId;
-                    currentSentId = sentId;
-                    currentNormalizedNer = normalizedNer;
-                    currentStartChar = beginChar;
-                    currentEndChar = endChar;
-                    currentDateId = -1;
+        if (allDateAnnotations.isEmpty()) {
+            logger.warn("No DATE annotations found. Nash index will be empty.");
+            try {
+                writeEmptyNashIndex(indexAccess);
+            } catch (IndexAccessException e) {
+                logger.error("Failed to write empty Nash index due to IndexAccessException", e);
+                throw new IOException("Failed to write empty Nash index", e);
+            }
+            return;
+        }
 
-                    LocalDate docDate = parseNormalizedDate(normalizedNer);
-                    if (docDate != null) {
-                        final LocalDate finalDocDate = docDate;
-                        currentDateId = dateToId.computeIfAbsent(docDate, date -> {
-                            idToDate.add(date);
-                            int newId = idToDate.size() - 1;
-                            String interval = String.format("[%s , %s]",
-                                    NASH_INTERVAL_FORMATTER.format(finalDocDate),
-                                    NASH_INTERVAL_FORMATTER.format(finalDocDate));
-                            intervalStrings.add(interval);
-                            listIndexToEntries.put(newId, new ArrayList<>());
-                            return newId;
-                        });
+        // Group by document and sentence
+        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocAndSent = allDateAnnotations.stream()
+            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
+                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
+
+        int currentDocId = -1;
+        int currentSentId = -1;
+        String currentNormalizedNerValue = null; // Renamed for clarity
+        int currentMergedStartChar = -1;
+        int currentMergedEndChar = -1;
+        int currentDateIdForMergedEntity = -1; // Renamed for clarity
+
+        // Iterate through sentences, apply span filter, then merge entities within the filtered sentence tokens
+        for (Map.Entry<Integer, Map<Integer, List<AnnotationEntry>>> docEntry : groupedByDocAndSent.entrySet()) {
+            int documentId = docEntry.getKey();
+            for (Map.Entry<Integer, List<AnnotationEntry>> sentEntry : docEntry.getValue().entrySet()) {
+                int sentenceId = sentEntry.getKey();
+                List<AnnotationEntry> sentenceTokens = sentEntry.getValue(); // Already sorted by begin_char from SQL
+
+                // Apply sentence span filter
+                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
+                    sentenceTokens, documentId, sentenceId, "NashIndexGenerator", logger);
+
+                // Process filtered tokens for this sentence to merge date entities
+                for (AnnotationEntry token : filteredSentenceTokens) {
+                    String normalizedNer = token.getNormalizedNer(); // e.g., "2023-01-15"
+
+                    // Logic to merge consecutive identical normalized_ner values
+                    if (documentId == currentDocId && sentenceId == currentSentId && Objects.equals(normalizedNer, currentNormalizedNerValue)) {
+                        currentMergedEndChar = token.getEndChar(); // Extend current entity
                     } else {
-                        logger.trace("Skipping invalid/unparseable normalized_ner date: {}", normalizedNer);
+                        // End of previous entity (if any), or start of a new document/sentence
+                        if (currentDocId != -1 && currentDateIdForMergedEntity != -1) {
+                            Position finalizedPosition = new Position(
+                                    currentDocId, currentSentId, currentMergedStartChar, currentMergedEndChar);
+                            listIndexToEntries.computeIfAbsent(currentDateIdForMergedEntity, k -> new ArrayList<>()) // Ensure list exists
+                                            .add(new NashDateEntryWithId(finalizedPosition, currentDateIdForMergedEntity));
+                        }
+
+                        // Start of a new entity
+                        currentDocId = documentId;
+                        currentSentId = sentenceId;
+                        currentNormalizedNerValue = normalizedNer;
+                        currentMergedStartChar = token.getBeginChar();
+                        currentMergedEndChar = token.getEndChar();
+                        currentDateIdForMergedEntity = -1; // Reset
+
+                        LocalDate docDate = parseNormalizedDate(normalizedNer);
+                        if (docDate != null) {
+                            final LocalDate finalDocDate = docDate;
+                            currentDateIdForMergedEntity = dateToId.computeIfAbsent(docDate, date -> {
+                                idToDate.add(date);
+                                int newId = idToDate.size() - 1;
+                                String interval = String.format("[%s , %s]",
+                                        NASH_INTERVAL_FORMATTER.format(finalDocDate),
+                                        NASH_INTERVAL_FORMATTER.format(finalDocDate));
+                                intervalStrings.add(interval);
+                                // listIndexToEntries.put(newId, new ArrayList<>()); // Already handled by computeIfAbsent above for the value
+                                return newId;
+                            });
+                        } else {
+                            logger.trace("Skipping invalid/unparseable normalized_ner date: {} for token at doc/sent/char: {}/{}/{}",
+                                         normalizedNer, documentId, sentenceId, token.getBeginChar());
+                        }
                     }
                 }
             }
-            if (currentDocId != -1 && currentDateId != -1) {
-                Position finalizedPosition = new Position(
-                        currentDocId,
-                        currentSentId,
-                        currentStartChar,
-                        currentEndChar
-                );
-                 listIndexToEntries.get(currentDateId).add(new NashDateEntryWithId(finalizedPosition, currentDateId));
-            }
-        } catch (SQLException e) {
-            logger.error("Database error fetching annotations for Nash index", e);
-            throw e;
         }
-        logger.info("Finished fetching {} raw DATE annotations. Found {} unique dates.", rawAnnotationsProcessed, idToDate.size());
+        // Add the last processed entity after loops complete
+        if (currentDocId != -1 && currentDateIdForMergedEntity != -1) {
+            Position finalizedPosition = new Position(
+                    currentDocId, currentSentId, currentMergedStartChar, currentMergedEndChar);
+            listIndexToEntries.computeIfAbsent(currentDateIdForMergedEntity, k -> new ArrayList<>()) // Ensure list exists
+                            .add(new NashDateEntryWithId(finalizedPosition, currentDateIdForMergedEntity));
+        }
+
+        logger.info("Finished processing fetched annotations. Found {} unique dates for Nash intervals.", idToDate.size());
 
         if (intervalStrings.isEmpty()) {
-            logger.warn("No valid date intervals found. Nash index will be empty.");
-             try {
-                 indexAccess.put(NashSerializationUtils.DATE_LOOKUP_KEY, NashSerializationUtils.serializeDateLookup(Collections.emptyList()));
-             } catch (IndexAccessException | IOException e) {
-                 logger.error("Failed to write empty date lookup table", e);
-             }
+            logger.warn("No valid date intervals found after processing. Nash index will be empty.");
+            try {
+                writeEmptyNashIndex(indexAccess);
+            } catch (IndexAccessException e) {
+                logger.error("Failed to write empty Nash index due to IndexAccessException", e);
+                throw new IOException("Failed to write empty Nash index", e);
+            }
             return;
         }
 
@@ -252,6 +295,11 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             logger.error("Serialization error writing Nash index data", e);
             throw new IOException("Failed to serialize Nash index data for RocksDB", e);
         }
+    }
+
+    private void writeEmptyNashIndex(IndexAccessInterface idxAccess) throws IOException, IndexAccessException {
+        idxAccess.put(NashSerializationUtils.DATE_LOOKUP_KEY, NashSerializationUtils.serializeDateLookup(Collections.emptyList()));
+        logger.info("Wrote empty date lookup table for Nash index.");
     }
 
     private LocalDate parseNormalizedDate(String dateStr) {
