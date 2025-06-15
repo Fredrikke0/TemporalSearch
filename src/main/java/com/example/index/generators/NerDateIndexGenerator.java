@@ -150,7 +150,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                 continue;
             }
 
-            String normalizedDateKey = normalizeDate(rawNormalizedDate); // Convert to YYYYMMDD
+            String normalizedDateKey = normalizeDateToKeyFormat(rawNormalizedDate); // Use public static method
             if (normalizedDateKey == null) {
                 //logger.debug("Could not normalize date for key: {}", rawNormalizedDate);
                 processAndClearCurrentDateEntity(tempAggregator, currentMergedEntityTokens);
@@ -161,7 +161,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                 currentMergedEntityTokens.add(currentEntry);
             } else {
                 AnnotationEntry prevEntry = currentMergedEntityTokens.get(currentMergedEntityTokens.size() - 1);
-                String prevNormalizedDateKey = normalizeDate(prevEntry.getNormalizedNer());
+                String prevNormalizedDateKey = normalizeDateToKeyFormat(prevEntry.getNormalizedNer());
 
                 // Check for entity break
                 if (!normalizedDateKey.equals(prevNormalizedDateKey) ||
@@ -195,7 +195,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         AnnotationEntry lastToken = currentEntityTokens.get(currentEntityTokens.size() - 1);
 
         String rawNormalizedDate = firstToken.getNormalizedNer(); // All tokens in the list should have the same normalized date
-        String normalizedDateKey = normalizeDate(rawNormalizedDate);
+        String normalizedDateKey = normalizeDateToKeyFormat(rawNormalizedDate);
 
         if (normalizedDateKey == null) {
             logger.warn("Skipping entity due to normalization failure for date '{}' at doc/sent/char: {}/{}/{}",
@@ -227,7 +227,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
      * Normalizes a date string from YYYY-MM-DD format to YYYYMMDD format.
      * Returns null if the input is not a valid date or not in the expected format.
      */
-    private String normalizeDate(String date) {
+    public static String normalizeDateToKeyFormat(String date) {
         if (date == null || date.trim().isEmpty()) {
             return null;
         }
@@ -235,7 +235,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
 
         // Check for "0000" year early, as it's invalid for LocalDate
         if (trimmedDate.startsWith("0000")) {
-            logger.debug("Invalid year '0000' in date string '{}'. Dates with year 0000 are not supported.", trimmedDate);
+            logger.debug("Invalid year '0000' in date string '{}'. Skipping.", trimmedDate);
             return null;
         }
 
