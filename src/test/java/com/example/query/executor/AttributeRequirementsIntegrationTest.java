@@ -1,7 +1,6 @@
 package com.example.query.executor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -58,7 +57,6 @@ class AttributeRequirementsIntegrationTest {
         assertTrue(requirements.needsSentenceId, "Sentence ID should be required for sentence granularity and SENTENCE_ID column");
         assertTrue(requirements.needsPositions, "Positions should be required for SNIPPET column");
         assertTrue(requirements.needsSynonymIds, "Synonym IDs should be required for NER variable");
-        assertFalse(requirements.needsDateValues, "Date values should not be required for this query");
 
         var requiredAttributes = requirements.getRequiredSoAAttributes();
         assertTrue(requiredAttributes.contains("documentIds"), "Should require document IDs");
@@ -78,7 +76,6 @@ class AttributeRequirementsIntegrationTest {
 
         AttributeRequirements req2 = new AttributeRequirements();
         req2.needsSynonymIds = true;
-        req2.needsDateValues = true;
 
         req1.merge(req2);
 
@@ -86,6 +83,5 @@ class AttributeRequirementsIntegrationTest {
         assertTrue(req1.needsSentenceId, "Sentence ID should remain true");
         assertTrue(req1.needsPositions, "Positions should remain true");
         assertTrue(req1.needsSynonymIds, "Synonym IDs should be merged");
-        assertTrue(req1.needsDateValues, "Date values should be merged");
     }
 }

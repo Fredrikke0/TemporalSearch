@@ -65,7 +65,6 @@ class NerExecutorTest {
         defaultTestRequirements.needsSentenceId = true;
         defaultTestRequirements.needsPositions = true;
         defaultTestRequirements.needsSynonymIds = true;
-        defaultTestRequirements.needsDateValues = true;
         defaultTestRequirements.needsConceptualRowIds = true;
 
         indexes = new HashMap<>();

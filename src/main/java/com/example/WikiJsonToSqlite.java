@@ -99,7 +99,7 @@ public class WikiJsonToSqlite {
                 pragma.execute("PRAGMA journal_mode=WAL");
                 pragma.execute("PRAGMA synchronous=NORMAL");
                 pragma.execute("PRAGMA temp_store=MEMORY");
-                pragma.execute("PRAGMA cache_size=-2000"); // Use 2GB cache
+                pragma.execute("PRAGMA cache_size=-2000");
             }
 
             try (Statement stmt = conn.createStatement()) {

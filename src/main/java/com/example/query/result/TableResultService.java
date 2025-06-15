@@ -90,16 +90,10 @@ public class TableResultService {
             Map<String, IndexAccessInterface> indexes,
             SubqueryContext subqueryContext
     ) throws ResultGenerationException {
-        int initialBindingCount = (result != null) ? result.size() : 0;
-        // logger.info("Generating table from QueryResultSoA with {} bindings. Query: {}",
-        //         initialBindingCount, query.toString());
-
-        // Determine select columns first, even if result is empty, to create the table structure.
         List<SelectColumn> selectColumns = query.selectColumns();
         boolean createdDefaultColumns = false;
         if (selectColumns == null || selectColumns.isEmpty() || selectColumns.stream().anyMatch(sc -> "*".equals(sc.getColumnName()))) {
             logger.debug("No specific columns selected or * found, attempting to create default columns.");
-            // If result is null/empty, createDefaultSelectColumns might return empty or minimal columns.
             selectColumns = createDefaultSelectColumns(query, result);
             createdDefaultColumns = true;
         }
@@ -376,9 +370,8 @@ public class TableResultService {
 
         // Add a note about the preview if there are more rows than displayed
         if (totalRows > displayedRows) {
-            sb.append("\n\nNote: This is a preview showing ").append(displayedRows)
-              .append(" of ").append(totalRows).append(" total rows. Use export options to view all data.");
-            sb.append("\nTo export all results, use: --export=csv:results.csv");
+            sb.append("\n\nThis is a preview showing ").append(displayedRows)
+              .append(" of ").append(totalRows).append(" total rows. To export all results, use: --export=csv:results.csv");
         }
 
         return sb.toString();

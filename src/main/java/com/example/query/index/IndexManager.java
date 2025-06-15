@@ -552,7 +552,6 @@ public class IndexManager implements AutoCloseable {
             return;
         }
         isClosed = true;
-        logger.info("Closing IndexManager for index set: {}", indexSetName);
         List<String> failedToClose = new ArrayList<>();
 
         // Close SynonymManager first
@@ -590,6 +589,5 @@ public class IndexManager implements AutoCloseable {
                 IndexAccessException.ErrorType.RESOURCE_ERROR
             );
         }
-        logger.info("IndexManager closed for index set: {}", indexSetName);
     }
 }

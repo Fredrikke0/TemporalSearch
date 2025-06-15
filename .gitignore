@@ -16,6 +16,7 @@ simplewiki*
 stanford-english-extra-corenlp-models-current/
 .cursor
 sandbox/
+sandbox_og
 dump/
 projects/
 benchmark/

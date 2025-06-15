@@ -8,7 +8,6 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -221,16 +220,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     protected File writeBatchToTempFile(ListMultimap<String, PositionListSoA> positions) throws IOException {
         File tempFile = Files.createTempFile(tempDir, "batch-", ".tmp").toFile();
-        // logger.info("Attempting to write batch to temp file: {}. Unique terms in batch: {}. Total PositionLists: {}",
-        //    tempFile.getAbsolutePath(), positions.keySet().size(), positions.size());
-
-        try {
-            FileStore store = Files.getFileStore(tempDir);
-            // logger.debug("Usable space before writing [{}]: {} MB",
-            //     tempFile.getName(), store.getUsableSpace() / (1024 * 1024));
-        } catch (IOException e) {
-            logger.warn("Could not determine usable space before writing temp file [{}]: {}", tempFile.getName(), e.getMessage());
-        }
 
         long bytesWrittenToFile = 0;
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
@@ -330,7 +319,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 !blobsForCurrentSegment.isEmpty()) {
 
                 byte[] segmentToWrite = mergeBlobsForSegment(blobsForCurrentSegment, term);
-                // No longer checking positionsInFinalSegment > 0 here. We write what mergeBlobsForSegment gives.
 
                 String keyToWrite = (segmentCounterForThisTerm == 0) ? term : term + "#" + segmentCounterForThisTerm;
                 byte[] termKeyBytes = bytes(keyToWrite);

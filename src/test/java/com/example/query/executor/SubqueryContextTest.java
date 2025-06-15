@@ -1,21 +1,20 @@
 package com.example.query.executor;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.SubquerySpec;
-import com.example.query.executor.QueryResultSoA;
-import com.example.query.executor.AttributeRequirements;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-import com.example.core.Position;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 class SubqueryContextTest {
 
@@ -34,7 +33,8 @@ class SubqueryContextTest {
         subquery1 = new SubquerySpec(baseQuery1, "sq1");
         subquery2 = new SubquerySpec(baseQuery2, "sq2", Optional.of(List.of("col1", "col2")));
 
-        AttributeRequirements requirements = AttributeRequirements.forPhase1Compatibility();
+        AttributeRequirements requirements = new AttributeRequirements();
+        requirements.needsConceptualRowIds = true;
 
         results1 = new QueryResultSoA(Query.Granularity.SENTENCE, requirements);
         results1.add("source1", ValueType.TERM, null, 1, 1, 0, 7, -1, 0);

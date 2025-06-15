@@ -14,6 +14,7 @@ import com.example.index.util.SynonymManager;
 import com.example.query.QueryParseException;
 import com.example.query.QueryParser;
 import com.example.query.QuerySemanticValidator;
+import com.example.query.executor.ConditionExecutorFactory;
 import com.example.query.executor.PushdownStrategy;
 import com.example.query.executor.QueryExecutor;
 import com.example.query.executor.QueryResultSoA;
@@ -111,42 +112,20 @@ public class QueryCLI {
                 logger.debug("Created IndexManager for project: {} using index directory: {}", projectName, this.indexDirPath);
 
                 SynonymManager synonymManager = indexManager.getSynonymManager();
-                // ConditionExecutorFactory is no longer created here.
-                // QueryExecutor will create it internally using the query's granularity.
+                Query.Granularity queryGranularity = query.granularity(); // Get granularity from the query
 
-                // Update QueryExecutor instantiation
-                QueryExecutor queryExecutor = new QueryExecutor(this.stitchStrategyName, synonymManager);
+                // Create and configure the ConditionExecutorFactory
+                ConditionExecutorFactory factory = new ConditionExecutorFactory(synonymManager, this.stitchStrategyName, queryGranularity);
+                factory.setTemporalStrategy(this.temporalStrategyName); // Configure with the desired temporal strategy
+                logger.debug("ConditionExecutorFactory created and configured with temporal strategy: {}, stitch strategy: {}, query granularity: {}", this.temporalStrategyName, this.stitchStrategyName, queryGranularity);
+
+                // Inject the configured factory into QueryExecutor
+                QueryExecutor queryExecutor = new QueryExecutor(tableResultService, this.stitchStrategyName, synonymManager, factory);
                 queryExecutor.setPushdownStrategy(this.pushdownStrategy);
 
-                // Set temporal strategy on the factory AFTER queryExecutor creates it.
-                // This requires a way to access the factory from the executor, or setting it via QueryExecutor.
-                // For now, assuming QueryExecutor handles temporal strategy for its factory.
-                // If ConditionExecutorFactory.setTemporalStrategy is still needed to be called from here,
-                // QueryExecutor would need to expose its factory instance.
-                // The current design of ConditionExecutorFactory takes temporalStrategy in constructor
-                // via Query object in IndexManager -> this.temporalStrategyName is passed to IndexManager.
-                // And then IndexManager should configure its temporal components.
-                // The setTemporalStrategy was on the factory, which QueryExecutor now owns.
-                // QueryExecutor creates factory with query.granularity.
-                // Let's assume the temporal strategy is handled by passing temporalStrategyName to IndexManager
-                // which then ensures components (like TemporalExecutor via its factory) are set up.
-                // The specific call `executorFactory.setTemporalStrategy(this.temporalStrategyName);` is removed
-                // as `executorFactory` is no longer a local variable here.
-                // If `ConditionExecutorFactory` still needs `setTemporalStrategy` called,
-                // then `QueryExecutor` must expose its factory or handle it.
-                // Based on `ConditionExecutorFactory`'s code, it uses `desiredTemporalStrategy` from its state,
-                // which is set by `setTemporalStrategy`. This method is still public on ConditionExecutorFactory.
-                // QueryExecutor's constructor DOES NOT take temporal strategy for the factory.
-                // It takes stitchStrategy and queryGranularity for the factory.
-                // This suggests that temporal strategy setup needs to be re-evaluated.
-                // For now, I'll proceed without explicitly calling setTemporalStrategy here.
-                // It's possible IndexManager or a similar component already configures this.
-                // The `IndexManager` constructor already takes `temporalStrategyName`. It should configure relevant parts.
-
                 logger.debug("Executing query against project: {}", projectName);
-                Query.Granularity granularity = query.granularity();
                 int windowSize = query.granularitySize().orElse(0);
-                logger.info("Query granularity: {} with size: {}", granularity, windowSize);
+                logger.info("Query granularity: {} with size: {}", queryGranularity, windowSize);
 
                 QueryResultSoA execResult = queryExecutor.execute(query, indexManager); // Pass IndexManager
 
@@ -159,11 +138,10 @@ public class QueryCLI {
                     if (query.joinCondition().isPresent()) {
                         matchUnit = "conceptual joined rows";
                     } else {
-                        matchUnit = (granularity == Query.Granularity.DOCUMENT) ? "documents" : "sentences";
+                        matchUnit = (queryGranularity == Query.Granularity.DOCUMENT) ? "documents" : "sentences";
                     }
-                    logger.info("Query executed, found {} matching {} (granularity for base parts: {})", matchCount, matchUnit, granularity);
+                    logger.info("Query executed, found {} matching {} (granularity for base parts: {})", matchCount, matchUnit, queryGranularity);
 
-                    logger.debug("Generating result table from QueryResultSoA");
                     Map<String, IndexAccessInterface> allIndexes = indexManager.getAllIndexes(); // Get the map here
                     resultTable = tableResultService.generateTable(
                         query,

@@ -152,7 +152,7 @@ public class QueryEndToEndTest {
         // The current QueryExecutor design re-creates factory per query, so this factory instance
         // might not be what's used by QueryExecutor if its internal query has a different granularity.
         // However, some tests might use this factory directly.
-        factory = new ConditionExecutorFactory(staticMockSynonymManager, "optimized", Query.Granularity.SENTENCE);
+        factory = new ConditionExecutorFactory(staticMockSynonymManager, "optimized", Query.Granularity.DOCUMENT);
 
         mockUnigramIndex = new MockIndexAccess("unigram");
         // Add test data sorted by document ID (just like real indexes would be)
@@ -351,9 +351,16 @@ public class QueryEndToEndTest {
         queryParser = new QueryParser();
         tableResultService = new TableResultService(dbFilePath); // Use the temp db path
 
-        // QueryExecutor now creates its own factory.
-        // If tests need to inject a specific factory or tableResultService, use the other constructor.
-        queryExecutor = new QueryExecutor(tableResultService, "optimized", staticMockSynonymManager);
+        // Create the factory first
+        // Default to DOCUMENT granularity as many tests expect this.
+        // Tests specifically needing SENTENCE granularity for factory-level behavior (like LogicalExecutor fusion details)
+        // might need to create their own factory instance for that test.
+        factory = new ConditionExecutorFactory(staticMockSynonymManager, "optimized", Query.Granularity.DOCUMENT);
+        // If specific tests require a different temporal strategy, they might need to adjust this factory or use a new one.
+        // For now, this sets up the factory with its default temporal strategy (naive).
+
+        // QueryExecutor is now instantiated with the factory.
+        queryExecutor = new QueryExecutor(tableResultService, "optimized", staticMockSynonymManager, factory);
 
         defaultTestRequirements = new AttributeRequirements();
         defaultTestRequirements.needsDocumentId = true;

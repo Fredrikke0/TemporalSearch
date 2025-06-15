@@ -45,27 +45,6 @@ public class QueryExecutor {
     private final ConditionExecutorFactory injectedExecutorFactory;
 
     /**
-     * Creates a new QueryExecutor.
-     *
-     * @param stitchStrategy The stitch execution strategy ("none" or "optimized")
-     * @param synonymManager The SynonymManager instance for this query execution context.
-     */
-    public QueryExecutor(String stitchStrategy, SynonymManager synonymManager) {
-        this(new TableResultService(), stitchStrategy, synonymManager, null);
-    }
-
-    /**
-     * Constructor for testing purposes, allowing injection of mocks and specific SynonymManager.
-     *
-     * @param tableResultService Mocked TableResultService or actual instance.
-     * @param stitchStrategy The stitch execution strategy ("none" or "optimized")
-     * @param synonymManager The SynonymManager instance.
-     */
-    public QueryExecutor(TableResultService tableResultService, String stitchStrategy, SynonymManager synonymManager) {
-        this(tableResultService, stitchStrategy, synonymManager, null);
-    }
-
-    /**
      * Full constructor for QueryExecutor, allowing injection of ConditionExecutorFactory for testing.
      *
      * @param tableResultService The TableResultService instance.
@@ -466,7 +445,7 @@ public class QueryExecutor {
             if (leadingDates.isEmpty()) {
                 logger.info("Leading side for dependent join (alias: '{}', key: '{}') resulted in no usable dates (or was empty). INNER JOIN will yield no results.",
                             leadingAlias, leadingDateKeyName);
-                return new QueryResultSoA(query.granularity(), query.granularitySize().orElse(0), AttributeRequirements.forJoinOperations());
+                return new QueryResultSoA(query.granularity(), query.granularitySize().orElse(0), requirements);
             }
 
             LocalDate minLeadingDate = Collections.min(leadingDates);
@@ -621,14 +600,6 @@ public class QueryExecutor {
         }
     }
 
-    /**
-     * Extracts document IDs from a QueryResult.
-     * TODO: Implement this if needed.
-     *
-     * @param result The QueryResult to process
-     * @return Set of document IDs
-     */
-    // public Set<Integer> getDocumentIds(QueryResult result) { ... }
 
     private QueryResultSoA executeWithRequirements(Query query, Map<String, IndexAccessInterface> indexes,
                                         AttributeRequirements requirements, SubqueryContext subqueryContext)

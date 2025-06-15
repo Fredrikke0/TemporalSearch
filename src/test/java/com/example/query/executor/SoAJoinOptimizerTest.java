@@ -1,18 +1,17 @@
 package com.example.query.executor;
 
-import com.example.query.binding.ValueType;
-import com.example.query.model.Query;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.BeforeEach;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.stream.Collectors;
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import com.example.query.binding.ValueType;
+import com.example.query.model.Query;
 
 class SoAJoinOptimizerTest {
 
@@ -45,7 +44,6 @@ class SoAJoinOptimizerTest {
         defaultRequirements.needsDocumentId = true;
         defaultRequirements.needsSentenceId = true;
         defaultRequirements.needsPositions = true;
-        defaultRequirements.needsDateValues = true;
         defaultRequirements.needsConceptualRowIds = true;
         defaultRequirements.needsSynonymIds = false;
 

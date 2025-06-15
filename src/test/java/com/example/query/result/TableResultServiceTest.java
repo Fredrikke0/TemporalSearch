@@ -69,9 +69,8 @@ class TableResultServiceTest {
         defaultRequirements.needsDocumentId = true;
         defaultRequirements.needsSentenceId = true;
         defaultRequirements.needsPositions = true;
-        defaultRequirements.needsDateValues = true; // If testing date formatting
-        defaultRequirements.needsConceptualRowIds = true; // Essential for SoA processing
-        defaultRequirements.needsSynonymIds = true; // Debug table might show it
+        defaultRequirements.needsConceptualRowIds = true;
+        defaultRequirements.needsSynonymIds = true;
     }
 
     @AfterEach

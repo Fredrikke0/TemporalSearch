@@ -30,14 +30,9 @@ public class QueryAttributeAnalyzer {
      */
     public static AttributeRequirements analyze(Query query) {
         AttributeRequirements requirements = new AttributeRequirements();
-        // Start with base requirements based on SELECT, ORDER BY, GRANULARITY
 
         logger.trace("Analyzing query for attribute requirements: {}", query.toString());
-
-        // Default: always need document IDs if there are any conditions or selections
-        if (!query.conditions().isEmpty() || !query.selectColumns().isEmpty() || query.joinCondition().isPresent()) {
-            requirements.needsDocumentId = true;
-        }
+        requirements.needsDocumentId = true;
 
         // Analyze SELECT clause
         analyzeSelectColumns(query.selectColumns(), requirements);
@@ -66,12 +61,7 @@ public class QueryAttributeAnalyzer {
      * Analyzes SELECT columns to determine attribute requirements.
      */
     private static void analyzeSelectColumns(List<SelectColumn> selectColumns, AttributeRequirements requirements) {
-        if (!selectColumns.isEmpty()) {
-            // If there are any select columns, we are likely forming a table for display,
-            // which requires conceptual row IDs to group related bindings.
-            logger.trace("Found SELECT columns, requiring conceptual row IDs for result grouping.");
-            requirements.needsConceptualRowIds = true;
-        }
+        requirements.needsConceptualRowIds = true;
         for (SelectColumn column : selectColumns) {
             if (column instanceof SnippetColumn) {
                 logger.trace("Found SNIPPET column, requiring position offsets");
@@ -141,7 +131,6 @@ public class QueryAttributeAnalyzer {
     private static void analyzeJoinCondition(JoinCondition joinCondition, AttributeRequirements requirements) {
         if (joinCondition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL) {
             logger.trace("Found temporal join, requiring date values");
-            requirements.needsDateValues = true;
         }
         // Additional join analysis can be added here as needed
     }
