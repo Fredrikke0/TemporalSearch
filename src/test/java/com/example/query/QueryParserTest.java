@@ -229,7 +229,7 @@ class QueryParserTest {
         assertEquals("t1", query.mainAlias().get());
         assertEquals(1, query.conditions().size());
         assertEquals(1, query.orderBy().size());
-        assertEquals("t1.TITLE", query.orderBy().get(0));
+        assertEquals("-t1.TITLE", query.orderBy().get(0));
         assertEquals(5, query.limit().get());
 
         // Verify the conditions in detail

@@ -264,7 +264,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
 
         // Check for "0000" year early, as it's invalid for LocalDate
         if (trimmedDate.startsWith("0000")) {
-            logger.debug("Invalid year '0000' in date string '{}'. Skipping.", trimmedDate);
+            logger.trace("Invalid year '0000' in date string '{}'. Skipping.", trimmedDate);
             return null;
         }
 

@@ -720,9 +720,9 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         Optional<TemporalRange> range = Optional.empty();
         if (ctx.radius != null && ctx.unit != null) {
-            int radius = Integer.parseInt(ctx.radius.getText());
-            String unit = ctx.unit.getText();
-            range = Optional.of(new TemporalRange(radius + unit));
+            int radiusVal = Integer.parseInt(ctx.radius.getText());
+            String unitVal = ctx.unit.getText();
+            range = Optional.ofNullable(new TemporalRange(radiusVal + unitVal));
         }
 
         String qualifiedVariableName = null;

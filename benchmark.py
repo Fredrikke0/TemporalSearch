@@ -17,12 +17,12 @@ def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, p
     if not os.path.exists(jar_path):
         print(f"Error: JAR file not found at {jar_path}")
         print("Please build the project first (e.g., using 'mvn package')")
-        return None, None, None
+        return None, None, None, None
 
     # Check for existence of user-supplied db_file path directly
     if not os.path.exists(cli_db_file):
         print(f"Error: Database file specified by --db-file not found: {cli_db_file}")
-        return None, None, None
+        return None, None, None, None
     # We don't check cli_index_dir here as QueryCLI.java/IndexManager will handle its contents and existence.
 
     command = [
@@ -51,13 +51,21 @@ def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, p
         stderr_output = "" # Initialize as empty since we redirected original stderr
 
         benchmark_time_ms = None
+        core_processing_time_ms = None # Initialize new metric
         for line in stdout.splitlines():
             if line.startswith("BENCHMARK_EXECUTION_TIME_MS:"):
                 match = re.search(r"BENCHMARK_EXECUTION_TIME_MS: (\d+\.?\d*)", line)
                 if match:
                     benchmark_time_ms = float(match.group(1))
+            elif line.startswith("BENCHMARK_CORE_PROCESSING_TIME_MS:"): # Check for new metric
+                match_core = re.search(r"BENCHMARK_CORE_PROCESSING_TIME_MS: (\d+\.?\d*)", line)
+                if match_core:
+                    core_processing_time_ms = float(match_core.group(1))
+
+            # Optimization: if both found, no need to parse further lines for these metrics
+            if benchmark_time_ms is not None and core_processing_time_ms is not None:
                 break
-        return benchmark_time_ms, stdout, stderr_output
+        return benchmark_time_ms, core_processing_time_ms, stdout, stderr_output
 
     except subprocess.TimeoutExpired:
         timeout_msg = f"Query timed out after {QUERY_TIMEOUT_SECONDS} seconds."
@@ -70,7 +78,7 @@ def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, p
                 stdout = ""
         else:
             stdout = ""
-        return None, stdout, timeout_msg
+        return None, None, stdout, timeout_msg
 
     except Exception as e:
         error_msg = f"An error occurred during query execution: {e}"
@@ -80,7 +88,7 @@ def run_query_cli(query_string, cli_db_file, cli_index_dir, temporal_strategy, p
                 process.communicate(timeout=1)
             except Exception:
                 pass
-        return None, "", error_msg
+        return None, None, "", error_msg
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark QueryCLI.java. Runs all strategy combinations.")
@@ -237,7 +245,7 @@ if __name__ == "__main__":
                     if export_filename_base: # Ensure export_dir is also checked by os.path.join
                         warmup_export_path_str = os.path.join(args.export_dir, f"{export_filename_base}_warmup.csv")
 
-                    _, warmup_stdout, warmup_stderr = run_query_cli(
+                    _, _, warmup_stdout, warmup_stderr = run_query_cli(
                         query_text, args.db_file, args.index_dir,
                         temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, warmup_export_path_str, is_verbose=args.verbose
                     )
@@ -253,13 +261,13 @@ if __name__ == "__main__":
                         if run_num == warm_runs - 1 and timed_export_path_str:
                             current_export_file_path = timed_export_path_str
 
-                        time_taken, stdout_output, stderr_output = run_query_cli(
+                        time_taken, core_time_taken, stdout_output, stderr_output = run_query_cli(
                             query_text, args.db_file, args.index_dir,
                             temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, timed_export_path_str, is_verbose=args.verbose
                         )
                         if time_taken is not None:
                             timed_run_times_ms.append(time_taken)
-                            print(f"{progress_prefix}    BENCHMARK_EXECUTION_TIME_MS: {time_taken:.3f}")
+                            print(f"{progress_prefix}    BENCHMARK_EXECUTION_TIME_MS: {time_taken:.3f}" + (f", CORE_PROCESSING_TIME_MS: {core_time_taken:.3f}" if core_time_taken is not None else ""))
                         else:
                             print(f"{progress_prefix}    Failed to retrieve benchmark time for this run.")
 
@@ -278,13 +286,13 @@ if __name__ == "__main__":
                             if run_num == cold_runs - 1: # Last run's export path for verification
                                 current_export_file_path = cold_run_export_path_str
 
-                        time_taken, stdout_output, stderr_output = run_query_cli(
+                        time_taken, core_time_taken, stdout_output, stderr_output = run_query_cli(
                             query_text, args.db_file, args.index_dir,
                             temporal_strategy_val, pushdown_strategy_val, stitch_strategy_val, args.jar_path, cold_run_export_path_str, is_verbose=args.verbose
                         )
                         if time_taken is not None:
                             timed_run_times_ms.append(time_taken)
-                            print(f"{progress_prefix}    BENCHMARK_EXECUTION_TIME_MS (Cold Run {run_num+1}): {time_taken:.3f}")
+                            print(f"{progress_prefix}    BENCHMARK_EXECUTION_TIME_MS (Cold Run {run_num+1}): {time_taken:.3f}" + (f", CORE_PROCESSING_TIME_MS: {core_time_taken:.3f}" if core_time_taken is not None else ""))
                         else:
                             print(f"{progress_prefix}    Failed to retrieve benchmark time for Cold Run {run_num+1}.")
 
@@ -340,6 +348,7 @@ if __name__ == "__main__":
                     "pushdown_strategy": pushdown_strategy_val,
                     "stitch_strategy": stitch_strategy_val,
                     "time_ms": avg_time_ms, # This is now an average for warm mode
+                    "core_processing_time_ms": core_time_taken if 'core_time_taken' in locals() and core_time_taken is not None else None, # Store last core time; could average too
                     "individual_times_ms": list(timed_run_times_ms), # Store all timed runs
                     "cache_mode": cache_mode,
                     # Storing full stdout/stderr can be memory intensive; only store if verbose or errors.
@@ -373,8 +382,8 @@ if __name__ == "__main__":
             print(f"  (Warm mode: 1 warm-up run, 3 timed runs per strategy)")
         elif cache_mode == 'cold':
             print(f"  (Cold mode: 3 timed runs per strategy)")
-        print("  Strategy                            | Avg Time (ms) | Individual Times (ms) | Verification")
-        print("  ------------------------------------|---------------|-----------------------|---------------")
+        print("  Strategy                            | Avg Time (ms) | Avg Core Time (ms) | Individual Times (ms) | Verification")
+        print("  ------------------------------------|---------------|--------------------|-----------------------|---------------")
 
         # Sort strategies for consistent output, e.g., by name or a predefined order if necessary
         # For now, printing in order of execution for strategies.
@@ -383,6 +392,9 @@ if __name__ == "__main__":
             avg_time_str = f"{result['time_ms']:.3f}" if result['time_ms'] is not None else "N/A"
             avg_time_str = avg_time_str.rjust(13)
 
+            avg_core_time_str = f"{result['core_processing_time_ms']:.3f}" if result.get('core_processing_time_ms') is not None else "N/A"
+            avg_core_time_str = avg_core_time_str.rjust(18)
+
             individual_times_str = ", ".join([f"{t:.3f}" for t in result['individual_times_ms']])
             if not result['individual_times_ms']:
                 individual_times_str = "N/A"
@@ -390,7 +402,7 @@ if __name__ == "__main__":
 
             verification_display = result.get('verification_status', 'SKIPPED') # Default if key missing
 
-            print(f"  {strategy_str} | {avg_time_str} | {individual_times_str} | {verification_display}")
+            print(f"  {strategy_str} | {avg_time_str} | {avg_core_time_str} | {individual_times_str} | {verification_display}")
 
             if result['stderr']:
                 # Indent stderr for readability under its respective strategy run
@@ -406,6 +418,7 @@ if __name__ == "__main__":
     for temp_strat, push_strat, stitch_strat in strategy_combinations:
         key = (temp_strat, push_strat, stitch_strat)
         times_for_combo = []
+        core_times_for_combo = [] # New for core times
         # For verification summary, we can count PASSED/FAILED/SKIPPED per strategy
         verification_counts = {"PASSED": 0, "FAILED": 0, "SKIPPED": 0, "ERROR_READING_EXPORT": 0, "NO_OUTPUT_TO_VERIFY": 0, "EMPTY_OUTPUT_CONTENT":0 }
 
@@ -416,6 +429,8 @@ if __name__ == "__main__":
                     res_entry['stitch_strategy'] == stitch_strat):
                     if res_entry['time_ms'] is not None:
                         times_for_combo.append(res_entry['time_ms'])
+                    if res_entry.get('core_processing_time_ms') is not None: # New
+                        core_times_for_combo.append(res_entry['core_processing_time_ms']) # New
                     status = res_entry.get('verification_status', 'SKIPPED')
                     if status in verification_counts:
                         verification_counts[status] += 1
@@ -428,14 +443,22 @@ if __name__ == "__main__":
             avg_time_for_combo = sum(times_for_combo) / len(times_for_combo)
             avg_time_for_combo_str = f"{avg_time_for_combo:.3f} ms ({len(times_for_combo)} queries)"
 
+        avg_core_time_for_combo_str = "N/A" # New
+        if core_times_for_combo: # New
+            avg_core_time_for_combo = sum(core_times_for_combo) / len(core_times_for_combo) # New
+            avg_core_time_for_combo_str = f"{avg_core_time_for_combo:.3f} ms ({len(core_times_for_combo)} queries)" # New
+
+
         verification_summary_str = ", ".join([f"{k}:{v}" for k,v in verification_counts.items() if v > 0])
         if not verification_summary_str: verification_summary_str = "All Skipped or N/A"
 
 
         strat_key_str = f"T:{temp_strat}, P:{push_strat}, S:{stitch_strat}"
-        print(f"  {strat_key_str.ljust(45)}: {avg_time_for_combo_str.ljust(25)} Verification: {verification_summary_str}")
+        print(f"  {strat_key_str.ljust(45)}: Avg Total: {avg_time_for_combo_str.ljust(25)} Avg Core: {avg_core_time_for_combo_str.ljust(25)} Verification: {verification_summary_str}") # Modified print
 
     total_successful_timed_runs = sum(1 for qr_list in all_run_results for r in qr_list if r['time_ms'] is not None)
+    total_successful_core_timed_runs = sum(1 for qr_list in all_run_results for r in qr_list if r.get('core_processing_time_ms') is not None) # New
+
     total_verified_passed = sum(1 for qr_list in all_run_results for r in qr_list if r.get('verification_status') == 'PASSED')
 
     # Calculate total_verification_attempts based on entries that had an expected_answer
@@ -448,6 +471,7 @@ if __name__ == "__main__":
     print(f"\nTotal benchmark strategy executions attempted: {current_run_count}")
     print(f"(Note: Queries without JOIN keyword skip optimized pushdown strategies)")
     print(f"Total successful timed primary metric calculations: {total_successful_timed_runs}")
+    print(f"Total successful timed core processing metric calculations: {total_successful_core_timed_runs}") # New
 
     if total_verification_attempts > 0:
         print(f"Total verification checks made (for queries with expected answers): {total_verification_attempts}")
@@ -462,7 +486,7 @@ if __name__ == "__main__":
                 fieldnames = [
                     'original_query_id', 'original_query_index', 'query_text', 'expected_answer',
                     'temporal_strategy', 'pushdown_strategy', 'stitch_strategy',
-                    'cache_mode', 'avg_time_ms', 'individual_times_ms', 'verification_status',
+                    'cache_mode', 'avg_time_ms', 'core_processing_time_ms', 'individual_times_ms', 'verification_status', # Added core_processing_time_ms
                     'execution_order', 'strategy_combination_index'
                 ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -482,6 +506,7 @@ if __name__ == "__main__":
                             'stitch_strategy': result.get('stitch_strategy', ''),
                             'cache_mode': result.get('cache_mode', ''),
                             'avg_time_ms': result.get('time_ms', ''),
+                            'core_processing_time_ms': result.get('core_processing_time_ms', ''), # Added
                             'individual_times_ms': individual_times_str,
                             'verification_status': result.get('verification_status', ''),
                             'execution_order': exec_idx + 1,

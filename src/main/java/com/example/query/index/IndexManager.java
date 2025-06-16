@@ -73,7 +73,7 @@ public class IndexManager implements AutoCloseable {
             );
         }
 
-        // Initialize SynonymManager. Shouldnt really be hardcoded.
+        // Initialize SynonymManager.
         try {
             Path synonymManagerDbPath = this.indexBaseDir.resolve("global_values_lookup.db");
             if (!Files.exists(synonymManagerDbPath)) {
@@ -131,10 +131,9 @@ public class IndexManager implements AutoCloseable {
                 createdOptionsList.add(specificOptions);
                 specificOptions.setCreateIfMissing(false);
 
-                // Pass true for readOnly when opening for querying
                 IndexAccessInterface indexAccess = new IndexAccess(indexPath, type, specificOptions, true);
                 indexes.put(type, indexAccess);
-                createdOptionsList.remove(specificOptions); // Option is now owned by IndexAccess
+                createdOptionsList.remove(specificOptions);
                 logger.info("Successfully initialized required {} index", type);
 
             } catch (IndexAccessException e) {
@@ -199,16 +198,10 @@ public class IndexManager implements AutoCloseable {
              if ("nash".equalsIgnoreCase(temporalStrategy)) {
                 required.add("nash");
                  logger.debug("Nash strategy selected, requiring 'nash' index.");
-            } else { // Default to "naive" strategy, which usually relies on ner_date
+            } else {
                 required.add("ner_date");
                  logger.debug("Naive strategy selected (or DATE condition present), requiring 'ner_date' index.");
             }
-        }
-
-        // Ensure ner_date is included if any specific NER(DATE) condition exists, regardless of strategy
-        if(queryHasNerDateCondition(query)) {
-            required.add("ner_date");
-            logger.debug("Explicit NER(DATE) condition found, ensuring 'ner_date' index is required.");
         }
 
         // 4. Add stitch indexes if strategy is optimized and relevant conditions are present

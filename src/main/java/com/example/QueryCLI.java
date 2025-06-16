@@ -79,14 +79,15 @@ public class QueryCLI {
      */
     public void executeQuery(String queryStr, Optional<String> exportFormat, Optional<String> exportFilename) {
         long startTimeNs = System.nanoTime(); // Start timing
+        double coreProcessingTimeMs = -1.0; // Initialize to indicate not set
+        long coreProcessingStartTimeNs = 0; // Initialize
+
         try {
             logger.debug("Parsing query: {}", queryStr);
             Query query = parser.parse(queryStr);
 
             logger.debug("Validating query: {}", query);
             validator.validate(query, Optional.empty());
-
-            checkAndDisplayDateQueryHelp(queryStr, query);
 
             String projectName = query.source();
             logger.debug("Using project name from FROM clause: {}", projectName);
@@ -127,6 +128,7 @@ public class QueryCLI {
                 int windowSize = query.granularitySize().orElse(0);
                 logger.info("Query granularity: {} with size: {}", queryGranularity, windowSize);
 
+                coreProcessingStartTimeNs = System.nanoTime(); // Start core processing timer
                 QueryResultSoA execResult = queryExecutor.execute(query, indexManager); // Pass IndexManager
 
                 Table resultTable;
@@ -142,29 +144,20 @@ public class QueryCLI {
                     }
                     logger.info("Query executed, found {} matching {} (granularity for base parts: {})", matchCount, matchUnit, queryGranularity);
 
-                    Map<String, IndexAccessInterface> allIndexes = indexManager.getAllIndexes(); // Get the map here
+                    Map<String, IndexAccessInterface> allIndexes = indexManager.getAllIndexes();
                     resultTable = tableResultService.generateTable(
                         query,
                         execResult,
-                        allIndexes // Pass the map
+                        allIndexes
                     );
                 } else {
                     logger.error("Query execution returned a null QueryResultSoA.");
                     System.err.println("Error: Query execution resulted in an unexpected null result.");
-                    // Create an empty table or handle error appropriately
-                    resultTable = Table.create("Empty Result"); // Placeholder for an empty table
+                    resultTable = Table.create("Empty Result");
                     matchCount = 0;
                     matchUnit = "results";
                 }
 
-                // 6. Generate results using TableResultService (removed from inside if/else)
-                // The specific generation logic is now handled within the if/else branches above
-
-                // NOTE: We're now using Tablesaw's sorting capabilities directly
-                // The orderBy list in Query now contains Tablesaw-compatible sort strings
-                // (column names with optional "-" prefix for descending order)
-
-                // 7. Handle export if requested
                 if (exportFormat.isPresent() && exportFilename.isPresent()) {
                     String format = exportFormat.get();
                     String filename = exportFilename.get();
@@ -178,52 +171,28 @@ public class QueryCLI {
                         System.err.println("Error exporting results: " + e.getMessage());
                     }
                 } else {
-                    // 8. Format and display results
                     logger.debug("Formatting results for display");
                     String formattedResults = tableResultService.formatTable(resultTable);
 
-                    // Output the formatted results
                     System.out.println(formattedResults);
                 }
+                long coreProcessingEndTimeNs = System.nanoTime();
+                coreProcessingTimeMs = (coreProcessingEndTimeNs - coreProcessingStartTimeNs) / 1_000_000.0;
             }
 
         } catch (QueryParseException e) {
             logger.error("Query parse error: {}", e.getMessage());
             System.err.println("Error parsing query: " + e.getMessage());
-            // No position information in QueryParseException
         } catch (Exception e) {
             logger.error("Error executing query: {}", e.getMessage(), e);
             System.err.println("Error: " + e.getMessage());
         } finally {
             long endTimeNs = System.nanoTime();
             double executionTimeMs = (endTimeNs - startTimeNs) / 1_000_000.0;
+            if (coreProcessingTimeMs >= 0) {
+                System.out.printf("BENCHMARK_CORE_PROCESSING_TIME_MS: %.3f%n", coreProcessingTimeMs);
+            }
             System.out.printf("BENCHMARK_EXECUTION_TIME_MS: %.3f%n", executionTimeMs);
-        }
-    }
-
-    /**
-     * Checks if the query involves date operations and displays helpful information.
-     *
-     * @param queryStr The original query string
-     * @param query The parsed query object
-     */
-    private void checkAndDisplayDateQueryHelp(String queryStr, Query query) {
-        if (queryStr.toUpperCase().contains("DATE(")) {
-            // Check for specific predicates
-            if (queryStr.toUpperCase().contains("DATE(CONTAINS [")) {
-                logger.info("Date CONTAINS query detected - requires dates to be fully within range");
-                System.out.println("\nQuery Help: You're using DATE(CONTAINS [range]) which requires dates to be fully within the specified range.");
-                System.out.println("For broader matches, consider using DATE(INTERSECT [range]) which matches any overlap with the range.\n");
-            } else if (queryStr.toUpperCase().contains("DATE(INTERSECT [")) {
-                logger.info("Date INTERSECT query detected - matches any overlap with date range");
-            }
-
-            // Check for granularity
-            if (query.granularity() == Query.Granularity.SENTENCE) {
-                logger.info("Date query with sentence granularity detected");
-               } else {
-                logger.info("Date query with document granularity detected");
-            }
         }
     }
 

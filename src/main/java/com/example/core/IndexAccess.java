@@ -45,13 +45,12 @@ public class IndexAccess implements IndexAccessInterface {
         this.indexPath = indexPath.toString();
         this.isOpen = new AtomicBoolean(true);
         this.options = options;
-        this.readOnly = readOnly; // Store read-only mode
+        this.readOnly = readOnly;
 
         try {
             File indexDir = new File(this.indexPath);
             if (!indexDir.exists()) {
                 if (readOnly) {
-                    // Cannot create directory if we intend to open read-only and it doesn't exist
                     throw new IndexAccessException(
                         "Index directory does not exist and cannot be created in read-only mode: " + this.indexPath,
                         indexType,
@@ -74,9 +73,8 @@ public class IndexAccess implements IndexAccessInterface {
                 this.db = RocksDB.open(options, indexDir.getAbsolutePath());
                 logger.debug("Opened IndexAccess in read-write mode for type {} at {}", indexType, this.indexPath);
             }
-            //logger.debug("Initialized IndexAccess for type {} at {}", indexType, this.indexPath);
         } catch (RocksDBException e) {
-            this.isOpen.set(false); // Ensure isOpen reflects the failure
+            this.isOpen.set(false);
             if(this.options != null) { // Attempt to close options if open failed
                 this.options.close();
             }
@@ -130,7 +128,6 @@ public class IndexAccess implements IndexAccessInterface {
             if (value == null) {
                 return Optional.empty();
             }
-            // Deserialize to PositionListSoA instead of PositionList
             return Optional.of(PositionListSoA.deserializeFromCompositeBlob(value));
         } catch (IOException | RocksDBException e) {
             throw new IndexAccessException(
@@ -264,8 +261,6 @@ public class IndexAccess implements IndexAccessInterface {
         Optional<byte[]> rawBaseData = getRaw(baseTermBytes);
 
         if (rawBaseData.isPresent()) {
-            // Term was not segmented or this is the only part
-            // Apply context filtering directly during deserialization
             PositionListSoA soa = PositionListSoA.deserializeWithFilters(rawBaseData.get(), context);
             return soa.isEmpty() ? Optional.empty() : Optional.of(soa);
         }
@@ -327,22 +322,16 @@ public class IndexAccess implements IndexAccessInterface {
     @Override
     public void close() throws IndexAccessException {
         if (isOpen.compareAndSet(true, false)) {
-            //logger.debug("Closing IndexAccess for type {} at {}", indexType, indexPath);
-            // RocksDB's own resources (like iterators, batches) should be closed by their users before closing the DB.
-            // The DB should be closed before its associated Options object.
             try {
                 if (db != null) {
                     db.close();
                 }
             } catch (Exception e) {
                 logger.error("Error closing RocksDB instance for index {}: {}", indexType, e.getMessage(), e);
-                // Decide if this should throw or be suppressed, plan mentions try-finally for options.
-                // For now, log and proceed to close options.
             } finally {
                 if (options != null) {
                     options.close();
                 }
-                //logger.info("Successfully closed RocksDB and associated options for index: {}", indexType);
             }
         } else {
             logger.warn("IndexAccess for type {} at {} was already closed or never fully opened.", indexType, indexPath);

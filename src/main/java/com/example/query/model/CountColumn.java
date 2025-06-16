@@ -92,7 +92,6 @@ public class CountColumn implements SelectColumn {
                                Query query,
                                Map<String, Object> contextCache) {
         // COUNT columns are handled by a separate aggregation step after initial table population.
-        // This method doesn't need to do anything during the row-by-row population phase.
         logger.trace("populateColumn called for CountColumn '{}', row {}. No direct population needed.", columnName, rowIndex);
     }
 
@@ -140,18 +139,8 @@ public class CountColumn implements SelectColumn {
 
         logger.debug("Applying COUNT aggregation, grouping by: {}, counting: {}", groupColumns, countColumns);
 
-        // Use Tablesaw built-in count aggregation function
-        // This assumes the first count column in the list is the one to summarize, if multiple exist.
-        // For COUNT(UNIQUE var), this simple `count` might not be enough; it might need pre-processing or a specific unique count function.
-        // The current `CountColumn` definition for `countUnique` generates a name like `count_unique_alias_var`.
-        // `AggregateFunctions.count` counts non-missing values in the target column.
-        // If the `CountColumn` is truly `COUNT(*)`, it would need a different aggregate like `countRows` or `countWithMissing`.
-        // Let's assume for now `AggregateFunctions.count` on the first *group column* is a placeholder for COUNT(*)-like behavior when grouped.
-        // This part of CountColumn.applyCountAggregations needs to align with how TableResultService.applyGroupBy handles CountColumns.
         Table aggregatedTable = inputTable.summarize(groupColumns.get(0), AggregateFunctions.count).by(groupColumns.toArray(String[]::new));
 
-        // Rename the default "Count [col]" column to the original COUNT column name
-        // This needs to be more robust if groupColumns.get(0) is not what was intended for the count.
         String expectedAggColName = "Count [" + groupColumns.get(0) + "]";
         if (aggregatedTable.columnNames().contains(expectedAggColName) && !countColumns.isEmpty()) {
             aggregatedTable.column(expectedAggColName).setName(countColumns.get(0));
