@@ -440,16 +440,61 @@ public class QuerySemanticValidator {
 
         for (String orderSpecifier : query.orderBy()) {
             String rawColumnName = orderSpecifier.startsWith("-") ? orderSpecifier.substring(1) : orderSpecifier;
+
+            // Check if this is a COUNT expression (original format like "COUNT(*)" or "COUNT(q2.president)")
             if (rawColumnName.startsWith("COUNT(")) {
-                    boolean hasNonAggregateInSelect = query.selectColumns().stream()
+                // Validate that this COUNT expression exists in the SELECT clause
+                boolean foundMatchingCountColumn = false;
+                for (SelectColumn selectColumn : query.selectColumns()) {
+                    if (selectColumn instanceof CountColumn countColumn) {
+                        // Check if this CountColumn matches the ORDER BY expression
+                        String countColumnRepresentation = countColumn.toString();
+                        if (rawColumnName.equals(countColumnRepresentation)) {
+                            foundMatchingCountColumn = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!foundMatchingCountColumn) {
+                    throw new QueryParseException(String.format(
+                        "ORDER BY COUNT expression '%s' does not match any COUNT column in the SELECT clause.", rawColumnName
+                    ));
+                }
+
+                boolean hasNonAggregateInSelect = query.selectColumns().stream()
                     .anyMatch(sc -> !(sc instanceof CountColumn));
 
-                    if (hasNonAggregateInSelect && query.groupByColumns().isEmpty()) {
-                        throw new QueryParseException(String.format(
-                            "Cannot ORDER BY aggregate function '%s' when non-aggregate columns are present in the SELECT list and no GROUP BY clause is specified.", rawColumnName
-                        ));
-                    }
+                if (hasNonAggregateInSelect && query.groupByColumns().isEmpty()) {
+                    throw new QueryParseException(String.format(
+                        "Cannot ORDER BY aggregate function '%s' when non-aggregate columns are present in the SELECT list and no GROUP BY clause is specified.", rawColumnName
+                    ));
+                }
                 continue;
+            }
+
+            // Check if this is a generated COUNT column name (like "count_unique_q2_president")
+            boolean isCountColumnName = false;
+            for (SelectColumn selectColumn : query.selectColumns()) {
+                if (selectColumn instanceof CountColumn countColumn) {
+                    if (rawColumnName.equals(countColumn.getColumnName())) {
+                        isCountColumnName = true;
+
+                        boolean hasNonAggregateInSelect = query.selectColumns().stream()
+                            .anyMatch(sc -> !(sc instanceof CountColumn));
+
+                        if (hasNonAggregateInSelect && query.groupByColumns().isEmpty()) {
+                            throw new QueryParseException(String.format(
+                                "Cannot ORDER BY aggregate function '%s' when non-aggregate columns are present in the SELECT list and no GROUP BY clause is specified.", rawColumnName
+                            ));
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (isCountColumnName) {
+                continue; // Skip further validation for count column names
             }
 
             boolean isStructCol = isStructuralColumn(rawColumnName, query.mainAlias(), query.joinSteps(), allKnownAliasesInScope);

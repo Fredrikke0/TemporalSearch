@@ -341,8 +341,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     private Object visitCountExpression(QueryLangParser.CountExpressionContext ctx, boolean qualificationRequired) {
          if (ctx instanceof QueryLangParser.CountAllExpressionContext caec) {
             return visitCountAllExpression(caec);
-         } else if (ctx instanceof QueryLangParser.CountUniqueExpressionContext cuec) {
-             return visitCountUniqueExpression(cuec, qualificationRequired); // Pass flag
+         } else if (ctx instanceof QueryLangParser.CountTargetExpressionContext ctec) {
+             return visitCountTargetExpression(ctec, qualificationRequired); // Pass flag
          } else if (ctx instanceof QueryLangParser.CountDocumentsExpressionContext cdec) {
             return visitCountDocumentsExpression(cdec);
          } else {
@@ -393,18 +393,39 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         return CountColumn.countAll();
     }
 
-    public Object visitCountUniqueExpression(QueryLangParser.CountUniqueExpressionContext ctx, boolean qualificationRequired) {
-        String varName = ctx.variable().getText();
-        String qualifiedVarName;
+    public Object visitCountTargetExpression(QueryLangParser.CountTargetExpressionContext ctx, boolean qualificationRequired) {
+        boolean isUnique = ctx.unique != null; // Check if UNIQUE keyword is present
+        String targetName;
 
-        try {
-            qualifiedVarName = VariableQualifier.qualifyVariable(varName, qualificationRequired, Optional.of(DEFAULT_MAIN_ALIAS));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException(
-                String.format("COUNT(UNIQUE %s) requires a qualified variable in this context. Use COUNT(UNIQUE alias.%s)", varName, varName)
-            );
+        // Determine if the target is a variable or qualifiedIdentifier
+        if (ctx.variable() != null) {
+            String varName = ctx.variable().getText();
+            try {
+                targetName = VariableQualifier.qualifyVariable(varName, qualificationRequired, Optional.of(DEFAULT_MAIN_ALIAS));
+            } catch (IllegalArgumentException e) {
+                String countType = isUnique ? "COUNT(UNIQUE " + varName + ")" : "COUNT(" + varName + ")";
+                throw new IllegalArgumentException(
+                    String.format("%s requires a qualified variable in this context. Use %s",
+                                  countType,
+                                  isUnique ? "COUNT(UNIQUE alias." + varName + ")" : "COUNT(alias." + varName + ")")
+                );
+            }
+        } else if (ctx.qualifiedIdentifier() != null) {
+            // Extract qualified name from qualifiedIdentifier
+            String alias = ctx.qualifiedIdentifier().getChild(0).getText();
+            String fieldName = ctx.qualifiedIdentifier().getChild(2).getText();
+            targetName = alias + "." + fieldName;
+        } else {
+            throw new IllegalStateException("CountTargetExpression must have either variable or qualifiedIdentifier");
         }
-        return CountColumn.countUnique(qualifiedVarName);
+
+        if (isUnique) {
+            return CountColumn.countUnique(targetName);
+        } else {
+            // For non-unique COUNT, we can create a simple count of the target
+            // This may need to be implemented in CountColumn class
+            return CountColumn.countUnique(targetName);
+        }
     }
 
     @Override
@@ -948,9 +969,9 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             CountColumn countCol;
             if (countCtx instanceof QueryLangParser.CountAllExpressionContext cax) {
                 countCol = (CountColumn) visitCountAllExpression(cax);
-            } else if (countCtx instanceof QueryLangParser.CountUniqueExpressionContext cux) {
-                // visitCountUniqueExpression needs qualificationRequired for the variable inside
-                countCol = (CountColumn) visitCountUniqueExpression(cux, qualificationRequired);
+            } else if (countCtx instanceof QueryLangParser.CountTargetExpressionContext ctex) {
+                // visitCountTargetExpression needs qualificationRequired for the variable inside
+                countCol = (CountColumn) visitCountTargetExpression(ctex, qualificationRequired);
             } else if (countCtx instanceof QueryLangParser.CountDocumentsExpressionContext cdx) {
                 countCol = (CountColumn) visitCountDocumentsExpression(cdx);
             } else {

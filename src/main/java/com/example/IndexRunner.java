@@ -71,7 +71,7 @@ public class IndexRunner {
     );
 
     private static final List<String> ALL_NON_STITCH_INDEX_TYPES = List.of(
-        "unigram", "bigram", "trigram", "dependency", "hypernym",
+        "unigram", "bigram", "trigram", "dependency",
         "ner_date", "pos", "ner", "nash"
     );
 

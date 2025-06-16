@@ -113,35 +113,9 @@ public final class NotExecutor implements ConditionExecutor<Not> {
                 if (!idsFromContext.isEmpty()) {
                      logger.debug("Defined universe from FilteringContext: {} sentence IDs.", idsFromContext.size());
                 } else {
-                    // This can happen if allowedDocumentIds is present but allowedDocumentSentenceIds is empty or not specific enough.
-                    // Or if granularity is SENTENCE but context only has doc IDs.
-                    // Fallback to doc IDs if sentence IDs are not specifically restricted by the context but doc IDs are.
-                    // This scenario implies "all sentences within the allowed documents".
-                    // However, to truly get all sentences for those docs, we'd still need to scan.
-                    // For now, if allowedDocumentSentenceIds is empty but allowedDocumentIds is not,
-                    // we might be in a mixed state. The most correct 'universe' in this specific branch
-                    // if sentence granularity is truly required is what allowedDocumentSentenceIds provides.
-                    // If it's empty, the restricted universe of sentences is empty.
-                    // If the context *only* had documentIds, it means "all sentences in these documents".
-                    // The current FilteringContext structure for SENTENCE granularity expects allowedDocumentSentenceIds
-                    // to be populated if sentence-level restriction is intended.
-                    // If allowedDocumentIds() is present, but allowedDocumentSentenceIds() is not,
-                    // it means "these documents are allowed, but no specific sentences within them are restricted yet by the context".
-                    // This is tricky. For NOT, we need a defined set.
-                    // If allowedDocumentSentenceIds is empty/absent, but allowedDocumentIds is present AND sentence granularity,
-                    // this implies the context isn't specific enough for sentences yet.
-                    // In this specific sub-case, falling back to unigram index for these docs might be one option,
-                    // or considering the universe for sentences as empty if no specific sentences are allowed by context.
-                    // Let's assume if fc.allowedDocumentSentenceIds() is not populated meaningfully for SENTENCE,
-                    // the universe of *specific sentences* from context is empty.
-                    // The safer option if context is restrictive but not for the right granularity might be to still scan,
-                    // but ONLY for the documents specified in allowedDocumentIds. This is an optimization for later.
-                    // For now, if allowedDocumentSentenceIds is empty, the context-derived sentence universe is empty.
                     logger.debug("Defined universe from FilteringContext for SENTENCE granularity. Allowed sentences map resulted in {} specific sentence IDs.", idsFromContext.size());
                 }
             }
-            // If idsFromContext is empty after trying to use context, it means the context itself implies an empty universe.
-            // This is a valid state (e.g., previous AND conditions yielded no common docs/sentences).
             return idsFromContext;
         }
 
@@ -222,9 +196,6 @@ public final class NotExecutor implements ConditionExecutor<Not> {
         if (granularity == Query.Granularity.SENTENCE) {
             subConditionRequirements.needsSentenceId = true;
         }
-        // Sub-condition needs doc IDs for sure if we are doing NOT.
-        // It does not necessarily need conceptual row IDs itself unless it's complex.
-        // The requirements passed from parent already cover what the *final* QueryResultSoA of NOT needs.
 
         logger.debug("Executing NOT condition with incoming AttributeRequirements: {}, ContextIsPresent: {}. Sub-condition will use merged requirements.",
                      requirements.getRequiredSoAAttributes(), context.isPresent());

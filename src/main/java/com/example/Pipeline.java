@@ -27,7 +27,7 @@ public class Pipeline {
     );
 
     private static final java.util.List<String> ALL_NON_STITCH_INDEX_TYPES = java.util.List.of(
-        "unigram", "bigram", "trigram", "dependency", "hypernym",
+        "unigram", "bigram", "trigram", "dependency",
         "ner_date", "pos", "ner", "nash"
     );
     private static final String TEMP_STITCH_GEN_DIR_NAME = "temp_stitch_gen";
@@ -134,7 +134,7 @@ public class Pipeline {
                 .setDefault(java.util.List.of("all"))
                 .nargs("+")
                 .help("Type of index to generate (can specify multiple, space-separated): " +
-                      "unigram, bigram, trigram, dependency, ner_date, ner, pos, hypernym, nash, " +
+                      "unigram, bigram, trigram, dependency, ner_date, ner, pos, nash, " +
                       "various stitch_* types (e.g., stitch_unigram_date), " +
                       "'stitches' (for all stitch combinations), 'all' (for all available types).");
 

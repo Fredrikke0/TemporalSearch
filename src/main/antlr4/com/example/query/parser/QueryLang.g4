@@ -157,9 +157,9 @@ qualifiedStructuralColumn
     ;
 
 countExpression
-    : COUNT LPAREN WILDCARD RPAREN                   # CountAllExpression
-    | COUNT LPAREN UNIQUE variable RPAREN            # CountUniqueExpression
-    | COUNT LPAREN DOCUMENTS RPAREN                  # CountDocumentsExpression
+    : COUNT LPAREN WILDCARD RPAREN                                               # CountAllExpression
+    | COUNT LPAREN DOCUMENTS RPAREN                                              # CountDocumentsExpression
+    | COUNT LPAREN (unique=UNIQUE)? (variable | qualifiedIdentifier) RPAREN      # CountTargetExpression
     ;
 
 whereClause
