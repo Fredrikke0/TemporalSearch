@@ -84,7 +84,7 @@ public class QueryCLI {
             Query query = parser.parse(queryStr);
 
             logger.debug("Validating query: {}", query);
-            validator.validate(query);
+            validator.validate(query, Optional.empty());
 
             checkAndDisplayDateQueryHelp(queryStr, query);
 

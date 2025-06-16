@@ -40,7 +40,7 @@ class QuerySemanticValidatorTest {
         List<SelectColumn> columns = List.of(CountColumn.countAll());
         Query query = createQuery(columns, List.of());
 
-        assertDoesNotThrow(() -> validator.validate(query));
+        assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
     }
 
     @Test
@@ -60,7 +60,7 @@ class QuerySemanticValidatorTest {
         Query query = createQuery(columns, conditions, registry);
 
         // Validation should now pass as the qualified name '$main.person' is registered and used consistently
-        assertDoesNotThrow(() -> validator.validate(query));
+        assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
     }
 
     @Test
@@ -80,7 +80,7 @@ class QuerySemanticValidatorTest {
 
         Query query = createQuery(columns, conditions, registry);
 
-        assertDoesNotThrow(() -> validator.validate(query));
+        assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
     }
 
     @Test
@@ -96,7 +96,7 @@ class QuerySemanticValidatorTest {
 
         QueryParseException exception = assertThrows(
             QueryParseException.class,
-            () -> validator.validate(query)
+            () -> validator.validate(query, Optional.empty())
         );
 
         // Check for the specific message about the variable not being found (registry is empty)
@@ -118,7 +118,7 @@ class QuerySemanticValidatorTest {
 
         QueryParseException exception = assertThrows(
             QueryParseException.class,
-            () -> validator.validate(query)
+            () -> validator.validate(query, Optional.empty())
         );
 
         // Check for the specific message about the variable not being found (registry is empty)
@@ -145,7 +145,7 @@ class QuerySemanticValidatorTest {
 
         // Since we can't create a SnippetNode with window size > 5 (constructor prevents it),
         // we're just verifying that a valid window size passes validation
-        assertDoesNotThrow(() -> validator.validate(query));
+        assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
     }
 
     @Test
@@ -156,7 +156,7 @@ class QuerySemanticValidatorTest {
 
         QueryParseException exception = assertThrows(
             QueryParseException.class,
-            () -> validator.validate(query)
+            () -> validator.validate(query, Optional.empty())
         );
 
         assertTrue(exception.getMessage().contains("at least one column"));
@@ -174,7 +174,7 @@ class QuerySemanticValidatorTest {
 
         QueryParseException exception = assertThrows(
             QueryParseException.class,
-            () -> validator.validate(query)
+            () -> validator.validate(query, Optional.empty())
         );
 
         assertTrue(exception.getMessage().contains("supports at most 3 terms"));
@@ -190,7 +190,7 @@ class QuerySemanticValidatorTest {
         Query query = createQuery(columns, List.of());
 
         // This test passes because we can't actually create a Contains condition with empty terms
-        assertDoesNotThrow(() -> validator.validate(query));
+        assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
     }
 
     @Test
@@ -205,7 +205,7 @@ class QuerySemanticValidatorTest {
 
         Query query = createQuery(columns, conditions);
 
-        assertDoesNotThrow(() -> validator.validate(query));
+        assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
     }
 
     @Test
@@ -238,7 +238,7 @@ class QuerySemanticValidatorTest {
 
         QueryParseException exception = assertThrows(
             QueryParseException.class,
-            () -> validator.validate(query)
+            () -> validator.validate(query, Optional.empty())
         );
 
         // Check that the overall message contains the core error about the variable
@@ -301,10 +301,10 @@ class QuerySemanticValidatorTest {
         List<String> groupBy = List.of("$main.colZ"); // colZ is not known
         Query query = createQuery(select, List.of(), registry, groupBy);
 
-        QueryParseException exception = assertThrows(QueryParseException.class, () -> validator.validate(query));
-        assertTrue(exception.getMessage().contains("Variable '$main.colZ' not found in scope (current query (alias '$main') for GROUP BY '$main.colZ')"),
+        QueryParseException exception = assertThrows(QueryParseException.class, () -> validator.validate(query, Optional.empty()));
+        assertTrue(exception.getMessage().contains("Variable '$main.colZ' for GROUP BY ('$main.colZ') not found or not produced in scope (current query (alias '$main'))"),
                    "Exception message should indicate that colZ is not known in its scope. Actual: " + exception.getMessage());
-        assertTrue(exception.getMessage().contains("Available: [$main.colA]"),
+        assertTrue(exception.getMessage().contains("Available variables in this scope: [$main.colA]"),
                    "Exception message should list available variables. Actual: " + exception.getMessage());
     }
 }

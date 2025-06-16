@@ -44,7 +44,6 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         String getFilterLogDetail(); // For providing context (e.g., NER tag, POS tag) in log messages
     }
 
-    // Moved AnnotationData here from AbstractUnigramStitchGenerator
     public record AnnotationData(
         int sentenceId,
         int beginChar,
@@ -54,7 +53,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
     ) implements SentenceSpanFilterable {
         @Override
         public String getFilterLogDetail() {
-            return annotationKeyComponent; // Or specificValueForSynonym, depending on desired log detail
+            return annotationKeyComponent;
         }
         // Note: sentenceId() and beginChar() are implicitly provided by the record components
     }
@@ -91,9 +90,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             return ngramKey + IndexAccessInterface.DELIMITER + annotationKeyComponent;
         }
 
-        // Removed @Override as IndexEntry does not define this method.
-        // This method is present for consistency with the previous unigram stitch entry structure.
-        public long getAnnotationId() { // Required by IndexEntry, consistent with former UnigramStitchEntry
+        public long getAnnotationId() {
             return -1;
         }
     }
@@ -241,14 +238,14 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             return;
         }
 
-        List<AnnotationData> annotations = fetchAnnotationsForDocument(documentId); // Implemented by subclass
+        List<AnnotationData> annotations = fetchAnnotationsForDocument(documentId);
         if (annotations.isEmpty()) {
             return;
         }
 
         for (AnnotationData annotation : annotations) {
             int specificValueId = -1;
-            if (requiresSynonymIdForAnnotationValue()) { // Implemented by subclass
+            if (requiresSynonymIdForAnnotationValue()) {
                 try {
                     specificValueId = synonymManager.getId(annotation.specificValueForSynonym());
                 } catch (IllegalArgumentException e) {
@@ -308,7 +305,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         Map<Integer, List<NgramData>> ngramsBySentence = new HashMap<>();
         for (Map.Entry<Integer, List<ProcessedTokenInfo>> entry : tokensBySentence.entrySet()) {
             List<ProcessedTokenInfo> originalSentenceTokens = entry.getValue();
-            Integer sentenceId = entry.getKey(); // Get sentenceId for logging
+            Integer sentenceId = entry.getKey();
 
             if (originalSentenceTokens.isEmpty()) {
                 continue;
@@ -319,16 +316,16 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
 
             for (ProcessedTokenInfo tokenInfo : originalSentenceTokens) {
                 if (tokenInfo.beginChar() > firstTokenBeginChar + MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN) {
-                    logger.debug("Sentence (doc_id: {}, sentence_id: {}) truncated for indexing. Token with begin_char {} (text: '{}') exceeded limit (first_token_begin_char {} + span {}). Last token included had begin_char: {}.",
+                    logger.trace("Sentence (doc_id: {}, sentence_id: {}) truncated for indexing. Token with begin_char {} (text: '{}') exceeded limit (first_token_begin_char {} + span {}). Last token included had begin_char: {}.",
                         documentId,
                         sentenceId,
                         tokenInfo.beginChar(),
-                        tokenInfo.token(), // Added token text for better logging
+                        tokenInfo.token(),
                         firstTokenBeginChar,
                         MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN,
                         (effectiveSentenceTokens.isEmpty() ? "N/A" : effectiveSentenceTokens.get(effectiveSentenceTokens.size()-1).beginChar())
                     );
-                    break; // Stop adding tokens from this sentence
+                    break;
                 }
                 effectiveSentenceTokens.add(tokenInfo);
             }
@@ -339,18 +336,18 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
 
             List<NgramData> sentenceNgrams = new ArrayList<>();
             if (N == 1) { // Handle Unigrams
-                for (ProcessedTokenInfo tokenInfo : effectiveSentenceTokens) { // Use effective list
+                for (ProcessedTokenInfo tokenInfo : effectiveSentenceTokens) {
                     sentenceNgrams.add(new NgramData(tokenInfo.beginChar(), tokenInfo.endChar(), tokenInfo.token()));
                 }
             } else { // Handle N-grams (N > 1)
-                for (int i = 0; i <= effectiveSentenceTokens.size() - N; i++) { // Use effective list
+                for (int i = 0; i <= effectiveSentenceTokens.size() - N; i++) {
                     List<String> ngramComponentTokens = new ArrayList<>();
                     for (int j = 0; j < N; j++) {
-                        ngramComponentTokens.add(effectiveSentenceTokens.get(i + j).token()); // Use effective list
+                        ngramComponentTokens.add(effectiveSentenceTokens.get(i + j).token());
                     }
                     String ngramKey = String.join(String.valueOf(IndexAccessInterface.DELIMITER), ngramComponentTokens);
-                    int ngramBeginChar = effectiveSentenceTokens.get(i).beginChar(); // Use effective list
-                    int ngramEndChar = effectiveSentenceTokens.get(i + N - 1).endChar(); // Use effective list
+                    int ngramBeginChar = effectiveSentenceTokens.get(i).beginChar();
+                    int ngramEndChar = effectiveSentenceTokens.get(i + N - 1).endChar();
                     sentenceNgrams.add(new NgramData(ngramBeginChar, ngramEndChar, ngramKey));
                 }
             }
@@ -440,7 +437,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        return -1; // Indicates indeterminate progress for stitch indexes
+        return -1;
     }
 
     @Override

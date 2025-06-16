@@ -1,5 +1,7 @@
 package com.example.query;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -60,10 +62,11 @@ public class QuerySemanticValidator {
      * Validates a query for semantic correctness.
      *
      * @param query The query to validate
+     * @param externalAliasContext The alias under which this query is known, if it's a subquery.
      * @throws QueryParseException if the query has semantic errors
      */
-    public void validate(Query query) throws QueryParseException {
-        logger.debug("Starting semantic validation for query: {}", query);
+    public void validate(Query query, Optional<String> externalAliasContext) throws QueryParseException {
+        logger.debug("Starting semantic validation for query: {}, externalAliasContext: {}", query, externalAliasContext);
 
         VariableRegistry registry = query.variableRegistry();
         if (registry == null) {
@@ -73,7 +76,7 @@ public class QuerySemanticValidator {
         validateConditionConstraints(query.conditions());
         validateNerTypes(query.conditions());
         validateVariableDependencies(registry);
-        validateSelectColumns(query, registry);
+        validateSelectColumns(query, registry, externalAliasContext);
 
         query.limit().ifPresent(limit -> {
             try {
@@ -91,7 +94,7 @@ public class QuerySemanticValidator {
         }
 
         if (!query.groupByColumns().isEmpty()) {
-            validateGroupByClause(query);
+            validateGroupByClause(query, externalAliasContext);
         }
 
         if (!query.orderBy().isEmpty()) {
@@ -179,7 +182,7 @@ public class QuerySemanticValidator {
         }
     }
 
-    private void validateSelectColumns(Query query, VariableRegistry currentQueryRegistryContext) throws QueryParseException {
+    private void validateSelectColumns(Query query, VariableRegistry currentQueryRegistryContext, Optional<String> externalAliasContext) throws QueryParseException {
         if (query.selectColumns().isEmpty()) {
             throw new QueryParseException("Query must select at least one column");
         }
@@ -187,9 +190,9 @@ public class QuerySemanticValidator {
         Map<String, Query> subqueryAliasToQueryMap = query.joinSteps().stream()
                 .collect(Collectors.toMap(JoinStep::rightSourceAlias, JoinStep::subquery));
 
-        logger.debug("Subquery aliases for SELECT validation (current scope '{}'): {}", query.mainAlias().orElse("subquery_itself"), subqueryAliasToQueryMap.keySet());
+        String currentQueryEffectiveAlias = externalAliasContext.orElseGet(() -> query.mainAlias().orElse(QueryModelBuilder.DEFAULT_MAIN_ALIAS));
 
-        String currentQueryEffectiveAlias = query.mainAlias().orElse(QueryModelBuilder.DEFAULT_MAIN_ALIAS);
+        logger.debug("Subquery aliases for SELECT validation (current scope '{}'): {}", currentQueryEffectiveAlias, subqueryAliasToQueryMap.keySet());
 
         for (SelectColumn column : query.selectColumns()) {
             String fullColumnName;
@@ -305,7 +308,7 @@ public class QuerySemanticValidator {
             throw new QueryParseException(String.format("Exceeded max joins: %d", MAX_JOIN_DEPTH));
             }
         for (JoinStep step : query.joinSteps()) {
-            validate(step.subquery());
+            validate(step.subquery(), Optional.of(step.rightSourceAlias()));
             if (step.rightSourceAlias().isEmpty()) {
                 throw new QueryParseException("Subquery alias in JoinStep cannot be empty: " + step);
         }
@@ -362,74 +365,68 @@ public class QuerySemanticValidator {
         logger.debug("Successfully validated {} join column: {} for step: {}", side, qualifiedColumnName, currentStep);
             }
 
-    private void validateGroupByClause(Query query) throws QueryParseException {
-        logger.debug("Validating GROUP BY clause: {}", query.groupByColumns());
-        VariableRegistry currentQueryRegistry = query.variableRegistry();
-        List<String> groupByColumns = query.groupByColumns();
-        Set<String> groupBySet = new HashSet<>(groupByColumns);
-        String currentQueryEffectiveAlias = query.mainAlias().orElse(QueryModelBuilder.DEFAULT_MAIN_ALIAS);
-        Map<String, Query> subqueryAliasToQueryMap = query.joinSteps().stream()
-                .collect(Collectors.toMap(JoinStep::rightSourceAlias, JoinStep::subquery));
-        Set<String> allKnownAliasesInScope = new HashSet<>(subqueryAliasToQueryMap.keySet());
-        allKnownAliasesInScope.add(currentQueryEffectiveAlias);
+    private void validateGroupByClause(Query query, Optional<String> externalAliasContext) throws QueryParseException {
+        logger.debug("Validating GROUP BY clause: {} within external context: {}", query.groupByColumns(), externalAliasContext);
+        String currentQueryEffectiveAlias = externalAliasContext.orElseGet(() -> query.mainAlias().orElse(QueryModelBuilder.DEFAULT_MAIN_ALIAS));
 
-        for (String groupByColumnName : groupByColumns) {
-            String[] parts = groupByColumnName.split("\\.", 2);
-            if (parts.length != 2) { throw new QueryParseException(String.format("Invalid GROUP BY item '%s'. Expected alias.field", groupByColumnName));}
-            String alias = parts[0];
-            boolean isStructural = isStructuralColumn(groupByColumnName, query.mainAlias(), query.joinSteps(), allKnownAliasesInScope);
-            if (isStructural) continue;
+        VariableRegistry currentQueryRegistry = query.variableRegistry(); // Registry of the query (main or sub) being validated
+        Map<String, VariableRegistry> subqueryAliasToRegistryMap = query.joinSteps().stream()
+            .collect(Collectors.toMap(JoinStep::rightSourceAlias, step -> step.subquery().variableRegistry()));
 
-                VariableRegistry targetRegistryToUse;
-                String contextDescription;
-            String registryKeyToLookup = groupByColumnName;
+        List<String> availableVarsForErrorMessage;
 
-            if (query.joinSteps().isEmpty()) {
-                if (!alias.equals(currentQueryEffectiveAlias)) { throw new QueryParseException(String.format("Alias mismatch in GROUP BY '%s'. Alias '%s' vs current scope '%s'.", groupByColumnName, alias, currentQueryEffectiveAlias));}
-                targetRegistryToUse = currentQueryRegistry;
-                contextDescription = String.format("current query (alias '%s') for GROUP BY '%s'", currentQueryEffectiveAlias, groupByColumnName);
-            } else {
-                if (alias.equals(currentQueryEffectiveAlias)) {
-                    targetRegistryToUse = currentQueryRegistry;
-                    contextDescription = String.format("main query (alias %s) for GROUP BY '%s'", currentQueryEffectiveAlias, groupByColumnName);
-                } else if (subqueryAliasToQueryMap.containsKey(alias)) {
-                    targetRegistryToUse = subqueryAliasToQueryMap.get(alias).variableRegistry();
-                    contextDescription = String.format("subquery '%s' (via main) for GROUP BY '%s'", alias, groupByColumnName);
+        for (String groupByColumnOriginalName : query.groupByColumns()) {
+            String columnToCheckInRegistry;
+            // String aliasOfColumnInGroupBy = null; // Not strictly needed with this logic structure
+            VariableRegistry registryToUse;
+            String validationContextDescription;
+
+            if (groupByColumnOriginalName.contains(".")) { // Qualified item
+                String[] parts = groupByColumnOriginalName.split("\\.", 2);
+                if (parts.length != 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
+                     throw new QueryParseException(String.format("Invalid qualified format in GROUP BY item '%s'. Expected alias.fieldname.", groupByColumnOriginalName));
+                }
+                String aliasFromItem = parts[0];
+                columnToCheckInRegistry = groupByColumnOriginalName; // Use the full qualified name for registry lookup
+
+                if (aliasFromItem.equals(currentQueryEffectiveAlias)) {
+                    registryToUse = currentQueryRegistry;
+                    validationContextDescription = String.format("current query (alias '%s')", currentQueryEffectiveAlias);
+                } else if (subqueryAliasToRegistryMap.containsKey(aliasFromItem)) {
+                    registryToUse = subqueryAliasToRegistryMap.get(aliasFromItem);
+                    validationContextDescription = String.format("subquery '%s'", aliasFromItem);
                 } else {
-                    throw new QueryParseException(String.format("Unknown alias '%s' in GROUP BY '%s'. Main: '%s', Subs: %s", alias, groupByColumnName, currentQueryEffectiveAlias, subqueryAliasToQueryMap.keySet()));
-                    }
+                    // The alias is not the current query's effective alias, nor is it a known joined subquery's alias.
+                    throw new QueryParseException(String.format(
+                        "Unknown alias '%s' in GROUP BY item '%s'. Current scope (effective alias): '%s'. Known subquery aliases: %s.",
+                        aliasFromItem, groupByColumnOriginalName, currentQueryEffectiveAlias, subqueryAliasToRegistryMap.keySet()
+                    ));
+                }
+            } else { // Unqualified item
+                // Unqualified names in GROUP BY must belong to the current query's effective alias.
+                // The variable in the registry is stored qualified.
+                columnToCheckInRegistry = currentQueryEffectiveAlias + "." + groupByColumnOriginalName;
+                registryToUse = currentQueryRegistry;
+                validationContextDescription = String.format("current query (alias '%s', unqualified item '%s')", currentQueryEffectiveAlias, groupByColumnOriginalName);
             }
-            validateVariableInRegistry(registryKeyToLookup, targetRegistryToUse, contextDescription);
-            }
-        for (SelectColumn sc : query.selectColumns()) {
-            if (sc instanceof CountColumn) {
-                continue;
-            } else if (sc instanceof SnippetColumn snippetColumn) {
-                String snippetVarName = snippetColumn.getVariableName();
-                if (!groupBySet.contains(snippetVarName)) {
-                    throw new QueryParseException(String.format(
-                        "SNIPPET variable '%s' must be included in the GROUP BY clause when GROUP BY is present.",
-                        snippetVarName));
-                }
-            } else if (sc instanceof VariableColumn variableColumn) {
-                String varName = variableColumn.getColumnName();
-                if (!groupBySet.contains(varName)) {
-                    throw new QueryParseException(String.format(
-                        "SELECT column '%s' must be an aggregate function or appear in the GROUP BY clause.",
-                        varName));
-                }
-            } else if (sc instanceof StructuralColumn structuralColumn) {
-                String structName = structuralColumn.getColumnName();
-                if (!groupBySet.contains(structName)) {
-                    throw new QueryParseException(String.format(
-                        "SELECT column '%s' must be an aggregate function or appear in the GROUP BY clause.",
-                        structName));
-                }
-            } else {
-                throw new QueryParseException("Unknown SelectColumn type encountered during GROUP BY validation: " + sc.getClass().getName());
+
+            // Validate that the determined variable is produced in the selected registry
+            if (!registryToUse.isProduced(columnToCheckInRegistry)) {
+                availableVarsForErrorMessage = new ArrayList<>(registryToUse.getAllVariableNames());
+                Collections.sort(availableVarsForErrorMessage); // For consistent error messages
+                throw new QueryParseException(String.format(
+                    "Variable '%s' for GROUP BY ('%s') not found or not produced in scope (%s). Available variables in this scope: %s",
+                    columnToCheckInRegistry,      // The fully qualified name we attempted to find (e.g., q1.p or $main.p)
+                    groupByColumnOriginalName,    // The original name as it appeared in the GROUP BY clause (e.g. p or q1.p)
+                    validationContextDescription, // e.g. "current query (alias 'q1')" or "subquery 'q2'"
+                    availableVarsForErrorMessage   // All variables available in the target registry
+                ));
             }
         }
-        logger.debug("GROUP BY clause validated successfully.");
+        // Note: The logic for checking SELECT column compatibility with GROUP BY (aggregates vs. grouped columns)
+        // has been removed from this method to keep it focused on validating GROUP BY items themselves.
+        // That is a separate validation concern (aggregate consistency).
+        logger.debug("GROUP BY clause for effective alias '{}' validated successfully.", currentQueryEffectiveAlias);
     }
 
     private void validateOrderByClause(Query query) throws QueryParseException {

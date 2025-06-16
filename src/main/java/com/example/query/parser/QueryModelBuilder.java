@@ -510,7 +510,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     private Object visit(ParseTree tree, String currentScopeAlias) {
          // Helper to dispatch visits for conditions needing the alias
-         logger.debug("visit: tree: {}, currentScopeAlias: {}", tree, currentScopeAlias);
+         logger.trace("visit: tree: {}, currentScopeAlias: {}", tree, currentScopeAlias);
          if (tree instanceof QueryLangParser.NerExpressionContext c) return visitNerExpression(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.ContainsExpressionContext c) return visitContainsExpression(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.DateComparisonExpressionContext c) return visitDateComparisonExpression(c, currentScopeAlias);
