@@ -1,4 +1,6 @@
+# What date did Fidel Castro win the Cuban revolution?
 SELECT date, COUNT(*) FROM source WHERE CONTAINS('Cuban') AND CONTAINS('victory') AND NER(PERSON, 'Fidel Castro') AND NER(PERSON, 'Fulgencio Batista') AND DATE(< 2050) BIND date GROUP BY date ORDER BY COUNT(*) DESC ::: 1959-01-01
+#Who was president in year yyyy?
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('president') AND CONTAINS('United States') AND DATE(= 1988) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: reagan
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('president') AND CONTAINS('United States') AND DATE(= 1987) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: reagan
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('president') AND CONTAINS('United States') AND DATE(= 1989) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: bush
@@ -20,9 +22,23 @@ SELECT p, COUNT(*) FROM articles WHERE CONTAINS('president') AND CONTAINS('Unite
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('president') AND CONTAINS('United States') AND DATE(= 2005) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: bush
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('president') AND CONTAINS('United States') AND DATE(= 2006) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: bush
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('president') AND CONTAINS('United States') AND DATE(= 2007) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: bush
+# List of presidents of the us with order.
 SELECT ordinal, pres, COUNT(*) FROM source WHERE CONTAINS('president') AND CONTAINS('united states') AND NER(ORDINAL) BIND ordinal AND NER(PERSON) BIND pres GROUP BY ordinal, pres GRANULARITY SENTENCE ORDER BY COUNT(*) DESC LIMIT 10
-
+# List of presidents after president.
 SELECT q2.p, q2.date, COUNT(*) FROM articles ALIAS q1 JOIN (SELECT p, date FROM wiki WHERE CONTAINS('president') AND CONTAINS('united states') AND DATE(< 2020) BIND date AND NER(PERSON) BIND p AND NOT(NER(PERSON, 'reagan')) GROUP BY p, date GRANULARITY SENTENCE) ALIAS q2 ON q1.date BEFORE q2.date WHERE NER(PERSON, 'reagan') BIND p AND CONTAINS('president') AND CONTAINS('united states') AND DATE(< 2050) BIND date GROUP BY q2.date, q2.p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 SELECT q2.p, q2.date, COUNT(*) FROM articles ALIAS q1 JOIN (SELECT p, date FROM wiki WHERE CONTAINS('president') AND CONTAINS('united states') AND DATE(< 2020) BIND date AND NER(PERSON) BIND p AND NOT(NER(PERSON, 'clinton')) GROUP BY p, date GRANULARITY SENTENCE) ALIAS q2 ON q1.date BEFORE q2.date WHERE NER(PERSON, 'clinton') BIND p AND CONTAINS('president') AND CONTAINS('united states') AND DATE(< 2050) BIND date GROUP BY q2.date, q2.p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+# Lsit of presidents before president
+SELECT q2.p, q2.date, COUNT(*) FROM articles ALIAS q1 JOIN (SELECT p, date FROM wiki WHERE CONTAINS('president') AND CONTAINS('united states') AND DATE(< 2020) BIND date AND NER(PERSON) BIND p AND NOT(NER(PERSON, 'reagan')) GROUP BY p, date GRANULARITY SENTENCE) ALIAS q2 ON q1.date AFTER q2.date WHERE NER(PERSON, 'reagan') BIND p AND CONTAINS('president') AND CONTAINS('united states') AND DATE(< 2050) BIND date GROUP BY q2.date, q2.p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT q2.p, q2.date, COUNT(*) FROM articles ALIAS q1 JOIN (SELECT p, date FROM wiki WHERE CONTAINS('president') AND CONTAINS('united states') AND DATE(< 2020) BIND date AND NER(PERSON) BIND p AND NOT(NER(PERSON, 'clinton')) GROUP BY p, date GRANULARITY SENTENCE) ALIAS q2 ON q1.date AFTER q2.date WHERE NER(PERSON, 'clinton') BIND p AND CONTAINS('president') AND CONTAINS('united states') AND DATE(< 2050) BIND date GROUP BY q2.date, q2.p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 
+# List of presidents in year interval
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('United States') AND CONTAINS('president') AND DATE(INTERSECT[1987,2000]) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+
+# List of unemployment rates
+SELECT country, rate, date FROM articles WHERE CONTAINS('unemployment') AND NER(COUNTRY) BIND country AND NER(PERCENT) BIND rate AND DATE(< 2025) BIND date GRANULARITY SENTENCE
+# List of unemployment rates joined on current president
+SELECT q1.country, q1.rate, q1.date, q2.president, COUNT(q2.president) FROM articles ALIAS q1 JOIN (SELECT date, president FROM wiki WHERE CONTAINS('president') AND NER(COUNTRY, 'united states')  AND DATE(< 2020) BIND date AND NER(PERSON) BIND president GROUP BY president, date GRANULARITY SENTENCE) ALIAS q2 ON q1.date = q2.date WHERE CONTAINS('unemployment') AND NER(COUNTRY, 'united states') BIND country AND NER(PERCENT) BIND rate AND DATE(< 2025) BIND date GROUP BY q1.country, q1.rate, q1.date, q2.president GRANULARITY SENTENCE ORDER BY COUNT(q2.president) DESC
+SELECT q1.country, q1.rate, q1.date, q2.president, COUNT(q2.president) FROM articles ALIAS q1 JOIN (SELECT date, president FROM wiki WHERE CONTAINS('president') AND NER(COUNTRY, 'france')  AND DATE(< 2020) BIND date AND NER(PERSON) BIND president GROUP BY president, date GRANULARITY SENTENCE) ALIAS q2 ON q1.date = q2.date WHERE CONTAINS('unemployment') AND NER(COUNTRY, 'france') BIND country AND NER(PERCENT) BIND rate AND DATE(< 2025) BIND date GROUP BY q1.country, q1.rate, q1.date, q2.president GRANULARITY SENTENCE ORDER BY COUNT(q2.president) DESC
+
+# 3 hop
+SELECT q1.country, q1.rate, q1.date, q2.president, COUNT(q2.president) FROM articles ALIAS q1 JOIN (SELECT date, president FROM wiki WHERE CONTAINS('president') AND NER(COUNTRY, 'united states') AND DATE(< 2020) BIND date AND NER(PERSON) BIND president GROUP BY president, date GRANULARITY SENTENCE) ALIAS q2 ON q1.date = q2.date JOIN ( SELECT president FROM wiki WHERE CONTAINS('president') AND NER(PERSON, 'reagan') BIND president GROUP BY president GRANULARITY SENTENCE) ALIAS q3 ON q2.president = q3.president WHERE CONTAINS('unemployment') AND NER(COUNTRY, 'united states') BIND country AND NER(PERCENT) BIND rate AND DATE(< 2025) BIND date GROUP BY q1.country, q1.rate, q1.date, q2.president GRANULARITY SENTENCE ORDER BY COUNT(q2.president) DESC

@@ -983,11 +983,14 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             throw new IllegalStateException("OrderSpec must have identifier, variable, qualifiedIdentifier, or countExpression. Found: " + ctx.getText());
         }
 
-        // Return the qualified field name, prefixed with "-" if DESC
+        // Return the qualified field name, with appropriate prefix for ordering
         if (ctx.DESC() != null) {
             return "-" + qualifiedFieldName;
+        } else if (ctx.ASC() != null) {
+            return qualifiedFieldName;
+        } else {
+            return "-" + qualifiedFieldName;
         }
-        return qualifiedFieldName;
     }
 
     // Overload visitOrderByClause
