@@ -87,11 +87,65 @@ public final class NotExecutor implements ConditionExecutor<Not> {
     }
 
     /**
-     * Retrieves all unique document IDs or sentence ID pairs by iterating the unigram index.
-     * This serves as an approximation of the "universe" of possible matches.
+     * Retrieves all unique document IDs or sentence ID pairs.
+     * If a restrictive FilteringContext is provided, it's used as the universe.
+     * Otherwise, iterates the unigram index to approximate the "universe" of possible matches.
      */
-    private Set<?> getAllPossibleIds(Map<String, IndexAccessInterface> indexes, Query.Granularity granularity)
+    private Set<?> getAllPossibleIds(Map<String, IndexAccessInterface> indexes,
+                                     Query.Granularity granularity,
+                                     Optional<FilteringContext> context)
             throws QueryExecutionException {
+
+        if (context.isPresent() && !context.get().isUnrestricted()) {
+            logger.debug("Using FilteringContext to define universe for NOT operation (granularity: {}).", granularity);
+            FilteringContext fc = context.get();
+            Set<Object> idsFromContext = new HashSet<>();
+
+            if (granularity == Query.Granularity.DOCUMENT) {
+                fc.allowedDocumentIds().ifPresent(docIds -> idsFromContext.addAll(docIds));
+                logger.debug("Defined universe from FilteringContext: {} document IDs.", idsFromContext.size());
+            } else { // SENTENCE granularity
+                fc.allowedDocumentSentenceIds().ifPresent(docSentMap -> {
+                    docSentMap.forEach((docId, sentIds) -> {
+                        sentIds.forEach(sentId -> idsFromContext.add(new SimpleEntry<>(docId, sentId)));
+                    });
+                });
+                if (!idsFromContext.isEmpty()) {
+                     logger.debug("Defined universe from FilteringContext: {} sentence IDs.", idsFromContext.size());
+                } else {
+                    // This can happen if allowedDocumentIds is present but allowedDocumentSentenceIds is empty or not specific enough.
+                    // Or if granularity is SENTENCE but context only has doc IDs.
+                    // Fallback to doc IDs if sentence IDs are not specifically restricted by the context but doc IDs are.
+                    // This scenario implies "all sentences within the allowed documents".
+                    // However, to truly get all sentences for those docs, we'd still need to scan.
+                    // For now, if allowedDocumentSentenceIds is empty but allowedDocumentIds is not,
+                    // we might be in a mixed state. The most correct 'universe' in this specific branch
+                    // if sentence granularity is truly required is what allowedDocumentSentenceIds provides.
+                    // If it's empty, the restricted universe of sentences is empty.
+                    // If the context *only* had documentIds, it means "all sentences in these documents".
+                    // The current FilteringContext structure for SENTENCE granularity expects allowedDocumentSentenceIds
+                    // to be populated if sentence-level restriction is intended.
+                    // If allowedDocumentIds() is present, but allowedDocumentSentenceIds() is not,
+                    // it means "these documents are allowed, but no specific sentences within them are restricted yet by the context".
+                    // This is tricky. For NOT, we need a defined set.
+                    // If allowedDocumentSentenceIds is empty/absent, but allowedDocumentIds is present AND sentence granularity,
+                    // this implies the context isn't specific enough for sentences yet.
+                    // In this specific sub-case, falling back to unigram index for these docs might be one option,
+                    // or considering the universe for sentences as empty if no specific sentences are allowed by context.
+                    // Let's assume if fc.allowedDocumentSentenceIds() is not populated meaningfully for SENTENCE,
+                    // the universe of *specific sentences* from context is empty.
+                    // The safer option if context is restrictive but not for the right granularity might be to still scan,
+                    // but ONLY for the documents specified in allowedDocumentIds. This is an optimization for later.
+                    // For now, if allowedDocumentSentenceIds is empty, the context-derived sentence universe is empty.
+                    logger.debug("Defined universe from FilteringContext for SENTENCE granularity. Allowed sentences map resulted in {} specific sentence IDs.", idsFromContext.size());
+                }
+            }
+            // If idsFromContext is empty after trying to use context, it means the context itself implies an empty universe.
+            // This is a valid state (e.g., previous AND conditions yielded no common docs/sentences).
+            return idsFromContext;
+        }
+
+        logger.debug("FilteringContext is unrestricted or not present. Iterating '{}' index to approximate universe for NOT (granularity: {})...", UNIGRAM_INDEX_NAME, granularity);
         IndexAccessInterface unigramIndex = indexes.get(UNIGRAM_INDEX_NAME);
         if (unigramIndex == null) {
             logger.error("Required index '{}' not found for approximating universe in NOT operation.", UNIGRAM_INDEX_NAME);
@@ -103,7 +157,6 @@ public final class NotExecutor implements ConditionExecutor<Not> {
         }
 
         Set<Object> allIds = new HashSet<>();
-        logger.debug("Iterating '{}' index to approximate universe for NOT (granularity: {})...", UNIGRAM_INDEX_NAME, granularity);
         long count = 0;
 
         try (RocksIterator iterator = unigramIndex.iterateFromFirst()) {
@@ -164,20 +217,30 @@ public final class NotExecutor implements ConditionExecutor<Not> {
         logger.debug(">>> Executing NotExecutor");
         Condition subCondition = condition.condition();
         AttributeRequirements subConditionRequirements = new AttributeRequirements();
-        logger.debug("Executing NOT condition with AttributeRequirements: {}, ContextIsPresent: {}",
+        subConditionRequirements.merge(requirements); // Start with parent requirements
+        // Ensure sub-condition also fetches what's needed for ID extraction based on granularity
+        if (granularity == Query.Granularity.SENTENCE) {
+            subConditionRequirements.needsSentenceId = true;
+        }
+        // Sub-condition needs doc IDs for sure if we are doing NOT.
+        // It does not necessarily need conceptual row IDs itself unless it's complex.
+        // The requirements passed from parent already cover what the *final* QueryResultSoA of NOT needs.
+
+        logger.debug("Executing NOT condition with incoming AttributeRequirements: {}, ContextIsPresent: {}. Sub-condition will use merged requirements.",
                      requirements.getRequiredSoAAttributes(), context.isPresent());
 
         ConditionExecutor<Condition> subExecutor = factory.getExecutor(subCondition);
 
         // Execute the sub-condition with the provided requirements AND context
-        QueryResultSoA subResult = subExecutor.execute(subCondition, indexes, granularity, granularitySize, corpusName, requirements, context);
+        QueryResultSoA subResult = subExecutor.execute(subCondition, indexes, granularity, granularitySize, corpusName, subConditionRequirements, context);
 
         Set<?> subResultIds = extractIds(subResult, granularity);
         logger.debug("Sub-condition executed. Found {} entries, resulting in {} unique IDs for NOT logic.", subResult.size(), subResultIds.size());
 
-        Set<?> allPossibleIds = getAllPossibleIds(indexes, granularity);
-        if (allPossibleIds.isEmpty()) {
-            logger.error("Universe for NOT operation is empty. Check if '{}' index exists and is populated.", UNIGRAM_INDEX_NAME);
+        // Pass the context to getAllPossibleIds
+        Set<?> allPossibleIds = getAllPossibleIds(indexes, granularity, context);
+        if (allPossibleIds.isEmpty() && (context.isEmpty() || context.get().isUnrestricted())) {
+            logger.error("Universe for NOT operation is empty (and context was unrestricted). Check if '{}' index exists and is populated.", UNIGRAM_INDEX_NAME);
             throw new QueryExecutionException(
                 "Could not determine the set of all possible matches (universe is empty). Check if '" + UNIGRAM_INDEX_NAME + "' index exists and is populated.",
                 "N/A",
