@@ -357,8 +357,30 @@ public final class QueryResultSoA {
      */
     public String getVariableNameAt(int index) {
         validateIndex(index);
-        int variableIndex = variableNameIndices.getInt(index);
-        return variableIndex == -1 ? null : uniqueVariableNames.get(variableIndex);
+        int nameIndex = variableNameIndices.getInt(index);
+        return (nameIndex == -1) ? null : uniqueVariableNames.get(nameIndex);
+    }
+
+    /**
+     * Updates the value and its type at the specified index.
+     *
+     * @param index The index of the entry to update.
+     * @param newValue The new value to set.
+     * @param newType The new type of the value.
+     * @throws IndexOutOfBoundsException if the index is out of range.
+     */
+    public void updateValueAndTypeAt(int index, Object newValue, ValueType newType) {
+        validateIndex(index);
+
+        // Update value
+        int newValueIndex = getOrAddValueIndex(newValue);
+        valueIndices.set(index, newValueIndex);
+
+        // Update type
+        valueTypes.set(index, (byte) newType.ordinal());
+
+        logger.trace("Updated SoA entry at index {}: new value='{}' (idx={}), new type={}",
+                     index, newValue, newValueIndex, newType);
     }
 
     /**

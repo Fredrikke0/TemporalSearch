@@ -1,6 +1,7 @@
 package com.example.query.executor;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -13,6 +14,8 @@ import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
 import com.example.index.util.SynonymManager;
+import com.example.query.binding.ValueType;
+import com.example.query.binding.Variable;
 import com.example.query.index.IndexManager;
 import com.example.query.model.JoinCondition;
 import com.example.query.model.JoinStep;
@@ -83,6 +86,9 @@ public class QueryExecutor {
 
         try {
             QueryResultSoA result = executeWithRequirements(query, indexes, requirements, new SubqueryContext());
+
+            // Resolve any remaining unresolved IDs in the final result
+            resolveSynonymIdsInSoA(result, query);
 
             long executionTime = System.nanoTime() - startTime;
             logger.info("=== Query Execution Completed Successfully ===");
@@ -160,6 +166,8 @@ public class QueryExecutor {
                 mainConditionsResult = executeCondition(implicitAnd, indexes, granularity, granularitySize, source, requirements, initialContextForMainConditions);
             }
             logger.debug("Main query conditions executed, {} matches found.", mainConditionsResult.size());
+            // Resolve synonyms after main conditions
+            resolveSynonymIdsInSoA(mainConditionsResult, query);
         } else {
             logger.debug("No main query conditions found.");
             mainConditionsResult = new QueryResultSoA(granularity, granularitySize, requirements);
@@ -201,16 +209,20 @@ public class QueryExecutor {
                     try {
                         // Pass parentRequirements (overall query requirements) for context, but executed subquery will have its own.
                         rhsSoA = executeSingleDependentStep(currentLhsSoA, currentLhsAlias, rhsQuery, rhsAlias, step.onCondition(), indexes, subqueryContext, requirements, query.granularity(), query.granularitySize().orElse(0));
+                        resolveSynonymIdsInSoA(rhsSoA, rhsQuery); // Resolve for dependent step result
                     } catch (QueryExecutionException qe) {
                         logger.warn("Dependent execution for step (LHS: '{}', RHS: '{}') failed with QueryExecutionException: {}. Falling back to independent execution for this step.", currentLhsAlias, rhsAlias, qe.getMessage());
                         rhsSoA = executeWithRequirements(rhsQuery, indexes, rhsRequirements, new SubqueryContext()); // Execute independently with fresh context
+                        resolveSynonymIdsInSoA(rhsSoA, rhsQuery); // Resolve for independent step result
                     } catch (Exception e) {
                         logger.warn("Dependent execution for step (LHS: '{}', RHS: '{}') failed with generic Exception: {}. Falling back to independent execution for this step.", currentLhsAlias, rhsAlias, e.getMessage(), e);
                         rhsSoA = executeWithRequirements(rhsQuery, indexes, rhsRequirements, new SubqueryContext()); // Execute independently with fresh context
+                        resolveSynonymIdsInSoA(rhsSoA, rhsQuery);
                     }
                 } else {
                     logger.info("Executing RHS subquery '{}' (source: '{}') independently for JoinStep.", rhsAlias, rhsQuery.source());
                     rhsSoA = executeWithRequirements(rhsQuery, indexes, rhsRequirements, new SubqueryContext()); // Execute independently with fresh context for RHS
+                    resolveSynonymIdsInSoA(rhsSoA, rhsQuery); // Resolve after independent RHS execution
                 }
 
                 subqueryContext.addQueryResult(rhsAlias, rhsSoA);
@@ -584,7 +596,105 @@ public class QueryExecutor {
         logger.debug("Executing modified dependent query for alias '{}' (source '{}'): {}", dependentAlias, modifiedDependentQuery.source(), modifiedDependentQuery.toString());
         // Execute with a new SubqueryContext to isolate this modified execution
         QueryResultSoA result = executeWithRequirements(modifiedDependentQuery, indexes, QueryAttributeAnalyzer.analyze(modifiedDependentQuery), new SubqueryContext());
+        // Resolve synonyms for the result of the modified query
+        resolveSynonymIdsInSoA(result, modifiedDependentQuery); // Use modifiedDependentQuery for VariableRegistry
         logger.info("Modified dependent query for alias '{}' executed. Found {} matches.", dependentAlias, result.size());
         return result;
+    }
+
+    /**
+     * Resolves synonym IDs to terms within a QueryResultSoA for NER and POS types.
+     * Modifies the QueryResultSoA in-place.
+     *
+     * @param soa The QueryResultSoA to process.
+     * @param queryContext The Query object that provides context (e.g., VariableRegistry) for the SoA.
+     * @throws QueryExecutionException if synonym resolution fails.
+     */
+    private void resolveSynonymIdsInSoA(QueryResultSoA soa, Query queryContext) throws QueryExecutionException {
+        if (soa == null || soa.isEmpty() || synonymManager == null) {
+            return;
+        }
+
+        long startTime = System.nanoTime();
+        int resolvedCount = 0;
+
+        Map<Integer, String> idsToResolveForNer = new HashMap<>();
+        Map<Integer, String> idsToResolveForPos = new HashMap<>();
+        List<Integer> indicesToUpdateNer = new ArrayList<>();
+        List<Integer> indicesToUpdatePos = new ArrayList<>();
+
+        for (int i = 0; i < soa.size(); i++) {
+            ValueType currentType = soa.getValueTypeAt(i);
+            if (currentType == ValueType.UNRESOLVED_NER_ID) {
+                Object value = soa.getValueAt(i);
+                if (value instanceof Integer) {
+                    idsToResolveForNer.put((Integer) value, null); // Value will be filled by getTerms
+                    indicesToUpdateNer.add(i);
+                }
+            } else if (currentType == ValueType.UNRESOLVED_POS_ID) {
+                Object value = soa.getValueAt(i);
+                if (value instanceof Integer) {
+                    idsToResolveForPos.put((Integer) value, null);
+                    indicesToUpdatePos.add(i);
+                }
+            }
+        }
+
+        if (idsToResolveForNer.isEmpty() && idsToResolveForPos.isEmpty()) {
+            return; // Nothing to resolve
+        }
+
+        try {
+            if (!idsToResolveForNer.isEmpty()) {
+                logger.debug("Batch resolving {} UNRESOLVED_NER_ID entries.", idsToResolveForNer.size());
+                Map<Integer, String> resolvedNerTerms = synonymManager.getTerms(idsToResolveForNer.keySet());
+                for (int originalIndex : indicesToUpdateNer) {
+                    Integer unresolvedId = (Integer) soa.getValueAt(originalIndex);
+                    String resolvedTerm = resolvedNerTerms.get(unresolvedId);
+                    if (resolvedTerm != null) {
+                        // Assuming QueryResultSoA has/will have updateValueAndTypeAt
+                        soa.updateValueAndTypeAt(originalIndex, resolvedTerm, ValueType.ENTITY);
+                        resolvedCount++;
+                    } else {
+                        logger.warn("Could not resolve NER synonym ID: {} for SoA entry at index {}. Keeping as unresolved ID.", unresolvedId, originalIndex);
+                        // Optionally, could change type to a generic STRING or keep as UNRESOLVED if update fails/not found.
+                        // For now, it remains UNRESOLVED_NER_ID if term not found.
+                    }
+                }
+            }
+            if (!idsToResolveForPos.isEmpty()) {
+                logger.debug("Batch resolving {} UNRESOLVED_POS_ID entries.", idsToResolveForPos.size());
+                Map<Integer, String> resolvedPosTerms = synonymManager.getTerms(idsToResolveForPos.keySet());
+                for (int originalIndex : indicesToUpdatePos) {
+                    Integer unresolvedId = (Integer) soa.getValueAt(originalIndex);
+                    String resolvedTerm = resolvedPosTerms.get(unresolvedId);
+                    String variableName = soa.getVariableNameAt(originalIndex);
+                    ValueType targetType = ValueType.POS_TERM; // Default
+
+                    if (variableName != null && queryContext != null && queryContext.variableRegistry() != null) {
+                         Optional<Variable> varOpt = queryContext.variableRegistry().getVariable(variableName);
+                         if (varOpt.isPresent()) {
+                             // This can be used if we need to distinguish between POS_TERM and POS_TAG_TYPE,
+                             // but for now, UNRESOLVED_POS_ID usually implies the term associated with a tag.
+                             // targetType = varOpt.get().valueType(); // This might give the original intended type.
+                         }
+                    }
+
+                    if (resolvedTerm != null) {
+                        soa.updateValueAndTypeAt(originalIndex, resolvedTerm, targetType);
+                        resolvedCount++;
+                    } else {
+                        logger.warn("Could not resolve POS synonym ID: {} for SoA entry at index {}. Keeping as unresolved ID.", unresolvedId, originalIndex);
+                    }
+                }
+            }
+        } catch (Exception e) { // Catching generic Exception from synonymManager.getTerms()
+            throw new QueryExecutionException("Failed to resolve synonym IDs in QueryResultSoA", e, queryContext.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+
+        long endTime = System.nanoTime();
+        if (resolvedCount > 0) {
+            logger.debug("Resolved {} synonym IDs in QueryResultSoA (size: {}) in {} ms.", resolvedCount, soa.size(), (endTime - startTime) / 1_000_000.0);
+        }
     }
 }

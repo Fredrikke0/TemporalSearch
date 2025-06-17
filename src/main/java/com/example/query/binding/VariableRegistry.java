@@ -137,6 +137,24 @@ public class VariableRegistry {
     }
 
     /**
+     * Gets a variable by its qualified name.
+     * Prioritizes producer variables if the name is registered as both producer and consumer.
+     *
+     * @param qualifiedName The qualified variable name (e.g., $main.var, alias.var)
+     * @return An Optional containing the Variable if found, otherwise Optional.empty().
+     */
+    public java.util.Optional<Variable> getVariable(String qualifiedName) {
+        if (producers.containsKey(qualifiedName) && !producers.get(qualifiedName).isEmpty()) {
+            // Return the first producer variable found for this name
+            return java.util.Optional.of(producers.get(qualifiedName).iterator().next());
+        } else if (consumers.containsKey(qualifiedName) && !consumers.get(qualifiedName).isEmpty()) {
+            // If not a producer, return the first consumer variable found
+            return java.util.Optional.of(consumers.get(qualifiedName).iterator().next());
+        }
+        return java.util.Optional.empty();
+    }
+
+    /**
      * Gets the inferred type for a variable, based on all its producers and consumers.
      * If there are conflicting types, ANY is returned.
      *

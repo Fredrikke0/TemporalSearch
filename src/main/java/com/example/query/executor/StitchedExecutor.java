@@ -8,8 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import org.rocksdb.RocksDBException; // Added import
-import org.rocksdb.RocksIterator; // Added for temporal prefix scan
+import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,7 +78,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
         String stitchIndexGroupIdentifier;
         String specificAnnotationTypeForLookup = null;
         String annotationVarName = "";
-        ValueType annotationValueType;
+        ValueType annotationValueTypeToStore;
 
         Temporal temporalConditionDetails = null;
 
@@ -92,17 +91,17 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
             stitchIndexGroupIdentifier = "ner";
             specificAnnotationTypeForLookup = nerEntityType;
             annotationVarName = nerCond.qualifiedVariableName();
-            annotationValueType = ValueType.ENTITY;
+            annotationValueTypeToStore = (nerCond.target() != null && !nerCond.target().isBlank()) ? ValueType.ENTITY : ValueType.UNRESOLVED_NER_ID;
         } else if (annotationCondition instanceof Pos posCond) {
             stitchIndexGroupIdentifier = "pos";
             specificAnnotationTypeForLookup = posCond.posTag().toUpperCase();
             annotationVarName = posCond.variableName();
-            annotationValueType = ValueType.POS_TERM;
+            annotationValueTypeToStore = (posCond.term() != null && !posCond.term().isBlank()) ? ValueType.POS_TERM : ValueType.UNRESOLVED_POS_ID;
         } else if (annotationCondition instanceof Temporal tempCond) {
             stitchIndexGroupIdentifier = "date";
             temporalConditionDetails = tempCond;
             annotationVarName = tempCond.qualifiedVariableName().orElse("");
-            annotationValueType = ValueType.DATE;
+            annotationValueTypeToStore = ValueType.DATE;
         } else {
             logger.warn("Unsupported annotation condition type for stitch optimization: {}. Returning empty.", annotationCondition.getType());
             return new QueryResultSoA(granularity, granularitySize, requirements);
@@ -161,7 +160,6 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                             int sentenceId = positions.getSentenceIdAt(i);
                                             int termBeginChar = positions.getBeginCharAt(i);
                                             int termEndChar = positions.getEndCharAt(i);
-                                            int annotationSpecificValueId = positions.getSynonymIdAt(i);
 
                                             int conceptualRowId = resultSoA.getNextConceptualRowId();
 
@@ -178,11 +176,11 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                             if (!annotationVarName.isBlank()) {
                                                 resultSoA.add(
                                                     dateFromKey,
-                                                    annotationValueType,
+                                                    annotationValueTypeToStore,
                                                     annotationVarName,
                                                     docId, sentenceId,
                                                     -1, -1,
-                                                    annotationSpecificValueId,
+                                                    -1,
                                                     conceptualRowId
                                                 );
                                             }
@@ -198,15 +196,11 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         iterator.next();
                     }
                     logger.debug("Prefix search completed for temporal stitch. Examined {} keys for prefix '{}'", keysExamined, searchPrefix);
-                } catch (IndexAccessException e) {
-                    logger.error("RocksDB access error during temporal stitch prefix scan for index {}.", stitchIndexName, e);
-                    throw new QueryExecutionException("Error during temporal stitch index access", e, sourceName, QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
                 }
-
             } else {
                 String stitchLookupKey = ngramTerm + DELIMITER_CHAR + specificAnnotationTypeForLookup;
-                logger.debug("Looking up in stitch index '{}' with key: '{}', context isPresent: {}",
-                             stitchIndexName, stitchLookupKey, context.isPresent());
+                logger.debug("Looking up in stitch index '{}' with key: '{}', context isPresent: {}, annotationValueTypeToStore: {}",
+                             stitchIndexName, stitchLookupKey, context.isPresent(), annotationValueTypeToStore);
 
                 Optional<Integer> targetAnnotationValueIdOpt = Optional.empty();
                 String specificAnnotationValueFromCondition = null;
@@ -216,18 +210,18 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                     try {
                         targetAnnotationValueIdOpt = Optional.of(synonymManager.getId(specificAnnotationValueFromCondition.toLowerCase()));
                         logger.debug("Stitch with specific NER entity: '{}', targetId: {}", specificAnnotationValueFromCondition, targetAnnotationValueIdOpt.get());
-                    } catch (RocksDBException e) {
+                    } catch (Exception e) {
                         logger.warn("Failed to get synonym ID for specific NER entity value '{}' in StitchedExecutor. This entity is unknown or DB error. Returning empty for this stitch.", specificAnnotationValueFromCondition, e);
                         return new QueryResultSoA(granularity, granularitySize, requirements);
                     }
                 } else if (annotationCondition instanceof Pos posCond && posCond.term() != null && !posCond.term().isBlank()) {
-                    specificAnnotationValueFromCondition = posCond.term(); // The specific word for POS(TAG, 'word')
+                    specificAnnotationValueFromCondition = posCond.term();
                     try {
                         targetAnnotationValueIdOpt = Optional.of(synonymManager.getId(specificAnnotationValueFromCondition.toLowerCase()));
                         logger.debug("Stitch with specific POS term: '{}' (for POS tag {}), targetId: {}",
                                      specificAnnotationValueFromCondition, posCond.posTag().toUpperCase(),
-                                     targetAnnotationValueIdOpt.get()); // .get() is safe here if getId succeeds
-                    } catch (RocksDBException e) {
+                                     targetAnnotationValueIdOpt.get());
+                    } catch (Exception e) {
                         logger.warn("Failed to get synonym ID for specific POS term value '{}' (for POS tag {}) in StitchedExecutor. This term is unknown or DB error. Returning empty for this stitch.",
                                     specificAnnotationValueFromCondition, posCond.posTag().toUpperCase(), e);
                         return new QueryResultSoA(granularity, granularitySize, requirements);
@@ -248,29 +242,19 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         int termBeginChar = positions.getBeginCharAt(i);
                         int termEndChar = positions.getEndCharAt(i);
                         int currentAnnotationSynonymId = positions.getSynonymIdAt(i);
-                        String actualAnnotationTerm = null;
+                        Object annotationValueForSoA;
 
-                        if (targetAnnotationValueIdOpt.isPresent()) { // Specific NER entity filter
+                        if (targetAnnotationValueIdOpt.isPresent()) {
                             if (currentAnnotationSynonymId == targetAnnotationValueIdOpt.get().intValue()) {
-                                actualAnnotationTerm = specificAnnotationValueFromCondition; // Use the known value
+                                annotationValueForSoA = specificAnnotationValueFromCondition;
                             } else {
-                                // This co-occurrence's annotation ID doesn't match the target specific ID. Skip.
                                 logger.trace("Skipping co-occurrence: current annotation ID {} != target ID {} (for specific value '{}') for stitch key '{}'",
                                              currentAnnotationSynonymId, targetAnnotationValueIdOpt.get(), specificAnnotationValueFromCondition, stitchLookupKey);
                                 continue;
                             }
-                        } else { // No specific entity/term filter (e.g., generic NER(PERSON) or POS(NN) without term), or getId failed
-                            Optional<String> resolvedValueOpt = synonymManager.getTerm(currentAnnotationSynonymId);
-                            if (resolvedValueOpt.isPresent()) {
-                                actualAnnotationTerm = resolvedValueOpt.get();
-                            } else {
-                                logger.warn("Could not resolve synonym ID {} for annotation value. Stitch key: '{}'. Skipping this co-occurrence.",
-                                            currentAnnotationSynonymId, stitchLookupKey);
-                                continue; // Cannot resolve term, so skip this co-occurrence.
-                            }
+                        } else {
+                            annotationValueForSoA = currentAnnotationSynonymId;
                         }
-
-                        // If we reach here, actualAnnotationTerm is set (or was not required if annotationVarName is blank)
 
                         int conceptualRowId = resultSoA.getNextConceptualRowId();
 
@@ -280,25 +264,23 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                             containsCondition.variableName(),
                             docId, sentenceId,
                             termBeginChar, termEndChar,
-                            -1, // Synonym ID for the ngramTerm itself is not stored here
+                            -1,
                             conceptualRowId
                         );
 
                         if (!annotationVarName.isBlank()) {
-                            if (actualAnnotationTerm != null) {
+                            if (annotationValueForSoA != null) {
                                 resultSoA.add(
-                                    actualAnnotationTerm,
-                                    annotationValueType,
+                                    annotationValueForSoA,
+                                    annotationValueTypeToStore,
                                     annotationVarName,
                                     docId, sentenceId,
-                                    -1, -1, // Positions for annotation are not from stitch directly
-                                    currentAnnotationSynonymId, // Store the synonym ID of the resolved annotation
+                                    -1, -1,
+                                    currentAnnotationSynonymId,
                                     conceptualRowId
                                 );
                             } else {
-                                // This case should ideally not be reached if logic above is correct
-                                // and annotationVarName is not blank.
-                                logger.warn("actualAnnotationTerm is null but annotationVarName ('{}') is set for stitch key '{}'. Skipping annotation binding for conceptualRowId {}.",
+                                logger.warn("annotationValueForSoA is null but annotationVarName ('{}') is set for stitch key '{}'. Skipping annotation binding for conceptualRowId {}.",
                                             annotationVarName, stitchLookupKey, conceptualRowId);
                             }
                         }
@@ -310,18 +292,21 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
         } catch (IndexAccessException e) {
             logger.error("Error accessing stitch index {}.", stitchIndexName, e);
             throw new QueryExecutionException("Error accessing stitch index " + stitchIndexName, e, sourceName, QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
-        } catch (RocksDBException e) {
-            logger.error("RocksDB error during StitchedExecutor execution for index {}.", stitchIndexName, e);
-            throw new QueryExecutionException("RocksDB error during stitch execution for " + stitchIndexName, e, sourceName, QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
         } catch (IOException e) {
             logger.error("IOException during StitchedExecutor execution for index {}.", stitchIndexName, e);
             throw new QueryExecutionException("IO error during stitch execution for " + stitchIndexName, e, sourceName, QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        } catch (Exception e) {
+            logger.error("Unexpected exception during StitchedExecutor execution for index {}.", stitchIndexName, e);
+            String message = "Unexpected error during stitch execution for " + stitchIndexName;
+            if (e.getClass().getName().contains("RocksDBException")) {
+                 message = "Database error during stitch execution (synonym lookup) for " + stitchIndexName;
+            }
+            throw new QueryExecutionException(message, e, sourceName, QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
 
         logger.debug("StitchedExecutor finished for type '{}', N-gram '{}', index '{}'. Found {} results.",
                      stitchedCondition.stitchType(), ngramPrefix, stitchIndexName, resultSoA.size());
 
-        // Ensure results are sorted for subsequent merge joins
         if (resultSoA.size() > 1) {
             resultSoA.sort();
             logger.debug("Sorted StitchedExecutor results. Size: {}", resultSoA.size());
