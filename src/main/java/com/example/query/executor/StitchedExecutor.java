@@ -90,12 +90,12 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
             }
             stitchIndexGroupIdentifier = "ner";
             specificAnnotationTypeForLookup = nerEntityType;
-            annotationVarName = nerCond.qualifiedVariableName();
+            annotationVarName = Optional.ofNullable(nerCond.qualifiedVariableName()).orElse("");
             annotationValueTypeToStore = (nerCond.target() != null && !nerCond.target().isBlank()) ? ValueType.ENTITY : ValueType.UNRESOLVED_NER_ID;
         } else if (annotationCondition instanceof Pos posCond) {
             stitchIndexGroupIdentifier = "pos";
             specificAnnotationTypeForLookup = posCond.posTag().toUpperCase();
-            annotationVarName = posCond.variableName();
+            annotationVarName = Optional.ofNullable(posCond.variableName()).orElse("");
             annotationValueTypeToStore = (posCond.term() != null && !posCond.term().isBlank()) ? ValueType.POS_TERM : ValueType.UNRESOLVED_POS_ID;
         } else if (annotationCondition instanceof Temporal tempCond) {
             stitchIndexGroupIdentifier = "date";

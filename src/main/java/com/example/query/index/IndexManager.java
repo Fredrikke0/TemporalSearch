@@ -47,14 +47,16 @@ public class IndexManager implements AutoCloseable {
     private SynonymManager synonymManager;
     private boolean isClosed = false;
     private final String stitchStrategy;
+    private final String temporalStrategy;
 
     /**
      * Creates a new IndexManager for a specific index set and query.
-     * Initializes only the indexes required by the query and temporal strategy.
+     * Initializes only the indexes required by the query and temporal strategy,
+     * or attempts to preload all known types if specific preloading parameters are met.
      *
      * @param actualIndexDir The direct path to the directory containing the various index type subdirectories (e.g., unigram, ner_date).
      * @param indexSetName The name of the index set to use (from FROM clause), used for logging and identification.
-     * @param query The parsed query object
+     * @param query The parsed query object. Used to determine required indexes unless maximal preloading is triggered.
      * @param temporalStrategy The name of the temporal strategy ("nash" or "naive")
      * @param stitchStrategy The name of the stitch strategy (e.g., "optimized", "none")
      * @throws IndexAccessException if the base index directory doesn't exist or synonym manager fails to initialize
@@ -64,6 +66,7 @@ public class IndexManager implements AutoCloseable {
         this.indexSetName = indexSetName;
         this.indexes = new HashMap<>();
         this.stitchStrategy = stitchStrategy;
+        this.temporalStrategy = temporalStrategy;
 
         if (!Files.exists(this.indexBaseDir)) {
             throw new IndexAccessException(
@@ -90,19 +93,31 @@ public class IndexManager implements AutoCloseable {
             );
         }
 
-        initializeRequiredIndexes(query, temporalStrategy);
+        initializeRequiredIndexes(query);
     }
 
     /**
-     * Determines and initializes only the indexes required by the query and temporal strategy.
+     * Determines and initializes only the indexes required by the query and strategies,
+     * or all known indexes if maximal preloading conditions are met.
      *
      * @param query The parsed query
-     * @param temporalStrategy The temporal strategy ("nash" or "naive")
-     * @throws IndexAccessException if no required indexes could be initialized
+     * @throws IndexAccessException if no required indexes could be initialized (and not in maximal preloading where skipping is ok)
      */
-    private void initializeRequiredIndexes(Query query, String temporalStrategy) throws IndexAccessException {
-        Set<String> requiredIndexNames = determineRequiredIndexes(query, temporalStrategy, this.stitchStrategy);
-        logger.info("Query requires the following indexes: {}", requiredIndexNames);
+    private void initializeRequiredIndexes(Query query) throws IndexAccessException {
+        Set<String> requiredIndexNames;
+        boolean isMaximalPreload = "nash".equalsIgnoreCase(this.temporalStrategy) &&
+                                   "optimized".equalsIgnoreCase(this.stitchStrategy) &&
+                                   query != null && isMaximalPreloadQuery(query);
+                                   // QueryCLI now sends a specific query for this
+
+        if (isMaximalPreload) {
+            logger.info("Maximal preloading triggered for IndexManager based on strategies and query structure.");
+            requiredIndexNames = getAllKnownIndexTypes(); // Attempt to load all
+        } else {
+            requiredIndexNames = determineRequiredIndexes(query, this.temporalStrategy, this.stitchStrategy);
+        }
+
+        logger.info("Attempting to initialize indexes: {}", requiredIndexNames);
 
         List<Options> createdOptionsList = new ArrayList<>();
 
@@ -134,18 +149,28 @@ public class IndexManager implements AutoCloseable {
                 IndexAccessInterface indexAccess = new IndexAccess(indexPath, type, specificOptions, true);
                 indexes.put(type, indexAccess);
                 createdOptionsList.remove(specificOptions);
-                logger.info("Successfully initialized required {} index", type);
+                logger.info("Successfully initialized {} index", type);
 
             } catch (IndexAccessException e) {
-                logger.error("Failed to initialize required {} index at {}: {} [Type: {}]",
-                    type, indexBaseDir.resolve(type), e.getMessage(), e.getErrorType());
-                if (specificOptions != null && !indexes.containsValue(specificOptions)) {
+                if (isMaximalPreload) {
+                    logger.warn("Maximal Preload: Failed to initialize optional {} index at {}: {} [Type: {}]. Skipping.",
+                        type, indexBaseDir.resolve(type), e.getMessage(), e.getErrorType());
+                } else {
+                    logger.error("Failed to initialize required {} index at {}: {} [Type: {}]",
+                        type, indexBaseDir.resolve(type), e.getMessage(), e.getErrorType());
+                }
+                if (specificOptions != null && !createdOptionsList.contains(specificOptions) && !indexes.containsValue(specificOptions)) {
                     specificOptions.close();
                 }
             } catch (Exception e) {
-                logger.error("Unexpected error initializing required {} index at {}: {}",
-                    type, indexBaseDir.resolve(type), e.getMessage(), e);
-                if (specificOptions != null && !indexes.containsValue(specificOptions)) {
+                if (isMaximalPreload) {
+                    logger.warn("Maximal Preload: Unexpected error initializing optional {} index at {}: {}. Skipping.",
+                        type, indexBaseDir.resolve(type), e.getMessage(), e);
+                } else {
+                    logger.error("Unexpected error initializing required {} index at {}: {}",
+                        type, indexBaseDir.resolve(type), e.getMessage(), e);
+                }
+                if (specificOptions != null && !createdOptionsList.contains(specificOptions) && !indexes.containsValue(specificOptions)) {
                     specificOptions.close();
                 }
             }
@@ -155,16 +180,87 @@ public class IndexManager implements AutoCloseable {
             opts.close();
         }
 
-        if (indexes.isEmpty() && !requiredIndexNames.isEmpty()) {
-             String missing = String.join(", ", requiredIndexNames);
+        if (!isMaximalPreload && indexes.isEmpty() && !requiredIndexNames.isEmpty()) {
+             String missing = String.join(", ", requiredIndexNames.stream().filter(name -> !indexes.containsKey(name)).toArray(String[]::new));
             throw new IndexAccessException(
                 "None of the required indexes could be initialized in index set '" + indexSetName +
-                "'. Required: [" + missing + "]. Please ensure the index directories exist and contain valid RocksDB databases.",
+                "' for the given query. Required and missing/failed: [" + missing + "]" +
+                ". Please ensure these index directories exist and contain valid RocksDB databases.",
                 "index_manager",
                 IndexAccessException.ErrorType.INITIALIZATION_ERROR
             );
         }
-         logger.debug("Finished initializing required indexes. Active indexes: {}", indexes.keySet());
+         logger.debug("Finished initializing indexes. Active indexes: {}", indexes.keySet());
+    }
+
+    /**
+     * Checks if the provided query matches the structure of the "maximal preloading query"
+     * used by QueryCLI to signal an attempt to load all indexes.
+     * This is a heuristic check based on the known structure of that query.
+     */
+    private boolean isMaximalPreloadQuery(Query query) {
+        if (query == null || query.conditions() == null || query.conditions().isEmpty()) {
+            return false;
+        }
+        // Example conditions from QueryCLI's max preload query:
+        // CONTAINS('preload_a', 'preload_b', 'preload_c') AND NER('O') AND POS('NN') AND DEPENDENCY('dep') AND TEMPORAL('2000-01-01T00:00:00')
+        // This is a simplified check; we rely more on the strategy combination passed to constructor.
+        // A more robust check might involve looking for specific terms or a combination of many condition types.
+        // For now, if QueryCLI passes the designated strategies AND a query that isn't trivially empty,
+        // we assume it's the preload signal.
+        // The main check is `isMaximalPreload` in `initializeRequiredIndexes`.
+        // This method is more of a safeguard or future extension point.
+
+        // Let's check for multiple diverse conditions as a proxy.
+        boolean hasContains = false;
+        boolean hasNer = false;
+        boolean hasPos = false;
+        boolean hasDep = false;
+        boolean hasTemporal = false;
+
+        List<Condition> conditionsToCheck = new ArrayList<>(query.conditions());
+        while(!conditionsToCheck.isEmpty()){
+            Condition current = conditionsToCheck.remove(0);
+            if (current instanceof Contains) hasContains = true;
+            else if (current instanceof Ner) hasNer = true;
+            else if (current instanceof Pos) hasPos = true;
+            else if (current instanceof Dependency) hasDep = true;
+            else if (current instanceof Temporal) hasTemporal = true;
+            else if (current instanceof Logical logical) conditionsToCheck.addAll(logical.conditions());
+            else if (current instanceof Not not) conditionsToCheck.add(not.condition());
+        }
+        // If it has at least, say, 3 of these diverse types, consider it a preload signal query
+        int typeCount = (hasContains ? 1:0) + (hasNer ? 1:0) + (hasPos ? 1:0) + (hasDep ? 1:0) + (hasTemporal ? 1:0);
+        return typeCount >=3; // Heuristic: if it looks complex, it might be the preload query.
+    }
+
+    /**
+     * Returns a set of all known index types that IndexManager might try to load
+     * during a maximal preloading phase.
+     */
+    private Set<String> getAllKnownIndexTypes() {
+        Set<String> knownTypes = new HashSet<>();
+        // Base n-grams
+        knownTypes.add("unigram");
+        knownTypes.add("bigram");
+        knownTypes.add("trigram");
+        // Annotation types
+        knownTypes.add("ner");
+        knownTypes.add("ner_date");
+        knownTypes.add("pos");
+        knownTypes.add("dependency");
+        // Special temporal index
+        knownTypes.add("nash");
+        // Stitch variants (add all common ones)
+        String[] ngramPrefixes = {"unigram", "bigram", "trigram"};
+        String[] annotationSuffixes = {"pos", "ner", "date"};
+        for (String prefix : ngramPrefixes) {
+            for (String suffix : annotationSuffixes) {
+                knownTypes.add("stitch_" + prefix + "_" + suffix);
+            }
+        }
+        logger.debug("All known index types for maximal preloading: {}", knownTypes);
+        return knownTypes;
     }
 
     /**
