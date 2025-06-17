@@ -44,11 +44,13 @@ public final class QueryResultSoA {
     private IntArrayList conceptualRowIds; // NEW: Groups bindings into conceptual output rows
 
     // Value deduplication for memory optimization
-    private List<Object> uniqueValues;        // Deduplicated values
+    private List<Object> uniqueValues;        // Deduplicated values (stores the actual objects)
+    private Map<Object, Integer> valueToUniqueIndexMap; // Map for quick lookup of value to its index in uniqueValues
     private IntArrayList valueIndices;       // Indices into uniqueValues
 
     // Variable name interning for memory optimization
     private List<String> uniqueVariableNames;   // Deduplicated variable names
+    private Map<String, Integer> variableNameToUniqueIndexMap; // Map for quick lookup of var name to its index
     private IntArrayList variableNameIndices;  // Indices into uniqueVariableNames (-1 for no variable)
 
     // Type storage using bytes for memory efficiency
@@ -92,8 +94,11 @@ public final class QueryResultSoA {
 
         // Initialize deduplication structures
         this.uniqueValues = new ArrayList<>();
+        this.valueToUniqueIndexMap = new HashMap<>(); // Initialize map
         this.valueIndices = new IntArrayList();
+
         this.uniqueVariableNames = new ArrayList<>();
+        this.variableNameToUniqueIndexMap = new HashMap<>(); // Initialize map
         this.variableNameIndices = new IntArrayList();
         this.valueTypes = new ByteArrayList();
         this.nextConceptualRowIdGenerator = 0;
@@ -189,17 +194,16 @@ public final class QueryResultSoA {
             return -1; // Special sentinel for null values
         }
 
-        // Try local deduplication first
-        for (int i = 0; i < uniqueValues.size(); i++) {
-            if (Objects.equals(uniqueValues.get(i), value)) {
-                return i;
-            }
+        Integer index = valueToUniqueIndexMap.get(value);
+        if (index != null) {
+            return index;
         }
 
         // Add new unique value
-        int index = uniqueValues.size();
+        int newIndex = uniqueValues.size();
         uniqueValues.add(value);
-        return index;
+        valueToUniqueIndexMap.put(value, newIndex);
+        return newIndex;
     }
 
     /**
@@ -210,17 +214,16 @@ public final class QueryResultSoA {
             return -1; // Special sentinel for no variable
         }
 
-        // Try local interning first
-        for (int i = 0; i < uniqueVariableNames.size(); i++) {
-            if (Objects.equals(uniqueVariableNames.get(i), variableName)) {
-                return i;
-            }
+        Integer index = variableNameToUniqueIndexMap.get(variableName);
+        if (index != null) {
+            return index;
         }
 
         // Add new unique variable name
-        int index = uniqueVariableNames.size();
+        int newIndex = uniqueVariableNames.size();
         uniqueVariableNames.add(variableName);
-        return index;
+        variableNameToUniqueIndexMap.put(variableName, newIndex);
+        return newIndex;
     }
 
     // --- Accessors for SoA data ---
@@ -552,8 +555,10 @@ public final class QueryResultSoA {
         logger.trace("QueryResultSoA clear() (hashCode={}): BEFORE. current_size={}, current_nextConceptualRowIdGenerator={}",
                      System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator);
         this.uniqueValues.clear();
+        this.valueToUniqueIndexMap.clear();
         this.valueIndices.clear();
         this.uniqueVariableNames.clear();
+        this.variableNameToUniqueIndexMap.clear();
         this.variableNameIndices.clear();
         this.valueTypes.clear();
         this.documentIds.clear();

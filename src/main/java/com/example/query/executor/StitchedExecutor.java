@@ -167,8 +167,10 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                                 ngramTerm,
                                                 ValueType.TERM,
                                                 containsCondition.variableName(),
-                                                docId, sentenceId,
-                                                termBeginChar, termEndChar,
+                                                docId,
+                                                requirements.needsSentenceId ? sentenceId : -1,
+                                                requirements.needsPositions ? termBeginChar : -1,
+                                                requirements.needsPositions ? termEndChar : -1,
                                                 -1,
                                                 conceptualRowId
                                             );
@@ -178,7 +180,8 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                                     dateFromKey,
                                                     annotationValueTypeToStore,
                                                     annotationVarName,
-                                                    docId, sentenceId,
+                                                    docId,
+                                                    requirements.needsSentenceId ? sentenceId : -1,
                                                     -1, -1,
                                                     -1,
                                                     conceptualRowId
@@ -262,8 +265,10 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                             ngramTerm,
                             ValueType.TERM,
                             containsCondition.variableName(),
-                            docId, sentenceId,
-                            termBeginChar, termEndChar,
+                            docId,
+                            requirements.needsSentenceId ? sentenceId : -1,
+                            requirements.needsPositions ? termBeginChar : -1,
+                            requirements.needsPositions ? termEndChar : -1,
                             -1,
                             conceptualRowId
                         );
@@ -274,9 +279,10 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                     annotationValueForSoA,
                                     annotationValueTypeToStore,
                                     annotationVarName,
-                                    docId, sentenceId,
+                                    docId,
+                                    requirements.needsSentenceId ? sentenceId : -1,
                                     -1, -1,
-                                    currentAnnotationSynonymId,
+                                    requirements.needsSynonymIds ? currentAnnotationSynonymId : -1,
                                     conceptualRowId
                                 );
                             } else {
