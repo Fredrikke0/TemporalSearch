@@ -1,5 +1,5 @@
 # What date did Fidel Castro win the Cuban revolution?
-SELECT date, COUNT(*) FROM source WHERE CONTAINS('Cuban') AND CONTAINS('victory') AND NER(PERSON, 'Fidel Castro') AND NER(PERSON, 'Fulgencio Batista') AND DATE(< 2050) BIND date GROUP BY date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: 1959-01-01
+SELECT date, COUNT(*) FROM source WHERE CONTAINS('Cuban') AND CONTAINS('victory') AND NER(PERSON, 'Fidel Castro') AND NER(PERSON, 'Fulgencio Batista') AND DATE(< 2050) BIND date GROUP BY date ORDER BY COUNT(*) DESC ::: 1959-01-01
 #Who was president in year yyyy?
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('president') AND CONTAINS('United States') AND DATE(= 1988) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: reagan
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('president') AND CONTAINS('United States') AND DATE(= 1987) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: reagan
