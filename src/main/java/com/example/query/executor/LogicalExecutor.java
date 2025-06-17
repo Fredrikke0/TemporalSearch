@@ -266,7 +266,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                     logger.trace("Left docId {} > right docId {}, advancing right", leftDocId, rightDocId);
                     rightIdx++;
                 } else {
-                    logger.debug("MATCH FOUND: docId={}", leftDocId);
+                    logger.trace("MATCH FOUND: docId={}", leftDocId);
                     // Found matching docId - create cross product of all matching entries
                     int currentConceptualId = nextConceptualRowId++;
 
@@ -285,7 +285,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                         rightCount++;
                     }
 
-                    logger.debug("Adding {} left entries and {} right entries for conceptual ID {}",
+                    logger.trace("Adding {} left entries and {} right entries for conceptual ID {}",
                                leftCount, rightCount, currentConceptualId);
 
                                         // Add all left bindings for this docId
@@ -511,6 +511,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
      * Logic: Greedy, Single-Pass, Multi-Fusion, Non-Adjacent.
      */
     private List<Condition> fuseAllNonOverlappingStitchablePairs(List<Condition> originalConditions) {
+        logger.debug("Fusing all non-overlapping stitchable pairs. Original conditions size: {}", originalConditions.size());
         if (originalConditions.size() < 2) {
             return originalConditions;
         }

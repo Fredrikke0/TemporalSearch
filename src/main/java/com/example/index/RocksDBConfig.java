@@ -27,6 +27,10 @@ public class RocksDBConfig {
     public static final int BLOOM_FILTER_BITS_PER_KEY = 10;
     public static final boolean BLOOM_FILTER_USE_BLOCK_BASED_BUILDER = false;
 
+    // Constants for DB Open optimizations
+    private static final long MAX_MANIFEST_FILE_SIZE = 64L * 1024 * 1024; // 64MB
+    private static final long MAX_TOTAL_WAL_SIZE = 512L * 1024 * 1024; // 512MB
+
     /**
      * Creates an optimized Options instance for RocksDB configuration.
      * Settings are tuned for high-throughput index generation with reduced write amplification.
@@ -37,6 +41,13 @@ public class RocksDBConfig {
         Options options = new Options();
         options.setCreateIfMissing(true);
         options.setWriteBufferSize(WRITE_BUFFER_SIZE);
+
+        // DB Open Optimizations from https://github.com/facebook/rocksdb/wiki/Speed-Up-DB-Open
+        options.setSkipStatsUpdateOnDbOpen(true);
+        options.setMaxFileOpeningThreads(Runtime.getRuntime().availableProcessors());
+        options.setMaxManifestFileSize(MAX_MANIFEST_FILE_SIZE);
+        options.setMaxTotalWalSize(MAX_TOTAL_WAL_SIZE);
+        options.setSkipCheckingSstFileSizesOnDbOpen(true);
 
         // Block Cache configuration
         BlockBasedTableConfig tableOptions = new BlockBasedTableConfig();
@@ -57,11 +68,21 @@ public class RocksDBConfig {
                    "\n- Write buffer: {}MB" +
                    "\n- Block cache: {}GB" +
                    "\n- Compression: {}" +
-                   "\n- Statistics enabled: {}",
+                   "\n- Statistics enabled: {}" +
+                   "\n- Skip stats update on DB open: {}" +
+                   "\n- Max file opening threads: {}" +
+                   "\n- Max manifest file size: {}MB" +
+                   "\n- Max total WAL size: {}MB" +
+                   "\n- Skip checking SST file sizes on DB open: {}",
                    WRITE_BUFFER_SIZE / (1024 * 1024),
                    BLOCK_CACHE_SIZE / (1024 * 1024 * 1024),
                    options.compressionType(),
-                   options.statistics() != null);
+                   options.statistics() != null,
+                   true, // Corresponds to setSkipStatsUpdateOnDbOpen(true)
+                   Runtime.getRuntime().availableProcessors(), // Corresponds to setMaxFileOpeningThreads
+                   MAX_MANIFEST_FILE_SIZE / (1024 * 1024),
+                   MAX_TOTAL_WAL_SIZE / (1024 * 1024),
+                   true); // Corresponds to setSkipCheckingSstFileSizesOnDbOpen(true)
 
         return options;
     }

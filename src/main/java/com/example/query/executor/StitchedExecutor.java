@@ -208,6 +208,32 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                 logger.debug("Looking up in stitch index '{}' with key: '{}', context isPresent: {}",
                              stitchIndexName, stitchLookupKey, context.isPresent());
 
+                Optional<Integer> targetAnnotationValueIdOpt = Optional.empty();
+                String specificAnnotationValueFromCondition = null;
+
+                if (annotationCondition instanceof Ner nerValCond && nerValCond.target() != null && !nerValCond.target().isBlank()) {
+                    specificAnnotationValueFromCondition = nerValCond.target();
+                    try {
+                        targetAnnotationValueIdOpt = Optional.of(synonymManager.getId(specificAnnotationValueFromCondition.toLowerCase()));
+                        logger.debug("Stitch with specific NER entity: '{}', targetId: {}", specificAnnotationValueFromCondition, targetAnnotationValueIdOpt.get());
+                    } catch (RocksDBException e) {
+                        logger.warn("Failed to get synonym ID for specific NER entity value '{}' in StitchedExecutor. This entity is unknown or DB error. Returning empty for this stitch.", specificAnnotationValueFromCondition, e);
+                        return new QueryResultSoA(granularity, granularitySize, requirements);
+                    }
+                } else if (annotationCondition instanceof Pos posCond && posCond.term() != null && !posCond.term().isBlank()) {
+                    specificAnnotationValueFromCondition = posCond.term(); // The specific word for POS(TAG, 'word')
+                    try {
+                        targetAnnotationValueIdOpt = Optional.of(synonymManager.getId(specificAnnotationValueFromCondition.toLowerCase()));
+                        logger.debug("Stitch with specific POS term: '{}' (for POS tag {}), targetId: {}",
+                                     specificAnnotationValueFromCondition, posCond.posTag().toUpperCase(),
+                                     targetAnnotationValueIdOpt.get()); // .get() is safe here if getId succeeds
+                    } catch (RocksDBException e) {
+                        logger.warn("Failed to get synonym ID for specific POS term value '{}' (for POS tag {}) in StitchedExecutor. This term is unknown or DB error. Returning empty for this stitch.",
+                                    specificAnnotationValueFromCondition, posCond.posTag().toUpperCase(), e);
+                        return new QueryResultSoA(granularity, granularitySize, requirements);
+                    }
+                }
+
                 Optional<byte[]> rawBlobOpt = stitchIndex.getRaw(stitchLookupKey.getBytes(StandardCharsets.UTF_8));
 
                 if (rawBlobOpt.isPresent() && rawBlobOpt.get().length > 0) {
@@ -221,7 +247,30 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         int sentenceId = positions.getSentenceIdAt(i);
                         int termBeginChar = positions.getBeginCharAt(i);
                         int termEndChar = positions.getEndCharAt(i);
-                        int annotationSpecificValueId = positions.getSynonymIdAt(i);
+                        int currentAnnotationSynonymId = positions.getSynonymIdAt(i);
+                        String actualAnnotationTerm = null;
+
+                        if (targetAnnotationValueIdOpt.isPresent()) { // Specific NER entity filter
+                            if (currentAnnotationSynonymId == targetAnnotationValueIdOpt.get().intValue()) {
+                                actualAnnotationTerm = specificAnnotationValueFromCondition; // Use the known value
+                            } else {
+                                // This co-occurrence's annotation ID doesn't match the target specific ID. Skip.
+                                logger.trace("Skipping co-occurrence: current annotation ID {} != target ID {} (for specific value '{}') for stitch key '{}'",
+                                             currentAnnotationSynonymId, targetAnnotationValueIdOpt.get(), specificAnnotationValueFromCondition, stitchLookupKey);
+                                continue;
+                            }
+                        } else { // No specific entity/term filter (e.g., generic NER(PERSON) or POS(NN) without term), or getId failed
+                            Optional<String> resolvedValueOpt = synonymManager.getTerm(currentAnnotationSynonymId);
+                            if (resolvedValueOpt.isPresent()) {
+                                actualAnnotationTerm = resolvedValueOpt.get();
+                            } else {
+                                logger.warn("Could not resolve synonym ID {} for annotation value. Stitch key: '{}'. Skipping this co-occurrence.",
+                                            currentAnnotationSynonymId, stitchLookupKey);
+                                continue; // Cannot resolve term, so skip this co-occurrence.
+                            }
+                        }
+
+                        // If we reach here, actualAnnotationTerm is set (or was not required if annotationVarName is blank)
 
                         int conceptualRowId = resultSoA.getNextConceptualRowId();
 
@@ -231,31 +280,26 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                             containsCondition.variableName(),
                             docId, sentenceId,
                             termBeginChar, termEndChar,
-                            -1,
+                            -1, // Synonym ID for the ngramTerm itself is not stored here
                             conceptualRowId
                         );
 
                         if (!annotationVarName.isBlank()) {
-                            Object valueToAdd = null;
-                            Optional<String> resolvedValueOpt = synonymManager.getTerm(annotationSpecificValueId);
-
-                            if (resolvedValueOpt.isPresent()) {
-                                valueToAdd = resolvedValueOpt.get();
-                            } else {
-                                logger.warn("Could not resolve synonym ID {} for annotation value. Stitch key: '{}'. Skipping this annotation binding.", annotationSpecificValueId, stitchLookupKey);
-                                continue;
-                            }
-
-                            if (valueToAdd != null) {
+                            if (actualAnnotationTerm != null) {
                                 resultSoA.add(
-                                    valueToAdd,
+                                    actualAnnotationTerm,
                                     annotationValueType,
                                     annotationVarName,
                                     docId, sentenceId,
-                                    -1, -1,
-                                    annotationSpecificValueId,
+                                    -1, -1, // Positions for annotation are not from stitch directly
+                                    currentAnnotationSynonymId, // Store the synonym ID of the resolved annotation
                                     conceptualRowId
                                 );
+                            } else {
+                                // This case should ideally not be reached if logic above is correct
+                                // and annotationVarName is not blank.
+                                logger.warn("actualAnnotationTerm is null but annotationVarName ('{}') is set for stitch key '{}'. Skipping annotation binding for conceptualRowId {}.",
+                                            annotationVarName, stitchLookupKey, conceptualRowId);
                             }
                         }
                     }

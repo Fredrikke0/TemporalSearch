@@ -115,6 +115,13 @@ public class QueryCLI {
                 SynonymManager synonymManager = indexManager.getSynonymManager();
                 Query.Granularity queryGranularity = query.granularity(); // Get granularity from the query
 
+                // Add warning for stitch strategy and granularity mismatch
+                if ("optimized".equalsIgnoreCase(this.stitchStrategyName) && queryGranularity != Query.Granularity.SENTENCE) {
+                    String warningMessage = "Warning: Stitch optimization ('optimized') is active, but it is primarily designed and most effective for SENTENCE granularity. Current query granularity is " + queryGranularity + ". Results might not be optimal or behave as expected with stitching.";
+                    logger.warn(warningMessage);
+                    System.err.println(warningMessage);
+                }
+
                 // Create and configure the ConditionExecutorFactory
                 ConditionExecutorFactory factory = new ConditionExecutorFactory(synonymManager, this.stitchStrategyName, queryGranularity);
                 factory.setTemporalStrategy(this.temporalStrategyName); // Configure with the desired temporal strategy
