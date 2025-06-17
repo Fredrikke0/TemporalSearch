@@ -68,10 +68,10 @@ public class IndexAccess implements IndexAccessInterface {
 
             if (readOnly) {
                 this.db = RocksDB.openReadOnly(options, indexDir.getAbsolutePath());
-                logger.debug("Opened IndexAccess in READ-ONLY mode for type {} at {}", indexType, this.indexPath);
+                logger.trace("Opened IndexAccess in READ-ONLY mode for type {} at {}", indexType, this.indexPath);
             } else {
                 this.db = RocksDB.open(options, indexDir.getAbsolutePath());
-                logger.debug("Opened IndexAccess in read-write mode for type {} at {}", indexType, this.indexPath);
+                logger.trace("Opened IndexAccess in read-write mode for type {} at {}", indexType, this.indexPath);
             }
         } catch (RocksDBException e) {
             this.isOpen.set(false);
