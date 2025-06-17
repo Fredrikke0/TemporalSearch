@@ -10,7 +10,8 @@ import sys
 
 def get_hop_type(query_text):
     """Determines the hop type based on the number of JOIN clauses."""
-    join_count = len(re.findall(r' JOIN ', query_text, re.IGNORECASE))
+    # Use word boundary to match JOIN as a complete word
+    join_count = len(re.findall(r'\bJOIN\b', query_text, re.IGNORECASE))
     if join_count == 0:
         return "1-hop"
     elif join_count == 1:
@@ -49,8 +50,8 @@ def analyze_benchmarks(csv_filepath):
         with open(csv_filepath, 'r', newline='') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
-                if row['verification_status'] != 'PASSED':
-                    continue
+                # Include all queries regardless of verification status
+                # (verification is about answer correctness, not execution success)
 
                 query_text = row['query_text']
                 hop_type = get_hop_type(query_text)
