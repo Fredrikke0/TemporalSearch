@@ -196,7 +196,7 @@ public class QueryExecutor {
 
                 Query rhsQuery = step.subquery();
                 String rhsAlias = step.rightSourceAlias();
-                AttributeRequirements rhsRequirements = QueryAttributeAnalyzer.analyze(rhsQuery);
+                AttributeRequirements rhsRequirements = QueryAttributeAnalyzer.analyze(rhsQuery, requirements);
                 QueryResultSoA rhsSoA;
 
                 // --- Pushdown Logic for this step ---

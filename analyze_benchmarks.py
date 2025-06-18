@@ -164,7 +164,12 @@ def generate_latex_table(stats, strategy_tuples):
                 else:
                     warm_str = "N/A"
 
-                latex_string += f"{temporal} & {pushdown} & {stitch} & {cold_str} & {warm_str} \\\\ \n"
+                # Capitalize first letter and rename 'none' to 'naive'
+                temporal_display = temporal.capitalize()
+                pushdown_display = pushdown.replace('none', 'naive').capitalize()
+                stitch_display = stitch.replace('none', 'naive').capitalize()
+
+                latex_string += f"{temporal_display} & {pushdown_display} & {stitch_display} & {cold_str} & {warm_str} \\\\ \n"
 
         latex_string += "\\bottomrule\n"
         latex_string += "\\end{tabular}\n"
@@ -209,7 +214,11 @@ def generate_summary_table(stats, strategy_tuples):
         for strat_tuple in strategy_tuples:
             temporal, pushdown, stitch = strat_tuple
             if strat_tuple in stats[hop_type]:
-                strategy_name = f"{temporal},{pushdown},{stitch}"
+                # Capitalize first letter and rename 'none' to 'naive'
+                temporal_display = temporal.capitalize()
+                pushdown_display = pushdown.replace('none', 'naive').capitalize()
+                stitch_display = stitch.replace('none', 'naive').capitalize()
+                strategy_name = f"{temporal_display},{pushdown_display},{stitch_display}"
 
                 cold_stats = stats[hop_type][strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
                 warm_stats = stats[hop_type][strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})

@@ -29,6 +29,17 @@ public class QueryAttributeAnalyzer {
      * @return AttributeRequirements specifying which attributes are needed
      */
     public static AttributeRequirements analyze(Query query) {
+        return analyze(query, null);
+    }
+
+    /**
+     * Analyzes a query to determine which SoA attributes are required, considering parent requirements.
+     *
+     * @param query The query to analyze
+     * @param parentRequirements Requirements from the parent query (may be null for root queries)
+     * @return AttributeRequirements specifying which attributes are needed
+     */
+    public static AttributeRequirements analyze(Query query, AttributeRequirements parentRequirements) {
         AttributeRequirements requirements = new AttributeRequirements();
 
         logger.trace("Analyzing query for attribute requirements: {}", query.toString());
@@ -50,9 +61,31 @@ public class QueryAttributeAnalyzer {
             }
         }
 
-        // Analyze subqueries recursively from JoinSteps
+        // Analyze subqueries recursively from JoinSteps, propagating parent requirements
         for (com.example.query.model.JoinStep step : query.joinSteps()) {
-            requirements.merge(analyze(step.subquery()));
+            // Create combined requirements for subquery analysis
+            AttributeRequirements subqueryParentRequirements = new AttributeRequirements();
+            subqueryParentRequirements.merge(requirements); // Current query requirements
+            if (parentRequirements != null) {
+                subqueryParentRequirements.merge(parentRequirements); // Parent query requirements
+            }
+
+            AttributeRequirements subqueryRequirements = analyze(step.subquery(), subqueryParentRequirements);
+            requirements.merge(subqueryRequirements);
+        }
+
+        // Inherit critical requirements from parent if present
+        if (parentRequirements != null) {
+            // If parent needs sentence IDs (e.g., for GRANULARITY SENTENCE), subqueries must provide them
+            if (parentRequirements.needsSentenceId) {
+                logger.trace("Inheriting sentence ID requirement from parent query");
+                requirements.needsSentenceId = true;
+            }
+            // Conceptual row IDs are often needed for joins
+            if (parentRequirements.needsConceptualRowIds) {
+                logger.trace("Inheriting conceptual row ID requirement from parent query");
+                requirements.needsConceptualRowIds = true;
+            }
         }
 
         logger.trace("Query analysis complete. Requirements: {}", requirements);

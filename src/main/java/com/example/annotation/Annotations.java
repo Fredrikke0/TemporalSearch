@@ -621,23 +621,57 @@ public class Annotations {
 
         int sentenceId = 0;
         for (CoreSentence sentence : document.sentences()) {
-            List<CoreLabel> tokens = sentence.tokens();
+            List<CoreLabel> coreLabels = sentence.tokens(); // All tokens in the current sentence
+            if (coreLabels.isEmpty()) {
+                sentenceId++;
+                continue;
+            }
+
+            int firstTokenActualBeginChar = coreLabels.get(0).beginPosition();
+            boolean truncationOccurredInSentence = false;
+            List<CoreLabel> keptTokensForThisSentence = new ArrayList<>(); // For logging context
 
             // Process tokens
-            for (CoreLabel token : tokens) {
-                Map<String, Object> annotation = new HashMap<>();
-                annotation.put("document_id", documentId);
-                annotation.put("sentence_id", sentenceId);
-                annotation.put("begin_char", token.beginPosition());
-                annotation.put("end_char", token.endPosition());
-                annotation.put("token", token.word());
-                annotation.put("lemma", token.lemma());
-                annotation.put("pos", token.tag());
-                annotation.put("ner", token.ner());
-                annotation.put("normalized_ner",
-                        token.get(CoreAnnotations.NormalizedNamedEntityTagAnnotation.class));
+            for (CoreLabel token : coreLabels) {
+                if (token.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
+                    Map<String, Object> annotation = new HashMap<>();
+                    annotation.put("document_id", documentId);
+                    annotation.put("sentence_id", sentenceId);
+                    annotation.put("begin_char", token.beginPosition());
+                    annotation.put("end_char", token.endPosition());
+                    annotation.put("token", token.word());
+                    annotation.put("lemma", token.lemma());
+                    annotation.put("pos", token.tag());
+                    annotation.put("ner", token.ner());
+                    annotation.put("normalized_ner",
+                            token.get(CoreAnnotations.NormalizedNamedEntityTagAnnotation.class));
 
-                annotations.add(annotation);
+                    annotations.add(annotation);
+                    keptTokensForThisSentence.add(token);
+                } else {
+                    // Token extends beyond the allowed span
+                    if (!truncationOccurredInSentence) {
+                        String lastTokenDetails = keptTokensForThisSentence.isEmpty() ?
+                            "N/A (no tokens included)" :
+                            String.format("text: '%s', end_char: %d",
+                                keptTokensForThisSentence.get(keptTokensForThisSentence.size()-1).word(),
+                                keptTokensForThisSentence.get(keptTokensForThisSentence.size()-1).endPosition());
+
+                        logger.debug("Sentence (doc_id: {}, sentence_id: {}) annotation processing truncated by length. Token with text: '{}' (begin_char: {}, end_char: {}) exceeded span limit (first_token_begin_char: {} + max_span: {} = {}). Last token included: {}.",
+                                documentId,
+                                sentenceId,
+                                token.word(),
+                                token.beginPosition(),
+                                token.endPosition(),
+                                firstTokenActualBeginChar,
+                                CoreNLPConfig.MAX_SENTENCE_LENGTH,
+                                firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH,
+                                lastTokenDetails);
+                        truncationOccurredInSentence = true;
+                    }
+                    // Since tokens are ordered, once one is out, the rest are too.
+                    break;
+                }
             }
 
             // Process dependencies
@@ -647,19 +681,34 @@ public class Annotations {
                     IndexedWord source = edge.getSource();
                     IndexedWord target = edge.getTarget();
 
-                    int beginChar = Math.min(source.beginPosition(), target.beginPosition());
-                    int endChar = Math.max(source.endPosition(), target.endPosition());
+                    // Ensure both source and target tokens fully fall within the allowed character span
+                    if (source.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH &&
+                        target.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
 
-                    Map<String, Object> dependency = new HashMap<>();
-                    dependency.put("document_id", documentId);
-                    dependency.put("sentence_id", sentenceId);
-                    dependency.put("begin_char", beginChar);
-                    dependency.put("end_char", endChar);
-                    dependency.put("head_token", source.word());
-                    dependency.put("dependent_token", target.word());
-                    dependency.put("relation", edge.getRelation().toString());
+                        int beginChar = Math.min(source.beginPosition(), target.beginPosition());
+                        int endChar = Math.max(source.endPosition(), target.endPosition());
 
-                    dependencies.add(dependency);
+                        // This check is implicitly covered if source and target endPositions are within limit,
+                        // but kept for explicitness ensuring the dependency span itself is also fine.
+                        if (endChar <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
+                            Map<String, Object> dependency = new HashMap<>();
+                            dependency.put("document_id", documentId);
+                            dependency.put("sentence_id", sentenceId);
+                            dependency.put("begin_char", beginChar);
+                            dependency.put("end_char", endChar);
+                            dependency.put("head_token", source.word());
+                            dependency.put("dependent_token", target.word());
+                            dependency.put("relation", edge.getRelation().toString());
+
+                            dependencies.add(dependency);
+                        }
+                        // else: A dependency whose constituent tokens were within span, but whose combined span is not.
+                        // This case should be rare if token endPositions are the primary filter.
+                        // Can add logging here if this specific case needs to be tracked.
+                    }
+                    // else: Dependency involves at least one token that was (or would have been) truncated.
+                    // No specific log for skipped dependency here if truncationOccurredInSentence is true,
+                    // as the token-level truncation log covers the root cause for the sentence.
                 }
             }
             sentenceId++;
