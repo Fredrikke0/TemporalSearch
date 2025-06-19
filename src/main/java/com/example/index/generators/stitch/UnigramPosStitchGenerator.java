@@ -74,7 +74,7 @@ public final class UnigramPosStitchGenerator extends AbstractNgramStitchGenerato
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String posTag = rs.getString("pos");
-                    String token = rs.getString("token"); // The token that has this POS tag
+                    String token = rs.getString("token");
 
                     if (token == null || token.isEmpty() || posTag == null || posTag.isEmpty()) {
                         logger.trace("Skipping POS annotation due to null/empty token or posTag. Doc ID: {}, POS: '{}', Token: '{}'", documentId, posTag, token);
@@ -92,33 +92,22 @@ public final class UnigramPosStitchGenerator extends AbstractNgramStitchGenerato
             }
         } catch (SQLException e) {
             logger.error("SQLException in fetchAnnotationsForDocument for POS stitch, doc ID {}: {}", documentId, e.getMessage(), e);
-            throw e; // Re-throw
+            throw e;
         }
 
-        // Filter the annotations before returning
-        List<AnnotationData> filteredAnnotations = filterAnnotationsBySentenceCharacterSpan(
-            rawAnnotationsFromDb, documentId, "Unigram POS");
-
-        if (filteredAnnotations.isEmpty()) {
-            if (!rawAnnotationsFromDb.isEmpty()) {
-                logger.trace("No POS annotations remaining after span filtering for document ID {} for {} (Unigram) index.", documentId, MY_INDEX_NAME);
-            } else {
-                logger.trace("No POS annotations found for document ID {} for {} (Unigram) index.", documentId, MY_INDEX_NAME);
-            }
-        } else {
-            if (rawAnnotationsFromDb.size() != filteredAnnotations.size()) {
-                 logger.trace("Fetched {} raw POS annotations, filtered to {} for document ID {} for {} (Unigram) index.",
-                         rawAnnotationsFromDb.size(), filteredAnnotations.size(), documentId, MY_INDEX_NAME);
-            } else {
-                 logger.trace("Fetched {} POS annotations (no filtering needed) for document ID {} for {} (Unigram) index.", filteredAnnotations.size(), documentId, MY_INDEX_NAME);
-            }
+        if (rawAnnotationsFromDb.isEmpty()) {
+            logger.trace("No raw POS annotations found for document ID {} for {} (Unigram) index.", documentId, MY_INDEX_NAME);
         }
-        return filteredAnnotations;
+        if (!rawAnnotationsFromDb.isEmpty()) {
+            logger.trace("Fetched {} raw POS annotations for document ID {} for {} (Unigram) index. (Span filtering is now done in Annotations.java)",
+                     rawAnnotationsFromDb.size(), documentId, MY_INDEX_NAME);
+        }
+        return rawAnnotationsFromDb;
     }
 
     @Override
     protected boolean requiresSynonymIdForAnnotationValue() {
-        return true; // For POS stitch, the token itself is the specific value, requiring a synonym ID
+        return true;
     }
 
     @Override

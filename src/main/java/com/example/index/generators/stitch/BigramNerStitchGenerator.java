@@ -92,17 +92,10 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
             throw e;
         }
 
-        // Filter rawAnnotations using the centralized method
-        List<RawAnnotation> filteredRawAnnotations = filterAnnotationsBySentenceCharacterSpan(rawAnnotationsFromDb, documentId, "Bigram NER");
 
         List<AnnotationData> groupedAnnotations = new ArrayList<>();
-        if (filteredRawAnnotations.isEmpty()) { // Check the filtered list
-            // Optionally, log that no annotations remained after filtering if rawAnnotationsFromDb was not empty
-            if (!rawAnnotationsFromDb.isEmpty()) {
-                logger.trace("No NER annotations remaining after span filtering for document ID {} for {} (Bigram) index.", documentId, MY_INDEX_NAME);
-            } else {
-                logger.trace("No NER annotations found for document ID {} for {} (Bigram) index.", documentId, MY_INDEX_NAME);
-            }
+        if (rawAnnotationsFromDb.isEmpty()) {
+            logger.trace("No raw NER annotations found for document ID {} for {} (Bigram) index.", documentId, MY_INDEX_NAME);
             return groupedAnnotations;
         }
 
@@ -112,8 +105,8 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
         int currentEntityBeginChar = -1;
         int previousTokenEndChar = -1; // To check for token adjacency
 
-        for (int i = 0; i < filteredRawAnnotations.size(); i++) { // Iterate over filtered list
-            RawAnnotation currentAnnotation = filteredRawAnnotations.get(i); // Use filtered list
+        for (int i = 0; i < rawAnnotationsFromDb.size(); i++) {
+            RawAnnotation currentAnnotation = rawAnnotationsFromDb.get(i);
             boolean entityBreak = false;
 
             if (currentEntityType != null) {
@@ -149,7 +142,7 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
             previousTokenEndChar = currentAnnotation.originalAnnotationEndChar(); // Update for next adjacency check
 
             // If it's the last annotation in the list, process any pending entity
-            if (i == filteredRawAnnotations.size() - 1) { // Check against filtered list size
+            if (i == rawAnnotationsFromDb.size() - 1) {
                 if (!currentEntityRawTokens.isEmpty() && currentEntityType != null) {
                     String entityValue = String.join(" ", currentEntityRawTokens).toLowerCase();
                     groupedAnnotations.add(new AnnotationData(
@@ -167,7 +160,7 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
 
     @Override
     protected boolean requiresSynonymIdForAnnotationValue() {
-        return true; // Normalized NER string needs its ID from SynonymManager
+        return true;
     }
 
     @Override

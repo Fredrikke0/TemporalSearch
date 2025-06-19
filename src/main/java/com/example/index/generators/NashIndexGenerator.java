@@ -143,12 +143,8 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 int sentenceId = sentEntry.getKey();
                 List<AnnotationEntry> sentenceTokens = sentEntry.getValue(); // Already sorted by begin_char from SQL
 
-                // Apply sentence span filter
-                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
-                    sentenceTokens, documentId, sentenceId, "NashIndexGenerator", logger);
-
-                // Process filtered tokens for this sentence to merge date entities
-                for (AnnotationEntry token : filteredSentenceTokens) {
+                // Process tokens for this sentence to merge date entities
+                for (AnnotationEntry token : sentenceTokens) {
                     String normalizedNer = token.getNormalizedNer(); // e.g., "2023-01-15"
 
                     // Logic to merge consecutive identical normalized_ner values

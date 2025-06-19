@@ -101,9 +101,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
             sentencesMap.forEach((sentenceId, sentenceTokens) -> {
                 sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
 
-                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
-                    sentenceTokens, documentId, sentenceId, "BigramIndexGenerator", logger);
-                sentenceSpanFilteredTokens.addAll(filteredSentenceTokens);
+                sentenceSpanFilteredTokens.addAll(sentenceTokens);
             });
         });
 

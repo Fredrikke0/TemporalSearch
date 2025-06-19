@@ -92,16 +92,9 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
             throw e;
         }
 
-        // Filter rawAnnotations using the centralized method
-        List<RawAnnotation> filteredRawAnnotations = filterAnnotationsBySentenceCharacterSpan(rawAnnotationsFromDb, documentId, "Trigram NER");
-
         List<AnnotationData> groupedAnnotations = new ArrayList<>();
-        if (filteredRawAnnotations.isEmpty()) { // Check the filtered list
-            if (!rawAnnotationsFromDb.isEmpty()) {
-                logger.trace("No NER annotations remaining after span filtering for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
-            } else {
-                logger.trace("No NER annotations found for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
-            }
+        if (rawAnnotationsFromDb.isEmpty()) { // Check rawAnnotationsFromDb directly
+            logger.trace("No raw NER annotations found for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
             return groupedAnnotations;
         }
 
@@ -111,8 +104,8 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
         int currentEntityBeginChar = -1;
         int previousTokenEndChar = -1;
 
-        for (int i = 0; i < filteredRawAnnotations.size(); i++) { // Iterate over filtered list
-            RawAnnotation currentAnnotation = filteredRawAnnotations.get(i); // Use filtered list
+        for (int i = 0; i < rawAnnotationsFromDb.size(); i++) {
+            RawAnnotation currentAnnotation = rawAnnotationsFromDb.get(i); // Use rawAnnotationsFromDb
             boolean entityBreak = false;
 
             if (currentEntityType != null) {
@@ -146,7 +139,7 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
             currentEntityRawTokens.add(currentAnnotation.token());
             previousTokenEndChar = currentAnnotation.originalAnnotationEndChar();
 
-            if (i == filteredRawAnnotations.size() - 1) { // Check against filtered list size
+            if (i == rawAnnotationsFromDb.size() - 1) {
                 if (!currentEntityRawTokens.isEmpty() && currentEntityType != null) {
                     String entityValue = String.join(" ", currentEntityRawTokens).toLowerCase();
                     groupedAnnotations.add(new AnnotationData(
@@ -164,7 +157,7 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
 
     @Override
     protected boolean requiresSynonymIdForAnnotationValue() {
-        return true; // Normalized NER string needs ID
+        return true;
     }
 
     @Override

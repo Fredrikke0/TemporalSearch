@@ -120,9 +120,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
             sentencesMap.forEach((sentenceId, sentenceTokens) -> {
                 sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
-                    sentenceTokens, documentId, sentenceId, "POSIndexGenerator", logger);
-                sentenceSpanFilteredTokens.addAll(filteredSentenceTokens);
+                sentenceSpanFilteredTokens.addAll(sentenceTokens);
             });
         });
 

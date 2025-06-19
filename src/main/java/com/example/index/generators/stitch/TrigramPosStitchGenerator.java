@@ -87,30 +87,19 @@ public final class TrigramPosStitchGenerator extends AbstractNgramStitchGenerato
             throw e;
         }
 
-        // Filter the annotations before returning
-        List<AnnotationData> filteredAnnotations = filterAnnotationsBySentenceCharacterSpan(
-            rawAnnotationsFromDb, documentId, "Trigram POS");
-
-        if (filteredAnnotations.isEmpty()) {
-            if (!rawAnnotationsFromDb.isEmpty()) {
-                logger.trace("No POS annotations remaining after span filtering for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
-            } else {
-                logger.trace("No POS annotations found for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
-            }
-        } else {
-            if (rawAnnotationsFromDb.size() != filteredAnnotations.size()) {
-                 logger.trace("Fetched {} raw POS annotations, filtered to {} for document ID {} for {} (Trigram) index.",
-                         rawAnnotationsFromDb.size(), filteredAnnotations.size(), documentId, MY_INDEX_NAME);
-            } else {
-                 logger.trace("Fetched {} POS annotations (no filtering needed) for document ID {} for {} (Trigram) index.", filteredAnnotations.size(), documentId, MY_INDEX_NAME);
-            }
+        if (rawAnnotationsFromDb.isEmpty()) {
+            logger.trace("No raw POS annotations found for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
         }
-        return filteredAnnotations;
+        if (!rawAnnotationsFromDb.isEmpty()) {
+            logger.trace("Fetched {} raw POS annotations for document ID {} for {} (Trigram) index. (Span filtering is now done in Annotations.java)",
+                     rawAnnotationsFromDb.size(), documentId, MY_INDEX_NAME);
+        }
+        return rawAnnotationsFromDb;
     }
 
     @Override
     protected boolean requiresSynonymIdForAnnotationValue() {
-        return true; // Token associated with POS tag needs ID from SynonymManager
+        return true;
     }
 
     @Override

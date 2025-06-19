@@ -116,9 +116,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
             sentencesMap.forEach((sentenceId, sentenceTokens) -> {
                 sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
-                    sentenceTokens, documentId, sentenceId, "NerIndexGenerator", logger);
-                sentenceSpanFilteredBatch.addAll(filteredSentenceTokens);
+                sentenceSpanFilteredBatch.addAll(sentenceTokens);
             });
         });
 

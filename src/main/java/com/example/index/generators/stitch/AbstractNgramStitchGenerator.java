@@ -29,7 +29,6 @@ import com.google.common.collect.ListMultimap;
 
 public abstract class AbstractNgramStitchGenerator extends IndexGenerator<AbstractNgramStitchGenerator.NgramStitchEntry> {
     private static final Logger logger = LoggerFactory.getLogger(AbstractNgramStitchGenerator.class);
-    protected static final int MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN = 120;
 
     protected final SynonymManager synonymManager;
     protected final int N; // Size of the N-gram (e.g., 1 for unigram, 2 for bigram, 3 for trigram)
@@ -132,55 +131,6 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
     protected abstract List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException;
     protected abstract boolean requiresSynonymIdForAnnotationValue();
     protected abstract AnnotationType getManagedAnnotationType();
-
-    /**
-     * Filters a list of annotation records, removing those that fall outside the
-     * MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN limit within each sentence.
-     *
-     * @param rawAnnotations The list of raw annotation records to filter.
-     * @param documentId The ID of the document being processed (for logging).
-     * @param generatorTypeForLog A string indicating the type of generator (e.g., "Unigram NER", "Bigram Date") for logging.
-     * @param <T> The type of the annotation record, must implement SentenceSpanFilterable.
-     * @return A new list containing only the filtered annotation records.
-     */
-    protected <T extends SentenceSpanFilterable> List<T> filterAnnotationsBySentenceCharacterSpan(
-            List<T> rawAnnotations, int documentId, String generatorTypeForLog) {
-
-        if (rawAnnotations.isEmpty()) {
-            return new ArrayList<>(); // Return empty list if input is empty
-        }
-
-        List<T> filteredAnnotations = new ArrayList<>();
-        java.util.Map<Integer, Integer> firstTokenBeginCharPerSentence = new java.util.HashMap<>();
-        java.util.Set<Integer> truncatedSentencesLog = new java.util.HashSet<>(); // To log truncation only once per sentence
-
-        for (T rawAnno : rawAnnotations) {
-            int sentenceId = rawAnno.sentenceId();
-            int currentTokenBeginChar = rawAnno.beginChar();
-
-            if (!firstTokenBeginCharPerSentence.containsKey(sentenceId)) {
-                firstTokenBeginCharPerSentence.put(sentenceId, currentTokenBeginChar);
-            }
-
-            int firstCharInSentence = firstTokenBeginCharPerSentence.get(sentenceId);
-            if (currentTokenBeginChar <= firstCharInSentence + MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN) {
-                filteredAnnotations.add(rawAnno);
-            } else {
-                if (!truncatedSentencesLog.contains(sentenceId)) {
-                    logger.trace("Sentence (doc_id: {}, sentence_id: {}) annotation processing truncated for {}. Token with begin_char {} (detail: '{}') exceeded limit (first_token_begin_char {} + span {}).",
-                            documentId,
-                            sentenceId,
-                            generatorTypeForLog,
-                            currentTokenBeginChar,
-                            rawAnno.getFilterLogDetail(),
-                            firstCharInSentence,
-                            MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN);
-                    truncatedSentencesLog.add(sentenceId);
-                }
-            }
-        }
-        return filteredAnnotations;
-    }
 
     @Override
     protected List<NgramStitchEntry> fetchBatch(NgramStitchEntry lastStitchEntryFromPreviousOverallBatch) throws SQLException {
@@ -311,24 +261,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
                 continue;
             }
 
-            List<ProcessedTokenInfo> effectiveSentenceTokens = new ArrayList<>();
-            int firstTokenBeginChar = originalSentenceTokens.get(0).beginChar();
-
-            for (ProcessedTokenInfo tokenInfo : originalSentenceTokens) {
-                if (tokenInfo.beginChar() > firstTokenBeginChar + MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN) {
-                    logger.trace("Sentence (doc_id: {}, sentence_id: {}) truncated for indexing. Token with begin_char {} (text: '{}') exceeded limit (first_token_begin_char {} + span {}). Last token included had begin_char: {}.",
-                        documentId,
-                        sentenceId,
-                        tokenInfo.beginChar(),
-                        tokenInfo.token(),
-                        firstTokenBeginChar,
-                        MAX_SENTENCE_CHAR_SPAN_FROM_FIRST_TOKEN,
-                        (effectiveSentenceTokens.isEmpty() ? "N/A" : effectiveSentenceTokens.get(effectiveSentenceTokens.size()-1).beginChar())
-                    );
-                    break;
-                }
-                effectiveSentenceTokens.add(tokenInfo);
-            }
+            List<ProcessedTokenInfo> effectiveSentenceTokens = new ArrayList<>(originalSentenceTokens);
 
             if (effectiveSentenceTokens.size() < N) {
                 continue;

@@ -634,19 +634,19 @@ public class Annotations {
             // Process tokens
             for (CoreLabel token : coreLabels) {
                 if (token.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
-                    Map<String, Object> annotation = new HashMap<>();
-                    annotation.put("document_id", documentId);
-                    annotation.put("sentence_id", sentenceId);
-                    annotation.put("begin_char", token.beginPosition());
-                    annotation.put("end_char", token.endPosition());
-                    annotation.put("token", token.word());
-                    annotation.put("lemma", token.lemma());
-                    annotation.put("pos", token.tag());
-                    annotation.put("ner", token.ner());
-                    annotation.put("normalized_ner",
-                            token.get(CoreAnnotations.NormalizedNamedEntityTagAnnotation.class));
+                Map<String, Object> annotation = new HashMap<>();
+                annotation.put("document_id", documentId);
+                annotation.put("sentence_id", sentenceId);
+                annotation.put("begin_char", token.beginPosition());
+                annotation.put("end_char", token.endPosition());
+                annotation.put("token", token.word());
+                annotation.put("lemma", token.lemma());
+                annotation.put("pos", token.tag());
+                annotation.put("ner", token.ner());
+                annotation.put("normalized_ner",
+                        token.get(CoreAnnotations.NormalizedNamedEntityTagAnnotation.class));
 
-                    annotations.add(annotation);
+                annotations.add(annotation);
                     keptTokensForThisSentence.add(token);
                 } else {
                     // Token extends beyond the allowed span
@@ -685,22 +685,22 @@ public class Annotations {
                     if (source.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH &&
                         target.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
 
-                        int beginChar = Math.min(source.beginPosition(), target.beginPosition());
-                        int endChar = Math.max(source.endPosition(), target.endPosition());
+                    int beginChar = Math.min(source.beginPosition(), target.beginPosition());
+                    int endChar = Math.max(source.endPosition(), target.endPosition());
 
                         // This check is implicitly covered if source and target endPositions are within limit,
                         // but kept for explicitness ensuring the dependency span itself is also fine.
                         if (endChar <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
-                            Map<String, Object> dependency = new HashMap<>();
-                            dependency.put("document_id", documentId);
-                            dependency.put("sentence_id", sentenceId);
-                            dependency.put("begin_char", beginChar);
-                            dependency.put("end_char", endChar);
-                            dependency.put("head_token", source.word());
-                            dependency.put("dependent_token", target.word());
-                            dependency.put("relation", edge.getRelation().toString());
+                    Map<String, Object> dependency = new HashMap<>();
+                    dependency.put("document_id", documentId);
+                    dependency.put("sentence_id", sentenceId);
+                    dependency.put("begin_char", beginChar);
+                    dependency.put("end_char", endChar);
+                    dependency.put("head_token", source.word());
+                    dependency.put("dependent_token", target.word());
+                    dependency.put("relation", edge.getRelation().toString());
 
-                            dependencies.add(dependency);
+                    dependencies.add(dependency);
                         }
                         // else: A dependency whose constituent tokens were within span, but whose combined span is not.
                         // This case should be rare if token endPositions are the primary filter.

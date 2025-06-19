@@ -143,9 +143,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
             sentencesMap.forEach((sentenceId, sentenceTokens) -> {
                 sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
-                    sentenceTokens, documentId, sentenceId, "NerDateIndexGenerator", logger);
-                sentenceSpanFilteredBatch.addAll(filteredSentenceTokens);
+                sentenceSpanFilteredBatch.addAll(sentenceTokens); // Add all sorted tokens directly
             });
         });
 

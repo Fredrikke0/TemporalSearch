@@ -51,19 +51,16 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
         logger.debug("populateSpecificAnnotationSynonyms is a no-op for UnigramNerStitchIndexGenerator as NER tags are not stored in SynonymManager and normalized_ner IDs are handled by the parent.");
     }
 
-    // Temporary internal record to hold raw annotation data including the token
     private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag, int originalAnnotationEndChar) implements SentenceSpanFilterable {
         @Override
         public String getFilterLogDetail() {
             return "NER: " + nerTag + ", Token: " + token;
         }
-        // sentenceId() and beginChar() are implicitly provided by the record components
     }
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
         List<RawAnnotation> rawAnnotationsFromDb = new ArrayList<>();
-        // Modified SQL to fetch 'token' and ensure ner is not null
         String sql = String.format("""
             SELECT sentence_id, begin_char, end_char, token, ner
             FROM annotations
@@ -80,10 +77,10 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
                     rawAnnotationsFromDb.add(new RawAnnotation(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
-                        rs.getInt("end_char"), // This is the end_char of the individual token
+                        rs.getInt("end_char"),
                         rs.getString("token"),
                         rs.getString("ner"),
-                        rs.getInt("end_char") // Store original end_char for adjacency check
+                        rs.getInt("end_char")
                     ));
                 }
             }
@@ -92,12 +89,10 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
             throw e;
         }
 
-        // Filter rawAnnotations using the centralized method
-        List<RawAnnotation> filteredRawAnnotations = filterAnnotationsBySentenceCharacterSpan(rawAnnotationsFromDb, documentId, "Unigram NER");
 
         List<AnnotationData> groupedAnnotations = new ArrayList<>();
-        if (filteredRawAnnotations.isEmpty()) {
-            logger.trace("No NER annotations found or all filtered for document ID {} for {} index.", documentId, MY_INDEX_NAME);
+        if (rawAnnotationsFromDb.isEmpty()) {
+            logger.trace("No raw NER annotations found for document ID {} for {} index. (Span filtering is now done in Annotations.java)", documentId, MY_INDEX_NAME);
             return groupedAnnotations;
         }
 
@@ -107,8 +102,8 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
         int currentEntityBeginChar = -1;
         int previousTokenEndChar = -1;
 
-        for (int i = 0; i < filteredRawAnnotations.size(); i++) { // Iterate over filtered list
-            RawAnnotation currentAnnotation = filteredRawAnnotations.get(i); // Use filtered list
+        for (int i = 0; i < rawAnnotationsFromDb.size(); i++) {
+            RawAnnotation currentAnnotation = rawAnnotationsFromDb.get(i);
             boolean entityBreak = false;
 
             if (currentEntityType != null) {
@@ -142,7 +137,7 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
             currentEntityRawTokens.add(currentAnnotation.token());
             previousTokenEndChar = currentAnnotation.originalAnnotationEndChar();
 
-            if (i == filteredRawAnnotations.size() - 1) { // Check against filtered list size
+            if (i == rawAnnotationsFromDb.size() - 1) {
                 if (!currentEntityRawTokens.isEmpty() && currentEntityType != null) {
                     String entityValue = String.join(" ", currentEntityRawTokens).toLowerCase();
                     groupedAnnotations.add(new AnnotationData(

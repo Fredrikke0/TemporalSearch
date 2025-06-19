@@ -91,30 +91,20 @@ public final class BigramPosStitchGenerator extends AbstractNgramStitchGenerator
             throw e;
         }
 
-        // Filter the annotations before returning
-        List<AnnotationData> filteredAnnotations = filterAnnotationsBySentenceCharacterSpan(
-            rawAnnotationsFromDb, documentId, "Bigram POS");
 
-        if (filteredAnnotations.isEmpty()) {
-            if (!rawAnnotationsFromDb.isEmpty()) {
-                logger.trace("No POS annotations remaining after span filtering for document ID {} for {} (Bigram) index.", documentId, MY_INDEX_NAME);
-            } else {
-                logger.trace("No POS annotations found for document ID {} for {} (Bigram) index.", documentId, MY_INDEX_NAME);
-            }
-        } else {
-            if (rawAnnotationsFromDb.size() != filteredAnnotations.size()) {
-                 logger.trace("Fetched {} raw POS annotations, filtered to {} for document ID {} for {} (Bigram) index.",
-                         rawAnnotationsFromDb.size(), filteredAnnotations.size(), documentId, MY_INDEX_NAME);
-            } else {
-                 logger.trace("Fetched {} POS annotations (no filtering needed) for document ID {} for {} (Bigram) index.", filteredAnnotations.size(), documentId, MY_INDEX_NAME);
-            }
+        if (rawAnnotationsFromDb.isEmpty()) {
+            logger.trace("No raw POS annotations found for document ID {} for {} (Bigram) index.", documentId, MY_INDEX_NAME);
         }
-        return filteredAnnotations;
+        if (!rawAnnotationsFromDb.isEmpty()) {
+            logger.trace("Fetched {} raw POS annotations for document ID {} for {} (Bigram) index. (Span filtering is now done in Annotations.java)",
+                     rawAnnotationsFromDb.size(), documentId, MY_INDEX_NAME);
+        }
+        return rawAnnotationsFromDb;
     }
 
     @Override
     protected boolean requiresSynonymIdForAnnotationValue() {
-        return true; // The token associated with the POS tag needs its ID from SynonymManager
+        return true;
     }
 
     @Override

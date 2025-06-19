@@ -13,7 +13,7 @@ import traceback
 DEFAULT_JAR_PATH = "target/query-cli.jar"
 # Timeouts for interactive mode
 QUERY_EXEC_TIMEOUT_SECONDS = 60 * 15  # 15 minutes for a single query to execute and return PROMPT
-CLI_STARTUP_TIMEOUT_SECONDS = 60    # Timeout for QueryCLI to start and print initial PROMPT
+CLI_STARTUP_TIMEOUT_SECONDS = 60 * 5    # Timeout for QueryCLI to start and print initial PROMPT
 COMMAND_ACK_TIMEOUT_SECONDS = 30    # Timeout for ACK responses from QueryCLI (SET STRATEGY, SET OUTPUT)
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 15 # Timeout for QueryCLI to exit after QUIT command
 
@@ -36,6 +36,7 @@ def _enqueue_output(stream, q, stream_name, is_verbose):
 
 class QueryCLIInteractiveProcess:
     def __init__(self, jar_path, db_file, index_dir, initial_temporal_strategy, initial_pushdown_strategy, initial_stitch_strategy, is_verbose=False):
+        print("[BENCHMARK.PY] Initializing QueryCLIInteractiveProcess...", flush=True)
         self.jar_path = jar_path
         self.db_file = db_file
         self.index_dir = index_dir
@@ -127,7 +128,7 @@ class QueryCLIInteractiveProcess:
         stderr_eof = False
 
         while True:
-            if self.process.poll() is not None:
+            if self.process is None or self.process.poll() is not None:
                 if self.is_verbose: print("[BENCHMARK.PY DEBUG] QueryCLI process terminated unexpectedly.", flush=True)
                 stdout_eof = self._drain_queue_into_list(self._stdout_q, call_specific_stdout) or stdout_eof
                 stderr_eof = self._drain_queue_into_list(self._stderr_q, call_specific_stderr) or stderr_eof
@@ -176,7 +177,7 @@ class QueryCLIInteractiveProcess:
         return stdout_output, stderr_output
 
     def send_command(self, command_str):
-        if self.process.poll() is not None:
+        if self.process is None or self.process.poll() is not None:
             stdout_final, stderr_final = self._collect_current_cycle_output(clear_buffers=False)
             raise ConnectionAbortedError(f"QueryCLI process not running. Cannot send '{command_str}'.\nStdout: {stdout_final}\nStderr: {stderr_final}")
 
@@ -187,8 +188,14 @@ class QueryCLIInteractiveProcess:
         self._last_command_timestamp = time.monotonic()
 
         try:
-            self.process.stdin.write(command_str + "\n")
-            self.process.stdin.flush()
+            if self.process.stdin:
+                self.process.stdin.write(command_str + "\n")
+                self.process.stdin.flush()
+            else:
+                # This case should ideally not be reached if Popen initializes stdin=PIPE correctly
+                # and stdin hasn't been closed and set to None.
+                stdout_final, stderr_final = self._collect_current_cycle_output(clear_buffers=False)
+                raise ConnectionAbortedError(f"QueryCLI process stdin is not available (None). Cannot send '{command_str}'.\nStdout: {stdout_final}\nStderr: {stderr_final}")
         except (IOError, ValueError) as e: # Catch BrokenPipeError (subclass of IOError) or ValueError if stdin closed
             stdout_final, stderr_final = self._collect_current_cycle_output(clear_buffers=False)
             raise ConnectionAbortedError(f"IOError/ValueError sending '{command_str}' (QueryCLI died or stdin closed?): {e}.\nStdout: {stdout_final}\nStderr: {stderr_final}")
@@ -245,7 +252,7 @@ class QueryCLIInteractiveProcess:
         if self.process and self.process.poll() is None:
             if self.is_verbose: print("[BENCHMARK.PY DEBUG] Sending EXIT to QueryCLI stdin.", flush=True)
             try:
-                if not self.process.stdin.closed:
+                if self.process.stdin and not self.process.stdin.closed:
                     self.process.stdin.write("EXIT\n")
                     self.process.stdin.flush()
                     self.process.stdin.close()
@@ -294,6 +301,7 @@ class QueryCLIInteractiveProcess:
 
 
 if __name__ == "__main__":
+    # print("[BENCHMARK.PY] Initializing benchmark script...", flush=True) # Loading message removed
     parser = argparse.ArgumentParser(description="Benchmark QueryCLI.java using interactive mode.")
     query_group = parser.add_mutually_exclusive_group(required=True)
     query_group.add_argument("--query", help="The query string to execute.")

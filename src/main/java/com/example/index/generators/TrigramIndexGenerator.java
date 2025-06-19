@@ -103,9 +103,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             sentencesMap.forEach((sentenceId, sentenceTokens) -> {
                 sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
 
-                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
-                    sentenceTokens, documentId, sentenceId, "TrigramIndexGenerator", logger);
-                sentenceSpanFilteredTokens.addAll(filteredSentenceTokens);
+                sentenceSpanFilteredTokens.addAll(sentenceTokens);
             });
         });
 

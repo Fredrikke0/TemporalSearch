@@ -104,9 +104,7 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             sentencesMap.forEach((sentenceId, sentenceTokens) -> {
                 sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
 
-                List<AnnotationEntry> filteredSentenceTokens = AnnotationEntry.filterTokensBySentenceSpan(
-                    sentenceTokens, documentId, sentenceId, "UnigramIndexGenerator", logger);
-                allFilteredTokens.addAll(filteredSentenceTokens);
+                allFilteredTokens.addAll(sentenceTokens);
             });
         });
 
