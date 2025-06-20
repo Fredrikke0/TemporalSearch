@@ -31,7 +31,8 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
     //Blacklist common, less informative relations
     private static final Set<String> BLACKLISTED_RELATIONS = Set.of(
         "punct",
-        "dep"
+        "dep",
+        "det"
     );
 
     public DependencyIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {

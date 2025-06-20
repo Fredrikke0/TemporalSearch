@@ -44,6 +44,8 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final DateTimeFormatter NASH_INTERVAL_FORMATTER = DateTimeFormatter.ISO_DATE; // YYYY-MM-DD
     private static final Pattern DATE_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
 
+    private long nashTermsWritten = 0; // Field to store terms written by this generator
+
     public NashIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
@@ -79,6 +81,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     public void generateIndex() throws SQLException, IOException {
         logger.info("Starting Nash index generation (in-memory build)... Index Name: {}", getIndexName());
         long startTime = System.currentTimeMillis();
+        this.nashTermsWritten = 0; // Initialize for this run
 
         Map<LocalDate, Integer> dateToId = new HashMap<>();
         List<LocalDate> idToDate = new ArrayList<>();
@@ -282,6 +285,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             indexAccess.put(NashSerializationUtils.DATE_LOOKUP_KEY, serializedLookup);
             logger.info("Written date lookup table ({} entries) to RocksDB.", idToDate.size());
             long endTime = System.currentTimeMillis();
+            this.nashTermsWritten = termsWritten; // Update the field
             logger.info("Successfully generated Nash index. Total unique prefixes written: {}. Time taken: {} ms",
                     termsWritten, (endTime - startTime));
         } catch (IndexAccessException e) {
@@ -296,6 +300,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private void writeEmptyNashIndex(IndexAccessInterface idxAccess) throws IOException, IndexAccessException {
         idxAccess.put(NashSerializationUtils.DATE_LOOKUP_KEY, NashSerializationUtils.serializeDateLookup(Collections.emptyList()));
         logger.info("Wrote empty date lookup table for Nash index.");
+        this.nashTermsWritten = 0; // Ensure count is 0 if index is empty
     }
 
     private LocalDate parseNormalizedDate(String dateStr) {
@@ -329,5 +334,10 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             }
         }
         return 0;
+    }
+
+    @Override
+    public long getTotalTermsWrittenToIndex() {
+        return this.nashTermsWritten;
     }
 }

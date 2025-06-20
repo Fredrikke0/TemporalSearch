@@ -103,22 +103,38 @@ public class DependencyConditionExecutorTest {
 
 
     @Test
-    void testExecuteSpecificSearch_variableBinding() throws QueryExecutionException, IndexAccessException, java.io.IOException {
+    void testExecute_bindAllLiterals_iterativePath_matchFound() throws QueryExecutionException, IndexAccessException, java.io.IOException {
         Dependency condition = new Dependency("city", "located_in", "country", "?where");
-        String expectedKey = "city" + DELIMITER_STR + "located_in" + DELIMITER_STR + "country";
+        String govRelPrefixKey = "city" + DELIMITER_STR + "located_in" + DELIMITER_STR;
+        String fullKey = "city" + DELIMITER_STR + "located_in" + DELIMITER_STR + "country";
 
         PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(5, 3, 2, 8));
-        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+        byte[] serializedPositions = positions.serializeToCompositeBlob();
+
+        // Mock for the iterative path (executeVariableSearchOptimized)
+        org.rocksdb.RocksIterator mockRocksIterator = org.mockito.Mockito.mock(org.rocksdb.RocksIterator.class);
+        when(mockIndex.seek(eq(govRelPrefixKey.toLowerCase().getBytes()))).thenReturn(mockRocksIterator);
+        when(mockRocksIterator.isValid()).thenReturn(true, false); // First call true, then false
+        when(mockRocksIterator.key()).thenReturn(fullKey.toLowerCase().getBytes());
+        when(mockRocksIterator.value()).thenReturn(serializedPositions);
+
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
-        assertEquals(1, result.size());
+        assertEquals(1, result.size(), "Expected 1 result from iterative path with BIND");
         assertEquals("city:located_in:country", result.getValueAt(0)); // Value is the full relation
         assertEquals(ValueType.DEPENDENCY, result.getValueTypeAt(0));
         assertEquals("?where", result.getVariableNameAt(0));
         assertEquals(5, result.getDocumentIdAt(0));
+
+        // Verify iterator was used
+        org.mockito.Mockito.verify(mockIndex).seek(eq(govRelPrefixKey.toLowerCase().getBytes()));
+        org.mockito.Mockito.verify(mockRocksIterator, org.mockito.Mockito.atLeastOnce()).isValid();
+        org.mockito.Mockito.verify(mockRocksIterator).key();
+        org.mockito.Mockito.verify(mockRocksIterator).value();
+        org.mockito.Mockito.verify(mockRocksIterator).next(); // ensure it was advanced
     }
 
      @Test

@@ -294,6 +294,7 @@ dependent
     | variable
     | STRING
     | identifier
+    | WILDCARD
     ;
 
 variable

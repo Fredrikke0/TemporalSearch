@@ -67,17 +67,26 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
             String governor = condition.governor();
             String dependent = condition.dependent();
             String relation = condition.relation();
-            boolean isVariable = condition.isVariable();
-            // String variableName = condition.variableName(); // variableName is used inside helpers
+            boolean isVariableBinding = condition.isVariable(); // True if BIND clause is used
 
-            if (governor != null && !governor.startsWith("?") &&
-                dependent != null && !dependent.startsWith("?") &&
-                relation != null && !relation.startsWith("?")) {
+            // Determine if any part is a variable placeholder (e.g., "?gov"), a literal wildcard "*",
+            // or if a BIND clause is active (which implies iterative search for binding).
+            // A field is considered "specific literal" if it's not null, not a variable placeholder, and not a wildcard.
+            boolean govIsSpecificLiteral = (governor != null && !governor.startsWith("?") && !"*".equals(governor));
+            boolean relIsSpecificLiteral = (relation != null && !relation.startsWith("?") && !"*".equals(relation));
+            boolean depIsSpecificLiteral = (dependent != null && !dependent.startsWith("?") && !"*".equals(dependent));
+
+            if (govIsSpecificLiteral && relIsSpecificLiteral && depIsSpecificLiteral && !isVariableBinding) {
+                // All parts are specific literals, and no BINDing is happening.
+                // This is the only case for the direct specific search.
                 conceptualRowIdCounter = executeSpecificSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
-            } else if (isVariable && relation != null && !relation.startsWith("?")) {
-                 conceptualRowIdCounter = executeVariableSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
             } else {
-                logger.warn("Unsupported or incomplete DEPENDENCY condition: {}. For specific search, governor, relation, and dependent must be specified literals. For variable search, relation must be a literal and variable must be true.", condition);
+                // Any part is a variable ('?'), a literal wildcard ('*'), or this is a BIND operation.
+                // This path should use iterative scanning.
+                // Note: isVariableBinding check is not strictly needed here for routing if the above specific literal check fails,
+                // but executeVariableSearchOptimized relies on condition.isVariable() and condition.variableName().
+                // The main point is that if it's not a fully specific, non-binding query, we iterate.
+                 conceptualRowIdCounter = executeVariableSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
             }
 
             logger.debug("DEPENDENCY condition execution produced {} entries in QueryResultSoA ({} conceptual rows)", resultSoA.size(), conceptualRowIdCounter);
@@ -165,18 +174,19 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                                                Optional<FilteringContext> context)
         throws IndexAccessException, IOException {
 
-        String variableName = condition.variableName();
-        // Relation filter must be present and not a variable for this optimized path
-        String relationFilterLower = condition.relation().toLowerCase();
+        String variableName = condition.isVariable() ? condition.variableName() : null;
 
-        // Governor and Dependent filters can be null (variable), a literal, or '*'
-        String governorFilterLower = condition.governor() != null && !condition.governor().startsWith("?")
+        // Relation filter must be present for BIND, but can be '*' for non-BIND wildcard searches.
+        // Initialize filters to handle literals, '?' (which results in null here after model building), or '*'.
+        String governorFilterLower = (condition.governor() != null && !condition.governor().startsWith("?"))
                                      ? condition.governor().toLowerCase() : null;
-        String dependentFilterLower = condition.dependent() != null && !condition.dependent().startsWith("?")
+        String relationFilterLower = (condition.relation() != null && !condition.relation().startsWith("?"))
+                                     ? condition.relation().toLowerCase() : null;
+        String dependentFilterLower = (condition.dependent() != null && !condition.dependent().startsWith("?"))
                                       ? condition.dependent().toLowerCase() : null;
 
-        logger.debug("Executing variable search for dependency relations with relation filter: '{}', gov filter: '{}', dep filter: '{}'",
-            relationFilterLower, governorFilterLower, dependentFilterLower);
+        logger.debug("Executing variable search for dependency relations with gov filter: '{}', rel filter: '{}', dep filter: '{}', binding to var: {}",
+            governorFilterLower, relationFilterLower, dependentFilterLower, variableName);
 
         if (index == null) {
             logger.error("IndexAccessInterface is null in DependencyExecutor.executeVariableSearchOptimized");
@@ -216,12 +226,12 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     String currentRelation = parts[1];
                     String currentDependent = parts[2];
 
-                    if (!currentRelation.equals(relationFilterLower)) {
+                    // Apply filters: if a filter is null or "*", it's a wildcard for that part.
+                    if (governorFilterLower != null && !"*".equals(governorFilterLower) && !currentGovernor.equals(governorFilterLower)) {
                         iterator.next();
                         continue;
                     }
-
-                    if (governorFilterLower != null && !"*".equals(governorFilterLower) && !currentGovernor.equals(governorFilterLower)) {
+                    if (relationFilterLower != null && !"*".equals(relationFilterLower) && !currentRelation.equals(relationFilterLower)) {
                         iterator.next();
                         continue;
                     }
@@ -256,7 +266,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                         currentConceptualRowId++;
                     }
                     logger.debug("Added {} bindings for dependency variable '{}' (key: '{}') under conceptual ID range ending {}",
-                                 numPositions, variableName, key, currentConceptualRowId -1);
+                                 numPositions, variableName != null ? variableName : "<N/A>", key, currentConceptualRowId -1);
                 } else {
                     logger.warn("Skipping invalid key format in dependency index: {}", key);
                 }

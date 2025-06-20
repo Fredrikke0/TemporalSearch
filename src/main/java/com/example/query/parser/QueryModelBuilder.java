@@ -896,6 +896,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             return unquote(ctx.STRING().getText());
         } else if (ctx.identifier() != null) {
             return visitIdentifier(ctx.identifier());
+        } else if (ctx.WILDCARD() != null) { // Added WILDCARD handling
+            return ctx.WILDCARD().getText();
         }
         throw new IllegalStateException("visitDependent called on unexpected context type. Context: " + ctx.getText());
     }
