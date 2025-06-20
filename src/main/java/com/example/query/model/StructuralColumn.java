@@ -127,7 +127,8 @@ public class StructuralColumn implements SelectColumn {
                              String timestampStr = SqliteAccessor.getInstance().getMetadata(source, docIdForMetadata, "timestamp");
                              if (timestampStr != null && !timestampStr.isEmpty()) {
                                  try {
-                                     docTimestamp = LocalDate.parse(timestampStr); // Assuming ISO_LOCAL_DATE format
+                                     // Try parsing as LocalDateTime first, then convert to LocalDate
+                                     docTimestamp = java.time.LocalDateTime.parse(timestampStr).toLocalDate();
                                  } catch (java.time.format.DateTimeParseException e) {
                                      logger.warn("Failed to parse timestamp string '{}' for docId {}. Setting missing.", timestampStr, docIdForMetadata, e);
                                      docTimestamp = null; // Explicitly set to null if parsing fails

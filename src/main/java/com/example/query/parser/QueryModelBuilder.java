@@ -1421,6 +1421,34 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         return new LocalDateTime[] { startDate, endDate };
     }
 
+    @Override
+    public Object visitDateSingleOrPair(QueryLangParser.DateSingleOrPairContext ctx) {
+        String startDateText = ctx.start.getText();
+        LocalDateTime startDateResult = parseDateLiteral(startDateText);
+
+        if (ctx.end != null) {
+            String endDateText = ctx.end.getText();
+            LocalDateTime endDateResult = parseDateLiteral(endDateText);
+
+            // Adjust endDateResult to the end of its period (day, month, year)
+            // similar to logic in visitDateLiteralRange
+            if (isYearOnly(endDateText)) {
+                endDateResult = LocalDateTime.of(endDateResult.getYear(), 12, 31, 23, 59, 59);
+            } else if (isYearMonth(endDateText)) {
+                java.time.YearMonth ym = java.time.YearMonth.of(endDateResult.getYear(), endDateResult.getMonth());
+                endDateResult = LocalDateTime.of(endDateResult.getYear(), endDateResult.getMonth(), ym.lengthOfMonth(), 23, 59, 59);
+            } else { // Full date
+                endDateResult = LocalDateTime.of(endDateResult.toLocalDate(), java.time.LocalTime.MAX);
+            }
+            return new LocalDateTime[] { startDateResult, endDateResult };
+        } else {
+            // If only start is present, return the single LocalDateTime.
+            // This aligns with how visitSingleYear returns a LocalDateTime,
+            // and how parseDateLiteral handles year-only strings.
+            return startDateResult;
+        }
+    }
+
     // Helper methods for date literal handling
 
     /**

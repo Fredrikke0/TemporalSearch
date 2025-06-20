@@ -303,9 +303,7 @@ class QueryCLIInteractiveProcess:
 if __name__ == "__main__":
     # print("[BENCHMARK.PY] Initializing benchmark script...", flush=True) # Loading message removed
     parser = argparse.ArgumentParser(description="Benchmark QueryCLI.java using interactive mode.")
-    query_group = parser.add_mutually_exclusive_group(required=True)
-    query_group.add_argument("--query", help="The query string to execute.")
-    query_group.add_argument("--query-file", help="Path to a file containing queries (one per line). Format: query ::: optional_expected_answer")
+    parser.add_argument("--query-dir", required=True, help="Path to a directory containing query files. Each file's first line must be 'BENCHMARK_TYPE: <TYPE>', where TYPE is 1HOP, 2HOP, or 3HOP.")
     parser.add_argument("--jar-path", default=DEFAULT_JAR_PATH, help=f"Path to QueryCLI JAR (default: {DEFAULT_JAR_PATH})")
     parser.add_argument("--db-file", required=True, help="Path to QueryCLI SQLite database file.")
     parser.add_argument("--index-dir", required=True, help="Path to QueryCLI index directory.")
@@ -315,26 +313,63 @@ if __name__ == "__main__":
     parser.add_argument("--full", action="store_true", help="Run cold and warm cache modes. Default: cold only.")
     parser.add_argument("--runs-per-query", type=int, default=3, help="Number of timed runs per query/strategy (after warmup for warm mode).")
     parser.add_argument("--verbose", action="store_true", help="Verbose output from benchmark script and QueryCLI.")
-    parser.add_argument("--export-dir", help="Directory for exported CSV results (for verification).")
-    parser.add_argument("--benchmark-output", help="CSV filename for aggregated benchmark results.")
+    parser.add_argument("--export-dir", help="Directory for exported CSV results (for verification). NOTE: This is for raw query output, not the benchmark summary.")
     args = parser.parse_args()
 
     queries_to_run_orig = []
-    if args.query_file:
-        try:
-            with open(args.query_file, 'r', encoding='utf-8') as f:
-                for idx, line in enumerate(f):
-                    line = line.strip()
-                    if not line or line.startswith('#'): continue
-                    parts = line.split(' ::: ', 1)
-                    queries_to_run_orig.append({'id': idx, 'text': parts[0], 'expected': parts[1] if len(parts) > 1 else None})
-            if not queries_to_run_orig: exit(f"Error: Query file {args.query_file} is empty.")
-        except FileNotFoundError: exit(f"Error: Query file not found: {args.query_file}")
-        except Exception as e: exit(f"Error reading query file {args.query_file}: {e}")
-    elif args.query:
-        queries_to_run_orig.append({'id': 0, 'text': args.query, 'expected': None})
+    if args.query_dir:
+        if not os.path.isdir(args.query_dir):
+            exit(f"Error: Query directory not found: {args.query_dir}")
 
-    if not queries_to_run_orig: exit("No queries to execute.")
+        query_files = [f for f in os.listdir(args.query_dir) if os.path.isfile(os.path.join(args.query_dir, f))]
+        if not query_files:
+            exit(f"Error: No files found in query directory: {args.query_dir}")
+
+        query_id_counter = 0
+        for filename in query_files:
+            filepath = os.path.join(args.query_dir, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    first_line = f.readline().strip()
+                    if not first_line.startswith("BENCHMARK_TYPE:"):
+                        print(f"Warning: File {filename} does not start with 'BENCHMARK_TYPE:'. Skipping.", flush=True)
+                        continue
+
+                    try:
+                        benchmark_type_str = first_line.split(":", 1)[1].strip().upper()
+                        if benchmark_type_str not in ["1HOP", "2HOP", "3HOP"]:
+                            print(f"Warning: File {filename} has invalid BENCHMARK_TYPE '{benchmark_type_str}'. Must be 1HOP, 2HOP, or 3HOP. Skipping.", flush=True)
+                            continue
+                    except IndexError:
+                        print(f"Warning: File {filename} has malformed 'BENCHMARK_TYPE:' line. Skipping.", flush=True)
+                        continue
+
+                    file_queries_loaded = 0
+                    for line_idx, line in enumerate(f, start=1): # Start line_idx from 1 for user messages
+                        line = line.strip()
+                        if not line or line.startswith('#'): continue
+                        parts = line.split(' ::: ', 1)
+                        queries_to_run_orig.append({
+                            'id': query_id_counter,
+                            'text': parts[0],
+                            'expected': parts[1] if len(parts) > 1 else None,
+                            'benchmark_type': benchmark_type_str, # Add benchmark_type
+                            'source_file': filename
+                        })
+                        query_id_counter += 1
+                        file_queries_loaded +=1
+                    if file_queries_loaded == 0:
+                         print(f"Warning: File {filename} (Type: {benchmark_type_str}) contained no queries after the type definition. Skipping file's contribution to benchmark.", flush=True)
+
+            except FileNotFoundError: # Should not happen given os.isfile check, but defensive
+                 print(f"Warning: File {filename} not found during processing (should not occur). Skipping.", flush=True)
+            except Exception as e:
+                 print(f"Warning: Error reading query file {filename}: {e}. Skipping.", flush=True)
+    else: # Should be caught by required=True in argparse
+        exit("Error: --query-dir is a required argument.")
+
+
+    if not queries_to_run_orig: exit("No valid queries loaded from any file in the query directory. Exiting.")
 
     if args.export_dir and not os.path.exists(args.export_dir):
         try: os.makedirs(args.export_dir); print(f"Created export directory: {args.export_dir}", flush=True)
@@ -348,7 +383,7 @@ if __name__ == "__main__":
     print(f"Timeouts: QueryExec={QUERY_EXEC_TIMEOUT_SECONDS}s, CLIStartup={CLI_STARTUP_TIMEOUT_SECONDS}s, CmdAck={COMMAND_ACK_TIMEOUT_SECONDS}s, PromptWait={PROMPT}", flush=True)
     if args.verbose: print("Verbose output enabled.", flush=True)
     if args.export_dir: print(f"Verification exports (if any) to: {args.export_dir}", flush=True)
-    if args.benchmark_output: print(f"Saving benchmark summary to: {args.benchmark_output}", flush=True)
+    print(f"Benchmark summary CSVs will be saved alongside their respective input query files in: {args.query_dir}", flush=True)
 
     all_run_results_accumulator = []
     cli_process = None
@@ -360,37 +395,71 @@ if __name__ == "__main__":
         )
         print("\n[BENCHMARK.PY] QueryCLI process initialized for interactive benchmarking.", flush=True)
 
-        temporal_strategies = ["naive", "nash"]
-        pushdown_strategies_list = ["none", "optimized"]
-        stitch_strategies_list = ["none", "optimized"]
-        strategy_combinations = list(itertools.product(temporal_strategies, pushdown_strategies_list, stitch_strategies_list))
+        temporal_strategies_base = ["naive", "nash"]
+        pushdown_strategies_base = ["none", "optimized"]
+        stitch_strategies_base = ["none", "optimized"]
+        # Removed: strategy_combinations = list(itertools.product(temporal_strategies, pushdown_strategies_list, stitch_strategies_list))
 
         cache_modes = ["cold"]
         if args.full: cache_modes.append("warm")
 
         for cache_mode in cache_modes:
             print(f"\n========== RUNNING CACHE MODE: {cache_mode.upper()} ==========", flush=True)
-            current_queries = list(queries_to_run_orig) # Make a mutable copy
+            current_queries_for_cache_mode = list(queries_to_run_orig) # Make a mutable copy for this cache mode
             if cache_mode == "cold":
-                random.shuffle(current_queries)
+                random.shuffle(current_queries_for_cache_mode)
                 print(f"  Cold Cache Mode: Queries shuffled. {args.runs_per_query} timed runs per setting.", flush=True)
             else:
                 print(f"  Warm Cache Mode: Queries in order. 1 warm-up + {args.runs_per_query} timed runs per setting.", flush=True)
 
-            for query_info in current_queries:
-                original_query_id_str = f"q{query_info['id']+1}"
+            for query_info in current_queries_for_cache_mode:
+                original_query_id_str = f"q{query_info['id']+1}" # Use the global unique ID
                 query_text = query_info['text']
                 expected_answer = query_info['expected']
-                print(f"\n--- Query {original_query_id_str} [{cache_mode.upper()}]: {query_text[:100]}{'...' if len(query_text)>100 else ''} ---", flush=True)
+                benchmark_type = query_info['benchmark_type'] # Get benchmark_type
+                source_file = query_info['source_file']
 
-                current_strats_for_query = list(strategy_combinations) # Copy
-                if "JOIN" not in query_text.upper():
-                    # Filter out 'optimized' pushdown if no JOIN
-                    current_strats_for_query = [(t,p,s) for t,p,s in strategy_combinations if p == "none"]
-                    if args.verbose: print("    (No JOIN found; using only 'none' pushdown strategy for this query)", flush=True)
+                print(f"\n--- Query {original_query_id_str} (File: {source_file}, Type: {benchmark_type}) [{cache_mode.upper()}]: {query_text[:100]}{'...' if len(query_text)>100 else ''} ---", flush=True)
+
+                # Determine strategy combinations for the current query based on BENCHMARK_TYPE
+                current_temporal_strategies = list(temporal_strategies_base)
+                current_stitch_strategies = list(stitch_strategies_base)
+
+                if benchmark_type == "1HOP":
+                    current_pushdown_strategies = ["none"]
+                    if args.verbose: print(f"    (Q:{original_query_id_str} - Type {benchmark_type}: Pushdown strategy fixed to 'none')", flush=True)
+                else: # 2HOP or 3HOP
+                    current_pushdown_strategies = list(pushdown_strategies_base)
+                    if args.verbose: print(f"    (Q:{original_query_id_str} - Type {benchmark_type}: Using all pushdown strategies {current_pushdown_strategies})", flush=True)
+
+                # Rule: Nash optimization (temporal strategy) only if "DATE" keyword is in the query.
+                # This rule is kept as it's general, not specific to 1/2/3HOP types.
+                has_date_keyword_for_nash = "DATE" in query_text.upper()
+                if "nash" in current_temporal_strategies and not has_date_keyword_for_nash:
+                    current_temporal_strategies.remove("nash")
+                    if args.verbose: print(f"    (Q:{original_query_id_str} - Removing NASH temporal strategy as query lacks 'DATE' keyword. Remaining: {current_temporal_strategies})", flush=True)
+                if not current_temporal_strategies: # If removing nash leaves no temporal strategies (e.g. if base was only nash)
+                    if args.verbose: print(f"    (Q:{original_query_id_str} - No temporal strategies applicable after DATE keyword check. Skipping this query for this cache mode.)", flush=True)
+                    continue
+
+
+                strategies_to_run_for_this_query = list(itertools.product(
+                    current_temporal_strategies,
+                    current_pushdown_strategies,
+                    current_stitch_strategies
+                ))
+
+                if not strategies_to_run_for_this_query:
+                    if args.verbose: print(f"    (Q:{original_query_id_str} - No strategy combinations to run after filtering by BENCHMARK_TYPE and DATE keyword. This query will be skipped for this cache mode.)", flush=True)
+                    continue
+
+                # The old complex filtering logic based on JOIN, is_temporal_join_condition, has_granularity_sentence_for_stitch is REMOVED.
+                # Lines 440-491 in the original file are effectively replaced by the BENCHMARK_TYPE logic above.
+
+                current_strats_for_query = strategies_to_run_for_this_query # Already computed
 
                 for temp_s, push_s, stitch_s in current_strats_for_query:
-                    progress_prefix = f"    [{cache_mode.upper()} Q:{original_query_id_str} T:{temp_s},P:{push_s},S:{stitch_s}]"
+                    progress_prefix = f"    [{cache_mode.upper()} Q:{original_query_id_str} File:{source_file} T:{temp_s},P:{push_s},S:{stitch_s},BT:{benchmark_type}]"
                     print(f"{progress_prefix} Preparing...", flush=True)
 
                     run_stdout_details = "" # For verbose or last run verification
@@ -403,6 +472,7 @@ if __name__ == "__main__":
                         print(f"{progress_prefix} ERROR setting strategy: {e_strat_set}. Skipping.", flush=True)
                         all_run_results_accumulator.append({
                             "original_query_id": original_query_id_str, "query_text": query_text, "expected_answer": expected_answer,
+                            "benchmark_type": benchmark_type, "source_file": source_file, # Add new fields
                             "temporal_strategy": temp_s, "pushdown_strategy": push_s, "stitch_strategy": stitch_s, "cache_mode": cache_mode,
                             "avg_time_ms": None, "individual_run_times_ms": [],
                             "verification_status": "STRATEGY_SETUP_FAIL", "stderr_output": str(e_strat_set) + "\n" + run_stderr_details, # include existing stderr
@@ -473,32 +543,104 @@ if __name__ == "__main__":
                     avg_exec_t = sum(timed_exec_times) / len(timed_exec_times) if timed_exec_times else None
 
                     ver_status = "SKIPPED" # Default verification status
+
+                    # 1. Check for TIMEOUT
                     if avg_exec_t is None and "timeout" in run_stderr_details.lower(): # Check if timeout specifically caused no avg time
                         ver_status = "TIMEOUT"
-                    elif expected_answer: # Only verify if an expected answer is provided
-                        content_to_verify = ""
-                        source_of_verification = "N/A"
+                    else:
+                        # Logic for sourcing content and then checking for EMPTY or expected answers
+                        content_for_analysis = ""
+                        source_of_content = "N/A"
+                        is_content_from_file = False # True if content_for_analysis is from verification_export_file
+
                         if verification_export_file and os.path.exists(verification_export_file):
                             try:
-                                with open(verification_export_file, 'r', encoding='utf-8') as vf: content_to_verify = vf.read()
-                                source_of_verification = verification_export_file
+                                with open(verification_export_file, 'r', encoding='utf-8') as vf:
+                                    content_for_analysis = vf.read()
+                                source_of_content = verification_export_file
+                                is_content_from_file = True
                             except Exception as e_vf:
                                 ver_status = f"VERIFY_EXPORT_READ_ERR: {e_vf}"
-                                run_stderr_details += f"VERIFY_FILE_READ_EXCEPTION: {str(e_vf)}\n"
-                        # Fallback to stdout of the last run (captured in run_stdout_details)
-                        elif run_stdout_details: # Check if there's any stdout content
-                             content_to_verify = run_stdout_details
-                             source_of_verification = "stdout (last run or verbose accumulated)"
+                                run_stderr_details += f"VERIFY_FILE_READ_EXCEPTION ({verification_export_file}): {str(e_vf)}\n"
+                        elif run_stdout_details: # Fallback to stdout if no export file or it didn't exist
+                            content_for_analysis = run_stdout_details
+                            source_of_content = "stdout (last run or verbose accumulated)"
+                            is_content_from_file = False
+                        # If neither export file nor stdout details, content_for_analysis remains ""
 
-                        if content_to_verify and ver_status == "SKIPPED": # If content was found and no read error
-                            ver_status = "PASSED" if expected_answer.lower() in content_to_verify.lower() else "FAILED"
-                            if args.verbose: print(f"{progress_prefix} Verification '{ver_status}' using: {source_of_verification}", flush=True)
-                        elif ver_status == "SKIPPED": # If no content found and no read error
-                             ver_status = "NO_VERIFIABLE_CONTENT (Export or Verbose required, or query produced no output)"
+                        # 2. Check for EMPTY status (if not already TIMEOUT or VERIFY_EXPORT_READ_ERR)
+                        if ver_status == "SKIPPED": # Only proceed if no prior critical status
+
+                            # Helper function to determine if output is effectively empty
+                            def is_output_effectively_empty(text_content, is_csv_file, prompt_text_val):
+                                if text_content is None: return True
+                                # An empty string or string with only whitespace is considered empty
+                                if not text_content.strip(): return True
+
+                                lines = text_content.splitlines()
+                                if not lines: return True # No lines after split (e.g. if content was just '\\n')
+
+                                if is_csv_file:
+                                    # CSV is empty if 0 lines, or 1 line (header), or >1 lines but all after header are blank
+                                    if len(lines) <= 1:
+                                        return True
+                                    # Check if all lines after a potential header are blank
+                                    for i in range(1, len(lines)):
+                                        if lines[i].strip():
+                                            return False # Found non-blank data line after header
+                                    return True # All lines after header are blank
+                                else: # Standard output
+                                    actual_data_lines = []
+                                    known_no_results_stdout_messages = [
+                                        "No results to display.",
+                                        "Query returned successfully with no results."
+                                        # Add any other specific "no data" messages from CLI if known
+                                    ]
+                                    for line in lines:
+                                        stripped_line = line.strip()
+                                        if "BENCHMARK_EXECUTION_TIME_MS:" in stripped_line:
+                                            continue
+                                        if stripped_line == prompt_text_val: # Exact match for prompt
+                                            continue
+
+                                        is_known_empty_message = False
+                                        for msg in known_no_results_stdout_messages:
+                                            if stripped_line == msg:
+                                                is_known_empty_message = True
+                                                break
+                                        if is_known_empty_message:
+                                            continue # Skip this line from being considered actual data
+
+                                        if stripped_line: # If a line has content and wasn't filtered
+                                            actual_data_lines.append(stripped_line)
+
+                                    # If no data lines collected after filtering, it's empty
+                                    return not actual_data_lines
+
+                            if is_output_effectively_empty(content_for_analysis, is_content_from_file, PROMPT):
+                                ver_status = "EMPTY"
+                                if args.verbose: print(f"{progress_prefix} Verification 'EMPTY' determined from: {source_of_content}", flush=True)
+
+                        # 3. If expected_answer exists and status is still SKIPPED (i.e., not TIMEOUT, not VERIFY_EXPORT_READ_ERR, not EMPTY)
+                        #    Then proceed with PASSED/FAILED or NO_VERIFIABLE_CONTENT.
+                        if expected_answer and ver_status == "SKIPPED":
+                            if content_for_analysis: # If there's some content (not deemed "EMPTY")
+                                ver_status = "PASSED" if expected_answer.lower() in content_for_analysis.lower() else "FAILED"
+                                if args.verbose: print(f"{progress_prefix} Verification '{ver_status}' using: {source_of_content} against expected answer.", flush=True)
+                            else:
+                                # This path means: not TIMEOUT, not EXPORT_ERR, not EMPTY, expected_answer exists,
+                                # BUT content_for_analysis is falsey (e.g. None or empty string from the start,
+                                # and is_output_effectively_empty didn't classify it as EMPTY).
+                                # This should be rare if is_output_effectively_empty is robust.
+                                ver_status = "NO_VERIFIABLE_CONTENT (Expected answer, but no output from query to check)"
+                                if args.verbose: print(f"{progress_prefix} Verification 'NO_VERIFIABLE_CONTENT' from: {source_of_content}", flush=True)
+                        # If no expected_answer, ver_status remains as TIMEOUT, EMPTY, or SKIPPED.
+                        # If expected_answer and ver_status was already VERIFY_EXPORT_READ_ERR or EMPTY, it remains so.
 
                     # Store results for this strategy combination
                     all_run_results_accumulator.append({
                         "original_query_id": original_query_id_str, "query_text": query_text, "expected_answer": expected_answer,
+                        "benchmark_type": benchmark_type, "source_file": source_file, # Add new fields
                         "temporal_strategy": temp_s, "pushdown_strategy": push_s, "stitch_strategy": stitch_s, "cache_mode": cache_mode,
                         "avg_time_ms": avg_exec_t,
                         "individual_run_times_ms": timed_exec_times,
@@ -524,27 +666,14 @@ if __name__ == "__main__":
         print("[BENCHMARK.PY] Script execution finished or aborted.", flush=True)
 
     if not all_run_results_accumulator:
-        print("\nNo benchmark results were collected.", flush=True)
-        if args.benchmark_output:
-             print(f"Creating empty benchmark output file (with headers): {args.benchmark_output}", flush=True)
-             try:
-                with open(args.benchmark_output, 'w', newline='', encoding='utf-8') as csvfile_empty:
-                    fieldnames_csv = [
-                        'original_query_id', 'query_text', 'expected_answer', 'temporal_strategy', 'pushdown_strategy',
-                        'stitch_strategy', 'cache_mode', 'avg_time_ms',
-                        'individual_run_times_ms', 'verification_status', 'stderr_output', 'stdout_output'
-                    ]
-                    writer_empty = csv.DictWriter(csvfile_empty, fieldnames=fieldnames_csv, extrasaction='ignore')
-                    writer_empty.writeheader()
-             except Exception as e_csv_empty_exc:
-                 print(f"Error creating empty benchmark CSV {args.benchmark_output}: {e_csv_empty_exc}", flush=True)
+        print("\nNo benchmark results were collected. No summary CSV files will be generated.", flush=True)
         exit(0)
 
-    print("\n========== BENCHMARK OVERALL SUMMARY ==========", flush=True)
+    print("\n========== BENCHMARK OVERALL SUMMARY (CONSOLE) ==========", flush=True)
     for res_item in all_run_results_accumulator:
         # Construct the summary line part by part for clarity
         summary_line = (
-            f"  Q:{res_item['original_query_id']} C:{res_item['cache_mode']} "
+            f"  Q:{res_item['original_query_id']} File:{res_item['source_file']} BT:{res_item['benchmark_type']} C:{res_item['cache_mode']} " # Add new fields
             f"T:{res_item['temporal_strategy']},P:{res_item['pushdown_strategy']},S:{res_item['stitch_strategy']} "
         )
         summary_line += f"AvgTime:{res_item['avg_time_ms']:.3f}ms " if res_item['avg_time_ms'] is not None else "AvgTime:N/A "
@@ -561,45 +690,59 @@ if __name__ == "__main__":
              print(indented_stdout, flush=True)
 
 
-    if args.benchmark_output:
-        print(f"\nExporting benchmark results to CSV: {args.benchmark_output}", flush=True)
+    # Logic for exporting to multiple CSV files based on source_file and benchmark_type
+    print(f"\nExporting benchmark results to separate CSV files in {args.query_dir}...", flush=True)
+
+    # Define fieldnames once
+    fieldnames_csv = [
+        'original_query_id', 'query_text', 'expected_answer',
+        'benchmark_type', 'source_file',
+        'temporal_strategy', 'pushdown_strategy', 'stitch_strategy', 'cache_mode',
+        'avg_time_ms', 'individual_run_times_ms',
+        'verification_status', 'stderr_output', 'stdout_output'
+    ]
+
+    grouped_results = {}
+    for row_data in all_run_results_accumulator:
+        key = (row_data['source_file'], row_data['benchmark_type'])
+        if key not in grouped_results:
+            grouped_results[key] = []
+        grouped_results[key].append(row_data)
+
+    files_written_count = 0
+    for (source_file, benchmark_type), results_for_group in grouped_results.items():
+        original_filename_without_ext = os.path.splitext(source_file)[0]
+        output_csv_basename = f"{original_filename_without_ext}_{benchmark_type}_results.csv"
+
+        # ALWAYS save alongside the original query file in its directory
+        output_filepath = os.path.join(args.query_dir, output_csv_basename)
+
+        print(f"  Writing results for {source_file} (Type: {benchmark_type}) to {output_filepath}", flush=True)
         try:
-            with open(args.benchmark_output, 'w', newline='', encoding='utf-8') as csvfile:
-                fieldnames_csv = [
-                    'original_query_id', 'query_text', 'expected_answer',
-                    'temporal_strategy', 'pushdown_strategy', 'stitch_strategy', 'cache_mode',
-                    'avg_time_ms', 'individual_run_times_ms',
-                    'verification_status', 'stderr_output', 'stdout_output'
-                ]
+            with open(output_filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames_csv, extrasaction='ignore')
                 writer.writeheader()
-                for row_data in all_run_results_accumulator:
-                    row_data_copy = row_data.copy()
-                    # Format list of floats into a semicolon-separated string for CSV
+                for row_data_item in results_for_group:
+                    row_data_copy = row_data_item.copy()
                     row_data_copy['individual_run_times_ms'] = ';'.join([f"{t:.3f}" for t in row_data_copy.get('individual_run_times_ms', [])])
 
-                    # Conditionally manage stdout_output in CSV
-                    if not args.verbose and 'stdout_output' in row_data_copy:
-                        # If verification was done via an export file, stdout is less critical unless verbose
-                        is_verified_by_export = (
-                            verification_export_file and # Needs original verification_export_file, tricky here, use a proxy
-                            row_data_copy['verification_status'] not in ["SKIPPED", "NO_VERIFIABLE_CONTENT", "VERIFY_EXPORT_READ_ERR"] and
-                            "_FOR_VERIFICATION.csv" in (row_data_copy.get('stdout_output') or "") # Heuristic if stdout was used for verification and then cleared
-                        )
-                        # This heuristic is imperfect because verification_export_file is not directly in row_data.
-                        # A simpler rule: if not verbose, and verification didn't fail due to stdout issues, clear it.
-                        if row_data_copy['verification_status'] not in ["SKIPPED", "NO_VERIFIABLE_CONTENT"] and not ("stdout" in (row_data_copy.get('source_of_verification') or "")):
-                           row_data_copy['stdout_output'] = "See verification export file or run with --verbose" if "_FOR_VERIFICATION.csv" in (row_data_copy.get('expected_answer') or "placeholder_to_check_export_pattern") else row_data_copy['stdout_output'] # A bit of a guess here
-                        # if not (verification_export_file and os.path.exists(verification_export_file)): This check is hard to do here.
-                        # Safer: if not verbose, and verification status is good, assume export was used if possible.
-                        if not args.verbose and row_data_copy['verification_status'] == "PASSED" and args.export_dir :
+                    if not args.verbose:
+                        if args.export_dir and row_data_copy['verification_status'] == "PASSED":
                              row_data_copy['stdout_output'] = "See verification export file or run with --verbose"
-
+                        elif row_data_copy['verification_status'] not in ["SKIPPED", "NO_VERIFIABLE_CONTENT"]:
+                            pass
+                        else:
+                            row_data_copy['stdout_output'] = ""
 
                     writer.writerow(row_data_copy)
-            print(f"Benchmark results successfully exported to {args.benchmark_output}", flush=True)
-        except Exception as e_csv_export:
-            print(f"Error exporting benchmark results to CSV {args.benchmark_output}: {e_csv_export}\n{traceback.format_exc()}", flush=True)
+            files_written_count += 1
+        except Exception as e_csv_export_multi:
+            print(f"  Error exporting benchmark results to CSV {output_filepath}: {e_csv_export_multi}\n{traceback.format_exc()}", flush=True)
+
+    if files_written_count > 0:
+        print(f"\nSuccessfully exported {files_written_count} benchmark result CSV file(s) to {args.query_dir}.", flush=True)
+    else:
+        print(f"\nNo benchmark result CSV files were generated (e.g. no results for any group).", flush=True)
 
     print("\nBenchmark script execution complete.", flush=True)
 
