@@ -91,10 +91,53 @@ public class StructuralColumn implements SelectColumn {
             return;
         }
 
-        int firstSoAIndex = indicesInSoA.get(0); // Use the first match in the unit as reference
-        int docIdForMetadata = resultSoA.getDocumentIdAt(firstSoAIndex);
+        Integer docIdForAlias = null;
+        Integer sentenceIdForAlias = null;
+        Integer beginCharForAlias = null;
+        Integer endCharForAlias = null;
+        boolean foundRelevantEntry = false;
 
-        logger.trace("Populating StructuralColumn {}.{} at row {} using SoA index {}", alias, fieldName, rowIndex, firstSoAIndex);
+        for (int soaIndex : indicesInSoA) {
+            String entryVarName = resultSoA.getVariableNameAt(soaIndex);
+            String determinedEntryAlias;
+
+            if (entryVarName != null && entryVarName.contains(".")) {
+                determinedEntryAlias = entryVarName.substring(0, entryVarName.indexOf('.'));
+            } else {
+                // If no explicit alias qualification (no '.'), or varName is null (e.g. for a raw condition match),
+                // it implies the entry belongs to the default main alias of the conceptual row component it originated from.
+                // In a joined SoA, QueryExecutor/JoinHandler are responsible for ensuring variable names are qualified if they came from a sub-alias.
+                // So, if it's not qualified here, it's effectively part of the "main" context of this conceptual row segment.
+                determinedEntryAlias = com.example.query.parser.QueryModelBuilder.DEFAULT_MAIN_ALIAS;
+            }
+
+            if (this.alias.equals(determinedEntryAlias)) {
+                docIdForAlias = resultSoA.getDocumentIdAt(soaIndex);
+                if (resultSoA.getRequirements().needsSentenceId) {
+                    sentenceIdForAlias = resultSoA.getSentenceIdAt(soaIndex);
+                }
+                if (resultSoA.getRequirements().needsPositions) {
+                    beginCharForAlias = resultSoA.getBeginCharAt(soaIndex);
+                    endCharForAlias = resultSoA.getEndCharAt(soaIndex);
+                }
+                foundRelevantEntry = true;
+                logger.trace("Found relevant entry for StructuralColumn {}.{} at soaIndex {}: docId={}, sentenceId={}, begin={}, end={}",
+                             this.alias, this.fieldName, soaIndex, docIdForAlias, sentenceIdForAlias, beginCharForAlias, endCharForAlias);
+                break;
+            }
+        }
+
+        if (!foundRelevantEntry) {
+            logger.warn("StructuralColumn {}.{} did not find a matching entry for its alias '{}' within the provided SoA indices for conceptual row. Row: {}. Setting missing.",
+                        this.alias, this.fieldName, this.alias, rowIndex);
+            table.column(getColumnName()).setMissing(rowIndex);
+            return;
+        }
+
+        // Use docIdForAlias which is now specific to 'this.alias'
+        final int effectiveDocId = docIdForAlias; // docIdForAlias must be non-null if foundRelevantEntry is true
+
+        logger.trace("Populating StructuralColumn {}.{} at row {} using effectiveDocId {}", this.alias, this.fieldName, rowIndex, effectiveDocId);
 
         Column<?> column = table.column(getColumnName());
 
@@ -102,18 +145,18 @@ public class StructuralColumn implements SelectColumn {
             switch (fieldName.toUpperCase()) {
                 case "TITLE":
                     if (column instanceof StringColumn strCol) {
-                        String cacheKey = "title_" + docIdForMetadata;
+                        String cacheKey = "title_" + effectiveDocId; // Use effectiveDocId
                         String title = (String) contextCache.get(cacheKey);
                         if (title == null) {
-                            title = SqliteAccessor.getInstance().getMetadata(source, docIdForMetadata, "title");
-                            title = (title != null) ? title : ""; // Ensure title is not null before caching
+                            title = SqliteAccessor.getInstance().getMetadata(source, effectiveDocId, "title"); // Use effectiveDocId
+                            title = (title != null) ? title : "";
                             contextCache.put(cacheKey, title);
-                            logger.trace("Fetched and cached TITLE '{}' for docId {}", title, docIdForMetadata);
+                            logger.trace("Fetched and cached TITLE '{}' for docId {}", title, effectiveDocId);
                         } else {
-                            logger.trace("Retrieved TITLE '{}' from cache for docId {}", title, docIdForMetadata);
+                            logger.trace("Retrieved TITLE '{}' from cache for docId {}", title, effectiveDocId);
                         }
                         strCol.set(rowIndex, title);
-                        logger.trace("Set TITLE '{}' for {}.{} at row {}", title, alias, fieldName, rowIndex);
+                        logger.trace("Set TITLE '{}' for {}.{} at row {}", title, this.alias, this.fieldName, rowIndex);
                     } else {
                          logger.error("Expected StringColumn for TITLE but got {} for column {}", column.type(), getColumnName());
                          column.setMissing(rowIndex);
@@ -121,35 +164,34 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "TIMESTAMP":
                      if (column instanceof DateColumn dateCol) {
-                         String cacheKey = "timestamp_" + docIdForMetadata;
+                         String cacheKey = "timestamp_" + effectiveDocId; // Use effectiveDocId
                          LocalDate docTimestamp = (LocalDate) contextCache.get(cacheKey);
                          if (docTimestamp == null) {
-                             String timestampStr = SqliteAccessor.getInstance().getMetadata(source, docIdForMetadata, "timestamp");
+                             String timestampStr = SqliteAccessor.getInstance().getMetadata(source, effectiveDocId, "timestamp"); // Use effectiveDocId
                              if (timestampStr != null && !timestampStr.isEmpty()) {
                                  try {
-                                     // Try parsing as LocalDateTime first, then convert to LocalDate
                                      docTimestamp = java.time.LocalDateTime.parse(timestampStr).toLocalDate();
                                  } catch (java.time.format.DateTimeParseException e) {
-                                     logger.warn("Failed to parse timestamp string '{}' for docId {}. Setting missing.", timestampStr, docIdForMetadata, e);
-                                     docTimestamp = null; // Explicitly set to null if parsing fails
+                                     logger.warn("Failed to parse timestamp string '{}' for docId {}. Setting missing.", timestampStr, effectiveDocId, e);
+                                     docTimestamp = null;
                                  }
                              }
-                             if (docTimestamp != null) { // Only cache if successfully parsed
+                             if (docTimestamp != null) {
                                 contextCache.put(cacheKey, docTimestamp);
-                                logger.trace("Fetched and cached TIMESTAMP '{}' for docId {}", docTimestamp, docIdForMetadata);
+                                logger.trace("Fetched and cached TIMESTAMP '{}' for docId {}", docTimestamp, effectiveDocId);
                              } else {
-                                logger.trace("Timestamp was null or unparseable for docId {}. Not caching.", docIdForMetadata);
+                                logger.trace("Timestamp was null or unparseable for docId {}. Not caching.", effectiveDocId);
                              }
                          } else {
-                             logger.trace("Retrieved TIMESTAMP '{}' from cache for docId {}", docTimestamp, docIdForMetadata);
+                             logger.trace("Retrieved TIMESTAMP '{}' from cache for docId {}", docTimestamp, effectiveDocId);
                          }
 
                          if (docTimestamp != null) {
                             dateCol.set(rowIndex, docTimestamp);
-                            logger.trace("Set TIMESTAMP '{}' for {}.{} at row {}", docTimestamp, alias, fieldName, rowIndex);
+                            logger.trace("Set TIMESTAMP '{}' for {}.{} at row {}", docTimestamp, this.alias, this.fieldName, rowIndex);
                          } else {
                             dateCol.setMissing(rowIndex);
-                            logger.trace("Set TIMESTAMP to missing for {}.{} at row {} due to null/unparseable date", alias, fieldName, rowIndex);
+                            logger.trace("Set TIMESTAMP to missing for {}.{} at row {} due to null/unparseable date", this.alias, this.fieldName, rowIndex);
                          }
                      } else {
                          logger.error("Expected DateColumn for TIMESTAMP but got {} for column {}", column.type(), getColumnName());
@@ -158,8 +200,8 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "DOCUMENT_ID":
                      if (column instanceof IntColumn intCol) {
-                         intCol.set(rowIndex, docIdForMetadata); // Already have this from resultSoA
-                          logger.trace("Set DOCUMENT_ID '{}' for {}.{} at row {}", docIdForMetadata, alias, fieldName, rowIndex);
+                         intCol.set(rowIndex, effectiveDocId); // Use effectiveDocId
+                          logger.trace("Set DOCUMENT_ID '{}' for {}.{} at row {}", effectiveDocId, this.alias, this.fieldName, rowIndex);
                      } else {
                          logger.error("Expected IntColumn for DOCUMENT_ID but got {} for column {}", column.type(), getColumnName());
                          column.setMissing(rowIndex);
@@ -167,13 +209,16 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "SENTENCE_ID":
                     if (column instanceof IntColumn intCol) {
-                         // Ensure sentenceId is actually available and needed by requirements for this SoA entry
-                         int sentenceId = resultSoA.getRequirements().needsSentenceId ? resultSoA.getSentenceIdAt(firstSoAIndex) : -1;
-                         if (sentenceId != -1 || !resultSoA.getRequirements().needsSentenceId) { // if -1 but not needed, that's fine (means doc granularity)
-                            intCol.set(rowIndex, sentenceId);
-                            logger.trace("Set SENTENCE_ID '{}' for {}.{} at row {}", sentenceId, alias, fieldName, rowIndex);
+                         // Use sentenceIdForAlias, which was fetched based on this.alias
+                         if (sentenceIdForAlias != null) {
+                            intCol.set(rowIndex, sentenceIdForAlias);
+                            logger.trace("Set SENTENCE_ID '{}' for {}.{} at row {}", sentenceIdForAlias, this.alias, this.fieldName, rowIndex);
                          } else {
-                            logger.trace("Sentence ID requested but not available or not applicable for SoA index {}, setting missing for {}.{}", firstSoAIndex, alias, fieldName);
+                            // This case means either sentence IDs were not required by SoA,
+                            // or no entry matching this.alias was found that had a sentenceId.
+                            // The foundRelevantEntry check should have caught the latter.
+                            // If sentenceIds were not required by SoA at all, sentenceIdForAlias would be null.
+                            logger.trace("Sentence ID for {}.{} at row {} is not available or not applicable (sentenceIdForAlias is null). Setting missing.", this.alias, this.fieldName, rowIndex);
                             intCol.setMissing(rowIndex);
                          }
                      } else {
@@ -183,12 +228,11 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "BEGIN":
                     if (column instanceof IntColumn intCol) {
-                        int beginChar = resultSoA.getRequirements().needsPositions ? resultSoA.getBeginCharAt(firstSoAIndex) : -1;
-                        if (beginChar != -1 || !resultSoA.getRequirements().needsPositions) {
-                            intCol.set(rowIndex, beginChar);
-                            logger.trace("Set BEGIN '{}' for {}.{} at row {}", beginChar, alias, fieldName, rowIndex);
+                        if (beginCharForAlias != null) {
+                            intCol.set(rowIndex, beginCharForAlias);
+                            logger.trace("Set BEGIN '{}' for {}.{} at row {}", beginCharForAlias, this.alias, this.fieldName, rowIndex);
                         } else {
-                            logger.trace("Begin char requested but not available for SoA index {}, setting missing for {}.{}", firstSoAIndex, alias, fieldName);
+                            logger.trace("Begin char for {}.{} at row {} is not available. Setting missing.", this.alias, this.fieldName, rowIndex);
                             intCol.setMissing(rowIndex);
                         }
                     } else {
@@ -198,12 +242,11 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "END":
                     if (column instanceof IntColumn intCol) {
-                        int endChar = resultSoA.getRequirements().needsPositions ? resultSoA.getEndCharAt(firstSoAIndex) : -1;
-                         if (endChar != -1 || !resultSoA.getRequirements().needsPositions) {
-                            intCol.set(rowIndex, endChar);
-                            logger.trace("Set END '{}' for {}.{} at row {}", endChar, alias, fieldName, rowIndex);
+                        if (endCharForAlias != null) {
+                            intCol.set(rowIndex, endCharForAlias);
+                            logger.trace("Set END '{}' for {}.{} at row {}", endCharForAlias, this.alias, this.fieldName, rowIndex);
                         } else {
-                            logger.trace("End char requested but not available for SoA index {}, setting missing for {}.{}", firstSoAIndex, alias, fieldName);
+                            logger.trace("End char for {}.{} at row {} is not available. Setting missing.", this.alias, this.fieldName, rowIndex);
                             intCol.setMissing(rowIndex);
                         }
                     } else {

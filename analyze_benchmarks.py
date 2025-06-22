@@ -105,68 +105,46 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
     Generates a LaTeX table from the aggregated benchmark results with mean ± SD format.
     Outputs a fragment suitable for inclusion in a larger document, wrapped in a figure environment.
     """
+    # Note: This table requires \\usepackage[separate-uncertainty,group-digits=none,mode=text]{siunitx} in your LaTeX preamble.
     if not stats:
         return "\\textbf{No data to display or error in processing.}"
 
     latex_string = "\\begin{figure}[htbp]\n"
     latex_string += "\\centering\n"
-    latex_string += f"\\caption{{{table_title}. Times shown as mean ± standard deviation in milliseconds (ms).}}\n"
-    # If you need to reference this figure, you can add a label:
-    # latex_string += "\\label{fig:benchmark_summary}\\n"
+    latex_string += "\\caption{Benchmark Performance Summary. Times shown as mean ± standard deviation in milliseconds (ms).}\n"
+    sanitized_title_for_label = re.sub(r'[^a-zA-Z0-9_]', '', table_title.lower().replace(' ', '_'))
+    latex_string += f"\\label{{fig:benchmark_summary_{sanitized_title_for_label}}}\n"
+    latex_string += f"\\textbf{{{table_title.replace('-', ' ').title()}}}\n"
+    latex_string += "\\begin{tabular}{@{}lllS[table-format=5.2, separate-uncertainty, group-digits=false, mode=math]S[table-format=5.2, separate-uncertainty, group-digits=false, mode=math]@{}}\n"
+    latex_string += "\\toprule\n"
+    latex_string += "Temporal & Pushdown & Stitch & {Cold (ms)} & {Warm (ms)} \\\\ \n" # LaTeX newline
+    latex_string += "\\midrule\n"
 
-    # Sort hop types: 1-hop, 2-hops, 3-hops, then others numerically if any
-    sorted_hop_types = sorted(
-        stats.keys(),
-        key=lambda x: (
-            int(x.split('-')[0]) if x.endswith('-hops') else float('inf'),
-            x
-        )
-    )
+    for strat_tuple in strategy_tuples:
+        temporal, pushdown, stitch = strat_tuple
+        if strat_tuple in stats: # Check directly in stats
+            cold_stats = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
+            warm_stats = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
 
-    # Ensure 1-hop, 2-hops, 3-hops are processed first if they exist
-    desired_order = ["1-hop", "2-hops", "3-hops"]
-    ordered_hop_types = [ht for ht in desired_order if ht in sorted_hop_types]
-    ordered_hop_types += [ht for ht in sorted_hop_types if ht not in desired_order]
+            if cold_stats['count'] > 0:
+                cold_val = f"{cold_stats['mean']:.2f}({cold_stats['std']:.2f})"
+            else:
+                cold_val = "{N/A}"
 
-    for i, hop_type in enumerate(ordered_hop_types):
-        if not stats[hop_type]:
-            continue
+            if warm_stats['count'] > 0:
+                warm_val = f"{warm_stats['mean']:.2f}({warm_stats['std']:.2f})"
+            else:
+                warm_val = "{N/A}"
 
-        if i > 0: # Add some vertical space between tables within the figure
-             latex_string += "\\vspace{1em}\n\n"
+            temporal_display = temporal.capitalize()
+            pushdown_display = pushdown.replace('none', 'naive').capitalize()
+            stitch_display = stitch.replace('none', 'naive').capitalize()
 
-        latex_string += f"\\textbf{{{hop_type.replace('-', ' ').title()}}}\n" # Title for each table
-        latex_string += "\\begin{tabular}{@{}lllcc@{}}\n"
-        latex_string += "\\toprule\n"
-        latex_string += "Temporal & Pushdown & Stitch & Cold (ms) & Warm (ms) \\\\ \\midrule\n"
+            latex_string += f"{temporal_display} & {pushdown_display} & {stitch_display} & {cold_val} & {warm_val} \\\\ \n" # LaTeX newline
 
-        for strat_tuple in strategy_tuples:
-            temporal, pushdown, stitch = strat_tuple
-            if strat_tuple in stats: # Check directly in stats
-                cold_stats = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
-                warm_stats = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
-
-                # Format as "mean ± SD" if we have data, otherwise "N/A"
-                if cold_stats['count'] > 0:
-                    cold_str = f"{cold_stats['mean']:.2f} ± {cold_stats['std']:.2f}"
-                else:
-                    cold_str = "N/A"
-
-                if warm_stats['count'] > 0:
-                    warm_str = f"{warm_stats['mean']:.2f} ± {warm_stats['std']:.2f}"
-                else:
-                    warm_str = "N/A"
-
-                # Capitalize first letter and rename 'none' to 'naive'
-                temporal_display = temporal.capitalize()
-                pushdown_display = pushdown.replace('none', 'naive').capitalize()
-                stitch_display = stitch.replace('none', 'naive').capitalize()
-
-                latex_string += f"{temporal_display} & {pushdown_display} & {stitch_display} & {cold_str} & {warm_str} \\\\ \n"
-
-        latex_string += "\\bottomrule\n"
-        latex_string += "\\end{tabular}\n"
-
+    latex_string += "\\bottomrule\n"
+    latex_string += "\\end{tabular}\n"
+    latex_string += "\\vspace{1em}\n"
     latex_string += "\\end{figure}\n"
     return latex_string
 
@@ -182,46 +160,28 @@ def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULT
     output.append(f"{table_title.upper()} (mean ± standard deviation in ms)")
     output.append("=" * 80)
 
-    # Sort hop types
-    sorted_hop_types = sorted(
-        stats.keys(),
-        key=lambda x: (
-            int(x.split('-')[0]) if x.endswith('-hops') else float('inf'),
-            x
-        )
-    )
+    output.append("-" * 60)
+    output.append(f"{'Strategy':<25} {'Cold (ms)':<20} {'Warm (ms)':<20}")
+    output.append("-" * 60)
 
-    desired_order = ["1-hop", "2-hops", "3-hops"]
-    ordered_hop_types = [ht for ht in desired_order if ht in sorted_hop_types]
-    ordered_hop_types += [ht for ht in sorted_hop_types if ht not in desired_order]
+    for strat_tuple in strategy_tuples:
+        temporal, pushdown, stitch = strat_tuple
+        if strat_tuple in stats: # Check directly in stats
+            # Capitalize first letter and rename 'none' to 'naive'
+            temporal_display = temporal.capitalize()
+            pushdown_display = pushdown.replace('none', 'naive').capitalize()
+            stitch_display = stitch.replace('none', 'naive').capitalize()
+            strategy_name = f"{temporal_display},{pushdown_display},{stitch_display}"
 
-    for hop_type in ordered_hop_types:
-        if not stats[hop_type]:
-            continue
+            cold_stats = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
+            warm_stats = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
 
-        output.append(f"\n{hop_type.replace('-', ' ').title()}:")
-        output.append("-" * 60)
-        output.append(f"{'Strategy':<25} {'Cold (ms)':<20} {'Warm (ms)':<20}")
-        output.append("-" * 60)
+            cold_str = f"{cold_stats['mean']:.2f} ± {cold_stats['std']:.2f}" if cold_stats['count'] > 0 else "N/A"
+            warm_str = f"{warm_stats['mean']:.2f} ± {warm_stats['std']:.2f}" if warm_stats['count'] > 0 else "N/A"
 
-        for strat_tuple in strategy_tuples:
-            temporal, pushdown, stitch = strat_tuple
-            if strat_tuple in stats: # Check directly in stats
-                # Capitalize first letter and rename 'none' to 'naive'
-                temporal_display = temporal.capitalize()
-                pushdown_display = pushdown.replace('none', 'naive').capitalize()
-                stitch_display = stitch.replace('none', 'naive').capitalize()
-                strategy_name = f"{temporal_display},{pushdown_display},{stitch_display}"
+            output.append(f"{strategy_name:<25} {cold_str:<20} {warm_str:<20}")
 
-                cold_stats = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
-                warm_stats = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
-
-                cold_str = f"{cold_stats['mean']:.2f} ± {cold_stats['std']:.2f}" if cold_stats['count'] > 0 else "N/A"
-                warm_str = f"{warm_stats['mean']:.2f} ± {warm_stats['std']:.2f}" if warm_stats['count'] > 0 else "N/A"
-
-                output.append(f"{strategy_name:<25} {cold_str:<20} {warm_str:<20}")
-
-    return "\n".join(output)
+    return "\n ".join(output)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -257,10 +217,6 @@ Examples:
         # Print summary to console
         summary_output = generate_summary_table(aggregated_data, strategy_ordering, table_title)
         print(summary_output)
-
-        print("\n" + "=" * 80)
-        print(f"LATEX TABLE OUTPUT FOR: {table_title}")
-        print("=" * 80)
 
         # Generate and print LaTeX table
         latex_output = generate_latex_table(aggregated_data, strategy_ordering, table_title)

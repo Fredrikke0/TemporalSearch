@@ -311,7 +311,6 @@ def run_cold_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
             stitch_s = task_data_ref['stitch_strategy']
 
             progress_prefix = f"    [COLD P:{pass_num+1}/{NUM_COLD_PASSES} Task:{task_idx+1}/{len(current_pass_tasks)} Q:{original_query_id_str} File:{source_file} T:{temp_s},P:{push_s},S:{stitch_s},BT:{benchmark_type}]"
-            print(f"{progress_prefix} Running...", flush=True)
 
             pass_stdout = ""
             pass_stderr = ""
@@ -607,11 +606,13 @@ class QueryCLIInteractiveProcess:
 
     def set_strategy(self, temporal, pushdown, stitch):
         cmd = f"SET STRATEGY temporal={temporal} pushdown={pushdown} stitch={stitch}"
-        return self._send_and_await_prompt(cmd, PROMPT, COMMAND_ACK_TIMEOUT_SECONDS, "SET STRATEGY")
+        stdout_cycle, stderr_cycle = self._send_and_await_prompt(cmd, PROMPT, COMMAND_ACK_TIMEOUT_SECONDS, "SET STRATEGY")
+        return None, stdout_cycle, stderr_cycle
 
     def set_output(self, export_format=None, filename=None):
         cmd = f"SET OUTPUT {export_format} {filename}" if export_format and filename else "SET OUTPUT NONE"
-        return self._send_and_await_prompt(cmd, PROMPT, COMMAND_ACK_TIMEOUT_SECONDS, "SET OUTPUT")
+        stdout_cycle, stderr_cycle = self._send_and_await_prompt(cmd, PROMPT, COMMAND_ACK_TIMEOUT_SECONDS, "SET OUTPUT")
+        return None, stdout_cycle, stderr_cycle
 
     def execute_query(self, query_string):
         self.send_command(query_string)
