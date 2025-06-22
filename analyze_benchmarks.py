@@ -115,7 +115,7 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
     sanitized_title_for_label = re.sub(r'[^a-zA-Z0-9_]', '', table_title.lower().replace(' ', '_'))
     latex_string += f"\\label{{fig:benchmark_summary_{sanitized_title_for_label}}}\n"
     latex_string += f"\\textbf{{{table_title.replace('-', ' ').title()}}}\n"
-    latex_string += "\\begin{tabular}{@{}lllS[table-format=5.2, separate-uncertainty, group-digits=false, mode=math]S[table-format=5.2, separate-uncertainty, group-digits=false, mode=math]@{}}\n"
+    latex_string += "\\begin{tabular}{@{}lllS[table-format=5.2(2), separate-uncertainty, group-digits=false, mode=math]S[table-format=5.2(2), separate-uncertainty, group-digits=false, mode=math]@{}}\n"
     latex_string += "\\toprule\n"
     latex_string += "Temporal & Pushdown & Stitch & {Cold (ms)} & {Warm (ms)} \\\\ \n" # LaTeX newline
     latex_string += "\\midrule\n"
