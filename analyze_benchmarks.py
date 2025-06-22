@@ -25,12 +25,11 @@ def get_hop_type(query_text):
 def analyze_benchmarks(csv_filepath):
     """
     Analyzes benchmark data from a CSV file and returns aggregated results with mean and standard deviation.
+    Assumes all data in the CSV pertains to a single benchmark type.
     """
-    # Structure: results[hop_type][(temporal, pushdown, stitch)][cache_mode] = [list of individual run times]
+    # Structure: results[(temporal, pushdown, stitch)][cache_mode] = [list of individual run times]
     results = collections.defaultdict(
-        lambda: collections.defaultdict(
             lambda: collections.defaultdict(list)
-        )
     )
 
     # Define all possible strategy values to ensure consistent ordering
@@ -53,9 +52,6 @@ def analyze_benchmarks(csv_filepath):
                 # Include all queries regardless of verification status
                 # (verification is about answer correctness, not execution success)
 
-                query_text = row['query_text']
-                hop_type = get_hop_type(query_text)
-
                 temporal = row['temporal_strategy']
                 pushdown = row['pushdown_strategy']
                 stitch = row['stitch_strategy']
@@ -66,7 +62,7 @@ def analyze_benchmarks(csv_filepath):
                 if individual_times_str:
                     try:
                         individual_times = [float(t.strip()) for t in individual_times_str.split(';') if t.strip()]
-                        results[hop_type][(temporal, pushdown, stitch)][cache].extend(individual_times)
+                        results[(temporal, pushdown, stitch)][cache].extend(individual_times)
                     except ValueError as e:
                         print(f"Warning: Could not parse individual_run_times_ms '{individual_times_str}' for query_id {row['original_query_id']}: {e}. Skipping.", file=sys.stderr)
                         continue
@@ -74,7 +70,7 @@ def analyze_benchmarks(csv_filepath):
                     # Fallback to avg_time_ms if individual times not available
                     try:
                         avg_time = float(row['avg_time_ms'])
-                        results[hop_type][(temporal, pushdown, stitch)][cache].append(avg_time)
+                        results[(temporal, pushdown, stitch)][cache].append(avg_time)
                     except ValueError:
                         print(f"Warning: Could not parse avg_time_ms '{row['avg_time_ms']}' for query_id {row['original_query_id']}. Skipping.", file=sys.stderr)
                         continue
@@ -88,26 +84,23 @@ def analyze_benchmarks(csv_filepath):
 
     # Calculate means and standard deviations
     stats = collections.defaultdict(
-        lambda: collections.defaultdict(
             lambda: collections.defaultdict(lambda: {'mean': 0.0, 'std': 0.0, 'count': 0})
-        )
     )
 
-    for hop_type, strats_data in results.items():
-        for strat_tuple, cache_data in strats_data.items():
-            for cache_mode, times in cache_data.items():
-                if times:
-                    mean_time = statistics.mean(times)
-                    std_time = statistics.stdev(times) if len(times) > 1 else 0.0
-                    stats[hop_type][strat_tuple][cache_mode] = {
-                        'mean': mean_time,
-                        'std': std_time,
-                        'count': len(times)
-                    }
+    for strat_tuple, cache_data in results.items():
+        for cache_mode, times in cache_data.items():
+            if times:
+                mean_time = statistics.mean(times)
+                std_time = statistics.stdev(times) if len(times) > 1 else 0.0
+                stats[strat_tuple][cache_mode] = {
+                    'mean': mean_time,
+                    'std': std_time,
+                    'count': len(times)
+                }
 
     return stats, strategy_tuples
 
-def generate_latex_table(stats, strategy_tuples):
+def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performance Summary"):
     """
     Generates a LaTeX table from the aggregated benchmark results with mean ± SD format.
     Outputs a fragment suitable for inclusion in a larger document, wrapped in a figure environment.
@@ -117,7 +110,7 @@ def generate_latex_table(stats, strategy_tuples):
 
     latex_string = "\\begin{figure}[htbp]\n"
     latex_string += "\\centering\n"
-    latex_string += "\\caption{Benchmark Performance Summary. Times shown as mean ± standard deviation in milliseconds (ms).}\n"
+    latex_string += f"\\caption{{{table_title}. Times shown as mean ± standard deviation in milliseconds (ms).}}\n"
     # If you need to reference this figure, you can add a label:
     # latex_string += "\\label{fig:benchmark_summary}\\n"
 
@@ -149,9 +142,9 @@ def generate_latex_table(stats, strategy_tuples):
 
         for strat_tuple in strategy_tuples:
             temporal, pushdown, stitch = strat_tuple
-            if strat_tuple in stats[hop_type]:
-                cold_stats = stats[hop_type][strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
-                warm_stats = stats[hop_type][strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
+            if strat_tuple in stats: # Check directly in stats
+                cold_stats = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
+                warm_stats = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
 
                 # Format as "mean ± SD" if we have data, otherwise "N/A"
                 if cold_stats['count'] > 0:
@@ -177,7 +170,7 @@ def generate_latex_table(stats, strategy_tuples):
     latex_string += "\\end{figure}\n"
     return latex_string
 
-def generate_summary_table(stats, strategy_tuples):
+def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULTS SUMMARY"):
     """
     Generates a simple text summary table for console output.
     """
@@ -186,7 +179,7 @@ def generate_summary_table(stats, strategy_tuples):
 
     output = []
     output.append("=" * 80)
-    output.append("BENCHMARK RESULTS SUMMARY (mean ± standard deviation in ms)")
+    output.append(f"{table_title.upper()} (mean ± standard deviation in ms)")
     output.append("=" * 80)
 
     # Sort hop types
@@ -213,15 +206,15 @@ def generate_summary_table(stats, strategy_tuples):
 
         for strat_tuple in strategy_tuples:
             temporal, pushdown, stitch = strat_tuple
-            if strat_tuple in stats[hop_type]:
+            if strat_tuple in stats: # Check directly in stats
                 # Capitalize first letter and rename 'none' to 'naive'
                 temporal_display = temporal.capitalize()
                 pushdown_display = pushdown.replace('none', 'naive').capitalize()
                 stitch_display = stitch.replace('none', 'naive').capitalize()
                 strategy_name = f"{temporal_display},{pushdown_display},{stitch_display}"
 
-                cold_stats = stats[hop_type][strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
-                warm_stats = stats[hop_type][strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
+                cold_stats = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
+                warm_stats = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
 
                 cold_str = f"{cold_stats['mean']:.2f} ± {cold_stats['std']:.2f}" if cold_stats['count'] > 0 else "N/A"
                 warm_str = f"{warm_stats['mean']:.2f} ± {warm_stats['std']:.2f}" if warm_stats['count'] > 0 else "N/A"
@@ -246,9 +239,15 @@ Examples:
         default='bench_results.csv',
         help='Path to the CSV file containing benchmark results (default: bench_results.csv)'
     )
+    parser.add_argument(
+        '-t', '--table-title',
+        default='Benchmark Performance Summary',
+        help='Title for the generated tables (default: Benchmark Performance Summary)'
+    )
 
     args = parser.parse_args()
     csv_path = args.file
+    table_title = args.table_title
 
     print(f"Analyzing benchmark data from: {csv_path}")
 
@@ -256,15 +255,15 @@ Examples:
 
     if aggregated_data:
         # Print summary to console
-        summary_output = generate_summary_table(aggregated_data, strategy_ordering)
+        summary_output = generate_summary_table(aggregated_data, strategy_ordering, table_title)
         print(summary_output)
 
         print("\n" + "=" * 80)
-        print("LATEX TABLE OUTPUT:")
+        print(f"LATEX TABLE OUTPUT FOR: {table_title}")
         print("=" * 80)
 
         # Generate and print LaTeX table
-        latex_output = generate_latex_table(aggregated_data, strategy_ordering)
+        latex_output = generate_latex_table(aggregated_data, strategy_ordering, table_title)
         print(latex_output)
     else:
         # Errors from analyze_benchmarks are printed to stderr within the function

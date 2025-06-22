@@ -356,7 +356,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         // Check if the target is a variable or a qualified identifier
         if (ctx.variable() != null) {
-            String variableName = (String) visit(ctx.variable());
+            String variableName = (String) visit(ctx.variable()); // This correctly returns a String
             if (qualificationRequired) {
                  throw new IllegalStateException(
                     String.format("Unqualified variable '%s' used in SNIPPET where qualification is required (due to ALIAS or JOIN). Use 'alias.%s'.",
@@ -367,7 +367,18 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             // If not required, implicitly qualify
             qualifiedTargetName = DEFAULT_MAIN_ALIAS + "." + variableName;
         } else if (ctx.qualifiedIdentifier() != null) {
-            qualifiedTargetName = (String) visit(ctx.qualifiedIdentifier());
+            Object visitedNode = visit(ctx.qualifiedIdentifier()); // visit() can return VariableColumn or StructuralColumn
+            if (visitedNode instanceof VariableColumn vc) {
+                qualifiedTargetName = vc.getColumnName();
+            } else if (visitedNode instanceof com.example.query.model.StructuralColumn sc) { // Ensure fully qualified name if it's StructuralColumn from model package
+                qualifiedTargetName = sc.getAlias() + "." + sc.getFieldName();
+            } else if (visitedNode instanceof String) { // Fallback for safety, though visitQualifiedIdentifier shouldn't return String directly
+                qualifiedTargetName = (String) visitedNode;
+                 logger.warn("visitQualifiedIdentifier returned a String for SNIPPET target. This is unexpected. Value: {}", qualifiedTargetName);
+            }
+            else {
+                throw new IllegalStateException("Snippet expression target (qualifiedIdentifier) resolved to unexpected type: " + visitedNode.getClass().getName());
+            }
         } else {
              throw new IllegalStateException("Snippet expression target must be a variable or qualified identifier.");
         }
