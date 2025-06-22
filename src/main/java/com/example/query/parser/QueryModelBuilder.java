@@ -1185,8 +1185,41 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             })
             .collect(java.util.stream.Collectors.toList());
 
+        // Ensure selected structural columns are marked as produced in the subquery's registry
+        for (SelectColumn sc : requalifiedSelectColumns) {
+            if (sc instanceof StructuralColumn structuralCol) {
+                // The getColumnName() here will be the alias-qualified name like "q2.DOCUMENT_ID"
+                String qualifiedStructuralName = structuralCol.getColumnName();
+                // Check if it's already registered as a producer (e.g. if it was also bound via BIND)
+                // Though structural columns typically aren't bound with BIND.
+                if (!subqueryBuilder.variableRegistry.isProduced(qualifiedStructuralName)) {
+                    subqueryBuilder.variableRegistry.registerProducer(
+                        qualifiedStructuralName,
+                        VariableType.ANY, // Structural columns don't have a specific BIND type here
+                        "SUBQUERY_SELECT_STRUCTURAL"
+                    );
+                    logger.debug("Registered selected structural column '{}' as producer in subquery '{}' registry.",
+                                 qualifiedStructuralName, subqueryAlias);
+                }
+            } else if (sc instanceof VariableColumn vc) {
+                // Variables selected (e.g. q2.party) must have been produced by a BIND clause
+                // within the subquery. The subqueryBuilder already handled their registration
+                // as producers during its internal processing of BIND.
+                // The requalifyVariables call on the registry handles their name changes (e.g. $main.party to q2.party).
+                // We must ensure they are indeed marked as produced in the subquery registry.
+                String qualifiedVariableName = vc.getColumnName();
+                if (!subqueryBuilder.variableRegistry.isProduced(qualifiedVariableName)) {
+                    // This case should ideally not happen if BIND clauses are correctly processed and registered.
+                    // However, adding a safeguard or at least a warning.
+                    logger.warn("Variable '{}' selected from subquery '{}' was not marked as produced. This might indicate an issue with BIND processing in the subquery.", qualifiedVariableName, subqueryAlias);
+                    // Optionally, could register it here, but it implies a potential flaw elsewhere.
+                    // For now, relying on BIND to have registered it.
+                }
+            }
+        }
+
         // Create the subquery Query object
-        Query subquery = new Query(
+        Query subqueryAst = new Query(
             source,
             requalifiedConditions,
             requalifiedOrderColumns,
@@ -1201,7 +1234,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         );
 
         // Return the SubquerySpec containing the Query object and its external alias
-        return new SubquerySpec(subquery, subqueryAlias);
+        return new SubquerySpec(subqueryAst, subqueryAlias);
     }
 
     // Overload visitJoinClause to accept qualification requirement
