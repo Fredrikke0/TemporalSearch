@@ -165,25 +165,6 @@ public class JoinHandler {
                 Object valueToAdd = rhsSoA.getValueAt(rightIdx);
                 ValueType typeToAdd = rhsSoA.getValueTypeAt(rightIdx);
 
-                // ===== TEMP DEBUG LOGGING START =====
-                if (rhsAlias != null && variableName.startsWith(rhsAlias + ".")) {
-                    if (variableName.endsWith(".party")) { // Assuming party is a common variable name
-                        logger.info("JOIN_HANDLER_TRACE: OutputConceptualId={}, RHS_Input_ConceptualId={}, Var='{}', Value='{}'",
-                            currentOutputConceptualId, pair.rightConceptualRowId(), variableName, valueToAdd);
-                    }
-                    if (variableName.endsWith(".person")) { // Assuming person is the join key here
-                         logger.info("JOIN_HANDLER_TRACE: OutputConceptualId={}, RHS_Input_ConceptualId={}, Var='{}', Value='{}'",
-                            currentOutputConceptualId, pair.rightConceptualRowId(), variableName, valueToAdd);
-                    }
-                } else if (variableName.equals("party")) { // For unaliased variables from subquery
-                     logger.info("JOIN_HANDLER_TRACE (unaliased): OutputConceptualId={}, RHS_Input_ConceptualId={}, Var='{}', Value='{}'",
-                            currentOutputConceptualId, pair.rightConceptualRowId(), variableName, valueToAdd);
-                } else if (variableName.equals("person")) {
-                     logger.info("JOIN_HANDLER_TRACE (unaliased): OutputConceptualId={}, RHS_Input_ConceptualId={}, Var='{}', Value='{}'",
-                            currentOutputConceptualId, pair.rightConceptualRowId(), variableName, valueToAdd);
-                }
-                // ===== TEMP DEBUG LOGGING END =====
-
                 if (operatorType == JoinCondition.JoinOperatorType.EQUALITY && variableName.equals(rhsAlias + "." + rightKey)) {
                     valueToAdd = pair.joinKeyValue(); // For RHS, this ensures consistency if joinKey was from LHS
                     if (valueToAdd instanceof LocalDate) typeToAdd = ValueType.DATE;
