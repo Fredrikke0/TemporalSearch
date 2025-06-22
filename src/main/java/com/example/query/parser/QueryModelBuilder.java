@@ -1553,43 +1553,68 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     }
 
     public String visitGroupByItem(QueryLangParser.GroupByItemContext ctx, String effectiveMainAlias, boolean qualificationRequired) {
+        String groupByColumnName;
+
         if (ctx.qualifiedIdentifier() != null) {
-            // For qualifiedIdentifier, the alias is already part of its text
-            // visitQualifiedIdentifier already returns a SelectColumn (StructuralColumn or VariableColumn)
-            // We need the string name here.
-            Object col = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
-            if (col instanceof SelectColumn) {
-                return ((SelectColumn) col).getColumnName();
+            Object colObj = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
+            if (colObj instanceof StructuralColumn sc) {
+                groupByColumnName = sc.getColumnName();
+                // Register this structural column as "produced" for validation purposes
+                variableRegistry.registerProducer(groupByColumnName, VariableType.ANY, "GROUP_BY_STRUCTURAL_QUALIFIED");
+                logger.debug("Registered qualified structural GROUP BY item '{}' as producer with type ANY.", groupByColumnName);
+            } else if (colObj instanceof VariableColumn vc) {
+                groupByColumnName = vc.getColumnName();
+                // This variable (e.g., alias.var) should already be a producer from its BIND clause or subquery.
+                // If it's not, the existing validation (which we are trying to satisfy) would catch it.
+            } else {
+                throw new IllegalStateException("Expected StructuralColumn or VariableColumn from visitQualifiedIdentifier in GROUP BY, got: " + (colObj != null ? colObj.getClass().getName() : "null"));
             }
-            throw new IllegalStateException("Expected SelectColumn from qualifiedIdentifier in GROUP BY, got: " + col.getClass().getName());
         } else if (ctx.variable() != null) {
-            String varName = ctx.variable().getText();
+            String varName = ctx.variable().getText(); // This is a plain identifier by grammar
             if (qualificationRequired) {
+                // If qualification is required, a plain variable here is an error.
+                // It should have been expressed as alias.var and parsed as qualifiedIdentifier.
                 throw new IllegalStateException(
-                    String.format("Unqualified variable '%s' used in GROUP BY where qualification is required. Use 'alias.%s'.", varName, varName)
+                    String.format("Unqualified variable '%s' used in GROUP BY where qualification (e.g., 'alias.%s') is required.",
+                                  varName, varName)
                 );
             }
-            return effectiveMainAlias + "." + varName;
+            // If qualification not required, implicitly qualify with effectiveMainAlias.
+            groupByColumnName = effectiveMainAlias + "." + varName;
+            // This variable (e.g., $main.myVar) must be a producer from a BIND.
+            // The existing semantic validation for variables will check this.
         } else if (ctx.identifier() != null) {
-            String identifierName = ctx.identifier().getText();
-            // Check if it's a structural keyword that can be unqualified in non-join/non-alias main query context
+            String identifierName = ctx.identifier().getText(); // Plain IDENTIFIER
             String upperIdName = identifierName.toUpperCase();
-            if (Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID").contains(upperIdName)) {
+            final Set<String> structuralKeywords = Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID", "BEGIN", "END");
+
+            if (structuralKeywords.contains(upperIdName)) { // Is it a structural keyword?
                  if (qualificationRequired) {
+                    // If it's a structural keyword used without an alias, and an alias is required.
                     throw new IllegalStateException(
-                        String.format("Unqualified structural keyword '%s' used in GROUP BY where qualification is required. Use 'alias.%s'.", identifierName, identifierName)
+                        String.format("Unqualified structural keyword '%s' used in GROUP BY where qualification (e.g., 'alias.%s') is required.",
+                                      identifierName, identifierName)
                     );
                 }
-                return effectiveMainAlias + "." + upperIdName; // Use uppercase for consistency with StructuralColumn handling
+                // If qualification not required, implicitly qualify with effectiveMainAlias.
+                groupByColumnName = effectiveMainAlias + "." + upperIdName;
+                variableRegistry.registerProducer(groupByColumnName, VariableType.ANY, "GROUP_BY_STRUCTURAL_UNQUALIFIED");
+                logger.debug("Registered unqualified structural GROUP BY item '{}' (from identifier) as producer with type ANY.", groupByColumnName);
+            } else { // Not a structural keyword, so it's a variable name.
+                if (qualificationRequired) {
+                    // An identifier that's not a structural keyword, used without an alias, where an alias is required.
+                    throw new IllegalStateException(
+                        String.format("Unqualified variable '%s' (from identifier) used in GROUP BY where qualification (e.g., 'alias.%s') is required.",
+                                      identifierName, identifierName)
+                    );
+                }
+                // If qualification not required, implicitly qualify with effectiveMainAlias.
+                groupByColumnName = effectiveMainAlias + "." + identifierName;
+                // This variable (e.g., $main.myVar) must be a producer. Validation will check.
             }
-            // Otherwise, treat as a variable
-            if (qualificationRequired) {
-                throw new IllegalStateException(
-                    String.format("Unqualified identifier '%s' used in GROUP BY where qualification is required. Use 'alias.%s'.", identifierName, identifierName)
-                );
-            }
-            return effectiveMainAlias + "." + identifierName;
+        } else {
+            throw new IllegalStateException("Unknown groupByItem type: " + ctx.getText());
         }
-        throw new IllegalStateException("Unknown groupByItem type: " + ctx.getText());
+        return groupByColumnName;
     }
 }

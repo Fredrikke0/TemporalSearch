@@ -509,7 +509,7 @@ class QueryParserTest {
         String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia ALIAS w GROUP BY category";
         // QueryModelBuilder should throw an error if an unqualified variable is used in GROUP BY with an alias.
         QueryParseException exception = assertThrows(QueryParseException.class, () -> parser.parse(queryStr));
-        assertTrue(exception.getMessage().contains("Unqualified variable 'category' used in GROUP BY where qualification is required. Use 'alias.category'."),
+        assertTrue(exception.getMessage().contains("Unqualified variable 'category' used in GROUP BY where qualification (e.g., 'alias.category') is required."),
                    "Error message should indicate 'category' needs qualification as 'alias.category'. Actual: " + exception.getMessage());
     }
 
@@ -539,7 +539,7 @@ class QueryParserTest {
         String queryStr = "SELECT COUNT(*) FROM wikipedia ALIAS w GROUP BY DOCUMENT_ID";
         // QueryModelBuilder should throw an error for unqualified structural columns as well if an alias is present.
         QueryParseException exception = assertThrows(QueryParseException.class, () -> parser.parse(queryStr));
-        assertTrue(exception.getMessage().contains("Unqualified variable 'DOCUMENT_ID' used in GROUP BY where qualification is required. Use 'alias.DOCUMENT_ID'."),
+        assertTrue(exception.getMessage().contains("Unqualified variable 'DOCUMENT_ID' used in GROUP BY where qualification (e.g., 'alias.DOCUMENT_ID') is required."),
                    "Error message should indicate 'DOCUMENT_ID' needs qualification as 'alias.DOCUMENT_ID'. Actual: " + exception.getMessage());
     }
     // --- END GROUP BY Parsing Tests ---
