@@ -220,34 +220,19 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
     }
 
     private QueryResultSoA performAndSoA(QueryResultSoA left, QueryResultSoA right,
-                                         Query.Granularity granularity, AttributeRequirements requirements) {
+                                         Query.Granularity granularity, AttributeRequirements requirements)
+            throws QueryExecutionException {
         logger.debug("Performing SoA AND operation (merge join). Left size: {}, Right size: {}. Granularity: {}",
                      left.size(), right.size(), granularity);
-
-        // DEBUG: Log the actual data being merged
-        // logger.debug("LEFT data:");
-        // for (int i = 0; i < left.size(); i++) {
-        //     logger.debug("  Left[{}]: docId={}, value={}, valueType={}",
-        //                 i, left.getDocumentIdAt(i), left.getValueAt(i), left.getValueTypeAt(i));
-        // }
-        // logger.debug("RIGHT data:");
-        // for (int i = 0; i < right.size(); i++) {
-        //     logger.debug("  Right[{}]: docId={}, value={}, valueType={}",
-        //                 i, right.getDocumentIdAt(i), right.getValueAt(i), right.getValueTypeAt(i));
-        // }
 
         AttributeRequirements combinedReqs = new AttributeRequirements();
         combinedReqs.merge(left.getRequirements());
         combinedReqs.merge(right.getRequirements());
-        combinedReqs.needsConceptualRowIds = true; // Crucial for AND/JOIN logic
-
-        // Data from indexes should already be sorted by document ID due to indexing process
-        // No need to re-sort - trust the index ordering
+        combinedReqs.needsConceptualRowIds = true;
 
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, left.getGranularitySize(), combinedReqs);
         int nextConceptualRowId = 0;
 
-        // Merge join algorithm - now guaranteed to work with sorted inputs
         int leftIdx = 0;
         int rightIdx = 0;
 
@@ -256,7 +241,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                 int leftDocId = left.getDocumentIdAt(leftIdx);
                 int rightDocId = right.getDocumentIdAt(rightIdx);
 
-                logger.trace("Merge join: comparing left[{}] docId={} vs right[{}] docId={}",
+                logger.trace("Merge join (Doc): comparing left[{}] docId={} vs right[{}] docId={}",
                            leftIdx, leftDocId, rightIdx, rightDocId);
 
                 if (leftDocId < rightDocId) {
@@ -266,74 +251,57 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                     logger.trace("Left docId {} > right docId {}, advancing right", leftDocId, rightDocId);
                     rightIdx++;
                 } else {
-                    logger.trace("MATCH FOUND: docId={}", leftDocId);
-                    // Found matching docId - create cross product of all matching entries
-                    int currentConceptualId = nextConceptualRowId++;
+                    // Found matching docId
+                    int granuleMatchDocId = leftDocId;
+                    logger.trace("Granule match on docId={}", granuleMatchDocId);
 
-                    // Store the start positions to iterate over all combinations
-                    int leftStart = leftIdx;
-                    int rightStart = rightIdx;
+                    int leftGranuleStartIdx = leftIdx;
+                    int rightGranuleStartIdx = rightIdx;
 
-                    // Count how many entries we have for this docId on both sides
-                    int leftCount = 0;
-                    while (leftIdx + leftCount < left.size() && left.getDocumentIdAt(leftIdx + leftCount) == leftDocId) {
-                        leftCount++;
+                    int countLeftInGranule = 0;
+                    while (leftIdx + countLeftInGranule < left.size() && left.getDocumentIdAt(leftIdx + countLeftInGranule) == granuleMatchDocId) {
+                        countLeftInGranule++;
                     }
 
-                    int rightCount = 0;
-                    while (rightIdx + rightCount < right.size() && right.getDocumentIdAt(rightIdx + rightCount) == rightDocId) {
-                        rightCount++;
+                    int countRightInGranule = 0;
+                    while (rightIdx + countRightInGranule < right.size() && right.getDocumentIdAt(rightIdx + countRightInGranule) == granuleMatchDocId) {
+                        countRightInGranule++;
                     }
 
-                    logger.trace("Adding {} left entries and {} right entries for conceptual ID {}",
-                               leftCount, rightCount, currentConceptualId);
+                    logger.trace("DocId={}: Left entries in granule: {}, Right entries in granule: {}.",
+                               granuleMatchDocId, countLeftInGranule, countRightInGranule);
 
-                                        // Add all left bindings for this docId
-                    for (int li = 0; li < leftCount; li++) {
-                        int leftRowIdx = leftStart + li;
-                        resultSoA.add(
-                            left.getValueAt(leftRowIdx),
-                            left.getValueTypeAt(leftRowIdx),
-                            left.getVariableNameAt(leftRowIdx),
-                            left.getDocumentIdAt(leftRowIdx),
-                            combinedReqs.needsSentenceId ? left.getSentenceIdAt(leftRowIdx) : -1,
-                            combinedReqs.needsPositions ? left.getBeginCharAt(leftRowIdx) : -1,
-                            combinedReqs.needsPositions ? left.getEndCharAt(leftRowIdx) : -1,
-                            combinedReqs.needsSynonymIds ? left.getSynonymIdAt(leftRowIdx) : -1,
-                            currentConceptualId
-                        );
+                    List<Integer> leftIndicesForGranule = new ArrayList<>(countLeftInGranule);
+                    for(int i=0; i < countLeftInGranule; ++i) {
+                        leftIndicesForGranule.add(leftGranuleStartIdx + i);
                     }
 
-                    // Add all right bindings for this docId
-                    for (int ri = 0; ri < rightCount; ri++) {
-                        int rightRowIdx = rightStart + ri;
-                        resultSoA.add(
-                            right.getValueAt(rightRowIdx),
-                            right.getValueTypeAt(rightRowIdx),
-                            right.getVariableNameAt(rightRowIdx),
-                            right.getDocumentIdAt(rightRowIdx),
-                            combinedReqs.needsSentenceId ? right.getSentenceIdAt(rightRowIdx) : -1,
-                            combinedReqs.needsPositions ? right.getBeginCharAt(rightRowIdx) : -1,
-                            combinedReqs.needsPositions ? right.getEndCharAt(rightRowIdx) : -1,
-                            combinedReqs.needsSynonymIds ? right.getSynonymIdAt(rightRowIdx) : -1,
-                            currentConceptualId
-                        );
+                    List<Integer> rightIndicesForGranule = new ArrayList<>(countRightInGranule);
+                    for(int i=0; i < countRightInGranule; ++i) {
+                        rightIndicesForGranule.add(rightGranuleStartIdx + i);
                     }
 
-                    // Advance both pointers past all processed entries
-                    leftIdx += leftCount;
-                    rightIdx += rightCount;
+                    if (!leftIndicesForGranule.isEmpty() && !rightIndicesForGranule.isEmpty()) {
+                         nextConceptualRowId = processMatchingGranule(
+                            resultSoA, left, right,
+                            leftIndicesForGranule, rightIndicesForGranule,
+                            combinedReqs, nextConceptualRowId);
+                    } else {
+                        logger.warn("Skipping processMatchingGranule for docId={} as one side has zero entries in the determined granule lists (left list size: {}, right list size: {}). Actual counts: left {}, right {}.",
+                            granuleMatchDocId, leftIndicesForGranule.size(), rightIndicesForGranule.size(), countLeftInGranule, countRightInGranule);
+                    }
+
+                    leftIdx += countLeftInGranule;
+                    rightIdx += countRightInGranule;
                 }
             }
         } else { // Granularity.SENTENCE
-            // For sentence granularity, we need to merge on (docId, sentenceId) pairs
             while (leftIdx < left.size() && rightIdx < right.size()) {
                 int leftDocId = left.getDocumentIdAt(leftIdx);
                 int rightDocId = right.getDocumentIdAt(rightIdx);
                 int leftSentId = combinedReqs.needsSentenceId ? left.getSentenceIdAt(leftIdx) : -1;
                 int rightSentId = combinedReqs.needsSentenceId ? right.getSentenceIdAt(rightIdx) : -1;
 
-                // Compare (docId, sentenceId) pairs lexicographically
                 int comparison = Integer.compare(leftDocId, rightDocId);
                 if (comparison == 0 && combinedReqs.needsSentenceId) {
                     comparison = Integer.compare(leftSentId, rightSentId);
@@ -345,61 +313,53 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                     rightIdx++;
                 } else {
                     // Found matching (docId, sentenceId) pair
-                    int currentConceptualId = nextConceptualRowId++;
+                    int granuleMatchDocId = leftDocId;
+                    int granuleMatchSentId = leftSentId;
 
-                    // Count entries for this (docId, sentenceId) pair on both sides
-                    int leftStart = leftIdx;
-                    int rightStart = rightIdx;
+                    logger.trace("Granule match on docId={}, sentId={}", granuleMatchDocId, granuleMatchSentId);
 
-                    int leftCount = 0;
-                    while (leftIdx + leftCount < left.size() &&
-                           left.getDocumentIdAt(leftIdx + leftCount) == leftDocId &&
-                           (!combinedReqs.needsSentenceId || left.getSentenceIdAt(leftIdx + leftCount) == leftSentId)) {
-                        leftCount++;
+                    int leftGranuleStartIdx = leftIdx;
+                    int rightGranuleStartIdx = rightIdx;
+
+                    int countLeftInGranule = 0;
+                    while (leftIdx + countLeftInGranule < left.size() &&
+                           left.getDocumentIdAt(leftIdx + countLeftInGranule) == granuleMatchDocId &&
+                           (!combinedReqs.needsSentenceId || left.getSentenceIdAt(leftIdx + countLeftInGranule) == granuleMatchSentId)) {
+                        countLeftInGranule++;
                     }
 
-                    int rightCount = 0;
-                    while (rightIdx + rightCount < right.size() &&
-                           right.getDocumentIdAt(rightIdx + rightCount) == rightDocId &&
-                           (!combinedReqs.needsSentenceId || right.getSentenceIdAt(rightIdx + rightCount) == rightSentId)) {
-                        rightCount++;
+                    int countRightInGranule = 0;
+                    while (rightIdx + countRightInGranule < right.size() &&
+                           right.getDocumentIdAt(rightIdx + countRightInGranule) == granuleMatchDocId &&
+                           (!combinedReqs.needsSentenceId || right.getSentenceIdAt(rightIdx + countRightInGranule) == granuleMatchSentId)) {
+                        countRightInGranule++;
                     }
 
-                    // Add all left bindings for this (docId, sentenceId) pair
-                    for (int li = 0; li < leftCount; li++) {
-                        int leftRowIdx = leftStart + li;
-                        resultSoA.add(
-                            left.getValueAt(leftRowIdx),
-                            left.getValueTypeAt(leftRowIdx),
-                            left.getVariableNameAt(leftRowIdx),
-                            left.getDocumentIdAt(leftRowIdx),
-                            combinedReqs.needsSentenceId ? left.getSentenceIdAt(leftRowIdx) : -1,
-                            combinedReqs.needsPositions ? left.getBeginCharAt(leftRowIdx) : -1,
-                            combinedReqs.needsPositions ? left.getEndCharAt(leftRowIdx) : -1,
-                            combinedReqs.needsSynonymIds ? left.getSynonymIdAt(leftRowIdx) : -1,
-                            currentConceptualId
-                        );
+                    logger.trace("DocId={}, SentId={}: Left entries in granule: {}, Right entries in granule: {}.",
+                               granuleMatchDocId, granuleMatchSentId, countLeftInGranule, countRightInGranule);
+
+                    List<Integer> leftIndicesForGranule = new ArrayList<>(countLeftInGranule);
+                    for(int i=0; i < countLeftInGranule; ++i) {
+                        leftIndicesForGranule.add(leftGranuleStartIdx + i);
                     }
 
-                    // Add all right bindings for this (docId, sentenceId) pair
-                    for (int ri = 0; ri < rightCount; ri++) {
-                        int rightRowIdx = rightStart + ri;
-                        resultSoA.add(
-                            right.getValueAt(rightRowIdx),
-                            right.getValueTypeAt(rightRowIdx),
-                            right.getVariableNameAt(rightRowIdx),
-                            right.getDocumentIdAt(rightRowIdx),
-                            combinedReqs.needsSentenceId ? right.getSentenceIdAt(rightRowIdx) : -1,
-                            combinedReqs.needsPositions ? right.getBeginCharAt(rightRowIdx) : -1,
-                            combinedReqs.needsPositions ? right.getEndCharAt(rightRowIdx) : -1,
-                            combinedReqs.needsSynonymIds ? right.getSynonymIdAt(rightRowIdx) : -1,
-                            currentConceptualId
-                        );
+                    List<Integer> rightIndicesForGranule = new ArrayList<>(countRightInGranule);
+                    for(int i=0; i < countRightInGranule; ++i) {
+                        rightIndicesForGranule.add(rightGranuleStartIdx + i);
                     }
 
-                    // Advance both pointers past all processed entries
-                    leftIdx += leftCount;
-                    rightIdx += rightCount;
+                    if (!leftIndicesForGranule.isEmpty() && !rightIndicesForGranule.isEmpty()) {
+                        nextConceptualRowId = processMatchingGranule(
+                           resultSoA, left, right,
+                           leftIndicesForGranule, rightIndicesForGranule,
+                           combinedReqs, nextConceptualRowId);
+                    } else {
+                       logger.warn("Skipping processMatchingGranule for docId={}, sentId={} as one side has zero entries in the determined granule lists (left list size: {}, right list size: {}). Actual counts: left {}, right {}.",
+                           granuleMatchDocId, granuleMatchSentId, leftIndicesForGranule.size(), rightIndicesForGranule.size(), countLeftInGranule, countRightInGranule);
+                    }
+
+                    leftIdx += countLeftInGranule;
+                    rightIdx += countRightInGranule;
                 }
             }
         }
@@ -408,8 +368,94 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         return resultSoA;
     }
 
+    /**
+     * Helper method to process a matching granule (docId or docId/sentId) by forming
+     * a Cartesian product of conceptual groups from left and right SoAs.
+     */
+    private int processMatchingGranule(
+        QueryResultSoA resultSoA,
+        QueryResultSoA leftSoa, QueryResultSoA rightSoa,
+        List<Integer> leftGranuleRowIndices,
+        List<Integer> rightGranuleRowIndices,
+        AttributeRequirements combinedReqs,
+        int currentNextConceptualRowId) throws QueryExecutionException {
+
+        if (!leftSoa.getRequirements().needsConceptualRowIds || !rightSoa.getRequirements().needsConceptualRowIds) {
+            String errorMsg = "Input QueryResultSoA to performAndSoA's granule processing is missing conceptualRowIds attribute. Left needs: " +
+                              leftSoa.getRequirements().needsConceptualRowIds + ", Right needs: " + rightSoa.getRequirements().needsConceptualRowIds;
+            logger.error(errorMsg);
+            throw new QueryExecutionException(
+                errorMsg,
+                "LogicalExecutor.processMatchingGranule",
+                QueryExecutionException.ErrorType.INTERNAL_ERROR
+            );
+        }
+
+        Map<Integer, List<Integer>> leftConceptualMap = new java.util.HashMap<>();
+        for (int idx : leftGranuleRowIndices) {
+            leftConceptualMap.computeIfAbsent(leftSoa.getConceptualRowIdAt(idx), k -> new ArrayList<>()).add(idx);
+        }
+
+        Map<Integer, List<Integer>> rightConceptualMap = new java.util.HashMap<>();
+        for (int idx : rightGranuleRowIndices) {
+            rightConceptualMap.computeIfAbsent(rightSoa.getConceptualRowIdAt(idx), k -> new ArrayList<>()).add(idx);
+        }
+
+        if (leftConceptualMap.isEmpty() || rightConceptualMap.isEmpty()) {
+            logger.warn("One or both conceptual maps are empty in processMatchingGranule. Left map size: {}, Right map size: {}. Input granule row counts left: {}, right: {}. Skipping product.",
+                        leftConceptualMap.size(), rightConceptualMap.size(), leftGranuleRowIndices.size(), rightGranuleRowIndices.size());
+            return currentNextConceptualRowId;
+        }
+
+        logger.trace("Processing granule. Left conceptual groups: {}, Right conceptual groups: {}", leftConceptualMap.size(), rightConceptualMap.size());
+
+        for (List<Integer> leftConceptGroupIndices : leftConceptualMap.values()) {
+            for (List<Integer> rightConceptGroupIndices : rightConceptualMap.values()) {
+                int conceptualIdForThisProduct = currentNextConceptualRowId++;
+                logger.trace("  New conceptual product ID: {}", conceptualIdForThisProduct);
+
+                for (int lIdx : leftConceptGroupIndices) {
+                    logger.trace("    Adding left entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
+                                 lIdx, leftSoa.getConceptualRowIdAt(lIdx), leftSoa.getDocumentIdAt(lIdx),
+                                 (combinedReqs.needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : "N/A"),
+                                 leftSoa.getVariableNameAt(lIdx), leftSoa.getValueAt(lIdx));
+                    resultSoA.add(
+                        leftSoa.getValueAt(lIdx),
+                        leftSoa.getValueTypeAt(lIdx),
+                        leftSoa.getVariableNameAt(lIdx),
+                        leftSoa.getDocumentIdAt(lIdx),
+                        combinedReqs.needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : -1,
+                        combinedReqs.needsPositions ? leftSoa.getBeginCharAt(lIdx) : -1,
+                        combinedReqs.needsPositions ? leftSoa.getEndCharAt(lIdx) : -1,
+                        combinedReqs.needsSynonymIds ? leftSoa.getSynonymIdAt(lIdx) : -1,
+                        conceptualIdForThisProduct
+                    );
+                }
+                for (int rIdx : rightConceptGroupIndices) {
+                     logger.trace("    Adding right entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
+                                 rIdx, rightSoa.getConceptualRowIdAt(rIdx), rightSoa.getDocumentIdAt(rIdx),
+                                 (combinedReqs.needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : "N/A"),
+                                 rightSoa.getVariableNameAt(rIdx), rightSoa.getValueAt(rIdx));
+                    resultSoA.add(
+                        rightSoa.getValueAt(rIdx),
+                        rightSoa.getValueTypeAt(rIdx),
+                        rightSoa.getVariableNameAt(rIdx),
+                        rightSoa.getDocumentIdAt(rIdx),
+                        combinedReqs.needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : -1,
+                        combinedReqs.needsPositions ? rightSoa.getBeginCharAt(rIdx) : -1,
+                        combinedReqs.needsPositions ? rightSoa.getEndCharAt(rIdx) : -1,
+                        combinedReqs.needsSynonymIds ? rightSoa.getSynonymIdAt(rIdx) : -1,
+                        conceptualIdForThisProduct
+                    );
+                }
+            }
+        }
+        return currentNextConceptualRowId;
+    }
+
     private QueryResultSoA performOrSoA(QueryResultSoA left, QueryResultSoA right,
-                                        Query.Granularity granularity, AttributeRequirements baseRequirements) {
+                                        Query.Granularity granularity, AttributeRequirements baseRequirements)
+        throws QueryExecutionException {
         logger.debug("Performing SoA OR operation. Left size: {}, Right size: {}. Granularity: {}",
                     left.size(), right.size(), granularity);
 
@@ -441,27 +487,12 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                 }
             }
         } else {
-            // If left doesn't have conceptual IDs (e.g., from a very old executor not yet updated), assign new ones.
-            // This is a fallback and ideally all executors should provide conceptual IDs.
-            int currentConceptualId = 0;
-            for (int i = 0; i < left.size(); i++) {
-                 currentConceptualId = i; // Simplistic: 1 new conceptual ID per entry
-                resultSoA.add(
-                    left.getValueAt(i),
-                    left.getValueTypeAt(i),
-                    left.getVariableNameAt(i),
-                    left.getDocumentIdAt(i),
-                    combinedReqs.needsSentenceId ? left.getSentenceIdAt(i) : -1,
-                    combinedReqs.needsPositions ? left.getBeginCharAt(i) : -1,
-                    combinedReqs.needsPositions ? left.getEndCharAt(i) : -1,
-                    combinedReqs.needsSynonymIds ? left.getSynonymIdAt(i) : -1,
-                    currentConceptualId
-                );
-                 if (currentConceptualId > maxLeftConceptualId) {
-                    maxLeftConceptualId = currentConceptualId;
-                }
-            }
-             logger.warn("Left QueryResultSoA in OR operation did not have conceptualRowIds. Assigning new ones. This may indicate an older executor.");
+            String errorMessage = "Left operand QueryResultSoA in performOrSoA is missing conceptualRowIds, which is a required attribute. " +
+                                  "This indicates a bug in the executor that produced this QueryResultSoA.";
+            logger.error(errorMessage);
+            throw new QueryExecutionException(errorMessage,
+                                             "LogicalExecutor.performOrSoA - Left Operand",
+                                             QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
 
 
@@ -483,23 +514,12 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                 );
             }
         } else {
-            // Fallback for right side if no conceptual IDs
-            int currentConceptualIdOffset = 0;
-            for (int i = 0; i < right.size(); i++) {
-                currentConceptualIdOffset = i; // Simplistic: 1 new conceptual ID per entry
-                resultSoA.add(
-                    right.getValueAt(i),
-                    right.getValueTypeAt(i),
-                    right.getVariableNameAt(i),
-                    right.getDocumentIdAt(i),
-                    combinedReqs.needsSentenceId ? right.getSentenceIdAt(i) : -1,
-                    combinedReqs.needsPositions ? right.getBeginCharAt(i) : -1,
-                    combinedReqs.needsPositions ? right.getEndCharAt(i) : -1,
-                    combinedReqs.needsSynonymIds ? right.getSynonymIdAt(i) : -1,
-                    offset + currentConceptualIdOffset
-                );
-            }
-            logger.warn("Right QueryResultSoA in OR operation did not have conceptualRowIds. Assigning new offset ones. This may indicate an older executor.");
+            String errorMessage = "Right operand QueryResultSoA in performOrSoA is missing conceptualRowIds, which is a required attribute. " +
+                                  "This indicates a bug in the executor that produced this QueryResultSoA.";
+            logger.error(errorMessage);
+            throw new QueryExecutionException(errorMessage,
+                                             "LogicalExecutor.performOrSoA - Right Operand",
+                                             QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
 
         logger.debug("SoA OR operation complete. Result size: {}", resultSoA.size());
