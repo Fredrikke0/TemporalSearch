@@ -80,7 +80,6 @@ public class QueryExecutor {
         // Analyze query to determine attribute requirements for SoA optimization
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
         logger.info("=== Query Execution Started ===");
-        logger.info("Query: {}", query);
         logger.info("SoA Attribute Requirements: {}", requirements.getRequiredSoAAttributes());
         logger.trace("Full requirements: {}", requirements);
 
@@ -141,7 +140,6 @@ public class QueryExecutor {
     private QueryResultSoA executeWithContext(Query query, Map<String, IndexAccessInterface> indexes,
                                      SubqueryContext subqueryContext, AttributeRequirements requirements)
             throws QueryExecutionException {
-        logger.debug("Executing query: {}", query);
         Query.Granularity granularity = query.granularity();
         int granularitySize = query.granularitySize().orElse(0);
         if (granularitySize < 0 || granularitySize > 10) {
@@ -423,7 +421,6 @@ public class QueryExecutor {
     private QueryResultSoA executeWithRequirements(Query query, Map<String, IndexAccessInterface> indexes,
                                         AttributeRequirements requirements, SubqueryContext subqueryContext)
             throws QueryExecutionException {
-        logger.debug("Executing query with requirements: {}, Granularity: {}", query, query.granularity());
         // Initialize the executor factory here, as it depends on the current query's granularity.
         if (this.injectedExecutorFactory != null) {
             this.executorFactory = this.injectedExecutorFactory;

@@ -73,9 +73,7 @@ public class StructuralColumn implements SelectColumn {
                  yield StringColumn.create(getColumnName()); // Default to String
             }
         };
-        // Log the type right after the switch expression completes
-        logger.debug("Switch expression yielded column '{}' of type {}", createdCol.name(), createdCol.type());
-        return createdCol;
+       return createdCol;
     }
 
     @Override

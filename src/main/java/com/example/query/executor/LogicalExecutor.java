@@ -184,7 +184,6 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                 return new QueryResultSoA(granularity, granularitySize, requirements);
             }
         }
-        logger.debug("executeAnd: Completed. Final cumulative result size: {}", cumulativeResult.size());
         return cumulativeResult;
     }
 
@@ -281,6 +280,30 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                         rightIndicesForGranule.add(rightGranuleStartIdx + i);
                     }
 
+                    // ---- START PRE-COMBO CHECK LOGGING ----
+                    boolean foundRepublicanInLeftGranule = false;
+                    for (int lIdx : leftIndicesForGranule) {
+                        Object lVal = left.getValueAt(lIdx);
+                        if ("republican".equals(lVal)) {
+                            foundRepublicanInLeftGranule = true;
+                            break;
+                        }
+                    }
+
+                    boolean foundTaftInRightGranule = false;
+                    for (int rIdx : rightIndicesForGranule) {
+                        Object rVal = right.getValueAt(rIdx);
+                        if (rVal instanceof String && ((String)rVal).toLowerCase().contains("taft")) {
+                            foundTaftInRightGranule = true;
+                            break;
+                        }
+                    }
+
+                    if (foundRepublicanInLeftGranule && foundTaftInRightGranule) {
+                        logger.info("PRE_COMBO_CHECK_SUCCESSFUL: Granule (DocId={}) found with 'republican' in leftSoa and 'taft' in rightSoa.", granuleMatchDocId);
+                    }
+                    // ---- END PRE-COMBO CHECK LOGGING ----
+
                     if (!leftIndicesForGranule.isEmpty() && !rightIndicesForGranule.isEmpty()) {
                          nextConceptualRowId = processMatchingGranule(
                             resultSoA, left, right,
@@ -347,6 +370,30 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                     for(int i=0; i < countRightInGranule; ++i) {
                         rightIndicesForGranule.add(rightGranuleStartIdx + i);
                     }
+
+                    // ---- START PRE-COMBO CHECK LOGGING ----
+                    boolean foundRepublicanInLeftGranule = false;
+                    for (int lIdx : leftIndicesForGranule) {
+                        Object lVal = left.getValueAt(lIdx);
+                        if ("republican".equals(lVal)) {
+                            foundRepublicanInLeftGranule = true;
+                            break;
+                        }
+                    }
+
+                    boolean foundTaftInRightGranule = false;
+                    for (int rIdx : rightIndicesForGranule) {
+                        Object rVal = right.getValueAt(rIdx);
+                        if (rVal instanceof String && ((String)rVal).toLowerCase().contains("taft")) {
+                            foundTaftInRightGranule = true;
+                            break;
+                        }
+                    }
+
+                    if (foundRepublicanInLeftGranule && foundTaftInRightGranule) {
+                        logger.info("PRE_COMBO_CHECK_SUCCESSFUL: Granule (DocId={}, SentId={}) found with 'republican' in leftSoa and 'taft' in rightSoa.", granuleMatchDocId, granuleMatchSentId);
+                    }
+                    // ---- END PRE-COMBO CHECK LOGGING ----
 
                     if (!leftIndicesForGranule.isEmpty() && !rightIndicesForGranule.isEmpty()) {
                         nextConceptualRowId = processMatchingGranule(

@@ -218,7 +218,6 @@ public class SoAJoinOptimizer {
                 }
             }
         }
-        logger.debug("Map combination yielded {} key matches.", results.size());
         return results;
     }
 

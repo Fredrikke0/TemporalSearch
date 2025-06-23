@@ -66,7 +66,6 @@ public class QuerySemanticValidator {
      * @throws QueryParseException if the query has semantic errors
      */
     public void validate(Query query, Optional<String> externalAliasContext) throws QueryParseException {
-        logger.debug("Starting semantic validation for query: {}, externalAliasContext: {}", query, externalAliasContext);
 
         VariableRegistry registry = query.variableRegistry();
         if (registry == null) {

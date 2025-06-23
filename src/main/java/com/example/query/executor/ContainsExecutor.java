@@ -164,7 +164,6 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             }
         }
         patterns.add(sb.toString());
-        logger.debug("Constructed pattern: {}", sb.toString());
         return patterns;
     }
 
@@ -302,12 +301,6 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             logger.debug("Pattern '{}' ends with '*', performing prefix search for '{}'", pattern, prefix);
             return executePrefixSearch(prefix, isVariable, variableName, index, condition, resultSoA, conceptualRowIdCounter, requirements, context);
         } else {
-            // Handles:
-            // 1. Exact terms: "term", "term1<DELIMITER>term2"
-            // 2. Literal "*": pattern is "*"
-            // 3. Patterns with '*' not at the end: "*<DELIMITER>term", "term<DELIMITER>*<DELIMITER>term"
-            // These will all be direct lookups.
-            logger.debug("Attempting direct lookup for pattern: {}", pattern);
             byte[] keyBytes = pattern.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             Optional<byte[]> rawBlobOptional = index.getRaw(keyBytes);
 
@@ -322,7 +315,6 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                     }
 
                     int numPositions = positions.getNumPositions();
-                    logger.debug("Found {} positions for pattern: '{}' after context filtering", numPositions, pattern);
 
                     String actualValue = reconstructValue(pattern, DELIMITER); // Reconstruct for display/binding
 
@@ -340,10 +332,6 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                         );
                     }
 
-                    // Logging for selective deserialization effectiveness can be removed or adapted if needed,
-                    // as deserializeWithFilters handles the full object based on context.
-                    logger.debug("Pattern '{}' resulted in {} entries in SoA after filtering.", pattern, numPositions);
-
                 } catch (Exception e) {
                     logger.error("Error during direct lookup and deserialization for pattern '{}': {}", pattern, e.getMessage(), e);
                     throw new QueryExecutionException("Error during direct lookup for pattern " + pattern, e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
@@ -353,6 +341,5 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             }
             return conceptualRowIdCounter;
         }
-        // REMOVED old complex wildcard handling logic (prefix scans for *term, term*term etc.)
     }
 }

@@ -520,7 +520,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     public Object visitSingleCondition(QueryLangParser.SingleConditionContext ctx, String currentScopeAlias) {
         // Dispatch to the specific condition visitor (e.g., visitNerExpression), passing the alias
         if (ctx.nerExpression() != null) {
-             logger.debug("visitSingleCondition: ctx.nerExpression: {}", ctx.nerExpression());
              return visitNerExpression(ctx.nerExpression(), currentScopeAlias);
         } else if (ctx.containsExpression() != null) {
              return visitContainsExpression(ctx.containsExpression(), currentScopeAlias);

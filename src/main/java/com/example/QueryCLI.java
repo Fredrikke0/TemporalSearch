@@ -150,18 +150,11 @@ public class QueryCLI implements AutoCloseable {
         IndexManager localIndexManager = null; // For non-interactive mode or if shared init failed
 
         try {
-            logger.debug("Parsing query: {}", queryStr);
             Query query = parser.parse(queryStr);
-
-            logger.debug("Validating query: {}", query);
-            // For interactive mode, subqueries might refer to variables defined in previous queries.
-            // This basic QueryCLI doesn't support session-wide variable registry yet.
-            // For now, validator gets an empty Optional for variable registry context.
             validator.validate(query, Optional.empty());
 
             String projectName = query.source();
             logger.debug("Using project name from FROM clause: {}", projectName);
-            logger.debug("Using database file: {}", this.dbFilePath);
             logger.debug("Using index base directory: {}", this.indexDirPath);
 
             if (!new java.io.File(this.dbFilePath).exists()) {
@@ -218,7 +211,6 @@ public class QueryCLI implements AutoCloseable {
             queryExecutor.setPushdownStrategy(this.currentPushdownStrategy);
             logger.debug("QueryExecutor configured with P:{}", this.currentPushdownStrategy);
 
-                logger.debug("Executing query against project: {}", projectName);
                 int windowSize = query.granularitySize().orElse(0);
                 logger.info("Query granularity: {} with size: {}", queryGranularity, windowSize);
 
@@ -258,7 +250,6 @@ public class QueryCLI implements AutoCloseable {
                         System.err.println("Error exporting results: " + e.getMessage());
                     }
                 } else {
-                logger.debug("Formatting results for console display");
                 String formattedResults = currentTableResultService.formatTable(resultTable);
                     System.out.println(formattedResults);
             }

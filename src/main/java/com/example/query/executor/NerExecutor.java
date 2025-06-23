@@ -324,14 +324,12 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 uniqueSynonymIds.add(positions.getSynonymIdAt(i));
             }
         }
-        logger.debug("executeVariableBindingSearch: Collected {} unique synonym IDs from {} positions.", uniqueSynonymIds.size(), initialNumPositions);
 
         // Step 2: Fetch terms in a batch
         Map<Integer, String> resolvedTermsCache = Collections.emptyMap(); // Default to empty
         if (!uniqueSynonymIds.isEmpty()) {
             try {
                 resolvedTermsCache = synonymManager.getTerms(uniqueSynonymIds);
-                logger.debug("executeVariableBindingSearch: Batch fetched {} terms for {} unique synonym IDs.", resolvedTermsCache.size(), uniqueSynonymIds.size());
             } catch (RocksDBException e) {
                 logger.error("RocksDBException while batch fetching terms in variable binding search for Type '{}'", normalizedEntityType, e);
                 throw new IndexAccessException("Failed to batch fetch terms from SynonymManager", NER_INDEX_NAME, IndexAccessException.ErrorType.READ_ERROR, e);
