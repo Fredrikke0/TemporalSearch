@@ -412,22 +412,51 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         for (List<Integer> leftConceptGroupIndices : leftConceptualMap.values()) {
             for (List<Integer> rightConceptGroupIndices : rightConceptualMap.values()) {
                 int conceptualIdForThisProduct = currentNextConceptualRowId++;
-                // ===== DETAILED LOGGING FOR SUBQUERY DEBUGGING START =====
-                String leftSoaContext = leftSoa.toString().substring(0, Math.min(leftSoa.toString().length(), 30)); // Abbreviated context
-                String rightSoaContext = rightSoa.toString().substring(0, Math.min(rightSoa.toString().length(), 30)); // Abbreviated context
-                logger.info("LOGICAL_EXEC_TRACE: Processing conceptual product. New ProductCID={}, LeftSoA Context='{}', RightSoA Context='{}'",
-                    conceptualIdForThisProduct, leftSoaContext, rightSoaContext);
-                // ===== DETAILED LOGGING FOR SUBQUERY DEBUGGING END =====
+
+                // Conditional logging pre-check
+                boolean logThisProduct = false;
+                String tempLValForCheck = null;
+                String tempRValForCheck = null;
+
+                // Check left side for party or person
+                if (!leftConceptGroupIndices.isEmpty()) {
+                    String lVarNameFirst = leftSoa.getVariableNameAt(leftConceptGroupIndices.get(0));
+                    Object lValueFirst = leftSoa.getValueAt(leftConceptGroupIndices.get(0));
+                    if (lVarNameFirst != null && lVarNameFirst.endsWith(".party")) {
+                        tempLValForCheck = String.valueOf(lValueFirst).toLowerCase();
+                        if (tempLValForCheck.equals("republican") || tempLValForCheck.equals("democrat")) {
+                            logThisProduct = true;
+                        }
+                    }
+                }
+                // Check right side for person name (e.g., containing taft)
+                if (!logThisProduct && !rightConceptGroupIndices.isEmpty()) {
+                    String rVarNameFirst = rightSoa.getVariableNameAt(rightConceptGroupIndices.get(0));
+                    Object rValueFirst = rightSoa.getValueAt(rightConceptGroupIndices.get(0));
+                    if (rVarNameFirst != null && rVarNameFirst.endsWith(".person")) {
+                        tempRValForCheck = String.valueOf(rValueFirst).toLowerCase();
+                        if (tempRValForCheck.contains("taft")) {
+                            logThisProduct = true;
+                        }
+                    }
+                }
+
+                if (logThisProduct) {
+                    String leftSoaContext = leftSoa.toString().substring(0, Math.min(leftSoa.toString().length(), 60));
+                    String rightSoaContext = rightSoa.toString().substring(0, Math.min(rightSoa.toString().length(), 60));
+                    logger.info("LOGICAL_EXEC_TRACE: Conditionally processing conceptual product. New ProductCID={}, LeftSoA='{}', RightSoA='{}'",
+                        conceptualIdForThisProduct, leftSoaContext, rightSoaContext);
+                }
 
                 logger.trace("  New conceptual product ID: {}", conceptualIdForThisProduct);
 
                 for (int lIdx : leftConceptGroupIndices) {
-                    // ===== DETAILED LOGGING FOR SUBQUERY DEBUGGING START =====
                     String lVarName = leftSoa.getVariableNameAt(lIdx);
                     Object lValue = leftSoa.getValueAt(lIdx);
-                    logger.info("LOGICAL_EXEC_TRACE: Adding L_ENTRY to ProductCID={}: Var='{}', Val='{}', FromLSoaCID={}",
-                        conceptualIdForThisProduct, lVarName, lValue, leftSoa.getConceptualRowIdAt(lIdx));
-                    // ===== DETAILED LOGGING FOR SUBQUERY DEBUGGING END =====
+                    if (logThisProduct || (lVarName !=null && (lVarName.endsWith(".party") || lVarName.endsWith(".person")))) {
+                         logger.info("LOGICAL_EXEC_TRACE: Adding L_ENTRY to ProductCID={}: Var='{}', Val='{}', FromLSoaCID={}",
+                            conceptualIdForThisProduct, lVarName, lValue, leftSoa.getConceptualRowIdAt(lIdx));
+                    }
                     logger.trace("    Adding left entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
                                  lIdx, leftSoa.getConceptualRowIdAt(lIdx), leftSoa.getDocumentIdAt(lIdx),
                                  (combinedReqs.needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : "N/A"),
@@ -445,12 +474,12 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                     );
                 }
                 for (int rIdx : rightConceptGroupIndices) {
-                     // ===== DETAILED LOGGING FOR SUBQUERY DEBUGGING START =====
                     String rVarName = rightSoa.getVariableNameAt(rIdx);
                     Object rValue = rightSoa.getValueAt(rIdx);
-                    logger.info("LOGICAL_EXEC_TRACE: Adding R_ENTRY to ProductCID={}: Var='{}', Val='{}', FromRSoaCID={}",
-                        conceptualIdForThisProduct, rVarName, rValue, rightSoa.getConceptualRowIdAt(rIdx));
-                    // ===== DETAILED LOGGING FOR SUBQUERY DEBUGGING END =====
+                     if (logThisProduct || (rVarName != null && (rVarName.endsWith(".party") || rVarName.endsWith(".person")))) {
+                        logger.info("LOGICAL_EXEC_TRACE: Adding R_ENTRY to ProductCID={}: Var='{}', Val='{}', FromRSoaCID={}",
+                            conceptualIdForThisProduct, rVarName, rValue, rightSoa.getConceptualRowIdAt(rIdx));
+                    }
                      logger.trace("    Adding right entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
                                  rIdx, rightSoa.getConceptualRowIdAt(rIdx), rightSoa.getDocumentIdAt(rIdx),
                                  (combinedReqs.needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : "N/A"),

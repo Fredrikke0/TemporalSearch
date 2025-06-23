@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,16 +78,24 @@ public class SoAJoinOptimizer {
         Map<T, Set<Integer>> keyToConceptualIds = new HashMap<>();
         if (!soa.getRequirements().needsConceptualRowIds) {
             logger.warn("Building key map for SoA (key: '{}'), but it lacks conceptualRowIds. Results may be incorrect.", keyName);
-            // Still proceed, but be aware conceptual IDs might be default/missing.
+        }
+
+        // Determine if this specific keyName or typical values warrant detailed logging
+        boolean detailedLogForKey = (keyName != null && keyName.endsWith(".person"));
+
+        if(detailedLogForKey) {
+            logger.info("SOA_OPT_TRACE: Building key map for keyName='{}', SoA Context='{}'", keyName, soa.toString().substring(0, Math.min(soa.toString().length(), 60)));
         }
 
         for (int i = 0; i < soa.size(); i++) {
             Object extractedValue = null;
             boolean keyFound = false;
-
+            int conceptualId = soa.getRequirements().needsConceptualRowIds ? soa.getConceptualRowIdAt(i) : i; // Fallback
             String varNameAtIndex = soa.getVariableNameAt(i);
-            if (varNameAtIndex != null && (varNameAtIndex.equals(keyName) || varNameAtIndex.equals("?" + keyName))) {
-                extractedValue = soa.getValueAt(i);
+            Object rawValueAtIndex = soa.getValueAt(i); // For logging original value
+
+            if (varNameAtIndex != null && (varNameAtIndex.equals(keyName) || varNameAtIndex.equals("" + keyName))) {
+                extractedValue = rawValueAtIndex;
                 keyFound = true;
             } else if (isStructuralDocumentIdKey(keyName) && soa.getRequirements().needsDocumentId) {
                  extractedValue = soa.getDocumentIdAt(i);
@@ -99,25 +108,46 @@ public class SoAJoinOptimizer {
                     String plainVarName = varNameAtIndex.substring(varNameAtIndex.lastIndexOf('.') + 1);
                     if (plainVarName.equalsIgnoreCase(keyName)) {
                         if (soa.getValueTypeAt(i) == ValueType.DATE) {
-                            extractedValue = soa.getValueAt(i);
+                            extractedValue = rawValueAtIndex;
                             keyFound = true;
                         } else {
-                            logger.warn("Structural date join key '{}': Variable '{}' was expected to be DATE type but is {}. Skipping for join key map.",
-                                        keyName, varNameAtIndex, soa.getValueTypeAt(i));
+                            // Logged further down if detailedLogForKey is true
                         }
                     }
                 }
             }
 
+            boolean logThisEntry = detailedLogForKey;
+            if (!logThisEntry && extractedValue != null) {
+                String valStr = String.valueOf(extractedValue).toLowerCase();
+                if (valStr.contains("taft") || valStr.contains("bush")) {
+                    logThisEntry = true;
+                }
+            }
+
+            if (logThisEntry) {
+                logger.info("SOA_OPT_TRACE: Entry i={}: Var='{}', RawVal='{}', ExtractedVal='{}', CID={}, KeyFound={}, KeyName='{}'",
+                    i, varNameAtIndex, rawValueAtIndex, extractedValue, conceptualId, keyFound, keyName);
+            }
+
             if (keyFound && extractedValue != null) {
                 try {
                     T castedValue = keyType.cast(extractedValue);
-                    int conceptualId = soa.getRequirements().needsConceptualRowIds ? soa.getConceptualRowIdAt(i) : i; // Fallback if no conceptualIDs
                     keyToConceptualIds.computeIfAbsent(castedValue, k -> new HashSet<>()).add(conceptualId);
+                    if (logThisEntry) {
+                        logger.info("SOA_OPT_TRACE: Added to map: Key='{}', CID={}", castedValue, conceptualId);
+                    }
                 } catch (ClassCastException e) {
-                    logger.warn("Cast failed for key '{}', value '{}' to type '{}'. Skipping.", keyName, extractedValue, keyType.getSimpleName());
+                    logger.warn("SOA_OPT_TRACE: Cast failed for key '{}', value '{}' to type '{}'. Skipping for map add.", keyName, extractedValue, keyType.getSimpleName());
                 }
+            } else if (logThisEntry && keyFound && extractedValue == null) {
+                logger.info("SOA_OPT_TRACE: Key '{}' found for CID={}, but extractedValue is null. Not added to map.", keyName, conceptualId);
             }
+        }
+        if(detailedLogForKey) {
+             logger.info("SOA_OPT_TRACE: Finished building key map for keyName='{}'. Map size: {}. First 5 entries: {}",
+                keyName, keyToConceptualIds.size(),
+                keyToConceptualIds.entrySet().stream().limit(5).map(e -> e.getKey() + "->" + e.getValue().size() + " CIDs").collect(Collectors.joining(", ")));
         }
         return keyToConceptualIds;
     }
