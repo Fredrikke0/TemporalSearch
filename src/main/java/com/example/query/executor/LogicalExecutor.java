@@ -280,26 +280,42 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                         rightIndicesForGranule.add(rightGranuleStartIdx + i);
                     }
 
+                    // ---- START GRANULE-SPECIFIC DEBUG LOGGING FOR (4398) ----
+                    if (granularity == Query.Granularity.DOCUMENT && granuleMatchDocId == 4398) {
+                        logger.info("GRANULE_CONTENTS_DEBUG: Target Granule (DocId={}, SentId=N/A) [Document Granularity]", granuleMatchDocId);
+                        logger.info("  LeftSoa (Source: OR Result) Entries for this Granule (Count: {}):", leftIndicesForGranule.size());
+                        for (int lIdx : leftIndicesForGranule) {
+                            logger.info("    L_DATA: Idx={}, Var='{}', Val='{}', Type={}, CID={}",
+                                        lIdx, left.getVariableNameAt(lIdx), left.getValueAt(lIdx),
+                                        left.getValueTypeAt(lIdx), left.getConceptualRowIdAt(lIdx));
+                        }
+                        logger.info("  RightSoa (Source: NER Result) Entries for this Granule (Count: {}):", rightIndicesForGranule.size());
+                        for (int rIdx : rightIndicesForGranule) {
+                            logger.info("    R_DATA: Idx={}, Var='{}', Val='{}', Type={}, CID={}",
+                                        rIdx, right.getVariableNameAt(rIdx), right.getValueAt(rIdx),
+                                        right.getValueTypeAt(rIdx), right.getConceptualRowIdAt(rIdx));
+                        }
+                    }
+                    // ---- END GRANULE-SPECIFIC DEBUG LOGGING ----
+
                     // ---- START PRE-COMBO CHECK LOGGING ----
-                    boolean foundRepublicanInLeftGranule = false;
+                    boolean foundRepublicanInLeftGranuleDoc = false;
                     for (int lIdx : leftIndicesForGranule) {
                         Object lVal = left.getValueAt(lIdx);
                         if ("republican".equals(lVal)) {
-                            foundRepublicanInLeftGranule = true;
+                            foundRepublicanInLeftGranuleDoc = true;
                             break;
                         }
                     }
-
-                    boolean foundTaftInRightGranule = false;
+                    boolean foundTaftInRightGranuleDoc = false;
                     for (int rIdx : rightIndicesForGranule) {
                         Object rVal = right.getValueAt(rIdx);
                         if (rVal instanceof String && ((String)rVal).toLowerCase().contains("taft")) {
-                            foundTaftInRightGranule = true;
+                            foundTaftInRightGranuleDoc = true;
                             break;
                         }
                     }
-
-                    if (foundRepublicanInLeftGranule && foundTaftInRightGranule) {
+                    if (foundRepublicanInLeftGranuleDoc && foundTaftInRightGranuleDoc) {
                         logger.info("PRE_COMBO_CHECK_SUCCESSFUL: Granule (DocId={}) found with 'republican' in leftSoa and 'taft' in rightSoa.", granuleMatchDocId);
                     }
                     // ---- END PRE-COMBO CHECK LOGGING ----
@@ -371,26 +387,42 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                         rightIndicesForGranule.add(rightGranuleStartIdx + i);
                     }
 
+                    // ---- START GRANULE-SPECIFIC DEBUG LOGGING FOR (4398,17) ----
+                    if (granularity == Query.Granularity.SENTENCE && granuleMatchDocId == 4398 && granuleMatchSentId == 17) {
+                        logger.info("GRANULE_CONTENTS_DEBUG: Target Granule (DocId={}, SentId={}) [Sentence Granularity]", granuleMatchDocId, granuleMatchSentId);
+                        logger.info("  LeftSoa (Source: OR Result) Entries for this Granule (Count: {}):", leftIndicesForGranule.size());
+                        for (int lIdx : leftIndicesForGranule) {
+                            logger.info("    L_DATA: Idx={}, Var='{}', Val='{}', Type={}, CID={}",
+                                        lIdx, left.getVariableNameAt(lIdx), left.getValueAt(lIdx),
+                                        left.getValueTypeAt(lIdx), left.getConceptualRowIdAt(lIdx));
+                        }
+                        logger.info("  RightSoa (Source: NER Result) Entries for this Granule (Count: {}):", rightIndicesForGranule.size());
+                        for (int rIdx : rightIndicesForGranule) {
+                            logger.info("    R_DATA: Idx={}, Var='{}', Val='{}', Type={}, CID={}",
+                                        rIdx, right.getVariableNameAt(rIdx), right.getValueAt(rIdx),
+                                        right.getValueTypeAt(rIdx), right.getConceptualRowIdAt(rIdx));
+                        }
+                    }
+                    // ---- END GRANULE-SPECIFIC DEBUG LOGGING ----
+
                     // ---- START PRE-COMBO CHECK LOGGING ----
-                    boolean foundRepublicanInLeftGranule = false;
+                    boolean foundRepublicanInLeftGranuleSent = false;
                     for (int lIdx : leftIndicesForGranule) {
                         Object lVal = left.getValueAt(lIdx);
                         if ("republican".equals(lVal)) {
-                            foundRepublicanInLeftGranule = true;
+                            foundRepublicanInLeftGranuleSent = true;
                             break;
                         }
                     }
-
-                    boolean foundTaftInRightGranule = false;
+                    boolean foundTaftInRightGranuleSent = false;
                     for (int rIdx : rightIndicesForGranule) {
                         Object rVal = right.getValueAt(rIdx);
                         if (rVal instanceof String && ((String)rVal).toLowerCase().contains("taft")) {
-                            foundTaftInRightGranule = true;
+                            foundTaftInRightGranuleSent = true;
                             break;
                         }
                     }
-
-                    if (foundRepublicanInLeftGranule && foundTaftInRightGranule) {
+                    if (foundRepublicanInLeftGranuleSent && foundTaftInRightGranuleSent) {
                         logger.info("PRE_COMBO_CHECK_SUCCESSFUL: Granule (DocId={}, SentId={}) found with 'republican' in leftSoa and 'taft' in rightSoa.", granuleMatchDocId, granuleMatchSentId);
                     }
                     // ---- END PRE-COMBO CHECK LOGGING ----
