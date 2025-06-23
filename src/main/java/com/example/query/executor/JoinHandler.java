@@ -164,7 +164,6 @@ public class JoinHandler {
 
                 Object valueToAdd = rhsSoA.getValueAt(rightIdx);
                 ValueType typeToAdd = rhsSoA.getValueTypeAt(rightIdx);
-
                 if (operatorType == JoinCondition.JoinOperatorType.EQUALITY && variableName.equals(rhsAlias + "." + rightKey)) {
                     valueToAdd = pair.joinKeyValue(); // For RHS, this ensures consistency if joinKey was from LHS
                     if (valueToAdd instanceof LocalDate) typeToAdd = ValueType.DATE;

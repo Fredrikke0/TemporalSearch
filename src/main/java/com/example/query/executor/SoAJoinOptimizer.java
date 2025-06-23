@@ -74,13 +74,6 @@ public class SoAJoinOptimizer {
     private static <T> Map<T, Set<Integer>> buildKeyToConceptualIdsMap(
             QueryResultSoA soa, String keyName, Class<T> keyType) {
 
-        // ===== TARGETED LOGGING FOR SoAJoinOptimizer =====
-        boolean isQ2PersonKey = (keyName != null && keyName.contains("person")); // Simple check for relevant key
-        if (isQ2PersonKey) {
-            logger.info("SOA_OPT_BUILD_MAP: Building key map for SoA (size {}) with keyName='{}', targetType='{}'", soa.size(), keyName, keyType.getSimpleName());
-        }
-        // ===== END TARGETED LOGGING =====
-
         Map<T, Set<Integer>> keyToConceptualIds = new HashMap<>();
         if (!soa.getRequirements().needsConceptualRowIds) {
             logger.warn("Building key map for SoA (key: '{}'), but it lacks conceptualRowIds. Results may be incorrect.", keyName);
@@ -121,25 +114,6 @@ public class SoAJoinOptimizer {
                     T castedValue = keyType.cast(extractedValue);
                     int conceptualId = soa.getRequirements().needsConceptualRowIds ? soa.getConceptualRowIdAt(i) : i; // Fallback if no conceptualIDs
                     keyToConceptualIds.computeIfAbsent(castedValue, k -> new HashSet<>()).add(conceptualId);
-
-                    // ===== TARGETED LOGGING FOR SoAJoinOptimizer =====
-                    if (isQ2PersonKey && extractedValue instanceof String && ((String)extractedValue).toLowerCase().contains("taft")) {
-                        logger.info("SOA_OPT_BUILD_MAP_TAFT: KeyName='{}', Found Person='{}' (type {}), Added CID={} to map for this person",
-                                    keyName, extractedValue, extractedValue.getClass().getSimpleName(), conceptualId);
-                        // Attempt to find party for this CID in the *current* soa for more context
-                        for (int j=0; j < soa.size(); j++) {
-                            if (soa.getConceptualRowIdAt(j) == conceptualId) {
-                                String varName = soa.getVariableNameAt(j);
-                                if (varName != null && varName.contains("party")) {
-                                    logger.info("SOA_OPT_BUILD_MAP_TAFT_CONTEXT: For Person='{}', CID={}, Found Party Var='{}', Party Val='{}'",
-                                                extractedValue, conceptualId, varName, soa.getValueAt(j));
-                                    break; // Found party for this CID, no need to check further for this specific log line
-                                }
-                            }
-                        }
-                    }
-                    // ===== END TARGETED LOGGING =====
-
                 } catch (ClassCastException e) {
                     logger.warn("Cast failed for key '{}', value '{}' to type '{}'. Skipping.", keyName, extractedValue, keyType.getSimpleName());
                 }
@@ -218,6 +192,7 @@ public class SoAJoinOptimizer {
                 }
             }
         }
+        logger.debug("Map combination yielded {} key matches.", results.size());
         return results;
     }
 

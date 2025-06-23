@@ -184,6 +184,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                 return new QueryResultSoA(granularity, granularitySize, requirements);
             }
         }
+        logger.debug("executeAnd: Completed. Final cumulative result size: {}", cumulativeResult.size());
         return cumulativeResult;
     }
 
@@ -280,46 +281,6 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                         rightIndicesForGranule.add(rightGranuleStartIdx + i);
                     }
 
-                    // ---- START GRANULE-SPECIFIC DEBUG LOGGING FOR (4398) ----
-                    if (granularity == Query.Granularity.DOCUMENT && granuleMatchDocId == 4398) {
-                        logger.info("GRANULE_CONTENTS_DEBUG: Target Granule (DocId={}, SentId=N/A) [Document Granularity]", granuleMatchDocId);
-                        logger.info("  LeftSoa (Source: OR Result) Entries for this Granule (Count: {}):", leftIndicesForGranule.size());
-                        for (int lIdx : leftIndicesForGranule) {
-                            logger.info("    L_DATA: Idx={}, Var='{}', Val='{}', Type={}, CID={}",
-                                        lIdx, left.getVariableNameAt(lIdx), left.getValueAt(lIdx),
-                                        left.getValueTypeAt(lIdx), left.getConceptualRowIdAt(lIdx));
-                        }
-                        logger.info("  RightSoa (Source: NER Result) Entries for this Granule (Count: {}):", rightIndicesForGranule.size());
-                        for (int rIdx : rightIndicesForGranule) {
-                            logger.info("    R_DATA: Idx={}, Var='{}', Val='{}', Type={}, CID={}",
-                                        rIdx, right.getVariableNameAt(rIdx), right.getValueAt(rIdx),
-                                        right.getValueTypeAt(rIdx), right.getConceptualRowIdAt(rIdx));
-                        }
-                    }
-                    // ---- END GRANULE-SPECIFIC DEBUG LOGGING ----
-
-                    // ---- START PRE-COMBO CHECK LOGGING ----
-                    boolean foundRepublicanInLeftGranuleDoc = false;
-                    for (int lIdx : leftIndicesForGranule) {
-                        Object lVal = left.getValueAt(lIdx);
-                        if ("republican".equals(lVal)) {
-                            foundRepublicanInLeftGranuleDoc = true;
-                            break;
-                        }
-                    }
-                    boolean foundTaftInRightGranuleDoc = false;
-                    for (int rIdx : rightIndicesForGranule) {
-                        Object rVal = right.getValueAt(rIdx);
-                        if (rVal instanceof String && ((String)rVal).toLowerCase().contains("taft")) {
-                            foundTaftInRightGranuleDoc = true;
-                            break;
-                        }
-                    }
-                    if (foundRepublicanInLeftGranuleDoc && foundTaftInRightGranuleDoc) {
-                        logger.info("PRE_COMBO_CHECK_SUCCESSFUL: Granule (DocId={}) found with 'republican' in leftSoa and 'taft' in rightSoa.", granuleMatchDocId);
-                    }
-                    // ---- END PRE-COMBO CHECK LOGGING ----
-
                     if (!leftIndicesForGranule.isEmpty() && !rightIndicesForGranule.isEmpty()) {
                          nextConceptualRowId = processMatchingGranule(
                             resultSoA, left, right,
@@ -387,46 +348,6 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                         rightIndicesForGranule.add(rightGranuleStartIdx + i);
                     }
 
-                    // ---- START GRANULE-SPECIFIC DEBUG LOGGING FOR (4398,17) ----
-                    if (granularity == Query.Granularity.SENTENCE && granuleMatchDocId == 4398 && granuleMatchSentId == 17) {
-                        logger.info("GRANULE_CONTENTS_DEBUG: Target Granule (DocId={}, SentId={}) [Sentence Granularity]", granuleMatchDocId, granuleMatchSentId);
-                        logger.info("  LeftSoa (Source: OR Result) Entries for this Granule (Count: {}):", leftIndicesForGranule.size());
-                        for (int lIdx : leftIndicesForGranule) {
-                            logger.info("    L_DATA: Idx={}, Var='{}', Val='{}', Type={}, CID={}",
-                                        lIdx, left.getVariableNameAt(lIdx), left.getValueAt(lIdx),
-                                        left.getValueTypeAt(lIdx), left.getConceptualRowIdAt(lIdx));
-                        }
-                        logger.info("  RightSoa (Source: NER Result) Entries for this Granule (Count: {}):", rightIndicesForGranule.size());
-                        for (int rIdx : rightIndicesForGranule) {
-                            logger.info("    R_DATA: Idx={}, Var='{}', Val='{}', Type={}, CID={}",
-                                        rIdx, right.getVariableNameAt(rIdx), right.getValueAt(rIdx),
-                                        right.getValueTypeAt(rIdx), right.getConceptualRowIdAt(rIdx));
-                        }
-                    }
-                    // ---- END GRANULE-SPECIFIC DEBUG LOGGING ----
-
-                    // ---- START PRE-COMBO CHECK LOGGING ----
-                    boolean foundRepublicanInLeftGranuleSent = false;
-                    for (int lIdx : leftIndicesForGranule) {
-                        Object lVal = left.getValueAt(lIdx);
-                        if ("republican".equals(lVal)) {
-                            foundRepublicanInLeftGranuleSent = true;
-                            break;
-                        }
-                    }
-                    boolean foundTaftInRightGranuleSent = false;
-                    for (int rIdx : rightIndicesForGranule) {
-                        Object rVal = right.getValueAt(rIdx);
-                        if (rVal instanceof String && ((String)rVal).toLowerCase().contains("taft")) {
-                            foundTaftInRightGranuleSent = true;
-                            break;
-                        }
-                    }
-                    if (foundRepublicanInLeftGranuleSent && foundTaftInRightGranuleSent) {
-                        logger.info("PRE_COMBO_CHECK_SUCCESSFUL: Granule (DocId={}, SentId={}) found with 'republican' in leftSoa and 'taft' in rightSoa.", granuleMatchDocId, granuleMatchSentId);
-                    }
-                    // ---- END PRE-COMBO CHECK LOGGING ----
-
                     if (!leftIndicesForGranule.isEmpty() && !rightIndicesForGranule.isEmpty()) {
                         nextConceptualRowId = processMatchingGranule(
                            resultSoA, left, right,
@@ -489,48 +410,15 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         logger.trace("Processing granule. Left conceptual groups: {}, Right conceptual groups: {}", leftConceptualMap.size(), rightConceptualMap.size());
 
         for (List<Integer> leftConceptGroupIndices : leftConceptualMap.values()) {
-            String representativeLVarName = null;
-            Object representativeLValue = null;
-            int representativeFromLSoaCID = -1;
-            if (!leftConceptGroupIndices.isEmpty()) {
-                int firstLIdx = leftConceptGroupIndices.get(0);
-                representativeLVarName = leftSoa.getVariableNameAt(firstLIdx);
-                representativeLValue = leftSoa.getValueAt(firstLIdx);
-                representativeFromLSoaCID = leftSoa.getConceptualRowIdAt(firstLIdx);
-            }
-            boolean isRepublicanLGroup = "republican".equals(representativeLValue);
-
             for (List<Integer> rightConceptGroupIndices : rightConceptualMap.values()) {
                 int conceptualIdForThisProduct = currentNextConceptualRowId++;
-                String leftSoaContext = leftSoa.toString().substring(0, Math.min(leftSoa.toString().length(), 60));
-                String rightSoaContext = rightSoa.toString().substring(0, Math.min(rightSoa.toString().length(), 60));
+                logger.trace("  New conceptual product ID: {}", conceptualIdForThisProduct);
 
-                boolean currentRightGroupIsTaft = false;
-                String representativeRVarNameForTaft = null;
-                Object representativeRValueForTaft = null;
-                int representativeFromRSoaCIDForTaft = -1;
-
-                if (!rightConceptGroupIndices.isEmpty()) {
-                    for (int rIdxCheck : rightConceptGroupIndices) {
-                        Object rValCheck = rightSoa.getValueAt(rIdxCheck);
-                        if (rValCheck instanceof String && ((String)rValCheck).toLowerCase().contains("taft")) {
-                            currentRightGroupIsTaft = true;
-                            representativeRVarNameForTaft = rightSoa.getVariableNameAt(rIdxCheck);
-                            representativeRValueForTaft = rValCheck;
-                            representativeFromRSoaCIDForTaft = rightSoa.getConceptualRowIdAt(rIdxCheck);
-                            break; // Found Taft in this right group
-                        }
-                    }
-                }
-
-                if (isRepublicanLGroup && currentRightGroupIsTaft) {
-                    logger.info("LOGICAL_EXEC_TARGET_COMBO: ProductCID={}, L_Var='{}', L_Val='{}' (FromLSoaCID={}) WITH R_Var='{}', R_Val='{}' (FromRSoaCID={}). LeftSoaCtx='{}', RightSoaCtx='{}'",
-                        conceptualIdForThisProduct, representativeLVarName, representativeLValue, representativeFromLSoaCID,
-                        representativeRVarNameForTaft, representativeRValueForTaft, representativeFromRSoaCIDForTaft, leftSoaContext, rightSoaContext);
-                }
-
-                // Add all L entries for this product
                 for (int lIdx : leftConceptGroupIndices) {
+                    logger.trace("    Adding left entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
+                                 lIdx, leftSoa.getConceptualRowIdAt(lIdx), leftSoa.getDocumentIdAt(lIdx),
+                                 (combinedReqs.needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : "N/A"),
+                                 leftSoa.getVariableNameAt(lIdx), leftSoa.getValueAt(lIdx));
                     resultSoA.add(
                         leftSoa.getValueAt(lIdx),
                         leftSoa.getValueTypeAt(lIdx),
@@ -543,8 +431,11 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                         conceptualIdForThisProduct
                     );
                 }
-                // Add all R entries for this product
                 for (int rIdx : rightConceptGroupIndices) {
+                     logger.trace("    Adding right entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
+                                 rIdx, rightSoa.getConceptualRowIdAt(rIdx), rightSoa.getDocumentIdAt(rIdx),
+                                 (combinedReqs.needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : "N/A"),
+                                 rightSoa.getVariableNameAt(rIdx), rightSoa.getValueAt(rIdx));
                     resultSoA.add(
                         rightSoa.getValueAt(rIdx),
                         rightSoa.getValueTypeAt(rIdx),
