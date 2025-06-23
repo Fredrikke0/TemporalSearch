@@ -410,30 +410,48 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         logger.trace("Processing granule. Left conceptual groups: {}, Right conceptual groups: {}", leftConceptualMap.size(), rightConceptualMap.size());
 
         for (List<Integer> leftConceptGroupIndices : leftConceptualMap.values()) {
+            String representativeLVarName = null;
+            Object representativeLValue = null;
+            int representativeFromLSoaCID = -1;
+            if (!leftConceptGroupIndices.isEmpty()) {
+                int firstLIdx = leftConceptGroupIndices.get(0);
+                representativeLVarName = leftSoa.getVariableNameAt(firstLIdx);
+                representativeLValue = leftSoa.getValueAt(firstLIdx);
+                representativeFromLSoaCID = leftSoa.getConceptualRowIdAt(firstLIdx);
+            }
+            boolean isRepublicanLGroup = "republican".equals(representativeLValue);
+
             for (List<Integer> rightConceptGroupIndices : rightConceptualMap.values()) {
                 int conceptualIdForThisProduct = currentNextConceptualRowId++;
-                // ===== DETAILED LOGGING FOR SUBQUERY DEBUGGING START =====
-                String leftSoaContext = leftSoa.toString().substring(0, Math.min(leftSoa.toString().length(), 60)); // Abbreviated context
-                String rightSoaContext = rightSoa.toString().substring(0, Math.min(rightSoa.toString().length(), 60)); // Abbreviated context
-                // ===== DETAILED LOGGING FOR SUBQUERY DEBUGGING END =====
+                String leftSoaContext = leftSoa.toString().substring(0, Math.min(leftSoa.toString().length(), 60));
+                String rightSoaContext = rightSoa.toString().substring(0, Math.min(rightSoa.toString().length(), 60));
 
-                // logger.trace("  New conceptual product ID: {}", conceptualIdForThisProduct); // Original trace, can be noisy
+                boolean currentRightGroupIsTaft = false;
+                String representativeRVarNameForTaft = null;
+                Object representativeRValueForTaft = null;
+                int representativeFromRSoaCIDForTaft = -1;
 
-                for (int lIdx : leftConceptGroupIndices) {
-                    String lVarName = leftSoa.getVariableNameAt(lIdx);
-                    Object lValue = leftSoa.getValueAt(lIdx);
-                    boolean isRepublicanL = "republican".equals(lValue);
-
-                    // Conditional logging for left entry
-                    if (isRepublicanL) {
-                        logger.info("LOGICAL_EXEC_TARGET_L: ProductCID={}, L_Var='{}', L_Val='{}', FromLSoaCID={}. LeftSoaCtx='{}', RightSoaCtx='{}'",
-                            conceptualIdForThisProduct, lVarName, lValue, leftSoa.getConceptualRowIdAt(lIdx), leftSoaContext, rightSoaContext);
+                if (!rightConceptGroupIndices.isEmpty()) {
+                    for (int rIdxCheck : rightConceptGroupIndices) {
+                        Object rValCheck = rightSoa.getValueAt(rIdxCheck);
+                        if (rValCheck instanceof String && ((String)rValCheck).toLowerCase().contains("taft")) {
+                            currentRightGroupIsTaft = true;
+                            representativeRVarNameForTaft = rightSoa.getVariableNameAt(rIdxCheck);
+                            representativeRValueForTaft = rValCheck;
+                            representativeFromRSoaCIDForTaft = rightSoa.getConceptualRowIdAt(rIdxCheck);
+                            break; // Found Taft in this right group
+                        }
                     }
+                }
 
-                    // logger.trace("    Adding left entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
-                    //              lIdx, leftSoa.getConceptualRowIdAt(lIdx), leftSoa.getDocumentIdAt(lIdx),
-                    //              (combinedReqs.needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : "N/A"),
-                    //              lVarName, lValue); // Original trace
+                if (isRepublicanLGroup && currentRightGroupIsTaft) {
+                    logger.info("LOGICAL_EXEC_TARGET_COMBO: ProductCID={}, L_Var='{}', L_Val='{}' (FromLSoaCID={}) WITH R_Var='{}', R_Val='{}' (FromRSoaCID={}). LeftSoaCtx='{}', RightSoaCtx='{}'",
+                        conceptualIdForThisProduct, representativeLVarName, representativeLValue, representativeFromLSoaCID,
+                        representativeRVarNameForTaft, representativeRValueForTaft, representativeFromRSoaCIDForTaft, leftSoaContext, rightSoaContext);
+                }
+
+                // Add all L entries for this product
+                for (int lIdx : leftConceptGroupIndices) {
                     resultSoA.add(
                         leftSoa.getValueAt(lIdx),
                         leftSoa.getValueTypeAt(lIdx),
@@ -446,22 +464,8 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                         conceptualIdForThisProduct
                     );
                 }
+                // Add all R entries for this product
                 for (int rIdx : rightConceptGroupIndices) {
-                    String rVarName = rightSoa.getVariableNameAt(rIdx);
-                    Object rValue = rightSoa.getValueAt(rIdx);
-                    boolean isTaftR = (rValue instanceof String && ((String)rValue).toLowerCase().contains("taft"));
-
-                    // Conditional logging for right entry (especially if a corresponding left entry was republican OR this right entry is Taft)
-                    // This relies on finding a republican left entry in the *same conceptual product group* later in logging or by context.
-                    if (isTaftR) { // Log if R_Val is Taft, to see what L_Val it pairs with.
-                        logger.info("LOGICAL_EXEC_TARGET_R: ProductCID={}, R_Var='{}', R_Val='{}', FromRSoaCID={}. LeftSoaCtx='{}', RightSoaCtx='{}'",
-                            conceptualIdForThisProduct, rVarName, rValue, rightSoa.getConceptualRowIdAt(rIdx), leftSoaContext, rightSoaContext);
-                    }
-
-                    // logger.trace("    Adding right entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
-                    //              rIdx, rightSoa.getConceptualRowIdAt(rIdx), rightSoa.getDocumentIdAt(rIdx),
-                    //              (combinedReqs.needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : "N/A"),
-                    //              rVarName, rValue); // Original trace
                     resultSoA.add(
                         rightSoa.getValueAt(rIdx),
                         rightSoa.getValueTypeAt(rIdx),
