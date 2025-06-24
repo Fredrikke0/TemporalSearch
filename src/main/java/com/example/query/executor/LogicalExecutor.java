@@ -432,7 +432,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                     );
                 }
                 for (int rIdx : rightConceptGroupIndices) {
-                     logger.trace("    Adding right entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
+                     logger.trace("Adding right entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
                                  rIdx, rightSoa.getConceptualRowIdAt(rIdx), rightSoa.getDocumentIdAt(rIdx),
                                  (combinedReqs.needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : "N/A"),
                                  rightSoa.getVariableNameAt(rIdx), rightSoa.getValueAt(rIdx));

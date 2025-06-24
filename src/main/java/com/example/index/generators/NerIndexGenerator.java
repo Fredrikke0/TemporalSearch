@@ -110,25 +110,25 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
                 Collectors.groupingBy(AnnotationEntry::getSentenceId)));
 
-        List<AnnotationEntry> sentenceSpanFilteredBatch = new ArrayList<>();
+        List<AnnotationEntry> collectedAnnotations = new ArrayList<>();
 
         // 2. For each sentence: sort tokens, filter by span, and collect
         groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
             sentencesMap.forEach((sentenceId, sentenceTokens) -> {
                 sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-                sentenceSpanFilteredBatch.addAll(sentenceTokens);
+                collectedAnnotations.addAll(sentenceTokens);
             });
         });
 
-        if (sentenceSpanFilteredBatch.isEmpty()) {
+        if (collectedAnnotations.isEmpty()) {
             if(!batch.isEmpty()){
-                logger.trace("All NER annotations filtered out by sentence span limit. Original batch size: {}", batch.size());
+                logger.trace("No NER annotations to process after initial fetching and grouping. Original batch size: {}", batch.size());
             }
             return resultMultimap;
         }
 
-        // 3. Re-sort the sentenceSpanFilteredBatch as the entity merging logic expects overall sorted order
-        sentenceSpanFilteredBatch.sort(Comparator
+        // 3. Re-sort the collectedAnnotations as the entity merging logic expects overall sorted order
+        collectedAnnotations.sort(Comparator
             .comparingInt(AnnotationEntry::getDocumentId)
             .thenComparingInt(AnnotationEntry::getSentenceId)
             .thenComparingInt(AnnotationEntry::getBeginChar));
@@ -142,8 +142,8 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         int currentEntitySentId = -1;
         int currentEntityBeginChar = -1;
 
-        // 4. Entity merging logic now uses sentenceSpanFilteredBatch
-        for (AnnotationEntry entry : sentenceSpanFilteredBatch) {
+        // 4. Entity merging logic now uses collectedAnnotations
+        for (AnnotationEntry entry : collectedAnnotations) {
             String nerTag = entry.getNer();
             boolean entityBreak = false;
 
