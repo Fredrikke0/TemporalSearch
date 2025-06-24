@@ -64,17 +64,17 @@ SELECT T, COUNT(*) FROM articles WHERE NER(PERSON, 'Nelson Mandela') AND CONTAIN
 # nobel Prize list
 SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(AFTER 2005) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 # specific years
-SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(= 1980) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(= 1982) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(= 1984) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(= 1986) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(= 1988) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(= 1990) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(= 1992) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(= 1994) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND NER(PERSON) BIND personName AND DATE(= 1998) BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 1980) AND NER(PERSON) BIND personName BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 1982) AND NER(PERSON) BIND personName BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 1984) AND NER(PERSON) BIND personName BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 1986) AND NER(PERSON) BIND personName BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 1988) AND NER(PERSON) BIND personName BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 1990) AND NER(PERSON) BIND personName BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 1992) AND NER(PERSON) BIND personName BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 1994) AND NER(PERSON) BIND personName BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 1998) AND NER(PERSON) BIND personName BIND event_date GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 
 SELECT date, affectedLocation FROM articles WHERE CONTAINS('earthquake') AND NER(CITY) BIND affectedLocation AND DATE(INTERSECT [1990,1995]) BIND date GRANULARITY SENTENCE
-SELECT date, affectedLocation FROM articles WHERE CONTAINS('earthquake') AND NER(CITY) BIND affectedLocation AND DATE(= 2004) BIND date GRANULARITY SENTENCE
-SELECT date, affectedLocation FROM articles WHERE (CONTAINS('earthquake') OR CONTAINS('tsunami')) AND NER(COUNTRY) BIND affectedLocation AND DATE(= 2004) BIND date GRANULARITY SENTENCE
-SELECT date, affectedLocation FROM articles WHERE (CONTAINS('earthquake') OR CONTAINS('tsunami')) AND NER(LOCATION) BIND affectedLocation AND DATE(= 2004) BIND date GRANULARITY SENTENCE
+SELECT date, affectedLocation FROM articles WHERE CONTAINS('earthquake') AND DATE(= 2004) BIND date AND NER(CITY) BIND affectedLocation GRANULARITY SENTENCE
+SELECT date, affectedLocation FROM articles WHERE (CONTAINS('earthquake') OR CONTAINS('tsunami')) AND DATE(= 2004) BIND date AND NER(COUNTRY) BIND affectedLocation GRANULARITY SENTENCE
+SELECT date, affectedLocation FROM articles WHERE (CONTAINS('earthquake') OR CONTAINS('tsunami')) AND DATE(= 2004) BIND date AND NER(LOCATION) BIND affectedLocation GRANULARITY SENTENCE
