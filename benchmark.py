@@ -546,7 +546,7 @@ class QueryCLIInteractiveProcess:
                  if self.is_verbose: print(f"[BENCHMARK.PY DEBUG] Both streams EOF and queues empty, but prompt not found.", flush=True)
                  break
 
-            time.sleep(0.01)
+            time.sleep(0.001)
 
         if not stdout_eof: self._drain_queue_into_list(self._stdout_q, call_specific_stdout)
         if not stderr_eof: self._drain_queue_into_list(self._stderr_q, call_specific_stderr)

@@ -7,6 +7,13 @@ import re
 import statistics
 import sys
 
+# Global mapping for specific strategy tuples to their display names
+STRATEGY_DISPLAY_NAMES = {
+    ('naive', 'none', 'none'): "B",
+    ('naive', 'none', 'optimized'): "S",
+    ('nash', 'none', 'optimized'): "S+N",
+    ('nash', 'optimized', 'optimized'): "S+N+P"
+}
 
 def get_hop_type(query_text):
     """Determines the hop type based on the number of JOIN clauses."""
@@ -111,36 +118,48 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
 
     latex_string = "\\begin{figure}[htbp]\n"
     latex_string += "\\centering\n"
-    latex_string += "\\caption{Benchmark Performance Summary. Times shown as mean ± standard deviation in milliseconds (ms).}\n"
+    latex_string += f"\\caption{{{table_title.replace('-', ' ').title()}. Times shown as mean ± standard deviation in milliseconds (ms).}}\n"
     sanitized_title_for_label = re.sub(r'[^a-zA-Z0-9_]', '', table_title.lower().replace(' ', '_'))
     latex_string += f"\\label{{fig:benchmark_summary_{sanitized_title_for_label}}}\n"
-    latex_string += f"\\textbf{{{table_title.replace('-', ' ').title()}}}\n"
-    latex_string += "\\begin{tabular}{@{}lllS[table-format=5.2(2), separate-uncertainty, group-digits=false, mode=math]S[table-format=5.2(2), separate-uncertainty, group-digits=false, mode=math]@{}}\n"
+
+    latex_string += "\\begin{tabular}{@{}cS[table-format=5.2(2), separate-uncertainty, group-digits=false, mode=math]S[table-format=5.2(2), separate-uncertainty, group-digits=false, mode=math]@{}}\n"
     latex_string += "\\toprule\n"
-    latex_string += "Temporal & Pushdown & Stitch & {Cold (ms)} & {Warm (ms)} \\\\ \n" # LaTeX newline
+    latex_string += "Strategy & {Cold (ms)} & {Warm (ms)} \\\\ \n"
     latex_string += "\\midrule\n"
 
-    for strat_tuple in strategy_tuples:
-        temporal, pushdown, stitch = strat_tuple
-        if strat_tuple in stats: # Check directly in stats
+    renderable_tuples_with_data = [
+        st for st in strategy_tuples
+        if st in stats and (stats[st].get('cold',{}).get('count',0) > 0 or stats[st].get('warm',{}).get('count',0) > 0)
+    ]
+
+    if not renderable_tuples_with_data:
+        latex_string += "\\multicolumn{3}{c}{No data available for selected strategies.} \\\\\\\\ \\n"
+    else:
+        last_renderable_strat_tuple_with_data = renderable_tuples_with_data[-1]
+
+        for i, strat_tuple in enumerate(renderable_tuples_with_data):
+            temporal, pushdown, stitch = strat_tuple
             cold_stats = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
             warm_stats = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
 
-            if cold_stats['count'] > 0:
-                cold_val = f"{cold_stats['mean']:.2f}({cold_stats['std']:.2f})"
+            cold_val = f"{cold_stats['mean']:.2f}({cold_stats['std']:.2f})" if cold_stats['count'] > 0 else "{N/A}"
+            warm_val = f"{warm_stats['mean']:.2f}({warm_stats['std']:.2f})" if warm_stats['count'] > 0 else "{N/A}"
+
+            strategy_display_name = STRATEGY_DISPLAY_NAMES.get(
+                strat_tuple,
+                f"{temporal.capitalize()}, {pushdown.replace('none', 'naive').capitalize()}, {stitch.replace('none', 'naive').capitalize()}"
+            )
+
+            is_last_row_to_highlight = (strat_tuple == last_renderable_strat_tuple_with_data)
+
+            if is_last_row_to_highlight:
+                latex_string += f"\\rowstyle{{\\bfseries}} \\\\ \n"
+                latex_string += f"{strategy_display_name} & {cold_val} & {warm_val} \\\\ \n"
             else:
-                cold_val = "{N/A}"
+                latex_string += f"{strategy_display_name} & {cold_val} & {warm_val} \\\\ \n"
 
-            if warm_stats['count'] > 0:
-                warm_val = f"{warm_stats['mean']:.2f}({warm_stats['std']:.2f})"
-            else:
-                warm_val = "{N/A}"
-
-            temporal_display = temporal.capitalize()
-            pushdown_display = pushdown.replace('none', 'naive').capitalize()
-            stitch_display = stitch.replace('none', 'naive').capitalize()
-
-            latex_string += f"{temporal_display} & {pushdown_display} & {stitch_display} & {cold_val} & {warm_val} \\\\ \n" # LaTeX newline
+            if strat_tuple != last_renderable_strat_tuple_with_data:
+                latex_string += "\\midrule\n"
 
     latex_string += "\\bottomrule\n"
     latex_string += "\\end{tabular}\n"
@@ -160,18 +179,19 @@ def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULT
     output.append(f"{table_title.upper()} (mean ± standard deviation in ms)")
     output.append("=" * 80)
 
-    output.append("-" * 60)
-    output.append(f"{'Strategy':<25} {'Cold (ms)':<20} {'Warm (ms)':<20}")
-    output.append("-" * 60)
+    output.append("-" * 80) # Adjusted width
+    # Updated header for a single strategy column, adjusted width
+    output.append(f"{'Strategy':<35} {'Cold (ms)':<20} {'Warm (ms)':<20}")
+    output.append("-" * 80) # Adjusted width
 
     for strat_tuple in strategy_tuples:
         temporal, pushdown, stitch = strat_tuple
         if strat_tuple in stats: # Check directly in stats
-            # Capitalize first letter and rename 'none' to 'naive'
-            temporal_display = temporal.capitalize()
-            pushdown_display = pushdown.replace('none', 'naive').capitalize()
-            stitch_display = stitch.replace('none', 'naive').capitalize()
-            strategy_name = f"{temporal_display},{pushdown_display},{stitch_display}"
+            # Get display name from map or generate a fallback
+            strategy_name = STRATEGY_DISPLAY_NAMES.get(
+                strat_tuple,
+                f"{temporal.capitalize()}/{pushdown.replace('none', 'naive').capitalize()}/{stitch.replace('none', 'naive').capitalize()}"
+            )
 
             cold_stats = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
             warm_stats = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
@@ -179,7 +199,8 @@ def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULT
             cold_str = f"{cold_stats['mean']:.2f} ± {cold_stats['std']:.2f}" if cold_stats['count'] > 0 else "N/A"
             warm_str = f"{warm_stats['mean']:.2f} ± {warm_stats['std']:.2f}" if warm_stats['count'] > 0 else "N/A"
 
-            output.append(f"{strategy_name:<25} {cold_str:<20} {warm_str:<20}")
+            # Use the new strategy_name and adjusted width
+            output.append(f"{strategy_name:<35} {cold_str:<20} {warm_str:<20}")
 
     return "\n ".join(output)
 
@@ -192,6 +213,7 @@ Examples:
   python analyze_benchmarks.py                    # Uses default 'bench_results.csv'
   python analyze_benchmarks.py -f bench.csv      # Uses 'bench.csv'
   python analyze_benchmarks.py --file data.csv   # Uses 'data.csv'
+  python analyze_benchmarks.py --file results_1hop.csv --table-title "1-hop Benchmark Performance" # Example for specific formatting
         """
     )
     parser.add_argument(
@@ -202,7 +224,7 @@ Examples:
     parser.add_argument(
         '-t', '--table-title',
         default='Benchmark Performance Summary',
-        help='Title for the generated tables (default: Benchmark Performance Summary)'
+        help='Title for the generated tables. Include "1-hop", "2-hops", or "3-hops" to get specific row formats.'
     )
 
     args = parser.parse_args()
@@ -211,16 +233,64 @@ Examples:
 
     print(f"Analyzing benchmark data from: {csv_path}")
 
-    aggregated_data, strategy_ordering = analyze_benchmarks(csv_path)
+    # Call analyze_benchmarks once to get all data and the full list of defined strategy permutations
+    aggregated_data, all_defined_strategy_permutations = analyze_benchmarks(csv_path)
 
     if aggregated_data:
-        # Print summary to console
-        summary_output = generate_summary_table(aggregated_data, strategy_ordering, table_title)
-        print(summary_output)
+        hop_type_in_title = None
+        title_lower = table_title.lower()
+        if "1-hop" in title_lower or "1 hop" in title_lower:
+            hop_type_in_title = "1-hop"
+        elif "2-hops" in title_lower or "2 hops" in title_lower:
+            hop_type_in_title = "2-hops"
+        elif "3-hops" in title_lower or "3 hops" in title_lower:
+            hop_type_in_title = "3-hops"
 
-        # Generate and print LaTeX table
-        latex_output = generate_latex_table(aggregated_data, strategy_ordering, table_title)
-        print(latex_output)
+        strategies_to_render = []
+
+        if not hop_type_in_title:
+            print(f"Warning: Hop type ('1-hop', '2-hops', '3-hops') not detected in table title: '{table_title}'.", file=sys.stderr)
+            print("Displaying table with all strategy permutations defined by the analyzer.", file=sys.stderr)
+            print("To use specific row formatting, include '1-hop', '2-hops', or '3-hops' in the --table-title argument.", file=sys.stderr)
+            strategies_to_render = all_defined_strategy_permutations
+        else:
+            # Define strategy tuples: (temporal, pushdown, stitch)
+            # These must match the keys used in analyze_benchmarks: 'naive'/'nash', 'none'/'optimized', 'none'/'optimized'
+            baseline = ('naive', 'none', 'none')
+            stitch_optimized = ('naive', 'none', 'optimized')
+            stitch_nash_optimized = ('nash', 'none', 'optimized')
+            all_optimized = ('nash', 'optimized', 'optimized') # Stitch + Nash + Pushdown
+
+            if hop_type_in_title == "1-hop":
+                strategies_to_render = [
+                    baseline,
+                    stitch_optimized,
+                    stitch_nash_optimized
+                ]
+                print(f"Detected {hop_type_in_title}. Displaying strategies: Baseline, Stitch Optimized, Stitch+Nash Optimized.")
+            elif hop_type_in_title in ["2-hops", "3-hops"]:
+                strategies_to_render = [
+                    baseline,
+                    stitch_optimized,
+                    stitch_nash_optimized,
+                    all_optimized
+                ]
+                print(f"Detected {hop_type_in_title}. Displaying strategies: Baseline, Stitch Optimized, Stitch+Nash Optimized, Stitch+Nash+Pushdown Optimized.")
+            else: # Should not be reached if hop_type_in_title is one of the above or None
+                print(f"Internal Warning: Unhandled hop_type_in_title '{hop_type_in_title}'. Falling back to all defined permutations.", file=sys.stderr)
+                strategies_to_render = all_defined_strategy_permutations
+
+        if not strategies_to_render:
+             # This case would typically mean all_defined_strategy_permutations was empty and no hop type was matched.
+             print("Error: No strategies selected or defined for display. Table will be empty or may not generate.", file=sys.stderr)
+        else:
+            # Print summary to console
+            summary_output = generate_summary_table(aggregated_data, strategies_to_render, table_title)
+            print(summary_output)
+            print("=" * 80)
+            # Generate and print LaTeX table
+            latex_output = generate_latex_table(aggregated_data, strategies_to_render, table_title)
+            print(latex_output)
     else:
-        # Errors from analyze_benchmarks are printed to stderr within the function
-        print("Could not generate tables due to errors in data processing or file not found.", file=sys.stderr)
+        # Errors from analyze_benchmarks (e.g., file not found) are printed to stderr within the function
+        print("Could not generate tables due to errors in data processing or file access.", file=sys.stderr)
