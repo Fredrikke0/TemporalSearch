@@ -38,7 +38,6 @@ public class QueryParser {
      */
     public Query parse(String queryString) throws QueryParseException {
         try {
-            logger.debug("Parsing query: {}", queryString);
 
             // Create the lexer and parser
             QueryLangLexer lexer = new QueryLangLexer(CharStreams.fromString(queryString));
