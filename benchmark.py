@@ -142,35 +142,63 @@ def run_warm_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
 
             run_stdout_details = ""
             run_stderr_details = ""
+            current_strategy_critical_failure = False
 
             try:
                 _, _, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
                 if strat_set_stderr: run_stderr_details += f"SET_STRATEGY_STDERR: {strat_set_stderr.strip()}\n"
-            except Exception as e_strat_set:
-                print(f"{progress_prefix} ERROR setting strategy: {e_strat_set}. Skipping.", flush=True)
+            except (ConnectionAbortedError, TimeoutError, RuntimeError) as e_strat_set_critical:
+                print(f"{progress_prefix} CRITICAL ERROR setting strategy: {e_strat_set_critical}. Re-raising.", flush=True)
+                run_stderr_details += f"CRITICAL_ERROR_SET_STRATEGY: {str(e_strat_set_critical)}\n{traceback.format_exc()}\n"
                 all_run_results_accumulator.append({
                     "original_query_id": original_query_id_str, "query_text": query_text, "expected_answer": expected_answer,
                     "benchmark_type": benchmark_type, "source_file": source_file,
                     "temporal_strategy": temp_s, "pushdown_strategy": push_s, "stitch_strategy": stitch_s, "cache_mode": "warm",
                     "avg_time_ms": None, "individual_run_times_ms": [],
-                    "verification_status": "STRATEGY_SETUP_FAIL", "stderr_output": str(e_strat_set) + "\n" + run_stderr_details,
+                    "verification_status": "CLI_PROCESS_ERROR_STRATEGY", "stderr_output": run_stderr_details,
                     "stdout_output": ""
                 })
-                continue
+                raise # Re-raise to be caught by per-file handler
+            except Exception as e_strat_set:
+                print(f"{progress_prefix} ERROR setting strategy: {e_strat_set}. Skipping this strategy combination.", flush=True)
+                run_stderr_details += f"NON_CRITICAL_ERROR_SET_STRATEGY: {str(e_strat_set)}\n"
+                all_run_results_accumulator.append({
+                    "original_query_id": original_query_id_str, "query_text": query_text, "expected_answer": expected_answer,
+                    "benchmark_type": benchmark_type, "source_file": source_file,
+                    "temporal_strategy": temp_s, "pushdown_strategy": push_s, "stitch_strategy": stitch_s, "cache_mode": "warm",
+                    "avg_time_ms": None, "individual_run_times_ms": [],
+                    "verification_status": "STRATEGY_SETUP_FAIL_NON_CRITICAL", "stderr_output": run_stderr_details,
+                    "stdout_output": ""
+                })
+                current_strategy_critical_failure = True # Mark to skip further operations for this combo
+                # continue # No, let it flow to the append, but the flag will prevent exec
 
             timed_exec_times = []
 
-            print(f"{progress_prefix}  Warm-up 1/1...", flush=True)
-            try:
-                _, wu_out, wu_err = cli_process.execute_query(query_text)
-                if wu_err: run_stderr_details += f"WARMUP_QUERY_STDERR: {wu_err.strip()}\n"
-                if args.verbose and wu_out: run_stdout_details += f"WARMUP_QUERY_STDOUT: {wu_out.strip()}\n"
-            except Exception as e_warmup:
-                print(f"{progress_prefix}  Warm-up ERROR: {e_warmup}", flush=True)
-                run_stderr_details += f"WARMUP_QUERY_EXCEPTION: {str(e_warmup)}\n"
+            if not current_strategy_critical_failure:
+                print(f"{progress_prefix}  Warm-up 1/1...", flush=True)
+                try:
+                    _, wu_out, wu_err = cli_process.execute_query(query_text)
+                    if wu_err: run_stderr_details += f"WARMUP_QUERY_STDERR: {wu_err.strip()}\n"
+                    if args.verbose and wu_out: run_stdout_details += f"WARMUP_QUERY_STDOUT: {wu_out.strip()}\n"
+                except (ConnectionAbortedError, TimeoutError, RuntimeError) as e_warmup_critical:
+                    print(f"{progress_prefix}  Warm-up CRITICAL ERROR: {e_warmup_critical}. Re-raising.", flush=True)
+                    run_stderr_details += f"CRITICAL_ERROR_WARMUP: {str(e_warmup_critical)}\n{traceback.format_exc()}\n"
+                    all_run_results_accumulator.append({ # Log partial failure before re-raising
+                        "original_query_id": original_query_id_str, "query_text": query_text, "expected_answer": expected_answer,
+                        "benchmark_type": benchmark_type, "source_file": source_file,
+                        "temporal_strategy": temp_s, "pushdown_strategy": push_s, "stitch_strategy": stitch_s, "cache_mode": "warm",
+                        "avg_time_ms": None, "individual_run_times_ms": [],
+                        "verification_status": "CLI_PROCESS_ERROR_WARMUP", "stderr_output": run_stderr_details, "stdout_output": ""
+                    })
+                    raise # Re-raise
+                except Exception as e_warmup:
+                    print(f"{progress_prefix}  Warm-up ERROR: {e_warmup}. This strategy combination will be marked as failed.", flush=True)
+                    run_stderr_details += f"NON_CRITICAL_ERROR_WARMUP: {str(e_warmup)}\n"
+                    current_strategy_critical_failure = True # Mark to skip timed runs
 
             verification_export_file = None
-            if args.export_dir and expected_answer:
+            if args.export_dir and expected_answer and not current_strategy_critical_failure:
                 safe_query_part = re.sub(r'[^a-zA-Z0-9_-]', '_', query_text)[:30]
                 fn_base = f"{original_query_id_str}_{safe_query_part}_T{temp_s}_P{push_s}_S{stitch_s}_warm"
                 verification_export_file = os.path.join(args.export_dir, f"{fn_base}_FOR_VERIFICATION.csv")
@@ -203,19 +231,36 @@ def run_warm_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
                         _, _, set_out_none_err = cli_process.set_output() # Revert to NONE
                         if set_out_none_err: run_stderr_details += f"SET_OUTPUT_NONE_STDERR (Run {run_num+1}): {set_out_none_err.strip()}\n"
 
+                except (ConnectionAbortedError, TimeoutError, RuntimeError) as e_query_run_critical:
+                    print(f"{progress_prefix}  Run {run_num+1} CRITICAL ERROR: {e_query_run_critical}. Re-raising.", flush=True)
+                    run_stderr_details += f"CRITICAL_ERROR_QUERY_RUN (Run {run_num+1}): {str(e_query_run_critical)}\n{traceback.format_exc()}\n"
+                    # Log partial failure for this strategy before re-raising
+                    all_run_results_accumulator.append({
+                        "original_query_id": original_query_id_str, "query_text": query_text, "expected_answer": expected_answer,
+                        "benchmark_type": benchmark_type, "source_file": source_file,
+                        "temporal_strategy": temp_s, "pushdown_strategy": push_s, "stitch_strategy": stitch_s, "cache_mode": "warm",
+                        "avg_time_ms": sum(timed_exec_times) / len(timed_exec_times) if timed_exec_times else None,
+                        "individual_run_times_ms": timed_exec_times,
+                        "verification_status": "CLI_PROCESS_ERROR_EXEC", "stderr_output": run_stderr_details,
+                        "stdout_output": run_stdout_details.strip() if args.verbose else "" # Include what we have
+                    })
+                    raise # Re-raise critical error
                 except Exception as e_query_run:
-                    print(f"{progress_prefix}  Run {run_num+1} ERROR: {e_query_run}", flush=True)
-                    run_stderr_details += f"QUERY_RUN_EXCEPTION (Run {run_num+1}): {str(e_query_run)}\n{traceback.format_exc()}\n"
+                    print(f"{progress_prefix}  Run {run_num+1} ERROR: {e_query_run}. This run will be skipped, but other runs for this strategy may proceed.", flush=True)
+                    run_stderr_details += f"NON_CRITICAL_ERROR_QUERY_RUN (Run {run_num+1}): {str(e_query_run)}\n{traceback.format_exc()}\n"
                     bfr_out, bfr_err = cli_process._collect_current_cycle_output(clear_buffers=True)
                     if bfr_out and args.verbose: run_stdout_details += f"BUFFERED_STDOUT_ON_EXC (Run {run_num+1}): {bfr_out.strip()}\n"
                     if bfr_err: run_stderr_details += f"BUFFERED_STDERR_ON_EXC (Run {run_num+1}): {bfr_err.strip()}\n"
-                    break
+                    # continue # Allow other runs for this strategy to proceed if this was a non-critical error for this specific run
 
             avg_exec_t = sum(timed_exec_times) / len(timed_exec_times) if timed_exec_times else None
             ver_status = "SKIPPED"
 
-            if avg_exec_t is None and "timeout" in run_stderr_details.lower():
-                ver_status = "TIMEOUT"
+            if current_strategy_critical_failure: # If setup or warmup failed non-critically
+                 ver_status = "STRATEGY_PREP_FAIL_NON_CRITICAL" # Specific status for this case
+            elif avg_exec_t is None and "timeout" in run_stderr_details.lower() and "CRITICAL_ERROR" not in run_stderr_details.upper():
+                # This 'timeout' is likely from the query execution itself within QueryCLI, not a Python-level TimeoutError from process interaction
+                ver_status = "TIMEOUT_IN_CLI"
             else:
                 content_for_analysis = ""
                 source_of_content = "N/A"
@@ -329,9 +374,22 @@ def run_cold_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
                 else:
                     print(f"{progress_prefix}    Pass {pass_num+1} ExecT=N/A. Check stderr.", flush=True)
 
+            except (ConnectionAbortedError, TimeoutError, RuntimeError) as e_query_run_cold_critical:
+                print(f"{progress_prefix}  Pass {pass_num+1} CRITICAL ERROR: {e_query_run_cold_critical}. Re-raising.", flush=True)
+                pass_stderr += f"CRITICAL_ERROR_QUERY_RUN_COLD (Pass {pass_num+1}): {str(e_query_run_cold_critical)}\n{traceback.format_exc()}\n"
+                pass_error_flag = True # Mark this pass as having an error
+                # We need to record this pass attempt before re-raising.
+                task_data_ref['pass_results'].append({
+                    'time': None,
+                    'stdout': pass_stdout, # Capture whatever stdout was collected
+                    'stderr': pass_stderr,
+                    'error_during_pass': True,
+                    'critical_error_details': f"CRITICAL_ERROR_QUERY_RUN_COLD: {str(e_query_run_cold_critical)}\n{traceback.format_exc()}"
+                })
+                raise # Re-raise critical error to be caught by per-file handler
             except Exception as e_query_run_cold:
                 print(f"{progress_prefix}  Pass {pass_num+1} ERROR: {e_query_run_cold}", flush=True)
-                pass_stderr += f"QUERY_RUN_EXCEPTION (Pass {pass_num+1}): {str(e_query_run_cold)}\n{traceback.format_exc()}\n"
+                pass_stderr += f"NON_CRITICAL_ERROR_QUERY_RUN_COLD (Pass {pass_num+1}): {str(e_query_run_cold)}\n{traceback.format_exc()}\n"
                 pass_error_flag = True
                 bfr_out_cold, bfr_err_cold = cli_process._collect_current_cycle_output(clear_buffers=True)
                 if bfr_out_cold and args.verbose : pass_stdout += f"BUFFERED_STDOUT_ON_EXC (Pass {pass_num+1}): {bfr_out_cold.strip()}\n"
@@ -361,9 +419,13 @@ def run_cold_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
         avg_exec_t_cold = sum(timed_exec_times_cold) / len(timed_exec_times_cold) if timed_exec_times_cold else None
 
         stderr_final_cold = ""
+        critical_failure_in_passes = False
         for i, res in enumerate(pass_results_list):
             if res.get('stderr'): stderr_final_cold += f"PASS_{i+1}_STDERR: {res['stderr'].strip()}\n"
             if res.get('error_during_pass'): stderr_final_cold += f"PASS_{i+1}_FLAGGED_ERROR: True\n"
+            if res.get('critical_error_details'):
+                stderr_final_cold += f"PASS_{i+1}_CRITICAL_ERROR_DETAILS: {res['critical_error_details'].strip()}\n"
+                critical_failure_in_passes = True
 
         verification_status_cold = "SKIPPED"
         stdout_for_verification_cold = ""
@@ -383,8 +445,10 @@ def run_cold_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
                     stdout_for_verification_cold = pass_results_list[-1].get('stdout', "")
                     source_of_content_cold = f"stdout (last pass - had error, index {len(pass_results_list)})"
 
-            if avg_exec_t_cold is None and any("timeout" in res.get('stderr', "").lower() for res in pass_results_list if res.get('stderr')):
-                verification_status_cold = "TIMEOUT"
+            if avg_exec_t_cold is None and any("timeout" in res.get('stderr', "").lower() for res in pass_results_list if res.get('stderr')) and not critical_failure_in_passes:
+                verification_status_cold = "TIMEOUT_IN_CLI"
+            elif critical_failure_in_passes : # If any pass had a critical failure that was re-raised (and thus stopped file processing) this task aggregation might not be fully representative
+                verification_status_cold = "CLI_PROCESS_ERROR_COLD_PASS"
             else:
                 content_for_analysis_cold = stdout_for_verification_cold
 
