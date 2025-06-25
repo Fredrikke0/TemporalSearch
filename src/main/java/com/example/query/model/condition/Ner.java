@@ -1,6 +1,7 @@
 package com.example.query.model.condition;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 
 import com.example.query.binding.VariableRegistry;
@@ -31,7 +32,7 @@ import com.example.query.binding.VariableType;
  */
 public record Ner(
     String entityType,
-    String target,            // Specific entity text to match, or null
+    List<String> targets,        // Specific entity texts to match, or empty list for any
     String qualifiedVariableName, // Variable to bind entities to (e.g., $main.person), or null
     boolean isVariable
 ) implements Condition {
@@ -41,6 +42,7 @@ public record Ner(
      */
     public Ner { // Compact constructor
         java.util.Objects.requireNonNull(entityType, "entityType cannot be null");
+        java.util.Objects.requireNonNull(targets, "targets cannot be null");
 
         if (isVariable) {
             java.util.Objects.requireNonNull(qualifiedVariableName, "qualifiedVariableName cannot be null when isVariable is true");
@@ -60,17 +62,27 @@ public record Ner(
      * @param entityType The entity type to match (e.g., "PERSON", "ORGANIZATION")
      */
     public Ner(String entityType) {
-        this(entityType, null, null, false);
+        this(entityType, List.of(), null, false);
     }
 
     /**
-     * Creates a new NER condition with a target but without variable binding.
+     * Creates a new NER condition with a single target but without variable binding.
      *
      * @param entityType The entity type to match
      * @param target The specific entity text to match
      */
     public Ner(String entityType, String target) {
-        this(entityType, target, null, false);
+        this(entityType, target != null ? List.of(target) : List.of(), null, false);
+    }
+
+    /**
+     * Creates a new NER condition with multiple targets but without variable binding.
+     *
+     * @param entityType The entity type to match
+     * @param targets The specific entity texts to match
+     */
+    public Ner(String entityType, List<String> targets) {
+        this(entityType, targets != null ? targets : List.of(), null, false);
     }
 
     /**
@@ -82,6 +94,15 @@ public record Ner(
      */
     public static Ner of(String entityType) {
         return new Ner(entityType);
+    }
+
+    /**
+     * Gets the first target for backward compatibility.
+     *
+     * @return The first target string, or null if targets list is empty
+     */
+    public String target() {
+        return targets.isEmpty() ? null : targets.get(0);
     }
 
     @Override
@@ -104,7 +125,7 @@ public record Ner(
         if (isVariable) {
             registry.registerProducer(qualifiedVariableName, getProducedVariableType(), getType());
         }
-        // Consumption of 'target' if it were a variable would also be handled in builder
+        // Consumption of 'targets' if they were variables would also be handled in builder
     }
 
     @Override
@@ -112,8 +133,12 @@ public record Ner(
         StringBuilder sb = new StringBuilder();
         sb.append("NER(").append(entityType);
 
-        if (target != null) {
-            sb.append(", ").append(target);
+        if (!targets.isEmpty()) {
+            if (targets.size() == 1) {
+                sb.append(", ").append(targets.get(0));
+            } else {
+                sb.append(", [").append(String.join(", ", targets)).append("]");
+            }
         }
         sb.append(")");
 
@@ -142,6 +167,6 @@ public record Ner(
         }
 
         String newVarName = newPrefix + qualifiedVariableName.substring(oldPrefix.length());
-        return new Ner(this.entityType, this.target, newVarName, this.isVariable);
+        return new Ner(this.entityType, this.targets, newVarName, this.isVariable);
     }
 }

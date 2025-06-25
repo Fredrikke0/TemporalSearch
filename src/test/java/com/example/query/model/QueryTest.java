@@ -137,7 +137,8 @@ public class QueryTest {
     public void testNerConditionWithVariableBinding() {
         // Create a NER condition that produces a variable
         // Condition stores the internally qualified name
-        Ner nerCondition = new Ner("PERSON", null, "$main.person", true);
+        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true);
+        List<Condition> conditions = List.of(nerCondition);
 
         // Create a query with this condition and a fresh registry
         VariableRegistry localRegistry = new VariableRegistry();
@@ -145,7 +146,7 @@ public class QueryTest {
         nerCondition.registerVariables(localRegistry);
 
         // Create query with the now populated registry
-        Query queryWithNer = new Query("wikipedia", List.of(nerCondition), new ArrayList<>(),
+        Query queryWithNer = new Query("wikipedia", conditions, new ArrayList<>(),
                                        Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
                                        new ArrayList<>(), localRegistry);
 
@@ -186,8 +187,8 @@ public class QueryTest {
     @Test
     public void testComplexQueryWithMultipleConditions() {
         // Create several conditions with internally qualified names
-        Ner personCondition = new Ner("PERSON", null, "$main.person", true);
-        Ner orgCondition = new Ner("ORGANIZATION", null, "$main.org", true);
+        Ner personCondition = new Ner("PERSON", List.of(), "$main.person", true);
+        Ner orgCondition = new Ner("ORGANIZATION", List.of(), "$main.org", true);
         Contains containsCondition = new Contains(List.of("meeting"), "$main.text", true);
 
         List<Condition> conditions = List.of(personCondition, orgCondition, containsCondition);
@@ -224,7 +225,7 @@ public class QueryTest {
     @Test
     @DisplayName("toString() should include NER condition with variable")
     void testToStringWithNerVariable() {
-        List<Condition> conditions = List.of(new Ner("PERSON", null, "$main.person", true)); // Internally qualified
+        List<Condition> conditions = List.of(new Ner("PERSON", List.of(), "$main.person", true)); // Internally qualified
         VariableRegistry registry = new VariableRegistry(); // Create registry
         conditions.get(0).registerVariables(registry); // Register variable
         Query query = new Query("documents", conditions, List.of(), Optional.empty(),
@@ -250,8 +251,8 @@ public class QueryTest {
     @Test
     @DisplayName("toString() should include multiple conditions with variables")
     void testToStringWithMultipleVariables() {
-        Condition nerPerson = new Ner("PERSON", null, "$main.person", true); // Internally qualified
-        Condition nerOrg = new Ner("ORGANIZATION", null, "$main.org", true);   // Internally qualified
+        Condition nerPerson = new Ner("PERSON", List.of(), "$main.person", true); // Internally qualified
+        Condition nerOrg = new Ner("ORGANIZATION", List.of(), "$main.org", true);   // Internally qualified
         Condition containsText = new Contains(List.of("meeting"), "$main.text", true); // Internally qualified
         List<Condition> conditions = List.of(nerPerson, nerOrg, containsText);
         List<SelectColumn> selectCols = List.of(new VariableColumn("$main.person"), new VariableColumn("$main.org")); // Internally qualified

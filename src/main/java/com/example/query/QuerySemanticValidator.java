@@ -1,5 +1,7 @@
 package com.example.query;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -25,6 +27,7 @@ import com.example.query.model.VariableColumn;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Ner;
+import com.example.query.model.condition.Temporal;
 import com.example.query.parser.QueryModelBuilder;
 
 /**
@@ -40,6 +43,10 @@ public class QuerySemanticValidator {
 
     // Maximum proximity window for temporal joins
     private static final int MAX_TEMPORAL_PROXIMITY_WINDOW = 365;
+
+    // Global date bounds mirroring Nash.java for validation
+    private static final LocalDate GLOBAL_LOWER_BOUND = LocalDate.parse("1925-01-01");
+    private static final LocalDate GLOBAL_UPPER_BOUND = LocalDate.parse("2025-12-31");
 
     // Define the set of valid NER entity types (uppercase)
     private static final Set<String> VALID_NER_TYPES = Set.of(
@@ -74,6 +81,7 @@ public class QuerySemanticValidator {
 
         validateConditionConstraints(query.conditions());
         validateNerTypes(query.conditions());
+        validateTemporalBounds(query.conditions());
         validateVariableDependencies(registry);
         validateSelectColumns(query, registry, externalAliasContext);
 
@@ -115,6 +123,57 @@ public class QuerySemanticValidator {
                         entityType, nerCondition.toString(), validTypesString
                     ));
                 }
+            }
+        }
+    }
+
+    private void validateTemporalBounds(List<Condition> conditions) throws QueryParseException {
+        for (Condition condition : conditions) {
+            if (condition instanceof Temporal temporalCondition) {
+                Optional<LocalDateTime> startDateOpt = temporalCondition.startDate();
+                Optional<LocalDateTime> endDateOpt = temporalCondition.endDate();
+
+                if (startDateOpt.isPresent()) {
+                    LocalDate startDate = startDateOpt.get().toLocalDate();
+                    if (startDate.isBefore(GLOBAL_LOWER_BOUND) || startDate.isAfter(GLOBAL_UPPER_BOUND)) {
+                        throw new QueryParseException(String.format(
+                            "Start date %s in temporal condition is outside the allowed global range (%s to %s).",
+                            startDate, GLOBAL_LOWER_BOUND, GLOBAL_UPPER_BOUND
+                        ));
+                    }
+                }
+
+                if (endDateOpt.isPresent()) {
+                    LocalDate endDate = endDateOpt.get().toLocalDate();
+                    if (endDate.isBefore(GLOBAL_LOWER_BOUND) || endDate.isAfter(GLOBAL_UPPER_BOUND)) {
+                        throw new QueryParseException(String.format(
+                            "End date %s in temporal condition is outside the allowed global range (%s to %s).",
+                            endDate, GLOBAL_LOWER_BOUND, GLOBAL_UPPER_BOUND
+                        ));
+                    }
+                }
+
+                if (startDateOpt.isPresent() && endDateOpt.isPresent()) {
+                    LocalDate startDate = startDateOpt.get().toLocalDate();
+                    LocalDate endDate = endDateOpt.get().toLocalDate();
+                    if (startDate.isAfter(endDate)) {
+                        throw new QueryParseException(String.format(
+                            "Start date %s cannot be after end date %s in temporal condition.",
+                            startDate, endDate
+                        ));
+                    }
+                }
+            }
+            // Recursively validate for logical conditions (AND, OR)
+            else if (condition instanceof com.example.query.model.condition.Logical logicalCondition) {
+                // Iterate over all conditions within the logical condition
+                for (Condition subCondition : logicalCondition.conditions()) {
+                    validateTemporalBounds(List.of(subCondition));
+                }
+            }
+            // Recursively validate for NOT conditions
+            else if (condition instanceof com.example.query.model.condition.Not notCondition) {
+                validateTemporalBounds(List.of(notCondition.condition()));
             }
         }
     }

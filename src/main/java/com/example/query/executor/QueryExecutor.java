@@ -23,6 +23,8 @@ import com.example.query.model.Query;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Logical.LogicalOperator;
+import com.example.query.model.condition.Ner;
+import com.example.query.model.condition.Not;
 import com.example.query.result.TableResultService;
 
 /**
@@ -198,11 +200,16 @@ public class QueryExecutor {
                 QueryResultSoA rhsSoA;
 
                 // --- Pushdown Logic for this step ---
-                boolean eligibleForPushdown = this.pushdownStrategy == PushdownStrategy.OPTIMIZED &&
+                boolean eligibleForTemporalPushdown = this.pushdownStrategy == PushdownStrategy.OPTIMIZED &&
                                               step.joinType() == JoinCondition.JoinType.INNER &&
                                               step.onCondition().operatorType() == JoinCondition.JoinOperatorType.TEMPORAL;
 
-                if (eligibleForPushdown) {
+                boolean eligibleForNerPushdown = this.pushdownStrategy == PushdownStrategy.OPTIMIZED &&
+                                              step.joinType() == JoinCondition.JoinType.INNER &&
+                                              step.onCondition().operatorType() == JoinCondition.JoinOperatorType.EQUALITY &&
+                                              isNerEqualityJoin(step.onCondition(), currentLhsSoA, rhsQuery);
+
+                if (eligibleForTemporalPushdown) {
                     logger.info("Attempting OPTIMIZED pushdown for JoinStep: LHS='{}', RHS Query Source='{}' (alias '{}'), ON {}", currentLhsAlias, rhsQuery.source(), rhsAlias, step.onCondition());
                     try {
                         // Pass parentRequirements (overall query requirements) for context, but executed subquery will have its own.
@@ -215,6 +222,20 @@ public class QueryExecutor {
                     } catch (Exception e) {
                         logger.warn("Dependent execution for step (LHS: '{}', RHS: '{}') failed with generic Exception: {}. Falling back to independent execution for this step.", currentLhsAlias, rhsAlias, e.getMessage(), e);
                         rhsSoA = executeWithRequirements(rhsQuery, indexes, rhsRequirements, new SubqueryContext()); // Execute independently with fresh context
+                        resolveSynonymIdsInSoA(rhsSoA, rhsQuery);
+                    }
+                } else if (eligibleForNerPushdown) {
+                    logger.info("Attempting OPTIMIZED NER pushdown for JoinStep: LHS='{}', RHS Query Source='{}' (alias '{}'), ON {}", currentLhsAlias, rhsQuery.source(), rhsAlias, step.onCondition());
+                    try {
+                        rhsSoA = executeSingleDependentStepForNer(currentLhsSoA, currentLhsAlias, rhsQuery, rhsAlias, step.onCondition(), indexes, subqueryContext, requirements, query.granularity(), query.granularitySize().orElse(0));
+                        resolveSynonymIdsInSoA(rhsSoA, rhsQuery);
+                    } catch (QueryExecutionException qe) {
+                        logger.warn("NER dependent execution for step (LHS: '{}', RHS: '{}') failed with QueryExecutionException: {}. Falling back to independent execution for this step.", currentLhsAlias, rhsAlias, qe.getMessage());
+                        rhsSoA = executeWithRequirements(rhsQuery, indexes, rhsRequirements, new SubqueryContext());
+                        resolveSynonymIdsInSoA(rhsSoA, rhsQuery);
+                    } catch (Exception e) {
+                        logger.warn("NER dependent execution for step (LHS: '{}', RHS: '{}') failed with generic Exception: {}. Falling back to independent execution for this step.", currentLhsAlias, rhsAlias, e.getMessage(), e);
+                        rhsSoA = executeWithRequirements(rhsQuery, indexes, rhsRequirements, new SubqueryContext());
                         resolveSynonymIdsInSoA(rhsSoA, rhsQuery);
                     }
                 } else {
@@ -693,5 +714,234 @@ public class QueryExecutor {
         if (resolvedCount > 0) {
             logger.debug("Resolved {} synonym IDs in QueryResultSoA (size: {}) in {} ms.", resolvedCount, soa.size(), (endTime - startTime) / 1_000_000.0);
         }
+    }
+
+    /**
+     * Determines if a join condition represents an NER equality join suitable for pushdown.
+     * Checks if one side of the join involves NER variables that could be filtered.
+     */
+    private boolean isNerEqualityJoin(JoinCondition condition, QueryResultSoA lhsSoA, Query rhsQuery) {
+        // Basic criteria: equality join and at least one side involves NER
+        if (condition.operatorType() != JoinCondition.JoinOperatorType.EQUALITY) {
+            return false;
+        }
+
+        // Check if LHS has NER entities in the join column and RHS has NER conditions that could benefit from filtering
+        String leftColumn = condition.leftColumn();
+        String rightColumn = condition.rightColumn();
+
+        // Simplified heuristic: check if LHS has ENTITY values and RHS contains NER conditions
+        boolean lhsHasEntities = hasEntityValues(lhsSoA, leftColumn);
+        boolean rhsHasNerConditions = hasNerConditions(rhsQuery);
+
+        return lhsHasEntities && rhsHasNerConditions;
+    }
+
+    /**
+     * Checks if the LHS QueryResultSoA has entity values in the specified column.
+     */
+    private boolean hasEntityValues(QueryResultSoA soa, String columnName) {
+        if (soa == null || soa.isEmpty()) {
+            return false;
+        }
+
+        for (int i = 0; i < soa.size(); i++) {
+            String varName = soa.getVariableNameAt(i);
+            if (varName != null && varName.endsWith("." + extractColumnBaseName(columnName))) {
+                ValueType valueType = soa.getValueTypeAt(i);
+                if (valueType == ValueType.ENTITY || valueType == ValueType.UNRESOLVED_NER_ID) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Checks if the RHS query contains NER conditions that could benefit from pushdown.
+     */
+    private boolean hasNerConditions(Query query) {
+        return containsNerConditions(query.conditions());
+    }
+
+    /**
+     * Recursively checks if a list of conditions contains NER conditions.
+     */
+    private boolean containsNerConditions(List<Condition> conditions) {
+        for (Condition condition : conditions) {
+            if (condition instanceof Ner) {
+                return true;
+            } else if (condition instanceof Logical logical) {
+                if (containsNerConditions(logical.conditions())) {
+                    return true;
+                }
+            } else if (condition instanceof Not not) {
+                if (containsNerConditions(List.of(not.condition()))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Extracts the base column name from a qualified column name.
+     */
+    private String extractColumnBaseName(String qualifiedColumnName) {
+        int dotIndex = qualifiedColumnName.lastIndexOf('.');
+        return dotIndex >= 0 ? qualifiedColumnName.substring(dotIndex + 1) : qualifiedColumnName;
+    }
+
+    /**
+     * Executes a single step of a dependent join, specifically for NER pushdown.
+     * Modifies the dependent (RHS) query based on entity values from the leading (LHS) SoA.
+     */
+    private QueryResultSoA executeSingleDependentStepForNer(
+            QueryResultSoA leadingSoA,
+            String leadingAlias,
+            Query dependentQuery,
+            String dependentAlias,
+            JoinCondition condition,
+            Map<String, IndexAccessInterface> indexes,
+            SubqueryContext overallSubqueryContext,
+            AttributeRequirements parentRequirements,
+            Query.Granularity granularity,
+            int granularitySize)
+            throws QueryExecutionException {
+
+        logger.debug("Executing single dependent step for NER: LeadingSoA (alias: '{}', size: {}) -> DependentQuery (alias: '{}', source: '{}') ON {}",
+                     leadingAlias, leadingSoA.size(), dependentAlias, dependentQuery.source(), condition);
+
+        String leftColumn = condition.leftColumn();
+        String rightColumn = condition.rightColumn();
+
+        String leadingEntityKeyName;
+        String dependentEntityKeyName;
+
+        String leftColAliasPart = JoinHandler.extractAliasFromColumnName(leftColumn);
+        String rightColAliasPart = JoinHandler.extractAliasFromColumnName(rightColumn);
+
+        if (leftColAliasPart.equals(leadingAlias)) {
+            leadingEntityKeyName = JoinHandler.extractKeyFromColumnName(leftColumn);
+            dependentEntityKeyName = JoinHandler.extractKeyFromColumnName(rightColumn);
+        } else if (rightColAliasPart.equals(leadingAlias)) {
+            leadingEntityKeyName = JoinHandler.extractKeyFromColumnName(rightColumn);
+            dependentEntityKeyName = JoinHandler.extractKeyFromColumnName(leftColumn);
+        } else {
+            throw new QueryExecutionException(String.format(
+                "Could not determine leading/dependent side for NER dependent join step. Leading alias: '%s', Left col: '%s' (alias '%s'), Right col: '%s' (alias '%s'). Condition: %s",
+                leadingAlias, leftColumn, leftColAliasPart, rightColumn, rightColAliasPart, condition),
+                dependentQuery.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+
+        // Extract unique synonym IDs from the leading SoA
+        Set<Integer> leadingSynonymIds = new HashSet<>();
+        if (leadingSoA != null && leadingSoA.size() > 0 && leadingSoA.getRequirements().needsSynonymIds) {
+            for (int i = 0; i < leadingSoA.size(); i++) {
+                String varNameInLhsSoA = leadingSoA.getVariableNameAt(i);
+                boolean nameMatch = (varNameInLhsSoA != null && varNameInLhsSoA.endsWith("." + extractColumnBaseName(leadingEntityKeyName)));
+
+                if (nameMatch && (leadingSoA.getValueTypeAt(i) == ValueType.ENTITY || leadingSoA.getValueTypeAt(i) == ValueType.UNRESOLVED_NER_ID)) {
+                    int synonymId = leadingSoA.getSynonymIdAt(i);
+                    if (synonymId >= 0) {
+                        leadingSynonymIds.add(synonymId);
+                    }
+                }
+            }
+        }
+
+        if (leadingSynonymIds.isEmpty()) {
+            logger.info("Leading side (alias: '{}', key: '{}') for NER dependent step provided no usable synonym IDs. Dependent subquery '{}' (source: '{}') will execute without NER pre-filter for this step.",
+                        leadingAlias, leadingEntityKeyName, dependentAlias, dependentQuery.source());
+            return executeWithRequirements(dependentQuery, indexes, QueryAttributeAnalyzer.analyze(dependentQuery), new SubqueryContext());
+        }
+
+        // Convert synonym IDs to terms
+        List<String> leadingTerms;
+        try {
+            Map<Integer, String> synonymIdToTerm = synonymManager.getTerms(leadingSynonymIds);
+            leadingTerms = new ArrayList<>(synonymIdToTerm.values());
+            leadingTerms.removeIf(java.util.Objects::isNull); // Remove any null values
+        } catch (Exception e) {
+            logger.warn("Failed to resolve synonym IDs {} to terms for NER pushdown. Executing without filter.", leadingSynonymIds, e);
+            return executeWithRequirements(dependentQuery, indexes, QueryAttributeAnalyzer.analyze(dependentQuery), new SubqueryContext());
+        }
+
+        if (leadingTerms.isEmpty()) {
+            logger.info("No valid terms found for synonym IDs {} from leading side. Executing dependent query without NER filter.", leadingSynonymIds);
+            return executeWithRequirements(dependentQuery, indexes, QueryAttributeAnalyzer.analyze(dependentQuery), new SubqueryContext());
+        }
+
+        logger.debug("NER pushdown: Leading terms from '{}': {}", leadingAlias, leadingTerms);
+
+        // Modify NER conditions in the dependent query to include the leading terms
+        List<Condition> modifiedConditions = modifyConditionsForNerPushdown(dependentQuery.conditions(), dependentEntityKeyName, leadingTerms);
+
+        Query modifiedDependentQuery = new Query(
+            dependentQuery.source(),
+            modifiedConditions,
+            dependentQuery.orderBy(),
+            dependentQuery.limit(),
+            dependentQuery.granularity(),
+            dependentQuery.granularitySize(),
+            dependentQuery.selectColumns(),
+            dependentQuery.variableRegistry(),
+            List.of(),
+            Optional.empty(),
+            dependentQuery.groupByColumns()
+        );
+
+        logger.debug("Executing modified dependent query for NER pushdown: alias '{}' (source '{}')", dependentAlias, modifiedDependentQuery.source());
+        QueryResultSoA result = executeWithRequirements(modifiedDependentQuery, indexes, QueryAttributeAnalyzer.analyze(modifiedDependentQuery), new SubqueryContext());
+        resolveSynonymIdsInSoA(result, modifiedDependentQuery);
+        logger.info("Modified dependent query for NER pushdown (alias '{}') executed. Found {} matches.", dependentAlias, result.size());
+        return result;
+    }
+
+    /**
+     * Modifies conditions to add NER pushdown filters.
+     */
+    private List<Condition> modifyConditionsForNerPushdown(List<Condition> originalConditions, String targetEntityKey, List<String> leadingTerms) {
+        List<Condition> modifiedConditions = new ArrayList<>();
+        boolean foundTargetNerCondition = false;
+
+        for (Condition condition : originalConditions) {
+            Condition modifiedCondition = modifyConditionForNerPushdown(condition, targetEntityKey, leadingTerms);
+            if (modifiedCondition != condition) {
+                foundTargetNerCondition = true;
+            }
+            modifiedConditions.add(modifiedCondition);
+        }
+
+        // If no existing NER condition was found to modify, we could add a new one, but this is complex
+        // For now, just log and return the original conditions
+        if (!foundTargetNerCondition) {
+            logger.debug("No suitable NER condition found to modify for pushdown with key '{}'. Using original conditions.", targetEntityKey);
+        }
+
+        return modifiedConditions;
+    }
+
+    /**
+     * Recursively modifies a single condition for NER pushdown.
+     */
+    private Condition modifyConditionForNerPushdown(Condition condition, String targetEntityKey, List<String> leadingTerms) {
+        if (condition instanceof Ner nerCondition) {
+            String qualifiedVarName = nerCondition.qualifiedVariableName();
+            if (qualifiedVarName != null && qualifiedVarName.endsWith("." + extractColumnBaseName(targetEntityKey))) {
+                // This is the NER condition we want to modify
+                List<String> newTargets = new ArrayList<>(leadingTerms);
+                logger.debug("Modifying NER condition for pushdown: original targets={}, new targets={}", nerCondition.targets(), newTargets);
+                return new Ner(nerCondition.entityType(), newTargets, nerCondition.qualifiedVariableName(), nerCondition.isVariable());
+            }
+        } else if (condition instanceof Logical logical) {
+            List<Condition> modifiedSubConditions = modifyConditionsForNerPushdown(logical.conditions(), targetEntityKey, leadingTerms);
+            return new Logical(logical.operator(), modifiedSubConditions);
+        } else if (condition instanceof Not not) {
+            Condition modifiedSubCondition = modifyConditionForNerPushdown(not.condition(), targetEntityKey, leadingTerms);
+            return new Not(modifiedSubCondition);
+        }
+
+        return condition; // Return unchanged if not applicable
     }
 }

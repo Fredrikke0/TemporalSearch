@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -22,7 +24,7 @@ class NerConditionTest {
         String entityType = "PERSON";
         String variableName = "scientist";
 
-        Ner condition = new Ner(entityType, null, variableName, true);
+        Ner condition = new Ner(entityType, List.of(), variableName, true);
 
         assertEquals(entityType, condition.entityType());
         assertEquals(variableName, condition.qualifiedVariableName());
@@ -54,7 +56,7 @@ class NerConditionTest {
     @DisplayName("Constructor should not accept null type")
     void constructorShouldNotAcceptNullType() {
         assertThrows(NullPointerException.class,
-            () -> new Ner(null, null, "varName", true));
+            () -> new Ner(null, List.of(), "varName", true));
     }
 
     @ParameterizedTest
@@ -90,7 +92,7 @@ class NerConditionTest {
     @Test
     @DisplayName("Constructor with variable should create condition with variable")
     void constructorWithVariableShouldCreateConditionWithVariable() {
-        Ner condition = new Ner("PERSON", null, "scientist", true);
+        Ner condition = new Ner("PERSON", List.of(), "scientist", true);
         assertEquals("PERSON", condition.entityType());
         assertEquals("scientist", condition.qualifiedVariableName());
         assertTrue(condition.isVariable());
@@ -113,14 +115,14 @@ class NerConditionTest {
     @Test
     @DisplayName("toString should format with variable correctly (BIND-based style)")
     void testToStringWithVariable() {
-        Ner condition = new Ner("PERSON", null, "scientist", true);
+        Ner condition = new Ner("PERSON", List.of(), "scientist", true);
         assertEquals("NER(PERSON) BIND scientist", condition.toString());
     }
 
     @Test
     @DisplayName("getProducedVariables should return variable when isVariable is true")
     void getProducedVariablesShouldReturnVariableWhenIsVariableIsTrue() {
-        Ner condition = new Ner("PERSON", null, "scientist", true);
+        Ner condition = new Ner("PERSON", List.of(), "scientist", true);
         assertEquals(1, condition.getProducedVariables().size());
         assertTrue(condition.getProducedVariables().contains("scientist"));
     }

@@ -51,7 +51,7 @@ class QuerySemanticValidatorTest {
         registry.registerProducer("$main.person", VariableType.ENTITY, "NER"); // Use internally qualified name ($main)
 
         // Create condition that binds the qualified variable name
-        Ner nerCondition = new Ner("PERSON", null, "$main.person", true); // Condition stores internally qualified name
+        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true); // Condition stores internally qualified name
         List<Condition> conditions = List.of(nerCondition);
 
         // Use that variable in SELECT (needs qualified name as used in SELECT)
@@ -71,7 +71,7 @@ class QuerySemanticValidatorTest {
         registry.registerProducer("$main.person", VariableType.ENTITY, "NER"); // Use internally qualified name ($main)
 
         // Create condition that binds the qualified variable name
-        Ner nerCondition = new Ner("PERSON", null, "$main.person", true); // Condition stores internally qualified name
+        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true); // Condition stores internally qualified name
         List<Condition> conditions = List.of(nerCondition);
 
         // Use that variable in a SNIPPET column using the internally qualified name
@@ -134,7 +134,7 @@ class QuerySemanticValidatorTest {
         registry.registerProducer("$main.person", VariableType.ENTITY, "NER"); // Use internally qualified name
 
         // Create condition that binds a variable
-        Ner nerCondition = new Ner("PERSON", null, "$main.person", true); // Use internally qualified name
+        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true); // Use internally qualified name
         List<Condition> conditions = List.of(nerCondition);
 
         // Create a snippet with window size 5 (the maximum allowed by the constructor)

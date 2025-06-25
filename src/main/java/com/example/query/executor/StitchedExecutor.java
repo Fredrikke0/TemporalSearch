@@ -4,9 +4,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
@@ -91,7 +94,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
             stitchIndexGroupIdentifier = "ner";
             specificAnnotationTypeForLookup = nerEntityType;
             annotationVarName = Optional.ofNullable(nerCond.qualifiedVariableName()).orElse("");
-            annotationValueTypeToStore = (nerCond.target() != null && !nerCond.target().isBlank()) ? ValueType.ENTITY : ValueType.UNRESOLVED_NER_ID;
+            annotationValueTypeToStore = (!nerCond.targets().isEmpty() && nerCond.targets().get(0) != null && !nerCond.targets().get(0).isBlank()) ? ValueType.ENTITY : ValueType.UNRESOLVED_NER_ID;
         } else if (annotationCondition instanceof Pos posCond) {
             stitchIndexGroupIdentifier = "pos";
             specificAnnotationTypeForLookup = posCond.posTag().toUpperCase();
@@ -205,28 +208,38 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                 logger.debug("Looking up in stitch index '{}' with key: '{}', context isPresent: {}, annotationValueTypeToStore: {}",
                              stitchIndexName, stitchLookupKey, context.isPresent(), annotationValueTypeToStore);
 
-                Optional<Integer> targetAnnotationValueIdOpt = Optional.empty();
-                String specificAnnotationValueFromCondition = null;
+                Set<Integer> targetAnnotationValueIds = new HashSet<>();
+                List<String> specificAnnotationValuesFromCondition = new ArrayList<>();
 
-                if (annotationCondition instanceof Ner nerValCond && nerValCond.target() != null && !nerValCond.target().isBlank()) {
-                    specificAnnotationValueFromCondition = nerValCond.target();
-                    try {
-                        targetAnnotationValueIdOpt = Optional.of(synonymManager.getId(specificAnnotationValueFromCondition.toLowerCase()));
-                        logger.debug("Stitch with specific NER entity: '{}', targetId: {}", specificAnnotationValueFromCondition, targetAnnotationValueIdOpt.get());
-                    } catch (Exception e) {
-                        logger.warn("Failed to get synonym ID for specific NER entity value '{}' in StitchedExecutor. This entity is unknown or DB error. Returning empty for this stitch.", specificAnnotationValueFromCondition, e);
+                if (annotationCondition instanceof Ner nerValCond && !nerValCond.targets().isEmpty()) {
+                    for (String target : nerValCond.targets()) {
+                        if (target != null && !target.isBlank()) {
+                            specificAnnotationValuesFromCondition.add(target);
+                            try {
+                                int targetId = synonymManager.getId(target.toLowerCase());
+                                targetAnnotationValueIds.add(targetId);
+                                logger.debug("Stitch with specific NER entity: '{}', targetId: {}", target, targetId);
+                            } catch (Exception e) {
+                                logger.warn("Failed to get synonym ID for specific NER entity value '{}' in StitchedExecutor. This entity is unknown or DB error. Skipping this target.", target, e);
+                            }
+                        }
+                    }
+
+                    if (targetAnnotationValueIds.isEmpty()) {
+                        logger.warn("No valid synonym IDs found for NER targets {} in StitchedExecutor. Returning empty for this stitch.", nerValCond.targets());
                         return new QueryResultSoA(granularity, granularitySize, requirements);
                     }
                 } else if (annotationCondition instanceof Pos posCond && posCond.term() != null && !posCond.term().isBlank()) {
-                    specificAnnotationValueFromCondition = posCond.term();
+                    String specificPosValue = posCond.term();
+                    specificAnnotationValuesFromCondition.add(specificPosValue);
                     try {
-                        targetAnnotationValueIdOpt = Optional.of(synonymManager.getId(specificAnnotationValueFromCondition.toLowerCase()));
+                        int targetId = synonymManager.getId(specificPosValue.toLowerCase());
+                        targetAnnotationValueIds.add(targetId);
                         logger.debug("Stitch with specific POS term: '{}' (for POS tag {}), targetId: {}",
-                                     specificAnnotationValueFromCondition, posCond.posTag().toUpperCase(),
-                                     targetAnnotationValueIdOpt.get());
+                                     specificPosValue, posCond.posTag().toUpperCase(), targetId);
                     } catch (Exception e) {
                         logger.warn("Failed to get synonym ID for specific POS term value '{}' (for POS tag {}) in StitchedExecutor. This term is unknown or DB error. Returning empty for this stitch.",
-                                    specificAnnotationValueFromCondition, posCond.posTag().toUpperCase(), e);
+                                    specificPosValue, posCond.posTag().toUpperCase(), e);
                         return new QueryResultSoA(granularity, granularitySize, requirements);
                     }
                 }
@@ -247,12 +260,27 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         int currentAnnotationSynonymId = positions.getSynonymIdAt(i);
                         Object annotationValueForSoA;
 
-                        if (targetAnnotationValueIdOpt.isPresent()) {
-                            if (currentAnnotationSynonymId == targetAnnotationValueIdOpt.get().intValue()) {
-                                annotationValueForSoA = specificAnnotationValueFromCondition;
+                        if (!targetAnnotationValueIds.isEmpty()) {
+                            if (targetAnnotationValueIds.contains(currentAnnotationSynonymId)) {
+                                // Find the original annotation value that matches this synonym ID
+                                annotationValueForSoA = null;
+                                for (String originalValue : specificAnnotationValuesFromCondition) {
+                                    try {
+                                        int originalId = synonymManager.getId(originalValue.toLowerCase());
+                                        if (originalId == currentAnnotationSynonymId) {
+                                            annotationValueForSoA = originalValue;
+                                            break;
+                                        }
+                                    } catch (Exception e) {
+                                        // Continue looking
+                                    }
+                                }
+                                if (annotationValueForSoA == null) {
+                                    annotationValueForSoA = specificAnnotationValuesFromCondition.get(0); // Fallback
+                                }
                             } else {
-                                logger.trace("Skipping co-occurrence: current annotation ID {} != target ID {} (for specific value '{}') for stitch key '{}'",
-                                             currentAnnotationSynonymId, targetAnnotationValueIdOpt.get(), specificAnnotationValueFromCondition, stitchLookupKey);
+                                logger.trace("Skipping co-occurrence: current annotation ID {} not in target IDs {} (for specific values {}) for stitch key '{}'",
+                                             currentAnnotationSynonymId, targetAnnotationValueIds, specificAnnotationValuesFromCondition, stitchLookupKey);
                                 continue;
                             }
                         } else {

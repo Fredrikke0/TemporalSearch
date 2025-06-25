@@ -129,7 +129,7 @@ class QueryAttributeAnalyzerTest {
 
         Query query = new Query(
             "test",
-            List.of(new Ner("PERSON", null, "$main.person", true)),
+            List.of(new Ner("PERSON", List.of(), "$main.person", true)),
             List.of(),
             Optional.empty(),
             Query.Granularity.DOCUMENT,

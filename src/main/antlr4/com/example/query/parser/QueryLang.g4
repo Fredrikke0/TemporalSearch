@@ -249,7 +249,7 @@ limitClause
     ;
 
 nerExpression
-    : NER LPAREN type=entityType (COMMA termValue=term)? RPAREN (BIND var=variable)?
+    : NER LPAREN type=entityType (COMMA terms+=term (COMMA terms+=term)*)? RPAREN (BIND var=variable)?
     ;
 
 entityType // Should align with VALID_NER_TYPES in QuerySemanticValidator (case-insensitive)

@@ -1,6 +1,7 @@
 package com.example.query.executor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -26,6 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -248,7 +250,7 @@ class NerExecutorTest {
     @Test
     void testVariableBindingDocumentGranularity() throws Exception {
         // Test NER(PERSON) BIND ?p - calls executeVariableBindingSearch
-        Ner condition = new Ner("PERSON", null, "?p", true);
+        Ner condition = new Ner("PERSON", List.of(), "?p", true);
 
         // Mock SynonymManager for term resolution
         int acmeId = 1;
@@ -306,7 +308,7 @@ class NerExecutorTest {
     @Test
     void testExecuteEntityTypeSearch_allTypesWithVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
         // Test NER(PERSON) BIND ?v - Changed from * to PERSON as wildcard type is not supported
-        Ner condition = new Ner("PERSON", null, "?anytype", true);
+        Ner condition = new Ner("PERSON", List.of(), "?anytype", true);
 
         int johnDoeId = 1;
         // when(synonymManager.getTerm(johnDoeId)).thenReturn(Optional.of("john doe")); // OLD MOCKING
@@ -398,7 +400,7 @@ class NerExecutorTest {
     @Test
     void testExecuteEntityTypeSearch_withVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
         // Simulates NER(LOCATION) BIND ?locVar
-        Ner condition = new Ner("LOCATION", null, "?loc", true); // NER(LOCATION) BIND ?loc
+        Ner condition = new Ner("LOCATION", List.of(), "?loc", true); // NER(LOCATION) BIND ?loc
 
         int parisId = 10;
         int londonId = 11;
@@ -446,7 +448,7 @@ class NerExecutorTest {
     @Test
     @Disabled("NER(DATE) queries are handled by TemporalExecutor, not NerExecutor. This test is invalid for NerExecutor.")
     void testExecuteDateSearch_withVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
-        Ner condition = new Ner("DATE", null, "?when", true);
+        Ner condition = new Ner("DATE", List.of(), "?when", true);
 
         // Mock for nerDateIndex.iterateFromFirst()
         List<Map.Entry<byte[], PositionListSoA>> dateEntries = Collections.emptyList();
@@ -462,7 +464,7 @@ class NerExecutorTest {
 
     @Test
     void testExecute_noMatchFound_iterator() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
-        Ner condition = new Ner("PERSON", null, "?p", true); // Uses iterator
+        Ner condition = new Ner("PERSON", List.of(), "?p", true); // Uses iterator
 
         // Setup mock iterator to return no results for the prefix "PERSON" + DELIMITER
         List<Map.Entry<byte[], PositionListSoA>> entries = Collections.emptyList();
@@ -524,5 +526,204 @@ class NerExecutorTest {
         assertThrows(QueryExecutionException.class, () -> {
             executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         });
+    }
+
+    // ==================== NER-DEPENDENT JOIN PUSHDOWN TESTS ====================
+
+    @Test
+    @DisplayName("NER condition with multiple targets should filter correctly")
+    void testExecuteMultipleTargets() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        // Test NER(PERSON, ['alice', 'bob']) - multiple specific targets
+        List<String> targets = List.of("alice", "bob");
+        Ner condition = new Ner("PERSON", targets);
+
+        // Mock synonym manager for the targets
+        int aliceId = 10;
+        int bobId = 20;
+        int charlieId = 30; // This should be filtered out
+
+        lenient().when(synonymManager.getId("alice")).thenReturn(aliceId);
+        lenient().when(synonymManager.getId("bob")).thenReturn(bobId);
+
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(1, 1, 0, 5, aliceId);    // Doc 1, "alice" - should match
+        positions.add(1, 2, 10, 13, bobId);    // Doc 1, "bob" - should match
+        positions.add(2, 1, 0, 7, charlieId);  // Doc 2, "charlie" - should be filtered out
+
+        byte[] blob = soaToBlob(positions);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(blob));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
+
+        assertNotNull(result);
+        assertEquals(2, result.getConceptualRowCount(), "Should find 2 conceptual rows for 'alice' and 'bob'");
+        assertEquals(2, result.size(), "Should find 2 occurrences (alice and bob)");
+
+        // Verify the results contain only alice and bob
+        Set<String> foundValues = new HashSet<>();
+        Set<Integer> foundSynonymIds = new HashSet<>();
+        for (int i = 0; i < result.size(); i++) {
+            foundValues.add((String) result.getValueAt(i));
+            foundSynonymIds.add(result.getSynonymIdAt(i));
+            assertEquals(ValueType.ENTITY, result.getValueTypeAt(i));
+            assertNull(result.getVariableNameAt(i));
+        }
+
+        assertTrue(foundValues.containsAll(Set.of("alice", "bob")), "Should contain both alice and bob: " + foundValues);
+        assertTrue(foundSynonymIds.containsAll(Set.of(aliceId, bobId)), "Should contain synonym IDs for alice and bob");
+        assertFalse(foundSynonymIds.contains(charlieId), "Should not contain charlie's synonym ID");
+
+        verify(synonymManager).getId("alice");
+        verify(synonymManager).getId("bob");
+    }
+
+    @Test
+    @DisplayName("NER condition with multiple targets and variable binding should work correctly")
+    void testExecuteMultipleTargetsWithVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        // Test NER(LOCATION, ['paris', 'london']) BIND ?loc
+        List<String> targets = List.of("paris", "london");
+        Ner condition = new Ner("LOCATION", targets, "?loc", true);
+
+        // Mock synonym manager for the targets
+        int parisId = 100;
+        int londonId = 200;
+        int tokyoId = 300; // This should be filtered out
+
+        lenient().when(synonymManager.getId("paris")).thenReturn(parisId);
+        lenient().when(synonymManager.getId("london")).thenReturn(londonId);
+
+        // Mock batch term resolution for variable binding
+        when(synonymManager.getTerms(eq(Set.of(parisId, londonId))))
+            .thenReturn(Map.of(parisId, "paris", londonId, "london"));
+
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(1, 1, 0, 5, parisId);    // Doc 1, "paris" - should match
+        positions.add(1, 2, 10, 16, londonId); // Doc 1, "london" - should match
+        positions.add(2, 1, 0, 5, parisId);    // Doc 2, "paris" again - should match
+        positions.add(3, 1, 0, 5, tokyoId);    // Doc 3, "tokyo" - should be filtered out
+
+        byte[] blob = soaToBlob(positions);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "LOCATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(blob));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
+
+        assertNotNull(result);
+        assertEquals(2, result.getConceptualRowCount(), "Should find 2 conceptual rows for 'paris' and 'london'");
+        assertEquals(3, result.size(), "Should find 3 occurrences (paris appears twice, london once)");
+
+        // Verify the results contain only paris and london, with correct variable binding
+        Set<String> foundValues = new HashSet<>();
+        Set<Integer> foundSynonymIds = new HashSet<>();
+        for (int i = 0; i < result.size(); i++) {
+            foundValues.add((String) result.getValueAt(i));
+            foundSynonymIds.add(result.getSynonymIdAt(i));
+            assertEquals(ValueType.ENTITY, result.getValueTypeAt(i));
+            assertEquals("?loc", result.getVariableNameAt(i));
+        }
+
+        assertTrue(foundValues.containsAll(Set.of("paris", "london")), "Should contain both paris and london: " + foundValues);
+        assertTrue(foundSynonymIds.containsAll(Set.of(parisId, londonId)), "Should contain synonym IDs for paris and london");
+        assertFalse(foundSynonymIds.contains(tokyoId), "Should not contain tokyo's synonym ID");
+
+        verify(synonymManager).getId("paris");
+        verify(synonymManager).getId("london");
+        verify(synonymManager).getTerms(eq(Set.of(parisId, londonId)));
+    }
+
+    @Test
+    @DisplayName("NER condition with empty targets should match any entity of that type")
+    void testExecuteEmptyTargets() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        // Test NER(ORGANIZATION, []) - empty targets should match any ORGANIZATION
+        Ner condition = new Ner("ORGANIZATION", List.of());
+
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(1, 1, 0, 6, 101);  // Doc 1, any org
+        positions.add(2, 1, 5, 14, 102); // Doc 2, any org
+
+        byte[] blob = soaToBlob(positions);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "ORGANIZATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(blob));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
+
+        assertNotNull(result);
+        assertEquals(1, result.getConceptualRowCount(), "Should be 1 conceptual row for the type itself");
+        assertEquals(2, result.size(), "Should find 2 occurrences of ORGANIZATION type");
+
+        // Verify results are type-based (not entity-specific)
+        for (int i = 0; i < result.size(); i++) {
+            assertEquals("ORGANIZATION", result.getValueAt(i));
+            assertEquals(ValueType.ENTITY_TYPE, result.getValueTypeAt(i));
+            assertNull(result.getVariableNameAt(i));
+            assertEquals(-1, result.getSynonymIdAt(i)); // For ENTITY_TYPE, synonymId is -1
+        }
+    }
+
+    @Test
+    @DisplayName("NER condition with targets preserves original casing")
+    void testExecuteTargetsPreservesOriginalCasing() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        // Test that original target casing is preserved in results even though lookup is lowercase
+        List<String> targets = List.of("New York", "Los Angeles");
+        Ner condition = new Ner("LOCATION", targets);
+
+        // Mock synonym manager - lookups should be lowercase but original casing preserved
+        int newYorkId = 50;
+        int losAngelesId = 60;
+
+        lenient().when(synonymManager.getId("new york")).thenReturn(newYorkId);
+        lenient().when(synonymManager.getId("los angeles")).thenReturn(losAngelesId);
+
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(1, 1, 0, 8, newYorkId);      // Doc 1, "New York"
+        positions.add(2, 1, 10, 21, losAngelesId); // Doc 2, "Los Angeles"
+
+        byte[] blob = soaToBlob(positions);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "LOCATION".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(blob));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
+
+        assertNotNull(result);
+        assertEquals(2, result.getConceptualRowCount(), "Should find 2 conceptual rows");
+        assertEquals(2, result.size(), "Should find 2 occurrences");
+
+        // Verify original casing is preserved
+        Set<String> foundValues = new HashSet<>();
+        for (int i = 0; i < result.size(); i++) {
+            foundValues.add((String) result.getValueAt(i));
+        }
+
+        assertTrue(foundValues.contains("New York"), "Should preserve 'New York' casing");
+        assertTrue(foundValues.contains("Los Angeles"), "Should preserve 'Los Angeles' casing");
+
+        // Verify lookups were done in lowercase
+        verify(synonymManager).getId("new york");
+        verify(synonymManager).getId("los angeles");
+    }
+
+    @Test
+    @DisplayName("NER condition with targets that don't exist should return empty results")
+    void testExecuteTargetsNotFound() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+        // Test NER(PERSON, ['nonexistent']) where the target doesn't exist in index
+        List<String> targets = List.of("nonexistent");
+        Ner condition = new Ner("PERSON", targets);
+
+        // Mock synonym manager to return ID for nonexistent
+        int nonexistentId = 999;
+        lenient().when(synonymManager.getId("nonexistent")).thenReturn(nonexistentId);
+
+        PositionListSoA positions = new PositionListSoA();
+        positions.add(1, 1, 0, 5, 123);  // Doc 1, different entity (ID 123, not 999)
+        positions.add(2, 1, 0, 5, 456);  // Doc 2, different entity (ID 456, not 999)
+
+        byte[] blob = soaToBlob(positions);
+        when(nerIndex.getRaw(argThat(key -> Arrays.equals(key, "PERSON".getBytes(java.nio.charset.StandardCharsets.UTF_8))))).thenReturn(Optional.ofNullable(blob));
+
+        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
+
+        assertNotNull(result);
+        assertEquals(0, result.getConceptualRowCount(), "Should find 0 conceptual rows for nonexistent target");
+        assertEquals(0, result.size(), "Should find 0 occurrences");
+        assertTrue(result.isEmpty());
+
+        verify(synonymManager).getId("nonexistent");
     }
 }

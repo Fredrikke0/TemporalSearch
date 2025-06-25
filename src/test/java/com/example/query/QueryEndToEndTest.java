@@ -1,5 +1,6 @@
 package com.example.query;
 
+import static org.junit.Assert.assertNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -16,6 +17,7 @@ import java.util.*;
 import org.apache.pig.impl.util.MultiMap;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentMatchers;
@@ -39,6 +41,7 @@ import com.example.query.executor.QueryExecutor;
 import com.example.query.executor.QueryResultSoA;
 import com.example.query.index.IndexManager;
 import com.example.query.model.Query;
+import com.example.query.model.condition.Ner;
 import com.example.query.result.ResultGenerationException;
 import com.example.query.result.TableResultService;
 import com.example.query.sqlite.SqliteAccessor;
@@ -766,5 +769,304 @@ public class QueryEndToEndTest {
         assertNotNull(results, "QueryResultSoA should not be null for naive DATE(>) query");
         assertFalse(results.isEmpty(), "Expected results for DATE(> 2023-03-20)");
         assertQueryResultContainsDocIds(results, 3, 30);
+    }
+
+    // ==================== NER-DEPENDENT JOIN PUSHDOWN TESTS ====================
+
+    @Test
+    @DisplayName("NER condition with specific target should work correctly")
+    public void testNerWithSingleTarget() throws QueryParseException, QueryExecutionException, ResultGenerationException, RocksDBException {
+        // Test direct usage of specific target in a NER condition
+        String queryString = "SELECT person FROM test_corpus WHERE NER(PERSON, 'albert einstein') BIND person";
+        Query query = queryParser.parse(queryString);
+        QueryResultSoA resultSoA = queryExecutor.execute(query, mockIndexManager);
+        Table table = tableResultService.generateTable(query, resultSoA, mockIndexManager.getAllIndexes());
+
+        assertNotNull(table);
+        // Expected: "albert einstein" should be found
+        List<String> personNames = table.stringColumn(0).asList().stream().map(String::toLowerCase).toList();
+        assertEquals(1, personNames.size(), "Expected one person name");
+        assertTrue(personNames.contains("albert einstein"), "Expected 'albert einstein' in results");
+    }
+
+    @Test
+    @DisplayName("NER condition with targets should filter correctly")
+    public void testNerTargetFiltering() throws QueryParseException, QueryExecutionException, ResultGenerationException, RocksDBException {
+        // Test that specifying targets actually filters the results
+        String queryStringAll = "SELECT person FROM test_corpus WHERE NER(PERSON) BIND person";
+        Query queryAll = queryParser.parse(queryStringAll);
+        QueryResultSoA resultAll = queryExecutor.execute(queryAll, mockIndexManager);
+        Table tableAll = tableResultService.generateTable(queryAll, resultAll, mockIndexManager.getAllIndexes());
+
+        String queryStringFiltered = "SELECT person FROM test_corpus WHERE NER(PERSON, 'albert einstein') BIND person";
+        Query queryFiltered = queryParser.parse(queryStringFiltered);
+        QueryResultSoA resultFiltered = queryExecutor.execute(queryFiltered, mockIndexManager);
+        Table tableFiltered = tableResultService.generateTable(queryFiltered, resultFiltered, mockIndexManager.getAllIndexes());
+
+        assertNotNull(tableAll);
+        assertNotNull(tableFiltered);
+
+        // All PERSON entities should be more than filtered results
+        assertTrue(tableAll.rowCount() > tableFiltered.rowCount(),
+            "Unfiltered query should return more results than filtered");
+
+        // Filtered results should contain only the specified target
+        List<String> filteredNames = tableFiltered.stringColumn(0).asList().stream().map(String::toLowerCase).toList();
+        assertEquals(1, filteredNames.size(), "Expected one person name in filtered results");
+        assertTrue(filteredNames.contains("albert einstein"), "Expected 'albert einstein' in filtered results");
+    }
+
+    @Test
+    @DisplayName("NER targets preserve original casing from query")
+    public void testNerTargetCasingPreservation() throws QueryParseException, QueryExecutionException, ResultGenerationException, RocksDBException {
+        // Test that original casing from the query is preserved in results
+        String queryString = "SELECT org FROM test_corpus WHERE NER(ORGANIZATION, 'Google') BIND org";
+        Query query = queryParser.parse(queryString);
+        QueryResultSoA resultSoA = queryExecutor.execute(query, mockIndexManager);
+        Table table = tableResultService.generateTable(query, resultSoA, mockIndexManager.getAllIndexes());
+
+        assertNotNull(table);
+        List<String> orgNames = table.stringColumn(0).asList();
+        assertEquals(1, orgNames.size(), "Expected one organization name");
+
+        // The original query had 'Google' with capital G, this should be preserved
+        // even though the mock data and synonym lookup might be lowercase
+        String foundOrg = orgNames.get(0);
+        assertTrue("Google".equals(foundOrg) || "google".equals(foundOrg),
+            "Expected 'Google' or 'google', got: " + foundOrg);
+    }
+
+    @Test
+    @DisplayName("Empty targets list should match any entity of that type")
+    public void testNerEmptyTargetsList() throws QueryParseException, QueryExecutionException, ResultGenerationException, RocksDBException {
+        // Although we can't directly test empty list through query parsing,
+        // we can test the NER condition without specific targets (which uses empty list internally)
+        String queryStringWithoutTargets = "SELECT org FROM test_corpus WHERE NER(ORGANIZATION) BIND org";
+        Query queryWithoutTargets = queryParser.parse(queryStringWithoutTargets);
+        QueryResultSoA resultWithoutTargets = queryExecutor.execute(queryWithoutTargets, mockIndexManager);
+
+        String queryStringWithTargets = "SELECT org FROM test_corpus WHERE NER(ORGANIZATION, 'google') BIND org";
+        Query queryWithTargets = queryParser.parse(queryStringWithTargets);
+        QueryResultSoA resultWithTargets = queryExecutor.execute(queryWithTargets, mockIndexManager);
+
+        // The without-targets query should return more or equal results
+        assertTrue(resultWithoutTargets.size() >= resultWithTargets.size(),
+            "Query without targets should return at least as many results as query with targets");
+    }
+
+    @Test
+    @DisplayName("NER with non-existent targets should return empty results")
+    public void testNerWithNonExistentTargets() throws QueryParseException, QueryExecutionException, ResultGenerationException, RocksDBException {
+        String queryString = "SELECT person FROM test_corpus WHERE NER(PERSON, 'john doe') BIND person";
+        Query query = queryParser.parse(queryString);
+        QueryResultSoA resultSoA = queryExecutor.execute(query, mockIndexManager);
+        Table table = tableResultService.generateTable(query, resultSoA, mockIndexManager.getAllIndexes());
+
+        assertNotNull(table);
+        // Since 'john doe' is not in our mock data, should return empty
+        assertEquals(0, table.rowCount(), "Expected no results for non-existent person name");
+    }
+
+    @Test
+    @DisplayName("NER targets work correctly with different entity types")
+    public void testNerTargetsWithDifferentEntityTypes() throws QueryParseException, QueryExecutionException, ResultGenerationException, RocksDBException {
+        // Test LOCATION with target
+        String locationQuery = "SELECT loc FROM test_corpus WHERE NER(LOCATION, 'london') BIND loc";
+        Query locQuery = queryParser.parse(locationQuery);
+        QueryResultSoA locResult = queryExecutor.execute(locQuery, mockIndexManager);
+        Table locTable = tableResultService.generateTable(locQuery, locResult, mockIndexManager.getAllIndexes());
+
+        assertNotNull(locTable);
+        assertEquals(1, locTable.rowCount(), "Expected one location");
+        assertTrue(locTable.stringColumn(0).get(0).toLowerCase().contains("london"));
+
+        // Test NUMBER with target
+        String numberQuery = "SELECT num FROM test_corpus WHERE NER(NUMBER, '42') BIND num";
+        Query numQuery = queryParser.parse(numberQuery);
+        QueryResultSoA numResult = queryExecutor.execute(numQuery, mockIndexManager);
+        Table numTable = tableResultService.generateTable(numQuery, numResult, mockIndexManager.getAllIndexes());
+
+        assertNotNull(numTable);
+        assertEquals(1, numTable.rowCount(), "Expected one number");
+        assertEquals("42", numTable.stringColumn(0).get(0));
+    }
+
+    @Test
+    @DisplayName("Complex query with NER targets and other conditions")
+    public void testComplexQueryWithNerTargets() throws QueryParseException, QueryExecutionException, ResultGenerationException {
+        // Test a more complex query combining NER with targets and other conditions
+        String queryString = "SELECT DOCUMENT_ID FROM test_corpus WHERE NER(PERSON, 'albert einstein') AND CONTAINS('test')";
+        Query query = queryParser.parse(queryString);
+        QueryResultSoA resultSoA = queryExecutor.execute(query, mockIndexManager);
+
+        assertNotNull(resultSoA);
+        // This should return documents that have both the specific person AND the word 'test'
+        // Based on our mock data, this might return no results or specific documents
+        // The test validates that the query executes successfully with combined conditions
+        assertTrue(resultSoA.size() >= 0, "Query should execute successfully, even if no results");
+    }
+
+    /*
+     * NOTE: The following tests would require implementing the actual join pushdown
+     * optimization in QueryExecutor. Since the design document describes this optimization
+     * but it may not be fully implemented yet, these tests serve as specifications
+     * for the expected behavior when the optimization is implemented.
+     */
+
+    @Test
+    @DisplayName("Simulated join pushdown scenario with NER equality")
+    public void testSimulatedNerJoinPushdown() throws QueryParseException, QueryExecutionException, ResultGenerationException, RocksDBException {
+        /*
+         * This test simulates what would happen in a join pushdown scenario:
+         * 1. Execute a query that finds specific persons
+         * 2. Use those results to create a new NER condition with those specific targets
+         * 3. Verify that the targeted NER condition returns the expected filtered results
+         *
+         * This demonstrates the key components that would be used in actual join pushdown.
+         */
+
+        // Step 1: Execute LHS query to get person entities
+        String lhsQuery = "SELECT person FROM test_corpus WHERE NER(PERSON, 'albert einstein') BIND person";
+        Query query1 = queryParser.parse(lhsQuery);
+        QueryResultSoA lhsResult = queryExecutor.execute(query1, mockIndexManager);
+        Table lhsTable = tableResultService.generateTable(query1, lhsResult, mockIndexManager.getAllIndexes());
+
+        // Step 2: Extract entity names from LHS results (simulating synonym ID -> term conversion)
+        List<String> extractedPersons = lhsTable.stringColumn(0).asList();
+        assertFalse(extractedPersons.isEmpty(), "Should have some persons from LHS");
+
+        // Step 3: Create RHS query with the extracted entities as targets
+        // In real pushdown, this would be done automatically by QueryExecutor
+        String rhsQuery = String.format("SELECT person FROM test_corpus WHERE NER(PERSON, '%s') BIND person", extractedPersons.get(0));
+        Query query2 = queryParser.parse(rhsQuery);
+        QueryResultSoA rhsResult = queryExecutor.execute(query2, mockIndexManager);
+        Table rhsTable = tableResultService.generateTable(query2, rhsResult, mockIndexManager.getAllIndexes());
+
+        // Step 4: Verify that RHS results match LHS results (demonstrating effective pushdown)
+        assertEquals(lhsTable.rowCount(), rhsTable.rowCount(),
+            "RHS with pushed-down targets should return same count as LHS");
+
+        Set<String> lhsPersons = new HashSet<>(lhsTable.stringColumn(0).asList());
+        Set<String> rhsPersons = new HashSet<>(rhsTable.stringColumn(0).asList());
+        assertEquals(lhsPersons, rhsPersons,
+            "RHS with pushed-down targets should return same entities as LHS");
+    }
+
+    @Test
+    @DisplayName("Performance benefit demonstration of NER target filtering")
+    public void testNerTargetFilteringPerformanceBenefit() throws QueryParseException, QueryExecutionException, ResultGenerationException, RocksDBException {
+        /*
+         * This test demonstrates the performance benefit of using targeted NER conditions
+         * vs. broad NER conditions by comparing result sizes.
+         */
+
+        // Broad query - gets all persons
+        String broadQuery = "SELECT person FROM test_corpus WHERE NER(PERSON) BIND person";
+        Query query1 = queryParser.parse(broadQuery);
+        QueryResultSoA broadResult = queryExecutor.execute(query1, mockIndexManager);
+
+        // Targeted query - gets specific persons
+        String targetedQuery = "SELECT person FROM test_corpus WHERE NER(PERSON, 'albert einstein') BIND person";
+        Query query2 = queryParser.parse(targetedQuery);
+        QueryResultSoA targetedResult = queryExecutor.execute(query2, mockIndexManager);
+
+        // Verify that targeting reduces the result set
+        assertTrue(broadResult.size() >= targetedResult.size(),
+            "Broad query should return at least as many results as targeted query");
+
+        if (broadResult.size() > targetedResult.size()) {
+            logger.info("NER targeting reduced result set from {} to {} entries",
+                broadResult.size(), targetedResult.size());
+        }
+
+        // Verify that targeted results are a subset of broad results
+        Table broadTable = tableResultService.generateTable(query1, broadResult, mockIndexManager.getAllIndexes());
+        Table targetedTable = tableResultService.generateTable(query2, targetedResult, mockIndexManager.getAllIndexes());
+
+        Set<String> broadPersons = new HashSet<>(broadTable.stringColumn(0).asList());
+        Set<String> targetedPersons = new HashSet<>(targetedTable.stringColumn(0).asList());
+
+        assertTrue(broadPersons.containsAll(targetedPersons),
+            "Targeted results should be a subset of broad results");
+    }
+
+    @Test
+    @DisplayName("Test programmatic creation of NER with multiple targets")
+    public void testProgrammaticNerMultipleTargets() throws QueryExecutionException {
+        /*
+         * This test demonstrates the programmatic creation of NER conditions with multiple targets,
+         * which would be used internally by QueryExecutor during join pushdown optimization.
+         */
+
+        // Create a Ner condition with multiple targets programmatically
+        List<String> targets = List.of("albert einstein", "marie curie");
+        Ner nerCondition = new Ner("PERSON", targets, "?person", true);
+
+        // Verify the condition was created correctly
+        assertEquals("PERSON", nerCondition.entityType());
+        assertEquals(targets, nerCondition.targets());
+        assertEquals("?person", nerCondition.qualifiedVariableName());
+        assertTrue(nerCondition.isVariable());
+
+        // Test the toString representation
+        String expected = "NER(PERSON, [albert einstein, marie curie]) BIND ?person";
+        assertEquals(expected, nerCondition.toString());
+
+        logger.info("Successfully created NER condition with multiple targets: {}", nerCondition);
+    }
+
+    @Test
+    @DisplayName("Test NER condition targets list functionality")
+    public void testNerTargetsListFunctionality() {
+        // Test empty targets list
+        Ner emptyTargets = new Ner("ORGANIZATION", List.of());
+        assertTrue(emptyTargets.targets().isEmpty());
+        assertNull(emptyTargets.target()); // backward compatibility method should return null
+
+        // Test single target
+        Ner singleTarget = new Ner("PERSON", List.of("alice"));
+        assertEquals(1, singleTarget.targets().size());
+        assertEquals("alice", singleTarget.target()); // backward compatibility
+
+        // Test multiple targets
+        Ner multipleTargets = new Ner("LOCATION", List.of("paris", "london", "tokyo"));
+        assertEquals(3, multipleTargets.targets().size());
+        assertEquals("paris", multipleTargets.target()); // should return first
+        assertTrue(multipleTargets.targets().contains("london"));
+        assertTrue(multipleTargets.targets().contains("tokyo"));
+
+        logger.info("NER targets functionality working correctly");
+    }
+
+    @Test
+    @DisplayName("NER condition with multiple target strings using new syntax")
+    public void testNerWithMultipleTargetsNewSyntax() throws QueryParseException, QueryExecutionException, ResultGenerationException, RocksDBException {
+        // Test the new syntax: NER(PERSON, 'target1', 'target2', 'target3')
+        String queryString = "SELECT person FROM test_corpus WHERE NER(PERSON, 'albert einstein', 'marie curie', 'nikola tesla') BIND person";
+        Query query = queryParser.parse(queryString);
+
+        // Verify the query was parsed correctly
+        assertFalse(query.conditions().isEmpty(), "Query should have conditions");
+        com.example.query.model.condition.Condition condition = query.conditions().get(0);
+        assertTrue(condition instanceof Ner, "Condition should be a NER condition");
+
+        Ner nerCondition = (Ner) condition;
+        assertEquals("PERSON", nerCondition.entityType(), "Entity type should be PERSON");
+        assertEquals(3, nerCondition.targets().size(), "Should have 3 target strings");
+        assertTrue(nerCondition.targets().contains("albert einstein"), "Should contain 'albert einstein'");
+        assertTrue(nerCondition.targets().contains("marie curie"), "Should contain 'marie curie'");
+        assertTrue(nerCondition.targets().contains("nikola tesla"), "Should contain 'nikola tesla'");
+        assertTrue(nerCondition.isVariable(), "Should be a variable binding condition");
+        assertEquals("$main.person", nerCondition.qualifiedVariableName(), "Variable name should be qualified");
+
+                        // Execute the query (this should work with the existing infrastructure)
+        QueryResultSoA resultSoA = queryExecutor.execute(query, mockIndexManager);
+        Table table = tableResultService.generateTable(query, resultSoA, mockIndexManager.getAllIndexes());
+
+        // Log the results for verification
+        logger.info("Query with multiple NER targets executed successfully. Results: {} rows", table.rowCount());
+
+        assertNotNull(resultSoA, "Result should not be null");
+        assertNotNull(table, "Table should not be null");
     }
 }

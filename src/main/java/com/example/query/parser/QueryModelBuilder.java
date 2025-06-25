@@ -607,15 +607,18 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             logger.debug("[QueryModelBuilder.visitNerExpression] No BIND clause detected or var is null. isVariable remains: {}", isVariable);
         }
 
-        String termValue = null;
-        if (ctx.termValue != null) {
-             Object termResult = visitTerm(ctx.termValue, currentScopeAlias); // Pass alias
-             termValue = (String) termResult; // visitTerm now returns plain name if variable
-            logger.debug("[QueryModelBuilder.visitNerExpression] termValue present: '{}'", termValue);
-             // Consumption registration happens within visitTerm
+        List<String> targets = new ArrayList<>();
+        if (ctx.terms != null && !ctx.terms.isEmpty()) {
+            for (var termNode : ctx.terms) {
+                Object termResult = visitTerm(termNode, currentScopeAlias); // Pass alias
+                String termValue = (String) termResult; // visitTerm now returns plain name if variable
+                logger.debug("[QueryModelBuilder.visitNerExpression] termValue present: '{}'", termValue);
+                targets.add(termValue);
+                // Consumption registration happens within visitTerm
+            }
         }
 
-        Ner nerCondition = new Ner(type, termValue, qualifiedVariableName, isVariable); // Pass qualified name
+        Ner nerCondition = new Ner(type, targets, qualifiedVariableName, isVariable); // Pass qualified name
         logger.debug("[QueryModelBuilder.visitNerExpression] Constructed Ner condition: {}", nerCondition);
         return nerCondition;
     }

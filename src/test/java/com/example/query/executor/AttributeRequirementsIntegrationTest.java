@@ -29,7 +29,7 @@ class AttributeRequirementsIntegrationTest {
 
         // Create a complex query: CONTAINS('test') AND NER(PERSON) with SNIPPET and SENTENCE_ID columns
         Contains containsCondition = new Contains(List.of("test"), "$main.term", true);
-        Ner nerCondition = new Ner("PERSON", null, "$main.person", true);
+        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true);
         Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(containsCondition, nerCondition));
 
         Query query = new Query(
