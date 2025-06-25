@@ -702,9 +702,9 @@ if __name__ == "__main__":
     if not args.query_dir or not os.path.isdir(args.query_dir): # Combined check
         exit(f"Error: Query directory not found or not specified: {args.query_dir}")
 
-    all_query_files = [f for f in os.listdir(args.query_dir) if os.path.isfile(os.path.join(args.query_dir, f))]
+    all_query_files = [f for f in os.listdir(args.query_dir) if os.path.isfile(os.path.join(args.query_dir, f)) and f.lower().endswith('.txt')]
     if not all_query_files:
-        exit(f"Error: No files found in query directory: {args.query_dir}")
+        exit(f"Error: No .txt query files found in query directory: {args.query_dir}")
 
     if args.export_dir and not os.path.exists(args.export_dir):
         try: os.makedirs(args.export_dir); print(f"Created export directory: {args.export_dir}", flush=True)

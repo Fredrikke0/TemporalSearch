@@ -1,4 +1,4 @@
-BENCHMARK_TYPE: 2HOP
+# 2 HOP
 # ordinal us pres and party
 #SELECT q1.ordinal, q1.pres, q2.party FROM source ALIAS q1 JOIN (SELECT party, COUNT(*) FROM source WHERE (CONTAINS('democrat') BIND party OR CONTAINS('republican') BIND party) AND NER(PERSON) BIND person GRANULARITY SENTENCE) ALIAS q2 ON q1.pres = q2.person WHERE DEPENDS('president','amod', '38th') AND CONTAINS('united states') AND NER(ORDINAL) BIND ordinal AND NER(PERSON) BIND pres GRANULARITY SENTENCE
 #SELECT q1.ordinal, q1.pres, q2.party FROM source ALIAS q1 JOIN (SELECT party, COUNT(*) FROM source WHERE (CONTAINS('democrat') BIND party OR CONTAINS('republican') BIND party) AND NER(PERSON) BIND person GRANULARITY SENTENCE) ALIAS q2 ON q1.pres = q2.person WHERE DEPENDS('president','amod', '39th') AND CONTAINS('united states') AND NER(ORDINAL) BIND ordinal AND NER(PERSON) BIND pres GRANULARITY SENTENCE

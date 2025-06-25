@@ -307,8 +307,8 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                     int synId = synonymManager.getId(normalizedFilterTarget);
                     filterTargetSynonymIds.add(synId);
                     filterSynonymIdToOriginalTarget.put(synId, filterTarget); // Store original casing
-                    logger.debug("TargetFilter '{}' (normalized: '{}') resolved to synonymId: {}",
-                                 filterTarget, normalizedFilterTarget, synId);
+                    // logger.debug("TargetFilter '{}' (normalized: '{}') resolved to synonymId: {}",
+                    //              filterTarget, normalizedFilterTarget, synId);
                 } catch (RocksDBException e) {
                     logger.error("RocksDBException while getting synonymId for TargetFilter '{}' in variable binding search for Type '{}'", filterTarget, normalizedEntityType, e);
                     throw new IndexAccessException("Failed to get synonymId for target filter: " + filterTarget, NER_INDEX_NAME, IndexAccessException.ErrorType.READ_ERROR, e);
