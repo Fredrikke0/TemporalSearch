@@ -139,7 +139,6 @@ def run_warm_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
 
         for temp_s, push_s, stitch_s in strategies_to_run_for_this_query:
             progress_prefix = f"    [WARM Q:{original_query_id_str} File:{source_file} T:{temp_s},P:{push_s},S:{stitch_s},BT:{benchmark_type}]"
-            print(f"{progress_prefix} Preparing...", flush=True)
 
             run_stdout_details = ""
             run_stderr_details = ""
@@ -177,7 +176,6 @@ def run_warm_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
                 verification_export_file = os.path.join(args.export_dir, f"{fn_base}_FOR_VERIFICATION.csv")
 
             for run_num in range(NUM_TIMED_RUNS_WARM):
-                print(f"{progress_prefix}  Timed Run {run_num+1}/{NUM_TIMED_RUNS_WARM}...", flush=True)
                 current_run_stdout, current_run_stderr = "", ""
                 try:
                     if verification_export_file and run_num == NUM_TIMED_RUNS_WARM - 1: # Last timed run
@@ -700,60 +698,13 @@ if __name__ == "__main__":
     parser.add_argument("--export-dir", help="Directory for exported CSV results (for verification). NOTE: This is for raw query output, not the benchmark summary.")
     args = parser.parse_args()
 
-    queries_to_run_orig = []
-    if args.query_dir:
-        if not os.path.isdir(args.query_dir):
-            exit(f"Error: Query directory not found: {args.query_dir}")
+    queries_to_run_orig = [] # This will be populated per file now
+    if not args.query_dir or not os.path.isdir(args.query_dir): # Combined check
+        exit(f"Error: Query directory not found or not specified: {args.query_dir}")
 
-        query_files = [f for f in os.listdir(args.query_dir) if os.path.isfile(os.path.join(args.query_dir, f))]
-        if not query_files:
-            exit(f"Error: No files found in query directory: {args.query_dir}")
-
-        query_id_counter = 0
-        for filename in query_files:
-            filepath = os.path.join(args.query_dir, filename)
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    first_line = f.readline().strip()
-                    if not first_line.startswith("BENCHMARK_TYPE:"):
-                        print(f"Warning: File {filename} does not start with 'BENCHMARK_TYPE:'. Skipping.", flush=True)
-                        continue
-
-                    try:
-                        benchmark_type_str = first_line.split(":", 1)[1].strip().upper()
-                        if benchmark_type_str not in ["1HOP", "2HOP", "3HOP"]:
-                            print(f"Warning: File {filename} has invalid BENCHMARK_TYPE '{benchmark_type_str}'. Must be 1HOP, 2HOP, or 3HOP. Skipping.", flush=True)
-                            continue
-                    except IndexError:
-                        print(f"Warning: File {filename} has malformed 'BENCHMARK_TYPE:' line. Skipping.", flush=True)
-                        continue
-
-                    file_queries_loaded = 0
-                    for line_idx, line in enumerate(f, start=1): # Start line_idx from 1 for user messages
-                        line = line.strip()
-                        if not line or line.startswith('#'): continue
-                        parts = line.split(' ::: ', 1)
-                        queries_to_run_orig.append({
-                            'id': query_id_counter,
-                            'text': parts[0],
-                            'expected': parts[1] if len(parts) > 1 else None,
-                            'benchmark_type': benchmark_type_str, # Add benchmark_type
-                            'source_file': filename
-                        })
-                        query_id_counter += 1
-                        file_queries_loaded +=1
-                    if file_queries_loaded == 0:
-                         print(f"Warning: File {filename} (Type: {benchmark_type_str}) contained no queries after the type definition. Skipping file's contribution to benchmark.", flush=True)
-
-            except FileNotFoundError: # Should not happen given os.isfile check, but defensive
-                 print(f"Warning: File {filename} not found during processing (should not occur). Skipping.", flush=True)
-            except Exception as e:
-                 print(f"Warning: Error reading query file {filename}: {e}. Skipping.", flush=True)
-    else: # Should be caught by required=True in argparse
-        exit("Error: --query-dir is a required argument.")
-
-
-    if not queries_to_run_orig: exit("No valid queries loaded from any file in the query directory. Exiting.")
+    all_query_files = [f for f in os.listdir(args.query_dir) if os.path.isfile(os.path.join(args.query_dir, f))]
+    if not all_query_files:
+        exit(f"Error: No files found in query directory: {args.query_dir}")
 
     if args.export_dir and not os.path.exists(args.export_dir):
         try: os.makedirs(args.export_dir); print(f"Created export directory: {args.export_dir}", flush=True)
@@ -769,130 +720,173 @@ if __name__ == "__main__":
     if args.export_dir: print(f"Verification exports (if any) to: {args.export_dir}", flush=True)
     print(f"Benchmark summary CSVs will be saved alongside their respective input query files in: {args.query_dir}", flush=True)
 
-    all_run_results_accumulator = []
-    cli_process = None
-    try:
-        cli_process = QueryCLIInteractiveProcess(
-            args.jar_path, args.db_file, args.index_dir,
-            "nash", "optimized", "optimized", # Hardcoded initial strategies
-            is_verbose=args.verbose
-        )
-        print("\n[BENCHMARK.PY] QueryCLI process initialized for interactive benchmarking.", flush=True)
+    total_files_processed = 0
+    total_csv_files_written = 0
 
-        temporal_strategies_base = ["naive", "nash"]
-        pushdown_strategies_base = ["none", "optimized"]
-        stitch_strategies_base = ["none", "optimized"]
+    for file_idx, current_filename in enumerate(all_query_files):
+        print(f"\n\n========== PROCESSING FILE {file_idx + 1}/{len(all_query_files)}: {current_filename} ==========", flush=True)
+        filepath = os.path.join(args.query_dir, current_filename)
 
-        cache_modes = ["cold"]
-        if args.full: cache_modes.append("warm")
+        queries_for_this_file = []
+        query_id_counter_local = 0
+        benchmark_type_for_file = None
 
-        for cache_mode in cache_modes:
-            print(f"\n========== RUNNING CACHE MODE: {cache_mode.upper()} ==========", flush=True)
+        # Infer benchmark_type_for_file from filename
+        fn_lower = current_filename.lower()
+        if "1hop" in fn_lower:
+            benchmark_type_for_file = "1HOP"
+        elif "2hop" in fn_lower:
+            benchmark_type_for_file = "2HOP"
+        elif "3hop" in fn_lower:
+            benchmark_type_for_file = "3HOP"
+        else:
+            print(f"Warning: Could not determine benchmark type (1HOP, 2HOP, 3HOP) from filename '{current_filename}'. Skipping this file.", flush=True)
+            continue
 
-            if cache_mode == "cold":
-                run_cold_mode(cli_process, queries_to_run_orig, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, all_run_results_accumulator)
-            elif cache_mode == "warm":
-                run_warm_mode(cli_process, queries_to_run_orig, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, all_run_results_accumulator)
-            # --- End of WARM CACHE ---
-    except (FileNotFoundError, TimeoutError, ConnectionAbortedError, RuntimeError) as e_cli_main:
-        print(f"\nCRITICAL SCRIPT ERROR related to QueryCLI process: {e_cli_main}", flush=True)
-        print(f"Traceback: {traceback.format_exc()}", flush=True)
-        print("Benchmark run ABORTED.", flush=True)
-    except KeyboardInterrupt:
-        print("\nBenchmark interrupted by user (Ctrl+C). Cleaning up...", flush=True)
-    except Exception as e_global: # Catch-all for unexpected errors in main benchmark loop
-        print(f"\nUNEXPECTED GLOBAL SCRIPT ERROR: {e_global}", flush=True)
-        print(f"Traceback: {traceback.format_exc()}", flush=True)
-    finally:
-        if cli_process:
-            print("\n[BENCHMARK.PY] Ensuring QueryCLI process is closed in finally block...", flush=True)
-            cli_process.close()
-        print("[BENCHMARK.PY] Script execution finished or aborted.", flush=True)
+        print(f"  Inferred benchmark type: {benchmark_type_for_file} for file: {current_filename}", flush=True)
 
-    if not all_run_results_accumulator:
-        print("\nNo benchmark results were collected. No summary CSV files will be generated.", flush=True)
-        exit(0)
-
-    print("\n========== BENCHMARK OVERALL SUMMARY (CONSOLE) ==========", flush=True)
-    for res_item in all_run_results_accumulator:
-        # Construct the summary line part by part for clarity
-        summary_line = (
-            f"  Q:{res_item['original_query_id']} File:{res_item['source_file']} BT:{res_item['benchmark_type']} C:{res_item['cache_mode']} " # Add new fields
-            f"T:{res_item['temporal_strategy']},P:{res_item['pushdown_strategy']},S:{res_item['stitch_strategy']} "
-        )
-        summary_line += f"AvgTime:{res_item['avg_time_ms']:.3f}ms " if res_item['avg_time_ms'] is not None else "AvgTime:N/A "
-        summary_line += f"Verify:{res_item['verification_status']}"
-        print(summary_line, flush=True)
-
-        if res_item['stderr_output'] and (args.verbose or "ERROR" in res_item['stderr_output'].upper() or "FAIL" in res_item['verification_status'].upper() or "TIMEOUT" in res_item['verification_status'].upper()):
-            # Print the query text first for context when there's an error
-            print(f"      Query Text: {res_item['query_text']}", flush=True)
-            indented_stderr = "\n".join([f"      Stderr: {line}" for line in res_item['stderr_output'].strip().split('\n')])
-            print(indented_stderr, flush=True)
-        if args.verbose and res_item['stdout_output']: # Only print stdout in summary if verbose
-             indented_stdout = "\n".join([f"      Stdout: {line}" for line in res_item['stdout_output'].strip().split('\n')])
-             print(indented_stdout, flush=True)
-
-
-    # Logic for exporting to multiple CSV files based on source_file and benchmark_type
-    print(f"\nExporting benchmark results to separate CSV files in {args.query_dir}...", flush=True)
-
-    # Define fieldnames once
-    fieldnames_csv = [
-        'original_query_id', 'query_text', 'expected_answer',
-        'benchmark_type', 'source_file',
-        'temporal_strategy', 'pushdown_strategy', 'stitch_strategy', 'cache_mode',
-        'avg_time_ms', 'individual_run_times_ms',
-        'verification_status', 'stderr_output', 'stdout_output'
-    ]
-
-    grouped_results = {}
-    for row_data in all_run_results_accumulator:
-        key = (row_data['source_file'], row_data['benchmark_type'])
-        if key not in grouped_results:
-            grouped_results[key] = []
-        grouped_results[key].append(row_data)
-
-    files_written_count = 0
-    for (source_file, benchmark_type), results_for_group in grouped_results.items():
-        original_filename_without_ext = os.path.splitext(source_file)[0]
-        output_csv_basename = f"{original_filename_without_ext}_{benchmark_type}_results.csv"
-
-        # ALWAYS save alongside the original query file in its directory
-        output_filepath = os.path.join(args.query_dir, output_csv_basename)
-
-        print(f"  Writing results for {source_file} (Type: {benchmark_type}) to {output_filepath}", flush=True)
         try:
-            with open(output_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                # Removed logic for reading BENCHMARK_TYPE from the first line.
+                # All lines are now considered potential queries or comments.
+                file_queries_loaded_count = 0
+                for line_num_in_file, line_content in enumerate(f, start=1): # Start from line 1
+                    line_content = line_content.strip()
+                    if not line_content or line_content.startswith('#'): continue # Skip empty lines and comments
+
+                    parts = line_content.split(' ::: ', 1)
+                    queries_for_this_file.append({
+                        'id': query_id_counter_local,
+                        'text': parts[0],
+                        'expected': parts[1] if len(parts) > 1 else None,
+                        'benchmark_type': benchmark_type_for_file, # Use inferred type
+                        'source_file': current_filename
+                    })
+                    query_id_counter_local += 1
+                    file_queries_loaded_count += 1
+
+                if file_queries_loaded_count == 0:
+                    print(f"Warning: File {current_filename} (Type: {benchmark_type_for_file}) contained no queries. Skipping this file's benchmarks.", flush=True)
+                    continue
+        except FileNotFoundError:
+            print(f"Warning: File {current_filename} not found during processing. Skipping.", flush=True)
+            continue
+        except Exception as e_file_read:
+            print(f"Warning: Error reading query file {current_filename}: {e_file_read}. Skipping.", flush=True)
+            continue
+
+        if not queries_for_this_file:
+            print(f"No valid queries loaded from {current_filename}. File will be skipped.", flush=True)
+            continue
+
+        total_files_processed += 1
+        results_for_this_file_accumulator = []
+        cli_process_for_file = None
+
+        try:
+            cli_process_for_file = QueryCLIInteractiveProcess(
+                args.jar_path, args.db_file, args.index_dir,
+                "nash", "optimized", "optimized", # Hardcoded initial strategies
+                is_verbose=args.verbose
+            )
+            print(f"\n[BENCHMARK.PY] QueryCLI process initialized for benchmarks from: {current_filename}", flush=True)
+
+            temporal_strategies_base = ["naive", "nash"]
+            pushdown_strategies_base = ["none", "optimized"]
+            stitch_strategies_base = ["none", "optimized"]
+
+            cache_modes_to_run = ["cold"]
+            if args.full: cache_modes_to_run.append("warm")
+
+            for cache_mode in cache_modes_to_run:
+                print(f"\n----- Running Cache Mode: {cache_mode.upper()} for {current_filename} -----", flush=True)
+
+                if cache_mode == "cold":
+                    run_cold_mode(cli_process_for_file, queries_for_this_file, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, results_for_this_file_accumulator)
+                elif cache_mode == "warm":
+                    run_warm_mode(cli_process_for_file, queries_for_this_file, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, results_for_this_file_accumulator)
+
+        except (FileNotFoundError, TimeoutError, ConnectionAbortedError, RuntimeError) as e_cli_main_file:
+            print(f"\nCRITICAL SCRIPT ERROR for file {current_filename} related to QueryCLI process: {e_cli_main_file}", flush=True)
+            print(f"Traceback: {traceback.format_exc()}", flush=True)
+            print(f"Benchmarks for {current_filename} ABORTED.", flush=True)
+        except KeyboardInterrupt:
+            print(f"\nBenchmark for {current_filename} interrupted by user (Ctrl+C). Cleaning up for this file...", flush=True)
+            # Decide if this should exit the whole script or just this file's processing
+            # For now, it will proceed to the finally block for this file and then to the next file.
+        except Exception as e_global_file:
+            print(f"\nUNEXPECTED SCRIPT ERROR during processing of {current_filename}: {e_global_file}", flush=True)
+            print(f"Traceback: {traceback.format_exc()}", flush=True)
+        finally:
+            if cli_process_for_file:
+                print(f"\n[BENCHMARK.PY] Ensuring QueryCLI process for {current_filename} is closed...", flush=True)
+                cli_process_for_file.close()
+            print(f"[BENCHMARK.PY] Finished processing benchmarks for {current_filename}.", flush=True)
+
+        if not results_for_this_file_accumulator:
+            print(f"\nNo benchmark results were collected for {current_filename}. No summary CSV will be generated for this file.", flush=True)
+            continue # Next file
+
+        # Console Summary for the current file
+        print(f"\n========== BENCHMARK SUMMARY FOR FILE: {current_filename} (Type: {benchmark_type_for_file}) ==========", flush=True)
+        for res_item in results_for_this_file_accumulator:
+            summary_line = (
+                f"  Q:{res_item['original_query_id']} C:{res_item['cache_mode']} " # File and BT removed as they are per-file context now
+                f"T:{res_item['temporal_strategy']},P:{res_item['pushdown_strategy']},S:{res_item['stitch_strategy']} "
+            )
+            summary_line += f"AvgTime:{res_item['avg_time_ms']:.3f}ms " if res_item['avg_time_ms'] is not None else "AvgTime:N/A "
+            summary_line += f"Verify:{res_item['verification_status']}"
+            print(summary_line, flush=True)
+
+            if res_item['stderr_output'] and (args.verbose or "ERROR" in res_item['stderr_output'].upper() or "FAIL" in res_item['verification_status'].upper() or "TIMEOUT" in res_item['verification_status'].upper()):
+                print(f"      Query Text (QID {res_item['original_query_id']}): {res_item['query_text']}", flush=True)
+                indented_stderr = "\n".join([f"      Stderr: {line}" for line in res_item['stderr_output'].strip().split('\n')])
+                print(indented_stderr, flush=True)
+            if args.verbose and res_item['stdout_output']:
+                 indented_stdout = "\n".join([f"      Stdout: {line}" for line in res_item['stdout_output'].strip().split('\n')])
+                 print(indented_stdout, flush=True)
+
+        # CSV Export for the current file
+        print(f"\nExporting benchmark results for {current_filename} to a CSV file...", flush=True)
+        fieldnames_csv = [
+            'original_query_id', 'query_text', 'expected_answer',
+            'benchmark_type', 'source_file', # benchmark_type and source_file are constant per CSV
+            'temporal_strategy', 'pushdown_strategy', 'stitch_strategy', 'cache_mode',
+            'avg_time_ms', 'individual_run_times_ms',
+            'verification_status', 'stderr_output', 'stdout_output'
+        ]
+        original_filename_no_ext = os.path.splitext(current_filename)[0]
+        # benchmark_type_for_file should be correctly set from file reading
+        output_csv_filename = f"{original_filename_no_ext}_{benchmark_type_for_file}_results.csv"
+        output_csv_filepath = os.path.join(args.query_dir, output_csv_filename)
+
+        print(f"  Writing results for {current_filename} (Type: {benchmark_type_for_file}) to {output_csv_filepath}", flush=True)
+        try:
+            with open(output_csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames_csv, extrasaction='ignore')
                 writer.writeheader()
-                for row_data_item in results_for_group:
+                for row_data_item in results_for_this_file_accumulator:
                     row_data_copy = row_data_item.copy()
-                    row_data_copy['individual_run_times_ms'] = ';'.join([f"{t:.3f}" for t in row_data_copy.get('individual_run_times_ms', []) if t is not None]) # Ensure t is not None
+                    row_data_copy['individual_run_times_ms'] = ';'.join([f"{t:.3f}" for t in row_data_copy.get('individual_run_times_ms', []) if t is not None])
 
                     if not args.verbose:
-                        # Default to empty string for stdout in CSV if not verbose
                         row_data_copy['stdout_output'] = ""
-                        # If verification happened via an export file (and was successful), note that.
-                        # This applies to both warm and cold modes where an export file might be generated.
-                        # We infer export file usage if export_dir is set and verification was PASSED.
                         if args.export_dir and row_data_copy['verification_status'] == "PASSED":
-                            if "VERIFY_EXPORT_WRITE_ERR" not in row_data_copy.get('stderr_output', ''): # Ensure export was successful
-                             row_data_copy['stdout_output'] = "See verification export file or run with --verbose"
-                        # If verification status indicates content (EMPTY, FAILED, TIMEOUT), but not via export file,
-                        # and not verbose, the original (shortened/non-verbose) stdout would have been stored
-                        # in all_run_results_accumulator, so it will be written as is.
-                        # If SKIPPED or NO_VERIFIABLE_CONTENT, it remains empty string.
-
+                            if "VERIFY_EXPORT_WRITE_ERR" not in row_data_copy.get('stderr_output', ''):
+                                row_data_copy['stdout_output'] = "See verification export file or run with --verbose"
                     writer.writerow(row_data_copy)
-            files_written_count += 1
-        except Exception as e_csv_export_multi:
-            print(f"  Error exporting benchmark results to CSV {output_filepath}: {e_csv_export_multi}\n{traceback.format_exc()}", flush=True)
+            total_csv_files_written += 1
+        except Exception as e_csv_export_file:
+            print(f"  Error exporting benchmark results for {current_filename} to CSV {output_csv_filepath}: {e_csv_export_file}\n{traceback.format_exc()}", flush=True)
 
-    if files_written_count > 0:
-        print(f"\nSuccessfully exported {files_written_count} benchmark result CSV file(s) to {args.query_dir}.", flush=True)
+    # --- End of loop over query files ---
+
+    if total_files_processed == 0:
+        print("\nNo query files were successfully processed from the directory.", flush=True)
+    elif total_csv_files_written == 0:
+        print(f"\nProcessed {total_files_processed} file(s), but no benchmark result CSV files were generated.", flush=True)
     else:
-        print(f"\nNo benchmark result CSV files were generated (e.g. no results for any group).", flush=True)
+        print(f"\nSuccessfully exported {total_csv_files_written} benchmark result CSV file(s) in total to {args.query_dir}.", flush=True)
 
     print("\nBenchmark script execution complete.", flush=True)
 

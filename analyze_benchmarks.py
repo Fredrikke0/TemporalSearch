@@ -12,7 +12,8 @@ STRATEGY_DISPLAY_NAMES = {
     ('naive', 'none', 'none'): "B",
     ('naive', 'none', 'optimized'): "S",
     ('nash', 'none', 'optimized'): "S+N",
-    ('nash', 'optimized', 'optimized'): "S+N+P"
+    ('naive', 'optimized', 'optimized'): "S+P",
+    ('nash', 'optimized', 'optimized'): "S+P+N"
 }
 
 def get_hop_type(query_text):
@@ -238,44 +239,46 @@ Examples:
 
     if aggregated_data:
         hop_type_in_title = None
-        title_lower = table_title.lower()
-        if "1-hop" in title_lower or "1 hop" in title_lower:
+        filename_lower = csv_path.lower()
+
+        # Hop type detection: ONLY from filename
+        if "1hop" in filename_lower:
             hop_type_in_title = "1-hop"
-        elif "2-hops" in title_lower or "2 hops" in title_lower:
+        elif "2hop" in filename_lower:
             hop_type_in_title = "2-hops"
-        elif "3-hops" in title_lower or "3 hops" in title_lower:
+        elif "3hop" in filename_lower:
             hop_type_in_title = "3-hops"
 
         strategies_to_render = []
 
         if not hop_type_in_title:
-            print(f"Warning: Hop type ('1-hop', '2-hops', '3-hops') not detected in table title: '{table_title}'.", file=sys.stderr)
+            print(f"Warning: Hop type ('1hop', '2hop', '3hop') not detected in CSV filename ('{csv_path}').", file=sys.stderr)
             print("Displaying table with all strategy permutations defined by the analyzer.", file=sys.stderr)
-            print("To use specific row formatting, include '1-hop', '2-hops', or '3-hops' in the --table-title argument.", file=sys.stderr)
+            print("To use specific row formatting, ensure hop type is in the CSV filename (e.g., 'my_1hop_data.csv').", file=sys.stderr)
             strategies_to_render = all_defined_strategy_permutations
         else:
             # Define strategy tuples: (temporal, pushdown, stitch)
-            # These must match the keys used in analyze_benchmarks: 'naive'/'nash', 'none'/'optimized', 'none'/'optimized'
-            baseline = ('naive', 'none', 'none')
-            stitch_optimized = ('naive', 'none', 'optimized')
-            stitch_nash_optimized = ('nash', 'none', 'optimized')
-            all_optimized = ('nash', 'optimized', 'optimized') # Stitch + Nash + Pushdown
+            baseline = ('naive', 'none', 'none')          # B
+            stitch_optimized = ('naive', 'none', 'optimized') # S
+            stitch_nash_optimized = ('nash', 'none', 'optimized') # S+N
+            stitch_pushdown_optimized = ('naive', 'optimized', 'optimized') # S+P
+            all_optimized_spn = ('nash', 'optimized', 'optimized') # S+P+N (was all_optimized)
 
             if hop_type_in_title == "1-hop":
                 strategies_to_render = [
                     baseline,
                     stitch_optimized,
-                    stitch_nash_optimized
+                    stitch_nash_optimized  # S+N
                 ]
-                print(f"Detected {hop_type_in_title}. Displaying strategies: Baseline, Stitch Optimized, Stitch+Nash Optimized.")
+                print(f"Detected {hop_type_in_title}. Displaying strategies: B, S, S+N.")
             elif hop_type_in_title in ["2-hops", "3-hops"]:
                 strategies_to_render = [
-                    baseline,
-                    stitch_optimized,
-                    stitch_nash_optimized,
-                    all_optimized
+                    baseline,                 # B
+                    stitch_optimized,         # S
+                    stitch_pushdown_optimized,# S+P
+                    all_optimized_spn         # S+P+N
                 ]
-                print(f"Detected {hop_type_in_title}. Displaying strategies: Baseline, Stitch Optimized, Stitch+Nash Optimized, Stitch+Nash+Pushdown Optimized.")
+                print(f"Detected {hop_type_in_title}. Displaying strategies: B, S, S+P, S+P+N.")
             else: # Should not be reached if hop_type_in_title is one of the above or None
                 print(f"Internal Warning: Unhandled hop_type_in_title '{hop_type_in_title}'. Falling back to all defined permutations.", file=sys.stderr)
                 strategies_to_render = all_defined_strategy_permutations

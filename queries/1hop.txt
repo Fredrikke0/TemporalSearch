@@ -26,9 +26,9 @@ SELECT p, COUNT(*) FROM articles WHERE CONTAINS('chancellor') AND CONTAINS('germ
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('chancellor') AND CONTAINS('germany') AND DATE(= 1997) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC ::: helmut kohl
 SELECT p, COUNT(*) FROM articles WHERE CONTAINS('chancellor') AND CONTAINS('germany') AND DATE(= 1991) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 # list of norwegian prime ministers
-SELECT p, COUNT(*) FROM articles WHERE CONTAINS('prime minister') AND CONTAINS('norway') AND DATE(< 2050) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT p, COUNT(*) FROM articles WHERE CONTAINS('prime minister') AND CONTAINS('norway') AND DATE(< 2025) AND NER(PERSON) BIND p GROUP BY p GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 # list of prime ministers any country any date
-SELECT p, country, date, COUNT(*) FROM articles WHERE CONTAINS('prime minister') AND NER(COUNTRY) BIND country AND DATE(< 2050) BIND date AND NER(PERSON) BIND p AND NOT(CONTAINS('president')) GROUP BY p, country, date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT p, country, date, COUNT(*) FROM articles WHERE CONTAINS('prime minister') AND NER(COUNTRY) BIND country AND DATE(< 2025) BIND date AND NER(PERSON) BIND p AND NOT(CONTAINS('president')) GROUP BY p, country, date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 # list of prime ministers any country specific year
 SELECT p, country, date, COUNT(*) FROM articles WHERE CONTAINS('prime minister') AND NER(COUNTRY) BIND country AND DATE(= 1991) BIND date AND NER(PERSON) BIND p AND NOT(CONTAINS('president')) GROUP BY p, country, date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 SELECT p, country, date, COUNT(*) FROM articles WHERE CONTAINS('prime minister') AND NER(COUNTRY) BIND country AND DATE(= 1980) BIND date AND NER(PERSON) BIND p AND NOT(CONTAINS('president')) GROUP BY p, country, date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
@@ -51,12 +51,12 @@ SELECT p, COUNT(*) FROM articles WHERE CONTAINS('United States') AND CONTAINS('p
 SELECT country, rate, date FROM articles WHERE CONTAINS('unemployment') AND NER(COUNTRY) BIND country AND NER(PERCENT) BIND rate AND DATE(< 2025) BIND date GRANULARITY SENTENCE
 
 # When did Armstrong walk on the moon?
-SELECT date, person, COUNT(*) FROM source WHERE CONTAINS('moon') AND NER(PERSON, 'Neil Armstrong') BIND person AND DATE(< 2050) BIND date GROUP BY person, date GRANULARITY SENTENCE ORDER BY COUNT(*)
+SELECT date, person, COUNT(*) FROM source WHERE CONTAINS('moon') AND NER(PERSON, 'Neil Armstrong') BIND person AND DATE(< 2025) BIND date GROUP BY person, date GRANULARITY SENTENCE ORDER BY COUNT(*)
 SELECT person FROM source WHERE CONTAINS('walk moon') AND DATE(= 1969) AND NER(PERSON) BIND person GRANULARITY SENTENCE
 # List of Apollo missions and astronauts
 # SELECT person, mission FROM source WHERE DEPENDS('Apollo','nummod', *) AND NER(NUMBER) BIND mission AND NER(PERSON) BIND person GRANULARITY SENTENCE
 # Apollo mission dates
-SELECT date, mission FROM source WHERE DEPENDS('Apollo','nummod', *) AND NER(NUMBER) BIND mission AND DATE(< 2050) BIND date GRANULARITY SENTENCE
+SELECT date, mission FROM source WHERE DEPENDS('Apollo','nummod', *) AND NER(NUMBER) BIND mission AND DATE(< 2025) BIND date GRANULARITY SENTENCE
 
 # Mandela release date
 SELECT T, COUNT(*) FROM articles WHERE NER(PERSON, 'Nelson Mandela') AND CONTAINS('release') AND DATE(= 1990) BIND T GROUP BY T GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
@@ -101,10 +101,10 @@ SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Priz
 SELECT personName, event_date, COUNT(*) FROM articles WHERE CONTAINS('Nobel Prize') AND DATE(= 2003) BIND event_date AND NER(PERSON) BIND personName GROUP BY personName, event_date GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 
 # Scientists and discoveries with dates
-SELECT personName, discoveryDate, COUNT(*) FROM articles WHERE CONTAINS('discovered') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1900,1920]) BIND discoveryDate GROUP BY personName, discoveryDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, discoveryDate, COUNT(*) FROM articles WHERE CONTAINS('invented') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1920,1940]) BIND discoveryDate GROUP BY personName, discoveryDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, discoveryDate, COUNT(*) FROM articles WHERE CONTAINS('physicist') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1900,1950]) BIND discoveryDate GROUP BY personName, discoveryDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, discoveryDate, COUNT(*) FROM articles WHERE CONTAINS('chemist') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1950,1980]) BIND discoveryDate GROUP BY personName, discoveryDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, discoveryDate, COUNT(*) FROM articles WHERE CONTAINS('discovered') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1990,2000]) BIND discoveryDate GROUP BY personName, discoveryDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, discoveryDate, COUNT(*) FROM articles WHERE CONTAINS('invented') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1925,1945]) BIND discoveryDate GROUP BY personName, discoveryDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, discoveryDate, COUNT(*) FROM articles WHERE CONTAINS('physicist') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1945,1975]) BIND discoveryDate GROUP BY personName, discoveryDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, discoveryDate, COUNT(*) FROM articles WHERE CONTAINS('chemist') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1975,1990]) BIND discoveryDate GROUP BY personName, discoveryDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 
 # Musicians and performances
 SELECT personName, performanceDate, COUNT(*) FROM articles WHERE CONTAINS('concert') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1960,1980]) BIND performanceDate GROUP BY personName, performanceDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
@@ -113,8 +113,8 @@ SELECT personName, performanceDate, COUNT(*) FROM articles WHERE CONTAINS('recor
 SELECT personName, performanceDate, COUNT(*) FROM articles WHERE CONTAINS('singer') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1950,1970]) BIND performanceDate GROUP BY personName, performanceDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 
 # Authors and publications
-SELECT personName, pubDate, COUNT(*) FROM articles WHERE CONTAINS('published') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1900,1920]) BIND pubDate GROUP BY personName, pubDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
-SELECT personName, pubDate, COUNT(*) FROM articles WHERE CONTAINS('published') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1920,1940]) BIND pubDate GROUP BY personName, pubDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, pubDate, COUNT(*) FROM articles WHERE CONTAINS('published') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1945,1950]) BIND pubDate GROUP BY personName, pubDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
+SELECT personName, pubDate, COUNT(*) FROM articles WHERE CONTAINS('published') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1925,1945]) BIND pubDate GROUP BY personName, pubDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 SELECT personName, pubDate, COUNT(*) FROM articles WHERE CONTAINS('novelist') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1950,1970]) BIND pubDate GROUP BY personName, pubDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 SELECT personName, pubDate, COUNT(*) FROM articles WHERE CONTAINS('author') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1960,1980]) BIND pubDate GROUP BY personName, pubDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
 SELECT personName, pubDate, COUNT(*) FROM articles WHERE CONTAINS('poet') AND NER(PERSON) BIND personName AND DATE(INTERSECT [1940,1960]) BIND pubDate GROUP BY personName, pubDate GRANULARITY SENTENCE ORDER BY COUNT(*) DESC
