@@ -134,10 +134,21 @@ public record Ner(
         sb.append("NER(").append(entityType);
 
         if (!targets.isEmpty()) {
+            final int MAX_TARGETS_TO_DISPLAY = 10;
             if (targets.size() == 1) {
                 sb.append(", ").append(targets.get(0));
-            } else {
+            } else if (targets.size() <= MAX_TARGETS_TO_DISPLAY) {
                 sb.append(", [").append(String.join(", ", targets)).append("]");
+            } else {
+                List<String> sublist = targets.subList(0, MAX_TARGETS_TO_DISPLAY);
+                int remaining = targets.size() - MAX_TARGETS_TO_DISPLAY;
+                sb.append(", [")
+                  .append(String.join(", ", sublist))
+                  .append(", ... (and ")
+                  .append(remaining)
+                  .append(" more target")
+                  .append(remaining > 1 ? "s" : "") // Pluralize 'target' if needed
+                  .append(")]");
             }
         }
         sb.append(")");

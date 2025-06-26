@@ -123,7 +123,11 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
     sanitized_title_for_label = re.sub(r'[^a-zA-Z0-9_]', '', table_title.lower().replace(' ', '_'))
     latex_string += f"\\label{{fig:benchmark_summary_{sanitized_title_for_label}}}\n"
 
-    latex_string += "\\begin{tabular}{@{}cS[table-format=5.2(2), separate-uncertainty, group-digits=false, mode=math]S[table-format=5.2(2), separate-uncertainty, group-digits=false, mode=math]@{}}\n"
+    latex_string += "\\begin{tabular}{@{}\n"
+    latex_string += "c\n"
+    latex_string += "S[table-format=5.2(6), separate-uncertainty, group-digits=false, mode=math]\n"
+    latex_string += "S[table-format=5.2(6), separate-uncertainty, group-digits=false, mode=math]\n"
+    latex_string += "@{}}\n"
     latex_string += "\\toprule\n"
     latex_string += "Strategy & {Cold (ms)} & {Warm (ms)} \\\\ \n"
     latex_string += "\\midrule\n"
@@ -154,7 +158,6 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
             is_last_row_to_highlight = (strat_tuple == last_renderable_strat_tuple_with_data)
 
             if is_last_row_to_highlight:
-                latex_string += f"\\rowstyle{{\\bfseries}} \\\\ \n"
                 latex_string += f"{strategy_display_name} & {cold_val} & {warm_val} \\\\ \n"
             else:
                 latex_string += f"{strategy_display_name} & {cold_val} & {warm_val} \\\\ \n"
