@@ -218,7 +218,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                             try {
                                 int targetId = synonymManager.getId(target.toLowerCase());
                                 targetAnnotationValueIds.add(targetId);
-                                logger.debug("Stitch with specific NER entity: '{}', targetId: {}", target, targetId);
+                                logger.trace("Stitch with specific NER entity: '{}', targetId: {}", target, targetId);
                             } catch (Exception e) {
                                 logger.warn("Failed to get synonym ID for specific NER entity value '{}' in StitchedExecutor. This entity is unknown or DB error. Skipping this target.", target, e);
                             }
@@ -235,7 +235,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                     try {
                         int targetId = synonymManager.getId(specificPosValue.toLowerCase());
                         targetAnnotationValueIds.add(targetId);
-                        logger.debug("Stitch with specific POS term: '{}' (for POS tag {}), targetId: {}",
+                        logger.trace("Stitch with specific POS term: '{}' (for POS tag {}), targetId: {}",
                                      specificPosValue, posCond.posTag().toUpperCase(), targetId);
                     } catch (Exception e) {
                         logger.warn("Failed to get synonym ID for specific POS term value '{}' (for POS tag {}) in StitchedExecutor. This term is unknown or DB error. Returning empty for this stitch.",

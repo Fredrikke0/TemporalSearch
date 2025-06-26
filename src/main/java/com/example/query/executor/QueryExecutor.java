@@ -36,6 +36,7 @@ import com.example.query.result.TableResultService;
  */
 public class QueryExecutor {
     private static final Logger logger = LoggerFactory.getLogger(QueryExecutor.class);
+    private static final int NER_PUSHDOWN_SYNONYM_THRESHOLD = 100_000; // Threshold for NER pushdown. Causes slowdowns for large synonym sets.
 
     private ConditionExecutorFactory executorFactory;
     private TableResultService tableResultService;
@@ -850,6 +851,13 @@ public class QueryExecutor {
             }
         }
 
+        // Check if NER pushdown should be skipped due to too many synonyms
+        if (leadingSynonymIds.size() > NER_PUSHDOWN_SYNONYM_THRESHOLD) {
+            logger.info("NER pushdown for dependent step (LHS alias: '{}', key: '{}'; RHS alias: '{}', source: '{}') skipped. Number of leading synonym IDs ({}) exceeds threshold ({}). Dependent subquery will execute without NER pre-filter for this step.",
+                        leadingAlias, leadingEntityKeyName, dependentAlias, dependentQuery.source(), leadingSynonymIds.size(), NER_PUSHDOWN_SYNONYM_THRESHOLD);
+            return executeWithRequirements(dependentQuery, indexes, QueryAttributeAnalyzer.analyze(dependentQuery, parentRequirements), new SubqueryContext()); // Use parentRequirements for analysis consistency
+        }
+
         if (leadingSynonymIds.isEmpty()) {
             logger.info("Leading side (alias: '{}', key: '{}') for NER dependent step provided no usable synonym IDs. Dependent subquery '{}' (source: '{}') will execute without NER pre-filter for this step.",
                         leadingAlias, leadingEntityKeyName, dependentAlias, dependentQuery.source());
@@ -892,7 +900,7 @@ public class QueryExecutor {
         );
 
         logger.debug("Executing modified dependent query for NER pushdown: alias '{}' (source '{}')", dependentAlias, modifiedDependentQuery.source());
-        QueryResultSoA result = executeWithRequirements(modifiedDependentQuery, indexes, QueryAttributeAnalyzer.analyze(modifiedDependentQuery), new SubqueryContext());
+        QueryResultSoA result = executeWithRequirements(modifiedDependentQuery, indexes, QueryAttributeAnalyzer.analyze(modifiedDependentQuery, parentRequirements), new SubqueryContext()); // Use parentRequirements
         resolveSynonymIdsInSoA(result, modifiedDependentQuery);
         logger.info("Modified dependent query for NER pushdown (alias '{}') executed. Found {} matches.", dependentAlias, result.size());
         return result;

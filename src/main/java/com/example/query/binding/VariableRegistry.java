@@ -39,7 +39,7 @@ public class VariableRegistry {
         producers.computeIfAbsent(qualifiedName, k -> ConcurrentHashMap.newKeySet())
                 .add(var);
 
-        logger.debug("Registered producer variable: {} with type {} from condition {}",
+        logger.trace("Registered producer variable: {} with type {} from condition {}",
                     qualifiedName, type, conditionType);
 
         return var;
@@ -59,7 +59,7 @@ public class VariableRegistry {
         consumers.computeIfAbsent(qualifiedName, k -> ConcurrentHashMap.newKeySet())
                 .add(var);
 
-        logger.debug("Registered consumer variable: {} with type {} from condition {}",
+        logger.trace("Registered consumer variable: {} with type {} from condition {}",
                     qualifiedName, type, conditionType);
 
         return var;
@@ -73,7 +73,7 @@ public class VariableRegistry {
      */
     public Set<ProducerVariable> getProducers(String qualifiedName) {
         Set<ProducerVariable> result = producers.getOrDefault(qualifiedName, Collections.emptySet());
-        logger.debug("getProducers('{}') returning {} producers", qualifiedName, result.size());
+        logger.trace("getProducers('{}') returning {} producers", qualifiedName, result.size());
         return Collections.unmodifiableSet(result);
     }
 
@@ -85,7 +85,7 @@ public class VariableRegistry {
      */
     public Set<ConsumerVariable> getConsumers(String qualifiedName) {
         Set<ConsumerVariable> result = consumers.getOrDefault(qualifiedName, Collections.emptySet());
-        logger.debug("getConsumers('{}') returning {} consumers", qualifiedName, result.size());
+        logger.trace("getConsumers('{}') returning {} consumers", qualifiedName, result.size());
         return Collections.unmodifiableSet(result);
     }
 
@@ -97,7 +97,7 @@ public class VariableRegistry {
      */
     public boolean isProduced(String qualifiedName) {
         boolean result = producers.containsKey(qualifiedName) && !producers.get(qualifiedName).isEmpty();
-        logger.debug("isProduced('{}') returning {}", qualifiedName, result);
+        logger.trace("isProduced('{}') returning {}", qualifiedName, result);
         return result;
     }
 
@@ -110,7 +110,7 @@ public class VariableRegistry {
         Set<String> allNames = new HashSet<>();
         allNames.addAll(producers.keySet());
         allNames.addAll(consumers.keySet());
-        logger.debug("getAllVariableNames() returning {} variables: {}", allNames.size(), allNames);
+        logger.trace("getAllVariableNames() returning {} variables: {}", allNames.size(), allNames);
         return Collections.unmodifiableSet(allNames);
     }
 
@@ -221,9 +221,8 @@ public class VariableRegistry {
             }
         }
 
-        logger.debug("Validate() result: {} errors", errors.size());
         if (!errors.isEmpty()) {
-            logger.debug("Validation errors: {}", errors);
+            logger.warn("Validation errors: {}", errors);
         }
 
         return errors;
@@ -235,7 +234,7 @@ public class VariableRegistry {
     public void clear() {
         producers.clear();
         consumers.clear();
-        logger.debug("Registry cleared");
+        logger.trace("Registry cleared");
     }
 
     /**
