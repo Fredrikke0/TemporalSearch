@@ -127,9 +127,10 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
     latex_string += "c\n"
     latex_string += "S[table-format=5.2(6), separate-uncertainty, group-digits=false, mode=math]\n"
     latex_string += "S[table-format=5.2(6), separate-uncertainty, group-digits=false, mode=math]\n"
+    latex_string += "S[table-format=4.1, table-sign-mantissa=true, table-auto-round=false, table-alignment=right]\n"
     latex_string += "@{}}\n"
     latex_string += "\\toprule\n"
-    latex_string += "Strategy & {Cold (ms)} & {Warm (ms)} \\\\ \n"
+    latex_string += "Strategy & {Cold (ms)} & {Warm (ms)} & {\\% Improv.} \\\\ \n"
     latex_string += "\\midrule\n"
 
     renderable_tuples_with_data = [
@@ -138,9 +139,10 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
     ]
 
     if not renderable_tuples_with_data:
-        latex_string += "\\multicolumn{3}{c}{No data available for selected strategies.} \\\\\\\\ \\n"
+        latex_string += "\\multicolumn{4}{c}{No data available for selected strategies.} \\\\\\\\ \n"
     else:
         last_renderable_strat_tuple_with_data = renderable_tuples_with_data[-1]
+        prev_row_avg_time = None # Initialize for improvement calculation
 
         for i, strat_tuple in enumerate(renderable_tuples_with_data):
             temporal, pushdown, stitch = strat_tuple
@@ -155,15 +157,39 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
                 f"{temporal.capitalize()}, {pushdown.replace('none', 'naive').capitalize()}, {stitch.replace('none', 'naive').capitalize()}"
             )
 
+            # Calculate current row average time and improvement
+            current_cold_mean = cold_stats['mean'] if cold_stats['count'] > 0 else None
+            current_warm_mean = warm_stats['mean'] if warm_stats['count'] > 0 else None
+            current_row_avg_time = None
+            improvement_val_for_siunitx = "{--}" # Default for LaTeX S-column (text)
+
+            if current_cold_mean is not None and current_warm_mean is not None:
+                current_row_avg_time = (current_cold_mean + current_warm_mean) / 2.0
+            elif current_cold_mean is not None:
+                current_row_avg_time = current_cold_mean
+            elif current_warm_mean is not None:
+                current_row_avg_time = current_warm_mean
+
+            if prev_row_avg_time is not None and current_row_avg_time is not None and abs(prev_row_avg_time) > 1e-9:
+                percentage_improvement = ((prev_row_avg_time - current_row_avg_time) / prev_row_avg_time) * 100
+                if percentage_improvement > 0:
+                    improvement_val_for_siunitx = f"\color{{ForestGreen}}{{{percentage_improvement:.1f}\\%}}"
+                else:
+                    improvement_val_for_siunitx = f"\color{{red}}{{{percentage_improvement:.1f}\\%}}"
+
             is_last_row_to_highlight = (strat_tuple == last_renderable_strat_tuple_with_data)
 
             if is_last_row_to_highlight:
-                latex_string += f"{strategy_display_name} & {cold_val} & {warm_val} \\\\ \n"
+                latex_string += f"{strategy_display_name} & {cold_val} & {warm_val} & {improvement_val_for_siunitx} \\\\ \n"
             else:
-                latex_string += f"{strategy_display_name} & {cold_val} & {warm_val} \\\\ \n"
+                latex_string += f"{strategy_display_name} & {cold_val} & {warm_val} & {improvement_val_for_siunitx} \\\\ \n"
 
             if strat_tuple != last_renderable_strat_tuple_with_data:
                 latex_string += "\\midrule\n"
+
+            # Update prev_row_avg_time for the next iteration
+            if current_row_avg_time is not None:
+                prev_row_avg_time = current_row_avg_time
 
     latex_string += "\\bottomrule\n"
     latex_string += "\\end{tabular}\n"
@@ -185,8 +211,11 @@ def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULT
 
     output.append("-" * 80) # Adjusted width
     # Updated header for a single strategy column, adjusted width
-    output.append(f"{'Strategy':<35} {'Cold (ms)':<20} {'Warm (ms)':<20}")
-    output.append("-" * 80) # Adjusted width
+    header_line = f"{'Strategy':<35} {'Cold (ms)':<20} {'Warm (ms)':<20} {'% Improv.':<10}"
+    output.append(header_line)
+    output.append("-" * len(header_line)) # Adjusted width
+
+    prev_row_avg_time = None # Initialize for improvement calculation
 
     for strat_tuple in strategy_tuples:
         temporal, pushdown, stitch = strat_tuple
@@ -197,14 +226,35 @@ def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULT
                 f"{temporal.capitalize()}/{pushdown.replace('none', 'naive').capitalize()}/{stitch.replace('none', 'naive').capitalize()}"
             )
 
-            cold_stats = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
-            warm_stats = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
+            cold_s = stats[strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
+            warm_s = stats[strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
 
-            cold_str = f"{cold_stats['mean']:.2f} ± {cold_stats['std']:.2f}" if cold_stats['count'] > 0 else "N/A"
-            warm_str = f"{warm_stats['mean']:.2f} ± {warm_stats['std']:.2f}" if warm_stats['count'] > 0 else "N/A"
+            cold_str = f"{cold_s['mean']:.2f} ± {cold_s['std']:.2f}" if cold_s['count'] > 0 else "N/A"
+            warm_str = f"{warm_s['mean']:.2f} ± {warm_s['std']:.2f}" if warm_s['count'] > 0 else "N/A"
+
+            # Calculate current row average time and improvement
+            current_cold_mean = cold_s['mean'] if cold_s['count'] > 0 else None
+            current_warm_mean = warm_s['mean'] if warm_s['count'] > 0 else None
+            current_row_avg_time = None
+            improvement_display_str = "N/A"
+
+            if current_cold_mean is not None and current_warm_mean is not None:
+                current_row_avg_time = (current_cold_mean + current_warm_mean) / 2.0
+            elif current_cold_mean is not None:
+                current_row_avg_time = current_cold_mean
+            elif current_warm_mean is not None:
+                current_row_avg_time = current_warm_mean
+
+            if prev_row_avg_time is not None and current_row_avg_time is not None and abs(prev_row_avg_time) > 1e-9:
+                percentage_improvement = ((prev_row_avg_time - current_row_avg_time) / prev_row_avg_time) * 100
+                improvement_display_str = f"{percentage_improvement:.1f}%"
 
             # Use the new strategy_name and adjusted width
-            output.append(f"{strategy_name:<35} {cold_str:<20} {warm_str:<20}")
+            output.append(f"{strategy_name:<35} {cold_str:<20} {warm_str:<20} {improvement_display_str:<10}")
+
+            # Update prev_row_avg_time for the next iteration
+            if current_row_avg_time is not None:
+                prev_row_avg_time = current_row_avg_time
 
     return "\n ".join(output)
 
