@@ -516,6 +516,7 @@ class QueryCLIInteractiveProcess:
 
         command = [
             "java",
+            "-Xmx80G",
             "--add-opens=java.base/java.lang=ALL-UNNAMED",
             "--enable-native-access=ALL-UNNAMED",
             "--sun-misc-unsafe-memory-access=allow",
