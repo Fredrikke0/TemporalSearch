@@ -846,47 +846,48 @@ if __name__ == "__main__":
 
         total_files_processed += 1
         results_for_this_file_accumulator = []
-        cli_process_for_file = None
 
-        try:
-            cli_process_for_file = QueryCLIInteractiveProcess(
-                args.jar_path, args.db_file, args.index_dir,
-                "nash", "optimized", "optimized", # Hardcoded initial strategies
-                is_verbose=args.verbose
-            )
-            print(f"\n[BENCHMARK.PY] QueryCLI process initialized for benchmarks from: {current_filename}", flush=True)
+        temporal_strategies_base = ["naive", "nash"]
+        pushdown_strategies_base = ["none", "optimized"]
+        stitch_strategies_base = ["none", "optimized"]
 
-            temporal_strategies_base = ["naive", "nash"]
-            pushdown_strategies_base = ["none", "optimized"]
-            stitch_strategies_base = ["none", "optimized"]
+        cache_modes_to_run = ["cold"]
+        if args.full: cache_modes_to_run.append("warm")
 
-            cache_modes_to_run = ["cold"]
-            if args.full: cache_modes_to_run.append("warm")
-
-            for cache_mode in cache_modes_to_run:
-                print(f"\n----- Running Cache Mode: {cache_mode.upper()} for {current_filename} -----", flush=True)
+        for cache_mode in cache_modes_to_run:
+            print(f"\n----- Running Cache Mode: {cache_mode.upper()} for {current_filename} -----", flush=True)
+            cli_process_for_mode = None
+            try:
+                cli_process_for_mode = QueryCLIInteractiveProcess(
+                    args.jar_path, args.db_file, args.index_dir,
+                    "nash", "optimized", "optimized", # Hardcoded initial strategies
+                    is_verbose=args.verbose
+                )
+                print(f"\n[BENCHMARK.PY] QueryCLI process initialized for '{cache_mode}' mode on file: {current_filename}", flush=True)
 
                 if cache_mode == "cold":
-                    run_cold_mode(cli_process_for_file, queries_for_this_file, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, results_for_this_file_accumulator)
+                    run_cold_mode(cli_process_for_mode, queries_for_this_file, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, results_for_this_file_accumulator)
                 elif cache_mode == "warm":
-                    run_warm_mode(cli_process_for_file, queries_for_this_file, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, results_for_this_file_accumulator)
+                    run_warm_mode(cli_process_for_mode, queries_for_this_file, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, results_for_this_file_accumulator)
 
-        except (FileNotFoundError, TimeoutError, ConnectionAbortedError, RuntimeError) as e_cli_main_file:
-            print(f"\nCRITICAL SCRIPT ERROR for file {current_filename} related to QueryCLI process: {e_cli_main_file}", flush=True)
-            print(f"Traceback: {traceback.format_exc()}", flush=True)
-            print(f"Benchmarks for {current_filename} ABORTED.", flush=True)
-        except KeyboardInterrupt:
-            print(f"\nBenchmark for {current_filename} interrupted by user (Ctrl+C). Cleaning up for this file...", flush=True)
-            # Decide if this should exit the whole script or just this file's processing
-            # For now, it will proceed to the finally block for this file and then to the next file.
-        except Exception as e_global_file:
-            print(f"\nUNEXPECTED SCRIPT ERROR during processing of {current_filename}: {e_global_file}", flush=True)
-            print(f"Traceback: {traceback.format_exc()}", flush=True)
-        finally:
-            if cli_process_for_file:
-                print(f"\n[BENCHMARK.PY] Ensuring QueryCLI process for {current_filename} is closed...", flush=True)
-                cli_process_for_file.close()
-            print(f"[BENCHMARK.PY] Finished processing benchmarks for {current_filename}.", flush=True)
+            except (FileNotFoundError, TimeoutError, ConnectionAbortedError, RuntimeError) as e_cli_main_file:
+                print(f"\nCRITICAL SCRIPT ERROR for file {current_filename} in '{cache_mode}' mode related to QueryCLI process: {e_cli_main_file}", flush=True)
+                print(f"Traceback: {traceback.format_exc()}", flush=True)
+                print(f"Benchmarks for {current_filename} in this mode and subsequent modes will be ABORTED.", flush=True)
+                break # Exit the loop over cache modes for this file
+            except KeyboardInterrupt:
+                print(f"\nBenchmark for {current_filename} in '{cache_mode}' mode interrupted by user (Ctrl+C). Cleaning up...", flush=True)
+                # This will fall through to finally, then exit the script because of the outer loop structure.
+                raise
+            except Exception as e_global_file:
+                print(f"\nUNEXPECTED SCRIPT ERROR during processing of {current_filename} in '{cache_mode}' mode: {e_global_file}", flush=True)
+                print(f"Traceback: {traceback.format_exc()}", flush=True)
+                break # Exit the loop over cache modes for this file
+            finally:
+                if cli_process_for_mode:
+                    print(f"\n[BENCHMARK.PY] Ensuring QueryCLI process for '{cache_mode}' mode on {current_filename} is closed...", flush=True)
+                    cli_process_for_mode.close()
+                print(f"[BENCHMARK.PY] Finished '{cache_mode}' mode for {current_filename}.", flush=True)
 
         if not results_for_this_file_accumulator:
             print(f"\nNo benchmark results were collected for {current_filename}. No summary CSV will be generated for this file.", flush=True)
