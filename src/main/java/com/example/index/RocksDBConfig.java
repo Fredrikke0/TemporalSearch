@@ -23,7 +23,7 @@ public class RocksDBConfig {
     }
 
     public static final long WRITE_BUFFER_SIZE = 256L * 1024 * 1024;
-    public static final long BLOCK_CACHE_SIZE = 100L * 1024 * 1024 * 1024;
+    public static final long BLOCK_CACHE_SIZE = 150L * 1024 * 1024 * 1024;
     public static final int BLOOM_FILTER_BITS_PER_KEY = 10;
     public static final boolean BLOOM_FILTER_USE_BLOCK_BASED_BUILDER = false;
 

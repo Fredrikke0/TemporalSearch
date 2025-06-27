@@ -384,12 +384,10 @@
                 <configuration>
                     <mainClass>com.example.QueryCLI</mainClass>
                     <vmArgs>
-                        -Xss16m
                         -XX:+UseG1GC
-                        -XX:MaxGCPauseMillis=200
-                        -XX:+UseStringDeduplication
-                        -XX:MaxRAMPercentage=80
-                        --add-opens=java.base/sun.misc=ALL-UNNAMED
+                        --add-opens=java.base/java.lang=ALL-UNNAMED
+                        --enable-native-access=ALL-UNNAMED
+                        --sun-misc-unsafe-memory-access=allow
                     </vmArgs>
                 </configuration>
             </plugin>
