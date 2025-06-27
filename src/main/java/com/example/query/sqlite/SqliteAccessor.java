@@ -83,7 +83,15 @@ public class SqliteAccessor {
 
         try {
             Class.forName("org.sqlite.JDBC");
-            return DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+            Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+            // Set PRAGMAs for performance
+            try (var stmt = conn.createStatement()) {
+                stmt.execute("PRAGMA journal_mode=WAL;");
+                stmt.execute("PRAGMA synchronous=NORMAL;");
+                stmt.execute("PRAGMA temp_store=MEMORY;");
+                stmt.execute("PRAGMA cache_size=-1000000;"); // 1GB cache
+            }
+            return conn;
         } catch (ClassNotFoundException e) {
             logger.error("SQLite JDBC driver not found", e);
             throw new SQLException("SQLite JDBC driver not found", e);
