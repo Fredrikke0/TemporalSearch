@@ -113,13 +113,13 @@ def analyze_benchmarks(csv_filepath):
 def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performance Summary"):
     """
     Generates a LaTeX table from the aggregated benchmark results with mean ± SD format.
-    Outputs a fragment suitable for inclusion in a larger document, wrapped in a figure environment.
+    Outputs a fragment suitable for inclusion in a larger document, wrapped in a table environment.
     """
     # Note: This table requires \\usepackage[separate-uncertainty,group-digits=none,mode=text]{siunitx} in your LaTeX preamble.
     if not stats:
         return "\\textbf{No data to display or error in processing.}"
 
-    latex_string = "\\begin{figure}[htbp]\n"
+    latex_string = "\\begin{table}[htbp]\n"
     latex_string += "\\centering\n"
     latex_string += f"\\caption{{{table_title.replace('-', ' ').title()}. Times shown as mean ± standard deviation in milliseconds (ms).}}\n"
     sanitized_title_for_label = re.sub(r'[^a-zA-Z0-9_]', '', table_title.lower().replace(' ', '_'))
@@ -196,7 +196,7 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
     latex_string += "\\bottomrule\n"
     latex_string += "\\end{tabular}\n"
     latex_string += "\\vspace{1em}\n"
-    latex_string += "\\end{figure}\n"
+    latex_string += "\\end{table}\n"
     return latex_string
 
 def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULTS SUMMARY"):
