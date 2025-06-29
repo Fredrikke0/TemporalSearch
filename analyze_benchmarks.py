@@ -10,7 +10,9 @@ import sys
 # Global mapping for specific strategy tuples to their display names
 STRATEGY_DISPLAY_NAMES = {
     ('naive', 'none', 'none'): "B",
+    ('nash', 'none', 'none'): "N",
     ('naive', 'none', 'optimized'): "S",
+    ('naive', 'optimized', 'none'): "P",
     ('nash', 'none', 'optimized'): "S+N",
     ('naive', 'optimized', 'optimized'): "S+P",
     ('nash', 'optimized', 'optimized'): "S+P+N"
@@ -312,7 +314,9 @@ Examples:
         else:
             # Define strategy tuples: (temporal, pushdown, stitch)
             baseline = ('naive', 'none', 'none')          # B
+            nash_only = ('nash', 'none', 'none')          # N
             stitch_optimized = ('naive', 'none', 'optimized') # S
+            pushdown_only = ('naive', 'optimized', 'none') # P
             stitch_nash_optimized = ('nash', 'none', 'optimized') # S+N
             stitch_pushdown_optimized = ('naive', 'optimized', 'optimized') # S+P
             all_optimized_spn = ('nash', 'optimized', 'optimized') # S+P+N (was all_optimized)
@@ -320,18 +324,21 @@ Examples:
             if hop_type_in_title == "1-hop":
                 strategies_to_render = [
                     baseline,
+                    nash_only,
                     stitch_optimized,
                     stitch_nash_optimized  # S+N
                 ]
-                print(f"Detected {hop_type_in_title}. Displaying strategies: B, S, S+N.")
+                print(f"Detected {hop_type_in_title}. Displaying strategies: B, N, S, S+N.")
             elif hop_type_in_title in ["2-hops", "3-hops"]:
                 strategies_to_render = [
                     baseline,                 # B
+                    nash_only,               # N
                     stitch_optimized,         # S
+                    pushdown_only,           # P
                     stitch_pushdown_optimized,# S+P
                     all_optimized_spn         # S+P+N
                 ]
-                print(f"Detected {hop_type_in_title}. Displaying strategies: B, S, S+P, S+P+N.")
+                print(f"Detected {hop_type_in_title}. Displaying strategies: B, N, S, P, S+P, S+P+N.")
             else: # Should not be reached if hop_type_in_title is one of the above or None
                 print(f"Internal Warning: Unhandled hop_type_in_title '{hop_type_in_title}'. Falling back to all defined permutations.", file=sys.stderr)
                 strategies_to_render = all_defined_strategy_permutations
