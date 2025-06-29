@@ -144,7 +144,22 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
         latex_string += "\\multicolumn{4}{c}{No data available for selected strategies.} \\\\\\\\ \n"
     else:
         last_renderable_strat_tuple_with_data = renderable_tuples_with_data[-1]
-        prev_row_avg_time = None # Initialize for improvement calculation
+
+        # Find baseline (B strategy) average time for improvement calculation
+        baseline_strat_tuple = ('naive', 'none', 'none')  # B strategy
+        baseline_avg_time = None
+        if baseline_strat_tuple in stats:
+            baseline_cold_stats = stats[baseline_strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
+            baseline_warm_stats = stats[baseline_strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
+            baseline_cold_mean = baseline_cold_stats['mean'] if baseline_cold_stats['count'] > 0 else None
+            baseline_warm_mean = baseline_warm_stats['mean'] if baseline_warm_stats['count'] > 0 else None
+
+            if baseline_cold_mean is not None and baseline_warm_mean is not None:
+                baseline_avg_time = (baseline_cold_mean + baseline_warm_mean) / 2.0
+            elif baseline_cold_mean is not None:
+                baseline_avg_time = baseline_cold_mean
+            elif baseline_warm_mean is not None:
+                baseline_avg_time = baseline_warm_mean
 
         for i, strat_tuple in enumerate(renderable_tuples_with_data):
             temporal, pushdown, stitch = strat_tuple
@@ -159,7 +174,7 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
                 f"{temporal.capitalize()}, {pushdown.replace('none', 'naive').capitalize()}, {stitch.replace('none', 'naive').capitalize()}"
             )
 
-            # Calculate current row average time and improvement
+            # Calculate current row average time and improvement from baseline
             current_cold_mean = cold_stats['mean'] if cold_stats['count'] > 0 else None
             current_warm_mean = warm_stats['mean'] if warm_stats['count'] > 0 else None
             current_row_avg_time = None
@@ -172,8 +187,12 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
             elif current_warm_mean is not None:
                 current_row_avg_time = current_warm_mean
 
-            if prev_row_avg_time is not None and current_row_avg_time is not None and abs(prev_row_avg_time) > 1e-9:
-                percentage_improvement = ((prev_row_avg_time - current_row_avg_time) / prev_row_avg_time) * 100
+            # Calculate improvement from baseline (B strategy) instead of previous row
+            if strat_tuple == baseline_strat_tuple:
+                # For baseline row, show no improvement (it's the reference)
+                improvement_val_for_siunitx = "{--}"
+            elif baseline_avg_time is not None and current_row_avg_time is not None and abs(baseline_avg_time) > 1e-9:
+                percentage_improvement = ((baseline_avg_time - current_row_avg_time) / baseline_avg_time) * 100
                 if percentage_improvement > 0:
                     improvement_val_for_siunitx = f"\color{{ForestGreen}}{{{percentage_improvement:.1f}\\%}}"
                 else:
@@ -188,10 +207,6 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
 
             if strat_tuple != last_renderable_strat_tuple_with_data:
                 latex_string += "\\midrule\n"
-
-            # Update prev_row_avg_time for the next iteration
-            if current_row_avg_time is not None:
-                prev_row_avg_time = current_row_avg_time
 
     latex_string += "\\bottomrule\n"
     latex_string += "\\end{tabular}\n"
@@ -208,7 +223,7 @@ def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULT
 
     output = []
     output.append("=" * 80)
-    output.append(f"{table_title.upper()} (mean ± standard deviation in ms)")
+    output.append(f"{table_title.upper()} (mean ± standard deviation)")
     output.append("=" * 80)
 
     output.append("-" * 80) # Adjusted width
@@ -217,7 +232,21 @@ def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULT
     output.append(header_line)
     output.append("-" * len(header_line)) # Adjusted width
 
-    prev_row_avg_time = None # Initialize for improvement calculation
+    # Find baseline (B strategy) average time for improvement calculation
+    baseline_strat_tuple = ('naive', 'none', 'none')  # B strategy
+    baseline_avg_time = None
+    if baseline_strat_tuple in stats:
+        baseline_cold_stats = stats[baseline_strat_tuple].get('cold', {'mean': 0.0, 'std': 0.0, 'count': 0})
+        baseline_warm_stats = stats[baseline_strat_tuple].get('warm', {'mean': 0.0, 'std': 0.0, 'count': 0})
+        baseline_cold_mean = baseline_cold_stats['mean'] if baseline_cold_stats['count'] > 0 else None
+        baseline_warm_mean = baseline_warm_stats['mean'] if baseline_warm_stats['count'] > 0 else None
+
+        if baseline_cold_mean is not None and baseline_warm_mean is not None:
+            baseline_avg_time = (baseline_cold_mean + baseline_warm_mean) / 2.0
+        elif baseline_cold_mean is not None:
+            baseline_avg_time = baseline_cold_mean
+        elif baseline_warm_mean is not None:
+            baseline_avg_time = baseline_warm_mean
 
     for strat_tuple in strategy_tuples:
         temporal, pushdown, stitch = strat_tuple
@@ -234,7 +263,7 @@ def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULT
             cold_str = f"{cold_s['mean']:.2f} ± {cold_s['std']:.2f}" if cold_s['count'] > 0 else "N/A"
             warm_str = f"{warm_s['mean']:.2f} ± {warm_s['std']:.2f}" if warm_s['count'] > 0 else "N/A"
 
-            # Calculate current row average time and improvement
+            # Calculate current row average time and improvement from baseline
             current_cold_mean = cold_s['mean'] if cold_s['count'] > 0 else None
             current_warm_mean = warm_s['mean'] if warm_s['count'] > 0 else None
             current_row_avg_time = None
@@ -247,16 +276,16 @@ def generate_summary_table(stats, strategy_tuples, table_title="BENCHMARK RESULT
             elif current_warm_mean is not None:
                 current_row_avg_time = current_warm_mean
 
-            if prev_row_avg_time is not None and current_row_avg_time is not None and abs(prev_row_avg_time) > 1e-9:
-                percentage_improvement = ((prev_row_avg_time - current_row_avg_time) / prev_row_avg_time) * 100
+            # Calculate improvement from baseline (B strategy) instead of previous row
+            if strat_tuple == baseline_strat_tuple:
+                # For baseline row, show no improvement (it's the reference)
+                improvement_display_str = "--"
+            elif baseline_avg_time is not None and current_row_avg_time is not None and abs(baseline_avg_time) > 1e-9:
+                percentage_improvement = ((baseline_avg_time - current_row_avg_time) / baseline_avg_time) * 100
                 improvement_display_str = f"{percentage_improvement:.1f}%"
 
             # Use the new strategy_name and adjusted width
             output.append(f"{strategy_name:<35} {cold_str:<20} {warm_str:<20} {improvement_display_str:<10}")
-
-            # Update prev_row_avg_time for the next iteration
-            if current_row_avg_time is not None:
-                prev_row_avg_time = current_row_avg_time
 
     return "\n ".join(output)
 
