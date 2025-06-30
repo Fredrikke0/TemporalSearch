@@ -245,7 +245,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
                     if (serializedEntriesBytes.isPresent()) {
                         strategyLogger.trace("NashTemporalStrategy: Found data for prefix '{}'. Deserializing with PositionListSoA.", prefix);
-                        PositionListSoA positionsSoA = PositionListSoA.deserializeWithFilters(serializedEntriesBytes.get(), context);
+                        PositionListSoA positionsSoA = PositionListSoA.deserializeWithFilters(serializedEntriesBytes.get(), requirements, context);
                         strategyLogger.trace("NashTemporalStrategy: Deserialized {} entries using PositionListSoA for prefix '{}'. Filtered size: {}.",
                                              PositionListSoA.getNumPositionsFromBlob(serializedEntriesBytes.get()), prefix, positionsSoA.getNumPositions());
 
@@ -272,8 +272,17 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
                                 if (match) {
                                     strategyLogger.trace("NashTemporalStrategy: Match found for prefix '{}'. Date: {}, Position: Doc={}, Sent={}, Begin={}, End={}",
-                                                         prefix, entryDate, currentPosition.getDocumentId(), currentPosition.getSentenceId(), currentPosition.getBeginPosition(), currentPosition.getEndPosition());
-                                    uniqueMatches.add(new UniqueTemporalMatch(currentPosition, entryDate));
+                                                         prefix, entryDate, positionsSoA.getDocIdAt(i),
+                                                         (requirements.needsSentenceId ? positionsSoA.getSentenceIdAt(i) : -1),
+                                                         (requirements.needsPositions ? positionsSoA.getBeginCharAt(i) : -1),
+                                                         (requirements.needsPositions ? positionsSoA.getEndCharAt(i) : -1));
+
+                                    uniqueMatches.add(new UniqueTemporalMatch(
+                                        positionsSoA.getDocIdAt(i),
+                                        (requirements.needsSentenceId ? positionsSoA.getSentenceIdAt(i) : -1),
+                                        (requirements.needsPositions ? positionsSoA.getBeginCharAt(i) : -1),
+                                        (requirements.needsPositions ? positionsSoA.getEndCharAt(i) : -1),
+                                        entryDate));
                                 }
                             } else {
                                 strategyLogger.warn("NashTemporalStrategy: Invalid dateId {} found for prefix '{}' at index {}. Max valid dateId is {}. Skipping entry.",
@@ -297,10 +306,10 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                         match.date(), // Value to bind (LocalDate)
                         ValueType.DATE,
                         effectiveVarName,
-                        match.position().getDocumentId(),
-                        requirements.needsSentenceId ? match.position().getSentenceId() : -1,
-                        requirements.needsPositions ? match.position().getBeginPosition() : -1,
-                        requirements.needsPositions ? match.position().getEndPosition() : -1,
+                        match.docId(),
+                        match.sentId(),
+                        match.begin(),
+                        match.end(),
                         requirements.needsSynonymIds ? -1 : -1, // NashDateEntry does not store synonymId directly applicable here; this is for NER synonyms, not date part synonyms.
                                                                  // If date parts (year, month) were bound, this would change.
                         resultSoA.getNextConceptualRowId() // Manage conceptual rows correctly
@@ -525,7 +534,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     );
 
                     if (match) {
-                        PositionListSoA positionList = PositionListSoA.deserializeWithFilters(valueBytes, context);
+                        PositionListSoA positionList = PositionListSoA.deserializeWithFilters(valueBytes, requirements, context);
                         strategyLogger.trace("NaiveTemporalStrategy: Original blob for key '{}' indicated {} positions. Filtered size: {}.",
                                              currentKey, PositionListSoA.getNumPositionsFromBlob(valueBytes), positionList.getNumPositions());
                         if (positionList.isEmpty()){
@@ -535,12 +544,9 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
                         // Process matching entries
                         if (variableNameToBind != null) {
-                            for (int i = 0; i < positionList.getNumPositions(); i++) {
-                                Position pos = positionList.getPositionAt(i);
-                                conceptualRowIdCounter = processEntryForVariableBinding(condition, resultSoA, requirements, granularity, granularitySize, conceptualRowIdCounter, entryDate, variableNameToBind, pos);
-                            }
+                            processEntryForVariableBinding(condition, resultSoA, requirements, granularity, granularitySize, entryDate, variableNameToBind, positionList);
                         } else {
-                            conceptualRowIdCounter = processEntryForDateLiteral(condition, resultSoA, requirements, granularity, granularitySize, conceptualRowIdCounter, entryDate, positionList);
+                            processEntryForDateLiteral(condition, resultSoA, requirements, granularity, granularitySize, entryDate, positionList);
                         }
                     } else {
                         keysSkipped++;
@@ -654,10 +660,10 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
         }
 
 
-        private int processEntryForDateLiteral(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
-                                  Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
+        private void processEntryForDateLiteral(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
+                                  Query.Granularity granularity, int granularitySize,
                                                LocalDate boundDate, PositionListSoA filteredPositions) {
-            if (filteredPositions.isEmpty()) return currentConceptualRowId;
+            if (filteredPositions.isEmpty()) return;
             int conceptualId = resultSoA.getNextConceptualRowId();
             for (int i = 0; i < filteredPositions.getNumPositions(); i++) {
                 resultSoA.add(
@@ -670,25 +676,24 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     conceptualId
                 );
             }
-            // If conceptual rows were added, increment the strategy's counter of processed items.
-            return currentConceptualRowId + 1;
         }
 
-        private int processEntryForVariableBinding(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
-                                                 Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
-                                                 LocalDate boundDate, String variableNameToBind, Position filteredPosition) {
-            int conceptualId = resultSoA.getNextConceptualRowId();
-            resultSoA.add(
-                boundDate, ValueType.DATE, variableNameToBind,
-                filteredPosition.getDocumentId(),
-                requirements.needsSentenceId ? filteredPosition.getSentenceId() : -1,
-                requirements.needsPositions ? filteredPosition.getBeginPosition() : -1,
-                requirements.needsPositions ? filteredPosition.getEndPosition() : -1,
-                -1, // Ensuring this is -1 as Position object has no getSynonymId and it's not relevant for ner_date entries here.
-                conceptualId
-            );
-             // If a conceptual row was added, increment the strategy's counter.
-             return currentConceptualRowId + 1;
+        private void processEntryForVariableBinding(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
+                                                 Query.Granularity granularity, int granularitySize,
+                                                 LocalDate boundDate, String variableNameToBind, PositionListSoA filteredPositions) {
+
+            for (int i = 0; i < filteredPositions.getNumPositions(); i++) {
+                int conceptualId = resultSoA.getNextConceptualRowId();
+                 resultSoA.add(
+                    boundDate, ValueType.DATE, variableNameToBind,
+                    filteredPositions.getDocIdAt(i),
+                    requirements.needsSentenceId ? filteredPositions.getSentenceIdAt(i) : -1,
+                    requirements.needsPositions ? filteredPositions.getBeginCharAt(i) : -1,
+                    requirements.needsPositions ? filteredPositions.getEndCharAt(i) : -1,
+                    -1, // Ensuring this is -1 as Position object has no getSynonymId and it's not relevant for ner_date entries here.
+                    conceptualId
+                );
+            }
         }
     }
 
@@ -778,7 +783,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
      }
 
     // Helper record for tracking unique matches in NashTemporalStrategy
-    private record UniqueTemporalMatch(Position position, LocalDate date) {}
+    private record UniqueTemporalMatch(int docId, int sentId, int begin, int end, LocalDate date) {}
 
     // Helper record for defining iteration range in NaiveTemporalStrategy
     private record IterationRange(String startKey, String endKey) {}

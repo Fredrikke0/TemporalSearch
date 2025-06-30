@@ -5,6 +5,8 @@ import java.util.Optional;
 
 import org.rocksdb.RocksIterator;
 
+import com.example.query.executor.AttributeRequirements;
+
 /**
  * Interface defining the core access methods for indexes.
  * Implemented by both the real RocksDB-backed IndexAccess
@@ -104,7 +106,7 @@ public interface IndexAccessInterface extends AutoCloseable {
      * @throws IndexAccessException If an error occurs accessing the underlying index storage.
      */
     default Optional<PositionListSoA> getMergedPositions(String baseTerm) throws IOException, IndexAccessException {
-        return getMergedPositions(baseTerm, Optional.empty());
+        return getMergedPositions(baseTerm, new AttributeRequirements(), Optional.empty());
     }
 
     /**
@@ -123,7 +125,11 @@ public interface IndexAccessInterface extends AutoCloseable {
      * @throws IOException If an I/O error occurs during deserialization or reading from the index.
      * @throws IndexAccessException If an error occurs accessing the underlying index storage.
      */
-    Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<com.example.query.executor.FilteringContext> context) throws IOException, IndexAccessException;
+    default Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<com.example.query.executor.FilteringContext> context) throws IOException, IndexAccessException {
+        return getMergedPositions(baseTerm, new AttributeRequirements(), context);
+    }
+
+    Optional<PositionListSoA> getMergedPositions(String baseTerm, com.example.query.executor.AttributeRequirements requirements, Optional<com.example.query.executor.FilteringContext> context) throws IOException, IndexAccessException;
 
     /**
      * Closes the index access, releasing any underlying resources.

@@ -154,7 +154,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                 if (matches) {
                                     byte[] rawBlob = iterator.value();
                                     if (rawBlob != null && rawBlob.length > 0) {
-                                        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+                                        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, requirements, context);
                                         logger.trace("Found {} positions for matching date '{}' with key '{}' after filtering",
                                                    positions.getNumPositions(), dateFromKey, currentKey);
 
@@ -248,7 +248,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
 
                 if (rawBlobOpt.isPresent() && rawBlobOpt.get().length > 0) {
                     byte[] rawBlob = rawBlobOpt.get();
-                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, requirements, context);
                     logger.debug("Found {} potential co-occurrences for key '{}' in stitch index '{}' after context filtering.",
                                  positions.getNumPositions(), stitchLookupKey, stitchIndexName);
 

@@ -133,7 +133,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
         if (rawBlobOptional.isPresent()) {
             byte[] rawBlob = rawBlobOptional.get();
-            PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+            PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, requirements, context);
 
             if (positions.isEmpty()) {
                 logger.debug("No positions for dependency relation '{}' after applying context filters.", searchKey);
@@ -241,7 +241,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     }
 
                     String valueToBind = String.join(":", currentGovernor, currentRelation, currentDependent);
-                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context);
+                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, requirements, context);
 
                     if (positions.isEmpty()) {
                         iterator.next();
