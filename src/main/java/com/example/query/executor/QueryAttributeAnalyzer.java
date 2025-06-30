@@ -14,6 +14,7 @@ import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Pos;
+import com.example.query.model.condition.Temporal;
 
 /**
  * Analyzes queries to determine which SoA attributes are required for execution.
@@ -153,6 +154,11 @@ public class QueryAttributeAnalyzer {
         } else if (condition instanceof Pos pos && (pos.isVariable() || pos.term() != null)) {
             logger.trace("Found POS condition with variable or target, requiring synonym IDs");
             requirements.needsSynonymIds = true;
+        } else if (condition instanceof Temporal) {
+            logger.trace("Found Temporal condition, requiring synonym IDs, position offsets, and sentence IDs");
+            requirements.needsSynonymIds = true;
+            requirements.needsPositions = true;
+            requirements.needsSentenceId = true;
         } else if (condition instanceof Logical logical) {
             // Recursively analyze logical conditions
             analyzeConditions(logical.conditions(), requirements);

@@ -273,15 +273,15 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                                 if (match) {
                                     strategyLogger.trace("NashTemporalStrategy: Match found for prefix '{}'. Date: {}, Position: Doc={}, Sent={}, Begin={}, End={}",
                                                          prefix, entryDate, positionsSoA.getDocIdAt(i),
-                                                         (requirements.needsSentenceId ? positionsSoA.getSentenceIdAt(i) : -1),
-                                                         (requirements.needsPositions ? positionsSoA.getBeginCharAt(i) : -1),
-                                                         (requirements.needsPositions ? positionsSoA.getEndCharAt(i) : -1));
+                                                         (positionsSoA.getSentenceIds() != null && !positionsSoA.getSentenceIds().isEmpty() ? positionsSoA.getSentenceIdAt(i) : -1),
+                                                         (positionsSoA.getBeginChars() != null && !positionsSoA.getBeginChars().isEmpty() ? positionsSoA.getBeginCharAt(i) : -1),
+                                                         (positionsSoA.getEndChars() != null && !positionsSoA.getEndChars().isEmpty() ? positionsSoA.getEndCharAt(i) : -1));
 
                                     uniqueMatches.add(new UniqueTemporalMatch(
                                         positionsSoA.getDocIdAt(i),
-                                        (requirements.needsSentenceId ? positionsSoA.getSentenceIdAt(i) : -1),
-                                        (requirements.needsPositions ? positionsSoA.getBeginCharAt(i) : -1),
-                                        (requirements.needsPositions ? positionsSoA.getEndCharAt(i) : -1),
+                                        (positionsSoA.getSentenceIds() != null && !positionsSoA.getSentenceIds().isEmpty() ? positionsSoA.getSentenceIdAt(i) : -1),
+                                        (positionsSoA.getBeginChars() != null && !positionsSoA.getBeginChars().isEmpty() ? positionsSoA.getBeginCharAt(i) : -1),
+                                        (positionsSoA.getEndChars() != null && !positionsSoA.getEndChars().isEmpty() ? positionsSoA.getEndCharAt(i) : -1),
                                         entryDate));
                                 }
                             } else {
