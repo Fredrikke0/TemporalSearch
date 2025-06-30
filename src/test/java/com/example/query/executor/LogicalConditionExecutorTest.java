@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -433,7 +434,7 @@ public class LogicalConditionExecutorTest {
             FilteringContext fc = capturedContextForSecond.get();
             assertFalse(fc.isUnrestricted());
             assertTrue(fc.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1, 2), fc.allowedDocumentIds().get());
+            assertEquals(new TreeSet<>(Set.of(1, 2)), fc.allowedDocumentIds().get());
             assertFalse(fc.allowedDocumentSentenceIds().isPresent());
         }
 
@@ -464,7 +465,7 @@ public class LogicalConditionExecutorTest {
 
             assertFalse(fc.isUnrestricted());
             assertTrue(fc.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1, 2), fc.allowedDocumentIds().get());
+            assertEquals(new TreeSet<>(Set.of(1, 2)), fc.allowedDocumentIds().get());
 
             assertTrue(fc.allowedDocumentSentenceIds().isPresent());
             Map<Integer, Set<Integer>> expectedSentIds = Map.of(
@@ -545,14 +546,14 @@ public class LogicalConditionExecutorTest {
             assertTrue(contextForC2.isPresent());
             assertFalse(contextForC2.get().isUnrestricted());
             assertTrue(contextForC2.get().allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1, 2), contextForC2.get().allowedDocumentIds().get());
+            assertEquals(new TreeSet<>(Set.of(1, 2)), contextForC2.get().allowedDocumentIds().get());
             assertFalse(contextForC2.get().allowedDocumentSentenceIds().isPresent());
 
             Optional<FilteringContext> contextForC3 = allCapturedContexts.get(2);
             assertTrue(contextForC3.isPresent());
             assertFalse(contextForC3.get().isUnrestricted());
             assertTrue(contextForC3.get().allowedDocumentIds().isPresent());
-            assertEquals(Set.of(2), contextForC3.get().allowedDocumentIds().get(), "Context for C3 should be intersection of C1's output and C2's output filtered by C1 context.");
+            assertEquals(new TreeSet<>(Set.of(2)), contextForC3.get().allowedDocumentIds().get(), "Context for C3 should be intersection of C1's output and C2's output filtered by C1 context.");
             assertFalse(contextForC3.get().allowedDocumentSentenceIds().isPresent());
         }
 
@@ -589,7 +590,8 @@ public class LogicalConditionExecutorTest {
             Optional<FilteringContext> contextForC2 = allCapturedContexts.get(1);
             assertTrue(contextForC2.isPresent());
             assertFalse(contextForC2.get().isUnrestricted());
-            assertEquals(Set.of(1, 2), contextForC2.get().allowedDocumentIds().orElse(Collections.emptySet()));
+            assertTrue(contextForC2.get().allowedDocumentIds().isPresent());
+            assertEquals(new TreeSet<>(Set.of(1, 2)), contextForC2.get().allowedDocumentIds().get());
         }
     }
 }

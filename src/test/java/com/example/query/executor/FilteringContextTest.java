@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -34,7 +35,7 @@ class FilteringContextTest {
 
     @Test
     void isUnrestricted_falseWhenDocIdsPresent() {
-        FilteringContext context = new FilteringContext(Optional.of(Set.of(1)), Optional.empty(), Query.Granularity.DOCUMENT);
+        FilteringContext context = new FilteringContext(Optional.of(new TreeSet<>(Set.of(1))), Optional.empty(), Query.Granularity.DOCUMENT);
         assertFalse(context.isUnrestricted());
     }
 
@@ -53,7 +54,7 @@ class FilteringContextTest {
 
     @Test
     void isUnrestricted_falseWhenDocIdsPresent_evenIfDocSentIdsIsEmptyMap_sentenceGranularity() {
-        FilteringContext context = new FilteringContext(Optional.of(Set.of(1)), Optional.of(Collections.emptyMap()), Query.Granularity.SENTENCE);
+        FilteringContext context = new FilteringContext(Optional.of(new TreeSet<>(Set.of(1))), Optional.of(Collections.emptyMap()), Query.Granularity.SENTENCE);
         assertFalse(context.isUnrestricted());
     }
 
@@ -127,24 +128,24 @@ class FilteringContextTest {
 
             assertFalse(resultContext.isUnrestricted());
             assertTrue(resultContext.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1, 2), resultContext.allowedDocumentIds().get());
+            assertEquals(new TreeSet<>(Set.of(1, 2)), resultContext.allowedDocumentIds().get());
             assertFalse(resultContext.allowedDocumentSentenceIds().isPresent());
         }
 
         @Test
         void intersect_docGranularity_restrictedContext_withOverlappingNewConstraints() {
-            FilteringContext initialContext = new FilteringContext(Optional.of(Set.of(1, 2, 3)), Optional.empty(), Query.Granularity.DOCUMENT);
+            FilteringContext initialContext = new FilteringContext(Optional.of(new TreeSet<>(Set.of(1, 2, 3))), Optional.empty(), Query.Granularity.DOCUMENT);
             QueryResultSoA newConstraints = createRealQueryResultSoA(Set.of(2, 3, 4), null, false);
 
             FilteringContext resultContext = initialContext.intersect(newConstraints);
 
             assertTrue(resultContext.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(2, 3), resultContext.allowedDocumentIds().get());
+            assertEquals(new TreeSet<>(Set.of(2, 3)), resultContext.allowedDocumentIds().get());
         }
 
         @Test
         void intersect_docGranularity_restrictedContext_withNonOverlappingNewConstraints() {
-            FilteringContext initialContext = new FilteringContext(Optional.of(Set.of(1, 2)), Optional.empty(), Query.Granularity.DOCUMENT);
+            FilteringContext initialContext = new FilteringContext(Optional.of(new TreeSet<>(Set.of(1, 2))), Optional.empty(), Query.Granularity.DOCUMENT);
             QueryResultSoA newConstraints = createRealQueryResultSoA(Set.of(3, 4), null, false);
 
             FilteringContext resultContext = initialContext.intersect(newConstraints);
@@ -199,7 +200,7 @@ class FilteringContextTest {
 
             assertFalse(resultContext.isUnrestricted());
             assertTrue(resultContext.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1, 2), resultContext.allowedDocumentIds().get());
+            assertEquals(new TreeSet<>(Set.of(1, 2)), resultContext.allowedDocumentIds().get());
             assertTrue(resultContext.allowedDocumentSentenceIds().isPresent());
             assertEquals(Map.of(1, Set.of(10, 11), 2, Set.of(20)), resultContext.allowedDocumentSentenceIds().get());
         }
@@ -216,7 +217,7 @@ class FilteringContextTest {
 
             assertFalse(resultContext.isUnrestricted()); // Because doc IDs are present
             assertTrue(resultContext.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1, 2), resultContext.allowedDocumentIds().get());
+            assertEquals(new TreeSet<>(Set.of(1, 2)), resultContext.allowedDocumentIds().get());
             assertFalse(resultContext.allowedDocumentSentenceIds().isPresent(), "Sentence IDs should not be populated if newConstraints.getRequirements().needsSentenceId is false");
         }
 
@@ -224,7 +225,7 @@ class FilteringContextTest {
         @Test
         void intersect_sentGranularity_restrictedDoc_restrictedSent_withOverlap() {
             FilteringContext initialContext = new FilteringContext(
-                Optional.of(Set.of(1, 2)),
+                Optional.of(new TreeSet<>(Set.of(1, 2))),
                 Optional.of(Map.of(1, Set.of(10, 12), 2, Set.of(20, 21))),
                 Query.Granularity.SENTENCE
             );
@@ -238,7 +239,7 @@ class FilteringContextTest {
             FilteringContext resultContext = initialContext.intersect(newConstraints);
 
             assertTrue(resultContext.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1), resultContext.allowedDocumentIds().get(), "Only doc 1 should remain");
+            assertEquals(new TreeSet<>(Set.of(1)), resultContext.allowedDocumentIds().get(), "Only doc 1 should remain");
 
             assertTrue(resultContext.allowedDocumentSentenceIds().isPresent());
             Map<Integer, Set<Integer>> expectedSentIds = Map.of(1, Set.of(12));
@@ -248,7 +249,7 @@ class FilteringContextTest {
         @Test
         void intersect_sentGranularity_restrictedDoc_unrestrictedSent_withNewConstraints() {
              // Initial context restricts docs but not specific sentences within those docs (empty Optional for sent IDs)
-            FilteringContext initialContext = new FilteringContext(Optional.of(Set.of(1, 2)), Optional.empty(), Query.Granularity.SENTENCE);
+            FilteringContext initialContext = new FilteringContext(Optional.of(new TreeSet<>(Set.of(1, 2))), Optional.empty(), Query.Granularity.SENTENCE);
             QueryResultSoA newConstraints = createRealQueryResultSoA(
                 Set.of(1, 3),
                 Map.of(1, Set.of(10, 11), 3, Set.of(30)),
@@ -259,7 +260,7 @@ class FilteringContextTest {
             FilteringContext resultContext = initialContext.intersect(newConstraints);
 
             assertTrue(resultContext.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1), resultContext.allowedDocumentIds().get()); // Only doc 1 overlaps
+            assertEquals(new TreeSet<>(Set.of(1)), resultContext.allowedDocumentIds().get()); // Only doc 1 overlaps
 
             assertTrue(resultContext.allowedDocumentSentenceIds().isPresent());
             // Since initial context had no sentence restrictions for doc 1, newConstraints' sentences for doc 1 are taken.
@@ -270,7 +271,7 @@ class FilteringContextTest {
         @Test
         void intersect_sentGranularity_docIntersectionBecomesEmpty() {
             FilteringContext initialContext = new FilteringContext(
-                Optional.of(Set.of(1)),
+                Optional.of(new TreeSet<>(Set.of(1))),
                 Optional.of(Map.of(1, Set.of(10))),
                 Query.Granularity.SENTENCE
             );
@@ -290,7 +291,7 @@ class FilteringContextTest {
         void intersect_sentGranularity_newConstraintsHaveNoSentencesForIntersectedDoc() {
             // Initial context allows doc 1, sent 10
             FilteringContext initialContext = new FilteringContext(
-                Optional.of(Set.of(1)),
+                Optional.of(new TreeSet<>(Set.of(1))),
                 Optional.of(Map.of(1, Set.of(10))),
                 Query.Granularity.SENTENCE
             );
@@ -305,7 +306,7 @@ class FilteringContextTest {
             FilteringContext resultContext = initialContext.intersect(newConstraints);
 
             assertTrue(resultContext.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1), resultContext.allowedDocumentIds().get()); // Doc 1 still allowed
+            assertEquals(new TreeSet<>(Set.of(1)), resultContext.allowedDocumentIds().get()); // Doc 1 still allowed
 
             assertTrue(resultContext.allowedDocumentSentenceIds().isPresent());
             // Since newConstraints.getUniqueDocumentSentenceIds() would not contain doc 1,
@@ -320,7 +321,7 @@ class FilteringContextTest {
         void intersect_sentGranularity_initialContextHasNoSentencesForIntersectedDoc() {
             // Initial context allows doc 1, but has no specific sentences listed for it
             FilteringContext initialContext = new FilteringContext(
-                Optional.of(Set.of(1)),
+                Optional.of(new TreeSet<>(Set.of(1))),
                 Optional.of(Map.of(2, Set.of(20))), // No entry for doc 1 in sentence map
                 Query.Granularity.SENTENCE
             );
@@ -334,7 +335,7 @@ class FilteringContextTest {
             FilteringContext resultContext = initialContext.intersect(newConstraints);
 
             assertTrue(resultContext.allowedDocumentIds().isPresent());
-            assertEquals(Set.of(1), resultContext.allowedDocumentIds().get());
+            assertEquals(new TreeSet<>(Set.of(1)), resultContext.allowedDocumentIds().get());
 
             assertTrue(resultContext.allowedDocumentSentenceIds().isPresent());
              // Because initial context didn't have specific sentence restrictions for doc 1 (it was missing from its map),
