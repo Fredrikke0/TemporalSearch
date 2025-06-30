@@ -50,10 +50,6 @@ public class SoAJoinOptimizer {
 
         if (isStructuralDateKey(leftJoinKey) && isStructuralDateKey(rightJoinKey)) {
             return performDateJoinSoA(leftSoA, rightSoA, leftJoinKey, rightJoinKey);
-        } else if (isStructuralDocumentIdKey(leftJoinKey) && isStructuralDocumentIdKey(rightJoinKey)) {
-            return performDocumentIdJoinSoA(leftSoA, rightSoA);
-        } else if (isStructuralSentenceIdKey(leftJoinKey) && isStructuralSentenceIdKey(rightJoinKey)) {
-            return performSentenceIdJoinSoA(leftSoA, rightSoA);
         } else {
             return performGenericJoinSoA(leftSoA, rightSoA, leftJoinKey, rightJoinKey);
         }
@@ -130,27 +126,6 @@ public class SoAJoinOptimizer {
 
         Map<LocalDate, Set<Integer>> leftMap = buildKeyToConceptualIdsMap(leftSoA, leftDateKeyName, LocalDate.class);
         Map<LocalDate, Set<Integer>> rightMap = buildKeyToConceptualIdsMap(rightSoA, rightDateKeyName, LocalDate.class);
-        return combineMaps(leftMap, rightMap);
-    }
-
-    private static List<SoAJoinKeyMatch> performDocumentIdJoinSoA(
-            QueryResultSoA leftSoA, QueryResultSoA rightSoA) {
-        logger.debug("Performing SoA DOCUMENT_ID join");
-        Map<Integer, Set<Integer>> leftMap = buildKeyToConceptualIdsMap(leftSoA, "document_id", Integer.class);
-        Map<Integer, Set<Integer>> rightMap = buildKeyToConceptualIdsMap(rightSoA, "document_id", Integer.class);
-        return combineMaps(leftMap, rightMap);
-    }
-
-    private static List<SoAJoinKeyMatch> performSentenceIdJoinSoA(
-            QueryResultSoA leftSoA, QueryResultSoA rightSoA) {
-        logger.debug("Performing SoA SENTENCE_ID join");
-        Map<Integer, Set<Integer>> leftMap = buildKeyToConceptualIdsMap(leftSoA, "sentence_id", Integer.class);
-        Map<Integer, Set<Integer>> rightMap = buildKeyToConceptualIdsMap(rightSoA, "sentence_id", Integer.class);
-
-        // Filter out invalid sentence IDs from maps before combining
-        leftMap.keySet().removeIf(sentId -> sentId < 0);
-        rightMap.keySet().removeIf(sentId -> sentId < 0);
-
         return combineMaps(leftMap, rightMap);
     }
 

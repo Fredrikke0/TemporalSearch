@@ -95,11 +95,6 @@ def _determine_strategies_for_query(query_info, temporal_strategies_base, pushdo
         current_pushdown_strategies = list(pushdown_strategies_base)
         if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - Type {benchmark_type}: Using all pushdown strategies {current_pushdown_strategies})", flush=True)
 
-    has_date_keyword_for_nash = "DATE" in query_text.upper()
-    if "nash" in current_temporal_strategies and not has_date_keyword_for_nash:
-        current_temporal_strategies.remove("nash")
-        if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - Removing NASH temporal strategy as query lacks 'DATE' keyword. Remaining: {current_temporal_strategies})", flush=True)
-
     if not current_temporal_strategies:
         if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - No temporal strategies applicable after DATE keyword check. No strategies for this query.)", flush=True)
         return []

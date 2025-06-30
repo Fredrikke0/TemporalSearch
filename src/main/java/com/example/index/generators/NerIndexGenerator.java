@@ -33,7 +33,6 @@ import com.google.common.collect.ListMultimap;
  * and these IDs are stored in PositionListSoA.synonymId.
  * Uses streaming processing and external sorting for efficient memory usage.
  *
- * This implementation is now RocksDB-based (see IndexGenerator).
  */
 public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(NerIndexGenerator.class);

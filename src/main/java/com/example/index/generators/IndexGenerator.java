@@ -89,7 +89,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     /**
      * Processes a raw batch of entries into an intermediate, aggregated form suitable for writing to a temp file.
      * @param batch The list of entries fetched from the database.
-     * @return A ListMultimap সেরা<String, PositionListSoA>, where keys are terms and values are their positions.
+     * @return A ListMultimap <String, PositionListSoA>, where keys are terms and values are their positions.
      */
     protected abstract ListMultimap<String, PositionListSoA> processBatch(List<T> batch);
 
