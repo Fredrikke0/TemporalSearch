@@ -200,6 +200,11 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             return 0;
         }
 
+        if (!requirements.needsSynonymIds) {
+            logger.error("Cannot execute specific entity filter for NER without synonym IDs. AttributeRequirements.needsSynonymIds must be true. Targets were: {}", targetValuesFromQuery);
+            return 0; // This operation is impossible without synonym IDs
+        }
+
         // Resolve all target values to synonym IDs and store the mapping
         Set<Integer> targetSynonymIds = new HashSet<>();
         Map<Integer, String> synonymIdToOriginalTarget = new HashMap<>();
@@ -288,10 +293,8 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         throws IOException, IndexAccessException, QueryExecutionException {
 
         if (!requirements.needsSynonymIds) {
-            logger.warn("executeVariableBindingSearch called for Type='{}', Var='{}', TargetFilter={} but AttributeRequirements.needsSynonymIds is false. This will likely yield no results or incorrect behavior for variable binding.",
-                        normalizedEntityType, queryVariableName, filterTargetValuesFromQuery);
-            // Depending on strictness, could return 0 or throw an error.
-            // For now, proceed but expect potential issues if synonym IDs are crucial later.
+            logger.error("Cannot perform variable binding for NER without synonym IDs. AttributeRequirements.needsSynonymIds must be true. Var: '{}'", queryVariableName);
+            return 0;
         }
         logger.debug("Executing executeVariableBindingSearch: Type='{}', Var='{}', TargetFilter={}, ContextIsPresent={}",
                      normalizedEntityType, queryVariableName, filterTargetValuesFromQuery, context.isPresent());
@@ -331,7 +334,11 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         byte[] rawBlob = rawBlobOptional.get();
         PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, requirements, context);
 
-        logger.trace("executeVariableBindingSearch: Decompressed raw arrays. DocIds size: {}, SynonymIds size: {}", positions.getNumPositions(), positions.getSynonymIds().size());
+        if (positions.isEmpty()) {
+            logger.debug("executeVariableBindingSearch: No positions for type '{}' after context filtering.", normalizedEntityType);
+            return 0;
+        }
+        logger.trace("executeVariableBindingSearch: Decompressed raw arrays. NumPositions: {}", positions.getNumPositions());
 
         Map<String, Integer> resolvedTermToConceptualRowId = new HashMap<>();
 
@@ -340,13 +347,11 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
         // Step 1: Collect unique synonym IDs
         Set<Integer> uniqueSynonymIds = new HashSet<>();
-        if (initialNumPositions > 0 && requirements.needsSynonymIds) { // Only collect if needed and positions exist
-            for (int i = 0; i < initialNumPositions; i++) {
-                int synonymId = positions.getSynonymIdAt(i);
-                // Apply filter if targets were specified
-                if (filterTargetSynonymIds.isEmpty() || filterTargetSynonymIds.contains(synonymId)) {
-                    uniqueSynonymIds.add(synonymId);
-                }
+        for (int i = 0; i < initialNumPositions; i++) {
+            int synonymId = positions.getSynonymIdAt(i);
+            // Apply filter if targets were specified
+            if (filterTargetSynonymIds.isEmpty() || filterTargetSynonymIds.contains(synonymId)) {
+                uniqueSynonymIds.add(synonymId);
             }
         }
 
@@ -374,12 +379,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
             String term = resolvedTermsCache.get(currentSynonymId);
             if (term == null) {
-                if (requirements.needsSynonymIds) {
-                     logger.warn("executeVariableBindingSearch: No term found in pre-fetched cache for synonymId {} at position {}. Skipping.", currentSynonymId, i);
-                } else {
-                     logger.error("executeVariableBindingSearch: Term for synonymId {} is null and needsSynonymIds is false. Cannot bind variable '{}'. Skipping position {}.",
-                                 currentSynonymId, queryVariableName, i);
-                }
+                logger.warn("executeVariableBindingSearch: No term found in pre-fetched cache for synonymId {} at position {}. Skipping.", currentSynonymId, i);
                 continue;
             }
             logger.trace("executeVariableBindingSearch: Term '{}' for synId {} found via pre-fetched cache.", term, currentSynonymId);
