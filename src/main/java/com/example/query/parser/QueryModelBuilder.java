@@ -681,11 +681,35 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         String operator = ctx.comparisonOp().getText();
         int year = Integer.parseInt(ctx.year.getText()); // Extract the year from the grammar
 
-        // Map comparison operator to temporal predicate (>, <, >=, <=, =, ==)
         TemporalPredicate temporalType = mapComparisonOpToPredicate(operator);
 
-        // Convert year to LocalDateTime for the start of that year
-        LocalDateTime yearStartDate = LocalDateTime.of(year, 1, 1, 0, 0);
+        Optional<LocalDateTime> startDate = Optional.empty();
+        Optional<LocalDateTime> endDate = Optional.empty();
+
+        switch (temporalType) {
+            case EQUAL:
+                // DATE(= 2020) means the whole year 2020.
+                startDate = Optional.of(LocalDateTime.of(year, 1, 1, 0, 0));
+                endDate = Optional.of(LocalDateTime.of(year, 12, 31, 23, 59, 59));
+                break;
+            case AFTER:
+                // DATE(> 2020) should mean after Dec 31, 2020.
+                startDate = Optional.of(LocalDateTime.of(year, 12, 31, 23, 59, 59));
+                break;
+            case AFTER_EQUAL:
+                // DATE(>= 2020) should mean on or after Jan 1, 2020.
+                startDate = Optional.of(LocalDateTime.of(year, 1, 1, 0, 0));
+                break;
+            case BEFORE:
+                // DATE(< 2020) means before Jan 1, 2020.
+                startDate = Optional.of(LocalDateTime.of(year, 1, 1, 0, 0));
+                break;
+            case BEFORE_EQUAL:
+                // DATE(<= 2020) means on or before Dec 31, 2020.
+                // The executor's `evaluateTemporalCondition` uses the endDate for BEFORE_EQUAL.
+                endDate = Optional.of(LocalDateTime.of(year, 12, 31, 23, 59, 59));
+                break;
+        }
 
         String qualifiedVariableName = null;
         if (ctx.BIND() != null && ctx.var != null) {
@@ -702,8 +726,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         // Create Temporal model with the year date and predicate
         return new Temporal(
-            Optional.of(yearStartDate), // The year as a LocalDateTime (start of year)
-            Optional.empty(), // End date not used for simple year comparisons
+            startDate, // The year as a LocalDateTime (start of year)
+            endDate, // End date not used for simple year comparisons
             Optional.ofNullable(qualifiedVariableName), // Variable name if BIND clause present
             Optional.empty(), // Range not applicable for year comparisons
             temporalType // The comparison predicate (BEFORE, AFTER, etc.)

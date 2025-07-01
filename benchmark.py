@@ -80,37 +80,42 @@ def is_output_effectively_empty(text_content, is_csv_file, prompt_text_val):
         # If no data lines collected after filtering, it's empty
         return not actual_data_lines
 
-def _determine_strategies_for_query(query_info, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, is_verbose):
-    query_text = query_info['text']
+def _determine_strategies_for_query(query_info, is_verbose):
     benchmark_type = query_info['benchmark_type']
     original_query_id_str = f"q{query_info['id']+1}"
 
-    current_temporal_strategies = list(temporal_strategies_base)
-    current_stitch_strategies = list(stitch_strategies_base)
-
+    strategies_to_run = []
     if benchmark_type == "1HOP":
-        current_pushdown_strategies = ["none"]
-        if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - Type {benchmark_type}: Pushdown strategy fixed to 'none')", flush=True)
-    else: # 2HOP or 3HOP
-        current_pushdown_strategies = list(pushdown_strategies_base)
-        if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - Type {benchmark_type}: Using all pushdown strategies {current_pushdown_strategies})", flush=True)
+        if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - Type {benchmark_type}: Using specific strategies for 1-hop.)", flush=True)
+        strategies_to_run = [
+            # (temporal, pushdown, stitch)
+            ('naive', 'none', 'none'),      # B
+            ('nash', 'none', 'none'),       # N
+            ('naive', 'none', 'optimized'), # S
+            ('nash', 'none', 'optimized')   # S+N
+        ]
+    elif benchmark_type in ["2HOP", "3HOP"]:
+        if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - Type {benchmark_type}: Using specific strategies for 2/3-hop.)", flush=True)
+        strategies_to_run = [
+            # (temporal, pushdown, stitch)
+            ('naive', 'none', 'none'),          # B
+            ('nash', 'none', 'none'),           # N
+            ('naive', 'none', 'optimized'),     # S
+            ('naive', 'optimized', 'none'),     # P
+            ('naive', 'optimized', 'optimized'),# S+P
+            ('nash', 'optimized', 'optimized')  # S+P+N
+        ]
+    else: # Should not happen with current logic, but good to have a fallback
+        if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - Type {benchmark_type}: Unknown type, no strategies will be run.)", flush=True)
+        strategies_to_run = []
 
-    if not current_temporal_strategies:
-        if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - No temporal strategies applicable after DATE keyword check. No strategies for this query.)", flush=True)
-        return []
-
-    strategies_to_run = list(itertools.product(
-        current_temporal_strategies,
-        current_pushdown_strategies,
-        current_stitch_strategies
-    ))
 
     if not strategies_to_run and is_verbose:
-        print(f"    (StrategyDeterminer Q:{original_query_id_str} - No strategy combinations generated after product. No strategies for this query.)", flush=True)
+        print(f"    (StrategyDeterminer Q:{original_query_id_str} - No strategy combinations generated for this benchmark type. No strategies for this query.)", flush=True)
 
     return strategies_to_run
 
-def run_warm_mode(cli_process, queries_to_run, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, all_run_results_accumulator):
+def run_warm_mode(cli_process, queries_to_run, args, all_run_results_accumulator, file_output_dir):
     NUM_TIMED_RUNS_WARM = 3
     print(f"  Warm Cache Mode: Queries in order. 1 warm-up + {NUM_TIMED_RUNS_WARM} timed runs per setting.", flush=True)
     current_queries_for_warm_mode = list(queries_to_run) # Process in original order
@@ -125,7 +130,7 @@ def run_warm_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
         print(f"\n--- Query {original_query_id_str} (File: {source_file}, Type: {benchmark_type}) [WARM]: {query_text[:100]}{'...' if len(query_text)>100 else ''} ---", flush=True)
 
         strategies_to_run_for_this_query = _determine_strategies_for_query(
-            query_info, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, args.verbose
+            query_info, args.verbose
         )
 
         if not strategies_to_run_for_this_query:
@@ -193,10 +198,10 @@ def run_warm_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
                     current_strategy_critical_failure = True # Mark to skip timed runs
 
             verification_export_file = None
-            if args.export_dir and expected_answer and not current_strategy_critical_failure:
+            if expected_answer and not current_strategy_critical_failure:
                 safe_query_part = re.sub(r'[^a-zA-Z0-9_-]', '_', query_text)[:30]
                 fn_base = f"{original_query_id_str}_{safe_query_part}_T{temp_s}_P{push_s}_S{stitch_s}_warm"
-                verification_export_file = os.path.join(args.export_dir, f"{fn_base}_FOR_VERIFICATION.csv")
+                verification_export_file = os.path.join(file_output_dir, f"{fn_base}_FOR_VERIFICATION.csv")
 
             for run_num in range(NUM_TIMED_RUNS_WARM):
                 current_run_stdout, current_run_stderr = "", ""
@@ -298,7 +303,7 @@ def run_warm_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
                 "stderr_output": run_stderr_details.strip()
             })
 
-def run_cold_mode(cli_process, queries_to_run, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, all_run_results_accumulator):
+def run_cold_mode(cli_process, queries_to_run, args, all_run_results_accumulator, file_output_dir):
     NUM_COLD_PASSES = 3
     print(f"  Cold Cache Mode: {NUM_COLD_PASSES} passes. All (query, strategy) combinations are generated, then shuffled before each pass. 1 execution per combination per pass.", flush=True)
 
@@ -310,9 +315,6 @@ def run_cold_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
         # Call the helper function with base strategies
         strategies_for_this_query_cold = _determine_strategies_for_query(
             query_info_orig_for_cold,
-            temporal_strategies_base,
-            pushdown_strategies_base,
-            stitch_strategies_base,
             args.verbose
         )
 
@@ -447,10 +449,10 @@ def run_cold_mode(cli_process, queries_to_run, args, temporal_strategies_base, p
             else:
                 content_for_analysis_cold = stdout_for_verification_cold
 
-                if args.export_dir and expected_answer:
+                if expected_answer:
                     safe_query_part = re.sub(r'[^a-zA-Z0-9_-]', '_', query_text)[:30]
                     fn_base = f"{original_query_id_str}_{safe_query_part}_T{temp_s}_P{push_s}_S{stitch_s}_cold_verify"
-                    verification_export_file_cold = os.path.join(args.export_dir, f"{fn_base}.csv")
+                    verification_export_file_cold = os.path.join(file_output_dir, f"{fn_base}.csv")
                     try:
                         with open(verification_export_file_cold, 'w', encoding='utf-8') as vf_cold:
                             vf_cold.write(stdout_for_verification_cold)
@@ -757,7 +759,7 @@ if __name__ == "__main__":
     parser.add_argument("--index-dir", required=True, help="Path to QueryCLI index directory.")
     parser.add_argument("--full", action="store_true", help="Run cold and warm cache modes. Default: cold only.")
     parser.add_argument("--verbose", action="store_true", help="Verbose output from benchmark script and QueryCLI.")
-    parser.add_argument("--export-dir", help="Directory for exported CSV results (for verification). NOTE: This is for raw query output, not the benchmark summary.")
+    parser.add_argument("--output-dir", required=True, help="Directory to store all benchmark results. A subdirectory will be created for each query file's benchmark type and name.")
     args = parser.parse_args()
 
     queries_to_run_orig = [] # This will be populated per file now
@@ -768,9 +770,12 @@ if __name__ == "__main__":
     if not all_query_files:
         exit(f"Error: No .txt query files found in query directory: {args.query_dir}")
 
-    if args.export_dir and not os.path.exists(args.export_dir):
-        try: os.makedirs(args.export_dir); print(f"Created export directory: {args.export_dir}", flush=True)
-        except OSError as e: exit(f"Error creating export directory {args.export_dir}: {e}")
+    if args.output_dir:
+        try:
+            os.makedirs(args.output_dir, exist_ok=True)
+            print(f"Created output directory: {args.output_dir}", flush=True)
+        except OSError as e:
+            exit(f"Error creating output directory {args.output_dir}: {e}")
 
     print(f"Using JAR: {args.jar_path}", flush=True)
     print(f"Using DB File: {args.db_file}", flush=True)
@@ -779,8 +784,8 @@ if __name__ == "__main__":
     print(f"Cache Mode: {'full (cold + warm)' if args.full else 'cold only'}. Runs/Passes: Warm (1 warmup + 3 timed), Cold (3 passes, 1 exec per pass).", flush=True)
     print(f"Timeouts: QueryExec={QUERY_EXEC_TIMEOUT_SECONDS}s, CLIStartup={CLI_STARTUP_TIMEOUT_SECONDS}s, CmdAck={COMMAND_ACK_TIMEOUT_SECONDS}s, PromptWait={PROMPT}", flush=True)
     if args.verbose: print("Verbose output enabled.", flush=True)
-    if args.export_dir: print(f"Verification exports (if any) to: {args.export_dir}", flush=True)
-    print(f"Benchmark summary CSVs will be saved alongside their respective input query files in: {args.query_dir}", flush=True)
+    if args.output_dir: print(f"Benchmark results and verification exports will be saved in subdirectories under: {args.output_dir}", flush=True)
+    print(f"Benchmark summary CSVs will be saved in a structured format inside: {args.output_dir}", flush=True)
 
     total_files_processed = 0
     total_csv_files_written = 0
@@ -844,9 +849,10 @@ if __name__ == "__main__":
         total_files_processed += 1
         results_for_this_file_accumulator = []
 
-        temporal_strategies_base = ["naive", "nash"]
-        pushdown_strategies_base = ["none", "optimized"]
-        stitch_strategies_base = ["none", "optimized"]
+        original_filename_no_ext = os.path.splitext(current_filename)[0]
+        file_output_dir = os.path.join(args.output_dir, benchmark_type_for_file, original_filename_no_ext)
+        os.makedirs(file_output_dir, exist_ok=True)
+        print(f"  Output for this file will be stored in: {file_output_dir}", flush=True)
 
         cache_modes_to_run = ["cold"]
         if args.full: cache_modes_to_run.append("warm")
@@ -863,9 +869,9 @@ if __name__ == "__main__":
                 print(f"\n[BENCHMARK.PY] QueryCLI process initialized for '{cache_mode}' mode on file: {current_filename}", flush=True)
 
                 if cache_mode == "cold":
-                    run_cold_mode(cli_process_for_mode, queries_for_this_file, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, results_for_this_file_accumulator)
+                    run_cold_mode(cli_process_for_mode, queries_for_this_file, args, results_for_this_file_accumulator, file_output_dir)
                 elif cache_mode == "warm":
-                    run_warm_mode(cli_process_for_mode, queries_for_this_file, args, temporal_strategies_base, pushdown_strategies_base, stitch_strategies_base, results_for_this_file_accumulator)
+                    run_warm_mode(cli_process_for_mode, queries_for_this_file, args, results_for_this_file_accumulator, file_output_dir)
 
             except (FileNotFoundError, TimeoutError, ConnectionAbortedError, RuntimeError) as e_cli_main_file:
                 print(f"\nCRITICAL SCRIPT ERROR for file {current_filename} in '{cache_mode}' mode related to QueryCLI process: {e_cli_main_file}", flush=True)
@@ -921,7 +927,7 @@ if __name__ == "__main__":
         original_filename_no_ext = os.path.splitext(current_filename)[0]
         # benchmark_type_for_file should be correctly set from file reading
         output_csv_filename = f"{original_filename_no_ext}_{benchmark_type_for_file}_results.csv"
-        output_csv_filepath = os.path.join(args.query_dir, output_csv_filename)
+        output_csv_filepath = os.path.join(file_output_dir, output_csv_filename)
 
         print(f"  Writing results for {current_filename} (Type: {benchmark_type_for_file}) to {output_csv_filepath}", flush=True)
         try:
@@ -934,7 +940,7 @@ if __name__ == "__main__":
 
                     if not args.verbose:
                         row_data_copy['stdout_output'] = ""
-                        if args.export_dir and row_data_copy['verification_status'] == "PASSED":
+                        if args.output_dir and row_data_copy['verification_status'] == "PASSED":
                             if "VERIFY_EXPORT_WRITE_ERR" not in row_data_copy.get('stderr_output', ''):
                                 row_data_copy['stdout_output'] = "See verification export file or run with --verbose"
                     writer.writerow(row_data_copy)
@@ -949,7 +955,7 @@ if __name__ == "__main__":
     elif total_csv_files_written == 0:
         print(f"\nProcessed {total_files_processed} file(s), but no benchmark result CSV files were generated.", flush=True)
     else:
-        print(f"\nSuccessfully exported {total_csv_files_written} benchmark result CSV file(s) in total to {args.query_dir}.", flush=True)
+        print(f"\nSuccessfully exported {total_csv_files_written} benchmark result CSV file(s) in total to {args.output_dir}.", flush=True)
 
     print("\nBenchmark script execution complete.", flush=True)
 

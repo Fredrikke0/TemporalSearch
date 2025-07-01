@@ -134,10 +134,10 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
         int currentDocId = -1;
         int currentSentId = -1;
-        String currentNormalizedNerValue = null; // Renamed for clarity
+        LocalDate currentMergedDate = null;
         int currentMergedStartChar = -1;
         int currentMergedEndChar = -1;
-        int currentDateIdForMergedEntity = -1; // Renamed for clarity
+        int currentDateIdForMergedEntity = -1;
 
         // Iterate through sentences, apply span filter, then merge entities within the filtered sentence tokens
         for (Map.Entry<Integer, Map<Integer, List<AnnotationEntry>>> docEntry : groupedByDocAndSent.entrySet()) {
@@ -149,9 +149,10 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 // Process tokens for this sentence to merge date entities
                 for (AnnotationEntry token : sentenceTokens) {
                     String normalizedNer = token.getNormalizedNer(); // e.g., "2023-01-15"
+                    LocalDate parsedDate = parseNormalizedDate(normalizedNer);
 
-                    // Logic to merge consecutive identical normalized_ner values
-                    if (documentId == currentDocId && sentenceId == currentSentId && Objects.equals(normalizedNer, currentNormalizedNerValue)) {
+                    // Logic to merge consecutive identical dates
+                    if (parsedDate != null && documentId == currentDocId && sentenceId == currentSentId && parsedDate.equals(currentMergedDate)) {
                         currentMergedEndChar = token.getEndChar(); // Extend current entity
                     } else {
                         // End of previous entity (if any), or start of a new document/sentence
@@ -165,15 +166,14 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                         // Start of a new entity
                         currentDocId = documentId;
                         currentSentId = sentenceId;
-                        currentNormalizedNerValue = normalizedNer;
+                        currentMergedDate = parsedDate;
                         currentMergedStartChar = token.getBeginChar();
                         currentMergedEndChar = token.getEndChar();
                         currentDateIdForMergedEntity = -1; // Reset
 
-                        LocalDate docDate = parseNormalizedDate(normalizedNer);
-                        if (docDate != null) {
-                            final LocalDate finalDocDate = docDate;
-                            currentDateIdForMergedEntity = dateToId.computeIfAbsent(docDate, date -> {
+                        if (parsedDate != null) {
+                            final LocalDate finalDocDate = parsedDate;
+                            currentDateIdForMergedEntity = dateToId.computeIfAbsent(parsedDate, date -> {
                                 idToDate.add(date);
                                 int newId = idToDate.size() - 1;
                                 String interval = String.format("[%s , %s]",
@@ -304,20 +304,16 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     }
 
     private LocalDate parseNormalizedDate(String dateStr) {
-        if (dateStr == null) return null;
+        String key = NerDateIndexGenerator.normalizeDateToKeyFormat(dateStr);
+        if (key == null) {
+            return null;
+        }
         try {
-            return LocalDate.parse(dateStr, DateTimeFormatter.ISO_LOCAL_DATE);
-        } catch (DateTimeParseException e1) {
-            try {
-                if (dateStr.matches("^\\d{4}$")) {
-                    return LocalDate.parse(dateStr + "-01-01");
-                } else if (dateStr.matches("^\\d{4}-\\d{2}$")) {
-                    return LocalDate.parse(dateStr + "-01");
-                }
-            } catch (DateTimeParseException e2) {
-                // Fall through
-            }
-            logger.trace("Could not parse date string '{}' with available formats.", dateStr);
+            // NerDateIndexGenerator.normalizeDateToKeyFormat returns a string in 'yyyyMMdd' format.
+            return LocalDate.parse(key, DateTimeFormatter.ofPattern("yyyyMMdd"));
+        } catch (DateTimeParseException e) {
+            // This path should ideally not be taken if normalizeDateToKeyFormat is correct.
+            logger.warn("Failed to parse date key '{}' generated from input '{}'", key, dateStr, e);
             return null;
         }
     }

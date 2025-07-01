@@ -503,9 +503,9 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 while (iterator.isValid()) {
                     String currentKey = new String(iterator.key(), StandardCharsets.UTF_8);
 
-                    // Check if we've exceeded our range
-                    if (range.endKey() != null && currentKey.compareTo(range.endKey()) > 0) {
-                        strategyLogger.debug("NaiveTemporalStrategy: Reached end of range at key: {}", currentKey);
+                    // Check if we've exceeded our range (endKey is exclusive)
+                    if (range.endKey() != null && currentKey.compareTo(range.endKey()) >= 0) {
+                        strategyLogger.debug("NaiveTemporalStrategy: Stopping scan. Key '{}' is at or beyond the exclusive end of range '{}'", currentKey, range.endKey());
                         break;
                     }
 
@@ -586,7 +586,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 case EQUAL:
                     if (queryStartDate != null) {
                         startKey = formatDateKey(queryStartDate);
-                        endKey = queryEndDate != null ? formatDateKey(queryEndDate) : startKey;
+                        endKey = formatDateKey(queryEndDate != null ? queryEndDate.plusDays(1) : queryStartDate.plusDays(1));
                     }
                     break;
 
@@ -596,7 +596,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                         startKey = formatDateKey(queryStartDate);
                     }
                     if (queryEndDate != null) {
-                        endKey = formatDateKey(queryEndDate);
+                        endKey = formatDateKey(queryEndDate.plusDays(1));
                     }
                     break;
 
@@ -604,6 +604,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     // For AFTER queries, start from the day after the reference date
                     if (queryStartDate != null) {
                         startKey = formatDateKey(queryStartDate.plusDays(1));
+                        endKey = formatDateKey(Nash.GLOBAL_UPPER_BOUND);
                     }
                     // No end key - iterate to the end of the index
                     break;
@@ -612,22 +613,25 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     // For AFTER_EQUAL, start from the reference date
                     if (queryStartDate != null) {
                         startKey = formatDateKey(queryStartDate);
+                        endKey = formatDateKey(Nash.GLOBAL_UPPER_BOUND);
                     }
                     // No end key - iterate to the end of the index
                     break;
 
                 case BEFORE:
-                    // For BEFORE queries, iterate from beginning to day before reference date
+                    // For BEFORE queries, iterate from beginning up to (but not including) the reference date
                     if (queryStartDate != null) {
-                        endKey = formatDateKey(queryStartDate.minusDays(1));
+                        startKey = formatDateKey(Nash.GLOBAL_LOWER_BOUND);
+                        endKey = formatDateKey(queryStartDate);
                     }
                     // No start key - iterate from the beginning of the index
                     break;
 
                 case BEFORE_EQUAL:
-                    // For BEFORE_EQUAL, iterate from beginning to reference date
+                    // For BEFORE_EQUAL, iterate from beginning up to and including the reference date
                     if (queryStartDate != null) {
-                        endKey = formatDateKey(queryStartDate);
+                        startKey = formatDateKey(Nash.GLOBAL_LOWER_BOUND);
+                        endKey = formatDateKey(queryStartDate.plusDays(1));
                     }
                     // No start key - iterate from the beginning of the index
                     break;
@@ -638,7 +642,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                         startKey = formatDateKey(queryStartDate);
                     }
                     if (queryEndDate != null) {
-                        endKey = formatDateKey(queryEndDate);
+                        endKey = formatDateKey(queryEndDate.plusDays(1));
                     }
                     break;
 
