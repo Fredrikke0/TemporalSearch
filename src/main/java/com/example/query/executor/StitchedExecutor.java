@@ -123,7 +123,6 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
 
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
         requirements.needsConceptualRowIds = true;
-        final Map<Integer, Map<Integer, Integer>> sentenceToConceptualRowId = new HashMap<>();
 
         try {
             if (temporalConditionDetails != null) {
@@ -173,14 +172,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                             int termBeginChar = positions.getBeginCharAt(i);
                                             int termEndChar = positions.getEndCharAt(i);
 
-                                            int conceptualRowId;
-                                            if (granularity == Query.Granularity.SENTENCE) {
-                                                conceptualRowId = sentenceToConceptualRowId
-                                                    .computeIfAbsent(docId, k -> new HashMap<>())
-                                                    .computeIfAbsent(sentenceId, k -> resultSoA.getNextConceptualRowId());
-                                            } else {
-                                                conceptualRowId = resultSoA.getNextConceptualRowId();
-                                            }
+                                            int conceptualRowId = resultSoA.getNextConceptualRowId();
 
                                             resultSoA.add(
                                                 ngramTerm,
@@ -303,14 +295,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                             annotationValueForSoA = currentAnnotationSynonymId;
                         }
 
-                        int conceptualRowId;
-                        if (granularity == Query.Granularity.SENTENCE) {
-                            conceptualRowId = sentenceToConceptualRowId
-                                .computeIfAbsent(docId, k -> new HashMap<>())
-                                .computeIfAbsent(sentenceId, k -> resultSoA.getNextConceptualRowId());
-                        } else {
-                            conceptualRowId = resultSoA.getNextConceptualRowId();
-                        }
+                        int conceptualRowId = resultSoA.getNextConceptualRowId();
 
                         resultSoA.add(
                             ngramTerm,

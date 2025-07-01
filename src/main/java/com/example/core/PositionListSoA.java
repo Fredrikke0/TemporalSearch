@@ -1098,9 +1098,9 @@ public class PositionListSoA {
         int selectedCount = 0;
 
         // Step 3: Document ID Filtering
-        Optional<TreeSet<Integer>> allowedDocIdsOpt = activeContext.allowedDocumentIds();
+        Optional<Set<Integer>> allowedDocIdsOpt = activeContext.allowedDocumentIds();
         if (allowedDocIdsOpt.isPresent()) {
-            TreeSet<Integer> allowedDocs = allowedDocIdsOpt.get();
+            Set<Integer> allowedDocs = allowedDocIdsOpt.get();
             if (allowedDocs.isEmpty()) {
                 logger.debug("deserializeWithFilters: Context has empty allowedDocumentIds set. Returning empty result.");
                 return result; // No documents allowed, so result is empty

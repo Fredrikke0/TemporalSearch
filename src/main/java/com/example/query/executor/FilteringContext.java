@@ -6,12 +6,11 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeSet;
 
 import com.example.query.model.Query;
 
 public record FilteringContext(
-    Optional<TreeSet<Integer>> allowedDocumentIds,
+    Optional<Set<Integer>> allowedDocumentIds,
     Optional<Map<Integer, Set<Integer>>> allowedDocumentSentenceIds, // Map<DocID, Set<SentenceID>>
     Query.Granularity granularity
 ) {
@@ -30,17 +29,17 @@ public record FilteringContext(
     // Derives a new context by intersecting with new constraints from a QueryResultSoA
     public FilteringContext intersect(QueryResultSoA newConstraints) {
         if (newConstraints == null || newConstraints.isEmpty()) {
-            return new FilteringContext(Optional.of(new TreeSet<>()), Optional.of(Collections.emptyMap()), this.granularity);
+            return new FilteringContext(Optional.of(new HashSet<>()), Optional.of(Collections.emptyMap()), this.granularity);
         }
 
         Set<Integer> currentResultDocIds = newConstraints.getUniqueDocumentIds();
-        Optional<TreeSet<Integer>> nextDocIds;
+        Optional<Set<Integer>> nextDocIds;
         if (this.allowedDocumentIds.isPresent()) {
-            TreeSet<Integer> intersection = new TreeSet<>(this.allowedDocumentIds.get());
+            Set<Integer> intersection = new HashSet<>(this.allowedDocumentIds.get());
             intersection.retainAll(currentResultDocIds);
             nextDocIds = Optional.of(intersection);
         } else {
-            nextDocIds = Optional.of(new TreeSet<>(currentResultDocIds));
+            nextDocIds = Optional.of(new HashSet<>(currentResultDocIds));
         }
 
         if (nextDocIds.isPresent() && nextDocIds.get().isEmpty()) {
