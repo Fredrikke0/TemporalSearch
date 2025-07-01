@@ -90,7 +90,7 @@ class PosExecutorTest {
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(1, result.getConceptualRowCount(), "Specific term search should yield 1 conceptual row for 'test'");
+        assertEquals(2, result.getConceptualRowCount(), "Specific term search should yield 2 conceptual rows for 2 matches of 'test'");
         assertEquals(2, result.size());
         Set<Integer> docIds = new HashSet<>();
         for(int i=0; i < result.size(); i++) docIds.add(result.getDocumentIdAt(i));
@@ -126,7 +126,7 @@ class PosExecutorTest {
 
         assertNotNull(result);
         assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
-        assertEquals(1, result.getConceptualRowCount(), "Specific term search should yield 1 conceptual row for 'run'");
+        assertEquals(4, result.getConceptualRowCount(), "Specific term search should yield 4 conceptual rows for 4 matches of 'run'");
         assertEquals(4, result.size());
 
         boolean match1_1 = false, match1_2 = false, match2_1 = false;
@@ -169,7 +169,7 @@ class PosExecutorTest {
 
         assertNotNull(result);
         assertEquals(Query.Granularity.SENTENCE, result.getGranularity());
-        assertEquals(1, result.getConceptualRowCount(), "Specific term search should yield 1 conceptual row for 'noun'");
+        assertEquals(4, result.getConceptualRowCount(), "Specific term search should yield 4 conceptual rows for 4 matches of 'noun'");
         assertEquals(4, result.size());
 
         boolean match1_0 = false, match1_2 = false, match1_3 = false, match2_1 = false;
@@ -219,7 +219,7 @@ class PosExecutorTest {
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(3, result.getConceptualRowCount(), "Should be 3 conceptual rows for 'good', 'bad', 'ugly'");
+        assertEquals(4, result.getConceptualRowCount(), "Should be 4 conceptual rows for 4 matches");
         assertEquals(4, result.size());
 
         Set<Integer> docIds = new HashSet<>();
@@ -260,7 +260,7 @@ class PosExecutorTest {
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        assertEquals(1, result.getConceptualRowCount(), "Should be 1 conceptual row for the tag 'NNP'");
+        assertEquals(3, result.getConceptualRowCount(), "Should be 3 conceptual rows for the 3 matches of the tag 'NNP'");
         assertEquals(3, result.size());
 
         Set<Integer> docIds = new HashSet<>();

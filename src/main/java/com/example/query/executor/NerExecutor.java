@@ -160,9 +160,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             return 0;
         }
         int numPositions = positions.getNumPositions();
-
-        int conceptualRowId = resultSoA.getNextConceptualRowId();
-        int positionsAddedToSoa = 0;
+        int conceptualRowsAdded = 0;
 
         for (int i = 0; i < numPositions; i++) {
             resultSoA.add(
@@ -174,13 +172,13 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                 requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                 -1,
-                conceptualRowId
+                resultSoA.getNextConceptualRowId() // Each match gets a new conceptual row
             );
-            positionsAddedToSoa++;
+            conceptualRowsAdded++;
         }
-        logger.debug("executeEntityTypeOnlySearch for Type '{}' added {} positions to QueryResultSoA under conceptualRowId {}",
-            normalizedEntityType, positionsAddedToSoa, conceptualRowId);
-        return positionsAddedToSoa > 0 ? 1 : 0; // Returns 1 conceptual row if positions were added
+        logger.debug("executeEntityTypeOnlySearch for Type '{}' added {} positions to QueryResultSoA, creating {} conceptual rows.",
+            normalizedEntityType, numPositions, conceptualRowsAdded);
+        return conceptualRowsAdded;
     }
 
     /**
@@ -242,15 +240,12 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             return 0;
         }
 
-        Map<Integer, Integer> synonymIdToConceptualRowId = new HashMap<>();
-        int positionsAddedToSoa = 0;
+        int conceptualRowsAdded = 0;
         int initialNumPositions = positions.getNumPositions();
 
         for (int i = 0; i < initialNumPositions; i++) {
             int currentSynonymId = positions.getSynonymIdAt(i);
             if (targetSynonymIds.contains(currentSynonymId)) {
-                int conceptualRowId = synonymIdToConceptualRowId.computeIfAbsent(currentSynonymId, k -> resultSoA.getNextConceptualRowId());
-
                 // Get the original target value for this synonym ID from our pre-computed mapping
                 String targetValueToStore = synonymIdToOriginalTarget.get(currentSynonymId);
                 if (targetValueToStore == null) {
@@ -267,14 +262,14 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                     requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                     requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                     currentSynonymId,
-                    conceptualRowId
+                    resultSoA.getNextConceptualRowId() // Each match gets a new conceptual row
                 );
-                positionsAddedToSoa++;
+                conceptualRowsAdded++;
             }
         }
-        logger.debug("executeSpecificEntityFilterSearch for Type '{}', Targets {} (synIds {}), added {} positions to QueryResultSoA with {} conceptual rows after all filtering.",
-                     normalizedEntityType, targetValuesFromQuery, targetSynonymIds, positionsAddedToSoa, synonymIdToConceptualRowId.size());
-        return synonymIdToConceptualRowId.size();
+        logger.debug("executeSpecificEntityFilterSearch for Type '{}', Targets {} (synIds {}), added {} positions to QueryResultSoA, creating {} conceptual rows.",
+                     normalizedEntityType, targetValuesFromQuery, targetSynonymIds, conceptualRowsAdded, conceptualRowsAdded);
+        return conceptualRowsAdded;
     }
 
     /**
@@ -333,9 +328,8 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
 
         logger.trace("executeVariableBindingSearch: Decompressed raw arrays. DocIds size: {}, SynonymIds size: {}", positions.getNumPositions(), positions.getSynonymIds().size());
 
-        Map<String, Integer> resolvedTermToConceptualRowId = new HashMap<>();
-
         int conceptualRowsAdded = 0;
+        int positionsAddedToSoa = 0;
         int initialNumPositions = positions.getNumPositions();
 
         // Step 1: Collect unique synonym IDs
@@ -395,12 +389,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
 
             final String finalValueToBind = valueToBind;
-            int conceptualRowId = resolvedTermToConceptualRowId.computeIfAbsent(finalValueToBind, k -> {
-                int newConceptualId = resultSoA.getNextConceptualRowId();
-                logger.trace("executeVariableBindingSearch: New conceptual row for term '{}' (valueToBind: '{}'). Assigning new conceptualRowId: {}",
-                             term, finalValueToBind, newConceptualId);
-                return newConceptualId;
-            });
+            int conceptualRowId = resultSoA.getNextConceptualRowId(); // Each match gets a new conceptual row
 
             logger.trace("executeVariableBindingSearch: Adding to resultSoA. ConceptualRowId: {}, VarName: '{}', Value: '{}', ValueType: ENTITY, DocId: {}",
                 conceptualRowId, queryVariableName, finalValueToBind, positions.getDocIdAt(i));
@@ -416,8 +405,9 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 currentSynonymId,
                 conceptualRowId
             );
+            positionsAddedToSoa++;
         }
-        conceptualRowsAdded = resolvedTermToConceptualRowId.size();
+        conceptualRowsAdded = positionsAddedToSoa;
         logger.debug("executeVariableBindingSearch for Type '{}' completed. Added {} conceptual rows and {} total bindings to QueryResultSoA.",
                      normalizedEntityType, conceptualRowsAdded, resultSoA.size());
         return conceptualRowsAdded;

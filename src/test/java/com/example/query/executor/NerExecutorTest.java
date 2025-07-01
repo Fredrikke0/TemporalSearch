@@ -187,8 +187,8 @@ class NerExecutorTest {
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        // For NER(TYPE) queries, conceptualRowCount is 1 (for the type itself)
-        assertEquals(1, result.getConceptualRowCount(), "For type-only search, one conceptual row for 'PERSON'");
+        // For NER(TYPE) queries, each occurrence gets its own conceptual row
+        assertEquals(2, result.getConceptualRowCount(), "For type-only search, each of the 2 occurrences should get a conceptual row");
         // Size is the number of actual occurrences/positions
         assertEquals(2, result.size(), "Should find 2 occurrences of PERSON type");
 
@@ -232,7 +232,7 @@ class NerExecutorTest {
 
         QueryResultSoA resultLocation = executor.execute(conditionLocation, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         assertNotNull(resultLocation);
-        assertEquals(1, resultLocation.getConceptualRowCount(), "Conceptual row count for LOCATION type");
+        assertEquals(2, resultLocation.getConceptualRowCount(), "Conceptual row count for LOCATION type");
         assertEquals(2, resultLocation.size(), "Two occurrences of LOCATION type");
         Set<Integer> locDocIds = new HashSet<>();
         for(int i=0; i < resultLocation.size(); i++){
@@ -275,8 +275,8 @@ class NerExecutorTest {
 
         assertNotNull(result);
         assertEquals(Query.Granularity.DOCUMENT, result.getGranularity());
-        // Two distinct entities: "acmeinc", "globexcorp"
-        assertEquals(2, result.getConceptualRowCount(), "Should be 2 conceptual rows for 'acmeinc', 'globexcorp'");
+        // Three occurrences, so three conceptual rows.
+        assertEquals(3, result.getConceptualRowCount(), "Should be 3 conceptual rows for 3 occurrences");
         // Three actual occurrences
         assertEquals(3, result.size(), "Should be 3 positions in total");
 
@@ -382,7 +382,7 @@ class NerExecutorTest {
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
-        assertEquals(1, result.getConceptualRowCount(), "Should be 1 conceptual row for the type itself");
+        assertEquals(2, result.getConceptualRowCount(), "Should be 2 conceptual rows for the 2 occurrences");
         assertEquals(2, result.size(), "Should find 2 occurrences of the type");
 
         for (int i = 0; i < result.size(); i++) {
@@ -427,7 +427,7 @@ class NerExecutorTest {
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
-        assertEquals(2, result.getConceptualRowCount(), "Should find two distinct entities: paris, london");
+        assertEquals(3, result.getConceptualRowCount(), "Should find 3 conceptual rows for 3 occurrences");
         assertEquals(3, result.size(), "Should find 3 occurrences in total");
 
         Set<String> foundValues = new HashSet<>();
@@ -608,7 +608,7 @@ class NerExecutorTest {
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
-        assertEquals(2, result.getConceptualRowCount(), "Should find 2 conceptual rows for 'paris' and 'london'");
+        assertEquals(3, result.getConceptualRowCount(), "Should find 3 conceptual rows for 3 occurrences");
         assertEquals(3, result.size(), "Should find 3 occurrences (paris appears twice, london once)");
 
         // Verify the results contain only paris and london, with correct variable binding
@@ -646,7 +646,7 @@ class NerExecutorTest {
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
-        assertEquals(1, result.getConceptualRowCount(), "Should be 1 conceptual row for the type itself");
+        assertEquals(2, result.getConceptualRowCount(), "Should be 2 conceptual rows for the 2 occurrences of the type");
         assertEquals(2, result.size(), "Should find 2 occurrences of ORGANIZATION type");
 
         // Verify results are type-based (not entity-specific)

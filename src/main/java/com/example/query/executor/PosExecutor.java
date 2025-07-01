@@ -142,14 +142,10 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         int numPositionsTotal = positions.getNumPositions();
         if (numPositionsTotal == 0) return; // Should be caught by positions.isEmpty() but defensive check.
 
-        int conceptualRowId = -1;
-        int positionsAddedToSoa = 0;
+        int conceptualRowsAdded = 0;
 
         for (int i = 0; i < numPositionsTotal; i++) {
             if (positions.getSynonymIdAt(i) == targetSynonymId) {
-                if (conceptualRowId == -1) {
-                    conceptualRowId = resultSoA.getNextConceptualRowId();
-                }
                 resultSoA.add(
                     termFromQuery,
                     ValueType.POS_TERM,
@@ -159,13 +155,13 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                     requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                     requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                     targetSynonymId,
-                    conceptualRowId
+                    resultSoA.getNextConceptualRowId() // Each match gets a new conceptual row
                 );
-                positionsAddedToSoa++;
+                conceptualRowsAdded++;
             }
         }
-        logger.debug("executeSpecificTermSearch for Tag '{}', Term '{}' added {} positions to QueryResultSoA under conceptualRowId {}",
-            tagFromQuery, termFromQuery, positionsAddedToSoa, conceptualRowId != -1 ? conceptualRowId : "(none)");
+        logger.debug("executeSpecificTermSearch for Tag '{}', Term '{}' added {} positions to QueryResultSoA, creating {} conceptual rows.",
+            tagFromQuery, termFromQuery, conceptualRowsAdded, conceptualRowsAdded);
     }
 
     private void executeTagOnlyOrVariableTermSearch(String tagFromQuery, String variableName, IndexAccessInterface index,
@@ -217,7 +213,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
             }
 
             Map<String, Integer> resolvedTermToConceptualRowId = new java.util.HashMap<>();
-            // Map<Integer, String> resolvedSynonymIdToTermCache = new java.util.HashMap<>(); // REMOVED
+            int conceptualRowsAdded = 0;
 
             for (int i = 0; i < numPositions; i++) {
                 int currentSynonymId = positions.getSynonymIdAt(i);
@@ -230,7 +226,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                     continue;
                 }
 
-                int conceptualRowId = resolvedTermToConceptualRowId.computeIfAbsent(termToBind, k -> resultSoA.getNextConceptualRowId());
+                int conceptualRowId = resultSoA.getNextConceptualRowId(); // Each match gets a new conceptual row
 
                 resultSoA.add(
                     termToBind,
@@ -243,13 +239,13 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                     currentSynonymId,
                     conceptualRowId
                 );
+                conceptualRowsAdded++;
             }
-            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' BIND '{}' added {} conceptual rows and {} total bindings.",
-                tagFromQuery, variableName, resolvedTermToConceptualRowId.size(), resultSoA.size());
+            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' BIND '{}' created {} conceptual rows from {} total bindings.",
+                tagFromQuery, variableName, conceptualRowsAdded, resultSoA.size());
 
         } else { // Tag-only search, no variable binding for the term itself
-            int conceptualRowIdForTag = resultSoA.getNextConceptualRowId();
-            int positionsAddedToSoa = 0;
+            int conceptualRowsAdded = 0;
             for (int i = 0; i < numPositions; i++) {
                 resultSoA.add(
                     tagFromQuery, // Value is the tag itself
@@ -260,12 +256,12 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                     requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                     requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                     -1, // No specific synonym ID is relevant when just matching the tag
-                    conceptualRowIdForTag
+                    resultSoA.getNextConceptualRowId() // Each match gets a new conceptual row
                 );
-                positionsAddedToSoa++;
+                conceptualRowsAdded++;
             }
-            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' (no BIND) added {} positions to QueryResultSoA under conceptualRowId {}",
-                tagFromQuery, positionsAddedToSoa, conceptualRowIdForTag);
+            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' (no BIND) added {} positions to QueryResultSoA, creating {} conceptual rows.",
+                tagFromQuery, conceptualRowsAdded, conceptualRowsAdded);
         }
     }
 }

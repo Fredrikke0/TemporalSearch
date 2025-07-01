@@ -673,7 +673,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                                   Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
                                                LocalDate boundDate, PositionListSoA filteredPositions) {
             if (filteredPositions.isEmpty()) return currentConceptualRowId;
-            int conceptualId = resultSoA.getNextConceptualRowId();
+            int conceptualRowsAdded = 0;
             for (int i = 0; i < filteredPositions.getNumPositions(); i++) {
                 resultSoA.add(
                     null, // No value to bind for literal matches
@@ -684,17 +684,16 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     requirements.needsPositions ? filteredPositions.getBeginCharAt(i) : -1,
                     requirements.needsPositions ? filteredPositions.getEndCharAt(i) : -1,
                     -1, // Synonym ID not applicable here
-                    conceptualId
+                    resultSoA.getNextConceptualRowId()
                 );
+                conceptualRowsAdded++;
             }
-            // If conceptual rows were added, increment the strategy's counter of processed items.
-            return currentConceptualRowId + 1;
+            return currentConceptualRowId + conceptualRowsAdded;
         }
 
         private int processEntryForVariableBinding(Temporal condition, QueryResultSoA resultSoA, AttributeRequirements requirements,
                                                  Query.Granularity granularity, int granularitySize, int currentConceptualRowId,
                                                  LocalDate boundDate, String variableNameToBind, Position filteredPosition) {
-            int conceptualId = resultSoA.getNextConceptualRowId();
             resultSoA.add(
                 boundDate, ValueType.DATE, variableNameToBind,
                 filteredPosition.getDocumentId(),
@@ -702,7 +701,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 requirements.needsPositions ? filteredPosition.getBeginPosition() : -1,
                 requirements.needsPositions ? filteredPosition.getEndPosition() : -1,
                 -1, // Ensuring this is -1 as Position object has no getSynonymId and it's not relevant for ner_date entries here.
-                conceptualId
+                resultSoA.getNextConceptualRowId()
             );
              // If a conceptual row was added, increment the strategy's counter.
              return currentConceptualRowId + 1;

@@ -130,6 +130,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
         logger.debug("Searching for specific dependency relation: {} (into QueryResultSoA)", searchKey);
         Optional<byte[]> rawBlobOptional = index.getRaw(keyBytes);
+        int conceptualRowsAdded = 0;
 
         if (rawBlobOptional.isPresent()) {
             byte[] rawBlob = rawBlobOptional.get();
@@ -155,17 +156,15 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                     requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                     requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                    currentConceptualRowId
+                    resultSoA.getNextConceptualRowId()
                 );
+                conceptualRowsAdded++;
             }
-            if (numPositions > 0) {
-                currentConceptualRowId++;
-            }
-            logger.debug("Added {} bindings for dependency '{}' under conceptual ID {}", numPositions, searchKey, currentConceptualRowId -1);
+            logger.debug("Added {} bindings for dependency '{}', creating {} conceptual rows.", numPositions, searchKey, conceptualRowsAdded);
         } else {
             logger.debug("No positions found for dependency relation: '{}'", searchKey);
         }
-        return currentConceptualRowId;
+        return currentConceptualRowId + conceptualRowsAdded;
     }
 
     private int executeVariableSearchOptimized(Dependency condition, IndexAccessInterface index,
@@ -248,6 +247,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                         continue;
                     }
                     int numPositions = positions.getNumPositions();
+                    int conceptualRowsAdded = 0;
 
                     for (int i = 0; i < numPositions; i++) {
                         resultSoA.add(
@@ -259,14 +259,13 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                             requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                             requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                             requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                            currentConceptualRowId
+                            resultSoA.getNextConceptualRowId()
                         );
+                        conceptualRowsAdded++;
                     }
-                    if (numPositions > 0) {
-                        currentConceptualRowId++;
-                    }
-                    logger.debug("Added {} bindings for dependency variable '{}' (key: '{}') under conceptual ID range ending {}",
-                                 numPositions, variableName != null ? variableName : "<N/A>", key, currentConceptualRowId -1);
+                    currentConceptualRowId += conceptualRowsAdded;
+                    logger.debug("Added {} bindings for dependency variable '{}' (key: '{}'), creating {} new conceptual rows.",
+                                 numPositions, variableName != null ? variableName : "<N/A>", key, conceptualRowsAdded);
                 } else {
                     logger.warn("Skipping invalid key format in dependency index: {}", key);
                 }
