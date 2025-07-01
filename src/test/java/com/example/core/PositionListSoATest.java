@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Test;
 
 import com.example.index.AnnotationType;
 import com.example.index.StitchPosition;
-import com.example.query.executor.AttributeRequirements;
 
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 
@@ -276,57 +275,6 @@ class PositionListSoATest {
         assertEquals(-1, synIds.getInt(0));
         assertEquals(20000, synIds.getInt(1));
         assertEquals(-1, synIds.getInt(2));
-    }
-
-    @Test
-    void testSelectiveDeserializationWithFilters() throws IOException {
-        PositionListSoA plOriginal = new PositionListSoA();
-        plOriginal.add(1, 10, 100, 1000, 10000); // pos 0
-        plOriginal.add(2, 20, 200, 2000, 20000); // pos 1
-
-        byte[] blob = plOriginal.serializeToCompositeBlob();
-
-        // --- Test Case 1: Only require sentence IDs ---
-        AttributeRequirements reqsSentOnly = new AttributeRequirements();
-        reqsSentOnly.needsSentenceId = true;
-
-        PositionListSoA plSentOnly = PositionListSoA.deserializeWithFilters(blob, reqsSentOnly, java.util.Optional.empty());
-
-        // Verify loaded data
-        assertEquals(2, plSentOnly.getNumPositions());
-        assertEquals(1, plSentOnly.getDocIdAt(0)); // DocIDs are always loaded
-        assertEquals(2, plSentOnly.getDocIdAt(1));
-        assertEquals(10, plSentOnly.getSentenceIdAt(0));
-        assertEquals(20, plSentOnly.getSentenceIdAt(1));
-
-        // Verify other arrays were NOT loaded (are empty)
-        assertTrue(plSentOnly.getBeginChars().isEmpty());
-        assertTrue(plSentOnly.getEndChars().isEmpty());
-        assertTrue(plSentOnly.getSynonymIds().isEmpty());
-
-
-        // --- Test Case 2: Only require positions ---
-        AttributeRequirements reqsPosOnly = new AttributeRequirements();
-        reqsPosOnly.needsPositions = true;
-
-        PositionListSoA plPosOnly = PositionListSoA.deserializeWithFilters(blob, reqsPosOnly, java.util.Optional.empty());
-        assertEquals(2, plPosOnly.getNumPositions());
-        assertEquals(100, plPosOnly.getBeginCharAt(0));
-        assertEquals(2000, plPosOnly.getEndCharAt(1));
-        assertTrue(plPosOnly.getSentenceIds().isEmpty());
-        assertTrue(plPosOnly.getSynonymIds().isEmpty());
-
-
-        // --- Test Case 3: Only require synonym IDs ---
-        AttributeRequirements reqsSynonymOnly = new AttributeRequirements();
-        reqsSynonymOnly.needsSynonymIds = true;
-
-        PositionListSoA plSynonymOnly = PositionListSoA.deserializeWithFilters(blob, reqsSynonymOnly, java.util.Optional.empty());
-        assertEquals(2, plSynonymOnly.getNumPositions());
-        assertEquals(10000, plSynonymOnly.getSynonymIdAt(0));
-        assertEquals(20000, plSynonymOnly.getSynonymIdAt(1));
-        assertTrue(plSynonymOnly.getSentenceIds().isEmpty());
-        assertTrue(plSynonymOnly.getBeginChars().isEmpty());
     }
 
     // --- Manipulation Method Tests ---

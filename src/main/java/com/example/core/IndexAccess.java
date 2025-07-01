@@ -254,14 +254,14 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public Optional<PositionListSoA> getMergedPositions(String baseTerm, com.example.query.executor.AttributeRequirements requirements, Optional<com.example.query.executor.FilteringContext> context)
+    public Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<com.example.query.executor.FilteringContext> context)
             throws IOException, IndexAccessException {
         checkOpen();
         byte[] baseTermBytes = bytes(baseTerm);
         Optional<byte[]> rawBaseData = getRaw(baseTermBytes);
 
         if (rawBaseData.isPresent()) {
-            PositionListSoA soa = PositionListSoA.deserializeWithFilters(rawBaseData.get(), requirements, context);
+            PositionListSoA soa = PositionListSoA.deserializeWithFilters(rawBaseData.get(), context);
             return soa.isEmpty() ? Optional.empty() : Optional.of(soa);
         }
 
@@ -278,7 +278,7 @@ public class IndexAccess implements IndexAccessInterface {
             if (rawSegmentData.isPresent()) {
                 segmentFoundInLoop = true;
                 // Apply context filtering directly during deserialization of the segment
-                PositionListSoA segmentSoA = PositionListSoA.deserializeWithFilters(rawSegmentData.get(), requirements, context);
+                PositionListSoA segmentSoA = PositionListSoA.deserializeWithFilters(rawSegmentData.get(), context);
 
                 if (!segmentSoA.isEmpty()) { // Only merge if the filtered segment is not empty
                     if (mergedSoA == null) {

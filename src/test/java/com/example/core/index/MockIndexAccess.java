@@ -359,7 +359,7 @@ public class MockIndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public Optional<PositionListSoA> getMergedPositions(String baseTerm, com.example.query.executor.AttributeRequirements requirements, Optional<FilteringContext> context) throws IOException, IndexAccessException {
+    public Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<FilteringContext> context) throws IOException, IndexAccessException {
         if (closed) {
             throw new IndexAccessException("MockIndexAccess is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
         }
@@ -376,7 +376,7 @@ public class MockIndexAccess implements IndexAccessInterface {
                 return Optional.empty(); // Or an empty PositionListSoA if context is present
             }
             try {
-                PositionListSoA resultSoa = PositionListSoA.deserializeWithFilters(blob, requirements, context);
+                PositionListSoA resultSoa = PositionListSoA.deserializeWithFilters(blob, context);
                 // resultSoa could be empty after filtering
                 return resultSoa.isEmpty() ? Optional.empty() : Optional.of(resultSoa);
             } catch (IOException e) {
@@ -400,7 +400,7 @@ public class MockIndexAccess implements IndexAccessInterface {
                 segmentFoundInLoop = true;
                 if (segmentBlob.length > 0) {
                     try {
-                        PositionListSoA segmentSoA = PositionListSoA.deserializeWithFilters(segmentBlob, requirements, context);
+                        PositionListSoA segmentSoA = PositionListSoA.deserializeWithFilters(segmentBlob, context);
                         if (!segmentSoA.isEmpty()) { // Only merge if not empty after filtering
                             if (mergedSoA == null) {
                                 mergedSoA = segmentSoA; // First non-empty segment

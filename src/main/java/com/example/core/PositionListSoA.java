@@ -19,7 +19,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.index.StitchPosition;
-import com.example.query.executor.AttributeRequirements;
 import com.example.query.executor.FilteringContext;
 import com.example.query.model.Query;
 
@@ -488,14 +487,6 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs or the data format is invalid.
      */
     public static PositionListSoA deserializeFromCompositeBlob(byte[] compositeBlob) throws IOException {
-        AttributeRequirements allTrue = new AttributeRequirements();
-        allTrue.needsSentenceId = true;
-        allTrue.needsPositions = true;
-        allTrue.needsSynonymIds = true;
-        return deserializeFromCompositeBlob(compositeBlob, allTrue);
-    }
-
-    public static PositionListSoA deserializeFromCompositeBlob(byte[] compositeBlob, AttributeRequirements requirements) throws IOException {
         if (compositeBlob == null || compositeBlob.length == 0) {
             return new PositionListSoA(); // Return empty if blob is null or empty
         }
@@ -519,38 +510,29 @@ public class PositionListSoA {
             instance.documentIds = readCompressedIntArray(dis, instance.numPositions, true);
             // logger.debug("Deserialized documentIds size: {}", instance.documentIds.size());
 
-            if (requirements.needsSentenceId) {
-                instance.sentenceIds = readCompressedIntArray(dis, instance.numPositions, true);
-            } else {
-                skipCompressedIntArray(dis, instance.numPositions);
-                instance.sentenceIds = new IntArrayList(0); // or null and handle later
-            }
+            // logger.debug("Deserializing sentenceIds for {} positions...", instance.numPositions);
+            instance.sentenceIds = readCompressedIntArray(dis, instance.numPositions, true);
+            // logger.debug("Deserialized sentenceIds size: {}", instance.sentenceIds.size());
 
-            if (requirements.needsPositions) {
-                instance.beginChars = readCompressedIntArray(dis, instance.numPositions, true);
-                instance.endChars = readCompressedIntArray(dis, instance.numPositions, true);
-            } else {
-                skipCompressedIntArray(dis, instance.numPositions); // begin
-                skipCompressedIntArray(dis, instance.numPositions); // end
-                instance.beginChars = new IntArrayList(0);
-                instance.endChars = new IntArrayList(0);
-            }
+            // logger.debug("Deserializing beginChars for {} positions...", instance.numPositions);
+            instance.beginChars = readCompressedIntArray(dis, instance.numPositions, true);
+            // logger.debug("Deserialized beginChars size: {}", instance.beginChars.size());
 
+            // logger.debug("Deserializing endChars for {} positions...", instance.numPositions);
+            instance.endChars = readCompressedIntArray(dis, instance.numPositions, true);
+            // logger.debug("Deserialized endChars size: {}", instance.endChars.size());
 
-            if (requirements.needsSynonymIds) {
-                instance.synonymIds = readCompressedIntArray(dis, instance.numPositions, false);
-            } else {
-                skipCompressedIntArray(dis, instance.numPositions);
-                instance.synonymIds = new IntArrayList(0);
-            }
+            // logger.debug("Deserializing synonymIds for {} positions...", instance.numPositions);
+            instance.synonymIds = readCompressedIntArray(dis, instance.numPositions, false); // No delta on synonym IDs typically
+            // logger.debug("Deserialized synonymIds size: {}", instance.synonymIds.size());
 
 
             // Post-deserialization validation
             if (instance.documentIds.size() != instance.numPositions ||
-                (requirements.needsSentenceId && instance.sentenceIds.size() != instance.numPositions) ||
-                (requirements.needsPositions && instance.beginChars.size() != instance.numPositions) ||
-                (requirements.needsPositions && instance.endChars.size() != instance.numPositions) ||
-                (requirements.needsSynonymIds && instance.synonymIds.size() != instance.numPositions)) {
+                instance.sentenceIds.size() != instance.numPositions ||
+                instance.beginChars.size() != instance.numPositions ||
+                instance.endChars.size() != instance.numPositions ||
+                instance.synonymIds.size() != instance.numPositions) {
                 String errorMessage = String.format(
                     "deserializeFromCompositeBlob: Mismatch between numPositions (%d) and actual array sizes. doc=%d, sent=%d, begin=%d, end=%d, syn=%d",
                     instance.numPositions, instance.documentIds.size(), instance.sentenceIds.size(),
@@ -1076,7 +1058,7 @@ public class PositionListSoA {
     }
 
     // Method from design document: PositionListSoA.deserializeWithFilters
-    public static PositionListSoA deserializeWithFilters(byte[] blob, AttributeRequirements requirements, Optional<FilteringContext> context)
+    public static PositionListSoA deserializeWithFilters(byte[] blob, Optional<FilteringContext> context)
             throws IOException {
         if (blob == null || blob.length == 0) {
             return new PositionListSoA(); // Return empty if blob is null or empty
@@ -1085,7 +1067,7 @@ public class PositionListSoA {
         // If context is not present or is unrestricted, use the standard deserialization
         if (context.isEmpty() || context.get().isUnrestricted()) {
             logger.trace("deserializeWithFilters: Context is empty or unrestricted, calling deserializeFromCompositeBlob.");
-            return deserializeFromCompositeBlob(blob, requirements);
+            return deserializeFromCompositeBlob(blob);
         }
 
         FilteringContext activeContext = context.get();
@@ -1104,35 +1086,10 @@ public class PositionListSoA {
         // Step 1: Deserialize all potential data arrays from the blob
         // Match the structure of deserializeFromCompositeBlob and serializeToCompositeBlob
         IntArrayList allDocIds = readCompressedIntArray(dis, numPositionsInBlob, true);     // applyDelta = true
-
-        IntArrayList allSentIds;
-        if (requirements.needsSentenceId) {
-            allSentIds = readCompressedIntArray(dis, numPositionsInBlob, true);
-        } else {
-            skipCompressedIntArray(dis, numPositionsInBlob);
-            allSentIds = null;
-        }
-
-        IntArrayList allBeginChars;
-        IntArrayList allEndChars;
-        if (requirements.needsPositions) {
-            allBeginChars = readCompressedIntArray(dis, numPositionsInBlob, true);
-            allEndChars = readCompressedIntArray(dis, numPositionsInBlob, true);
-        } else {
-            skipCompressedIntArray(dis, numPositionsInBlob); // beginChars
-            skipCompressedIntArray(dis, numPositionsInBlob); // endChars
-            allBeginChars = null;
-            allEndChars = null;
-        }
-
-        IntArrayList allSynonymIds;
-        if (requirements.needsSynonymIds) {
-            allSynonymIds = readCompressedIntArray(dis, numPositionsInBlob, false);
-        } else {
-            skipCompressedIntArray(dis, numPositionsInBlob);
-            allSynonymIds = null;
-        }
-
+        IntArrayList allSentIds = readCompressedIntArray(dis, numPositionsInBlob, true);    // applyDelta = true
+        IntArrayList allBeginChars = readCompressedIntArray(dis, numPositionsInBlob, true); // applyDelta = true
+        IntArrayList allEndChars = readCompressedIntArray(dis, numPositionsInBlob, true);   // applyDelta = true
+        IntArrayList allSynonymIds = readCompressedIntArray(dis, numPositionsInBlob, false); // applyDelta = false
 
         dis.close();
 
