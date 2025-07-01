@@ -1,8 +1,13 @@
 package com.example.query.executor;
 
 import java.io.IOException;
+// import java.util.ArrayList; // Not directly needed now
+// import java.util.Collections; // Not directly needed now
+// import java.util.List; // Not directly needed now
 import java.util.Map;
 import java.util.Optional;
+// import java.util.Objects; // Not directly needed now
+// import java.util.stream.Collectors; // Not directly needed now
 
 import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
@@ -11,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
+// import com.example.query.binding.MatchDetail; // Removed
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Dependency;
@@ -61,15 +67,25 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
             String governor = condition.governor();
             String dependent = condition.dependent();
             String relation = condition.relation();
-            boolean isVariableBinding = condition.isVariable();
+            boolean isVariableBinding = condition.isVariable(); // True if BIND clause is used
 
+            // Determine if any part is a variable placeholder (e.g., "?gov"), a literal wildcard "*",
+            // or if a BIND clause is active (which implies iterative search for binding).
+            // A field is considered "specific literal" if it's not null, not a variable placeholder, and not a wildcard.
             boolean govIsSpecificLiteral = (governor != null && !governor.startsWith("?") && !"*".equals(governor));
             boolean relIsSpecificLiteral = (relation != null && !relation.startsWith("?") && !"*".equals(relation));
             boolean depIsSpecificLiteral = (dependent != null && !dependent.startsWith("?") && !"*".equals(dependent));
 
             if (govIsSpecificLiteral && relIsSpecificLiteral && depIsSpecificLiteral && !isVariableBinding) {
+                // All parts are specific literals, and no BINDing is happening.
+                // This is the only case for the direct specific search.
                 conceptualRowIdCounter = executeSpecificSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
             } else {
+                // Any part is a variable ('?'), a literal wildcard ('*'), or this is a BIND operation.
+                // This path should use iterative scanning.
+                // Note: isVariableBinding check is not strictly needed here for routing if the above specific literal check fails,
+                // but executeVariableSearchOptimized relies on condition.isVariable() and condition.variableName().
+                // The main point is that if it's not a fully specific, non-binding query, we iterate.
                  conceptualRowIdCounter = executeVariableSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
             }
 
@@ -85,7 +101,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                 "Error accessing index or deserializing data for DEPENDENCY condition: " + e.getMessage(),
                 e,
                 condition.toString(),
-                QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR
+                QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR // Or a more general internal error
             );
         } catch (Exception e) {
             throw new QueryExecutionException(
@@ -160,6 +176,8 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
         String variableName = condition.isVariable() ? condition.variableName() : null;
 
+        // Relation filter must be present for BIND, but can be '*' for non-BIND wildcard searches.
+        // Initialize filters to handle literals, '?' (which results in null here after model building), or '*'.
         String governorFilterLower = (condition.governor() != null && !condition.governor().startsWith("?"))
                                      ? condition.governor().toLowerCase() : null;
         String relationFilterLower = (condition.relation() != null && !condition.relation().startsWith("?"))

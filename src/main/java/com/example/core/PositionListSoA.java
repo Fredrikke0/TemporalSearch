@@ -515,13 +515,15 @@ public class PositionListSoA {
                 return instance;
             }
 
+            // logger.debug("Deserializing documentIds for {} positions...", instance.numPositions);
             instance.documentIds = readCompressedIntArray(dis, instance.numPositions, true);
+            // logger.debug("Deserialized documentIds size: {}", instance.documentIds.size());
 
             if (requirements.needsSentenceId) {
                 instance.sentenceIds = readCompressedIntArray(dis, instance.numPositions, true);
             } else {
                 skipCompressedIntArray(dis, instance.numPositions);
-                instance.sentenceIds = new IntArrayList(0);
+                instance.sentenceIds = new IntArrayList(0); // or null and handle later
             }
 
             if (requirements.needsPositions) {
@@ -556,6 +558,7 @@ public class PositionListSoA {
                 logger.error(errorMessage);
                 throw new IOException(errorMessage);
             }
+            // logger.debug("deserializeFromCompositeBlob: END. Successfully deserialized.");
 
             return instance;
         } catch (java.io.EOFException e) {
@@ -605,6 +608,9 @@ public class PositionListSoA {
             for (int i = 0; i < numExpectedPositions; i++) {
                 list.add(value);
             }
+            // logger.debug("readCompressedIntArray: Read RLE data, value = {}, numExpectedPositions = {}.", value, numExpectedPositions);
+            // RLE data does not undergo delta transformation, so return directly.
+            // This is correct for both applyInverseDelta true and false cases if the original was RLE.
             return list;
         }
 
@@ -814,11 +820,13 @@ public class PositionListSoA {
                 throw new IOException("Failed to skip expected bytes for compressed array data. Expected: " + arraySizeOrMarker + ", Actual: " + skipped);
             }
         } else if (arraySizeOrMarker == 0) {
+             // logger.debug("skipCompressedIntArray: arraySizeOrMarker is 0 (empty array), nothing to skip beyond the size int itself.");
         } else {
             // This case should ideally not be reached if arraySizeOrMarker is negative but not RLE_MARKER
             logger.warn("skipCompressedIntArray: Encountered unexpected arraySize/marker value: {}. Cannot reliably skip.", arraySizeOrMarker);
             throw new IOException("Unexpected arraySize/marker in skipCompressedIntArray: " + arraySizeOrMarker);
         }
+        // logger.debug("skipCompressedIntArray: END. Skipped based on marker/size: {}", arraySizeOrMarker);
     }
 
     /**
@@ -872,6 +880,7 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs, the blob is malformed, or it's not a stitch list blob.
      */
     public static IntArrayList decompressSynonymIds(byte[] compositeBlob) throws IOException {
+        // logger.debug("decompressSynonymIds: Attempting from blob (size={})", compositeBlob != null ? compositeBlob.length : "null");
         if (compositeBlob == null || compositeBlob.length < 4) return new IntArrayList(0);
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(compositeBlob))) {
             int numPositions = dis.readInt();
@@ -880,6 +889,7 @@ public class PositionListSoA {
             skipCompressedIntArray(dis, numPositions); // SentenceIDs
             skipCompressedIntArray(dis, numPositions); // BeginChars
             skipCompressedIntArray(dis, numPositions); // EndChars
+            // logger.debug("decompressSynonymIds: Skipped doc, sentence, begin_char, and end_char IDs for {} positions.", numPositions);
             return readCompressedIntArray(dis, numPositions, false); // No delta
         }
     }
@@ -1065,18 +1075,22 @@ public class PositionListSoA {
         writeCompressedIntArray(dos, list.elements(), list.size(), applyDelta, override);
     }
 
+    // Method from design document: PositionListSoA.deserializeWithFilters
     public static PositionListSoA deserializeWithFilters(byte[] blob, AttributeRequirements requirements, Optional<FilteringContext> context)
             throws IOException {
         if (blob == null || blob.length == 0) {
             return new PositionListSoA(); // Return empty if blob is null or empty
         }
 
+        // If context is not present or is unrestricted, use the standard deserialization
         if (context.isEmpty() || context.get().isUnrestricted()) {
             logger.trace("deserializeWithFilters: Context is empty or unrestricted, calling deserializeFromCompositeBlob.");
             return deserializeFromCompositeBlob(blob, requirements);
         }
 
         FilteringContext activeContext = context.get();
+        //logger.debug("deserializeWithFilters: Active context present. Granularity: {}, AllowedDocsPresent: {}, AllowedDocSentsPresent: {}",
+        //        activeContext.granularity(), activeContext.allowedDocumentIds().isPresent(), activeContext.allowedDocumentSentenceIds().isPresent());
 
         PositionListSoA result = new PositionListSoA();
         DataInputStream dis = new DataInputStream(new ByteArrayInputStream(blob));
@@ -1089,7 +1103,7 @@ public class PositionListSoA {
 
         // Step 1: Deserialize all potential data arrays from the blob
         // Match the structure of deserializeFromCompositeBlob and serializeToCompositeBlob
-        IntArrayList allDocIds = readCompressedIntArray(dis, numPositionsInBlob, true);
+        IntArrayList allDocIds = readCompressedIntArray(dis, numPositionsInBlob, true);     // applyDelta = true
 
         IntArrayList allSentIds;
         if (requirements.needsSentenceId) {
@@ -1186,6 +1200,7 @@ public class PositionListSoA {
                 selectedCount++;
             }
         }
+        //logger.debug("deserializeWithFilters: Selected {} positions out of {} from blob after filtering.", selectedCount, numPositionsInBlob);
         return result;
     }
 

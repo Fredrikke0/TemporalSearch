@@ -4,8 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.util.Collections;
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -170,9 +169,9 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
 
                                         for (int i = 0; i < positions.getNumPositions(); i++) {
                                             int docId = positions.getDocIdAt(i);
-                                            int sentenceId = requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1;
-                                            int termBeginChar = requirements.needsPositions ? positions.getBeginCharAt(i) : -1;
-                                            int termEndChar = requirements.needsPositions ? positions.getEndCharAt(i) : -1;
+                                            int sentenceId = positions.getSentenceIdAt(i);
+                                            int termBeginChar = positions.getBeginCharAt(i);
+                                            int termEndChar = positions.getEndCharAt(i);
 
                                             int conceptualRowId;
                                             if (granularity == Query.Granularity.SENTENCE) {
@@ -188,9 +187,9 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                                 ValueType.TERM,
                                                 containsCondition.variableName(),
                                                 docId,
-                                                sentenceId,
-                                                termBeginChar,
-                                                termEndChar,
+                                                requirements.needsSentenceId ? sentenceId : -1,
+                                                requirements.needsPositions ? termBeginChar : -1,
+                                                requirements.needsPositions ? termEndChar : -1,
                                                 -1,
                                                 conceptualRowId
                                             );
@@ -201,7 +200,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                                     annotationValueTypeToStore,
                                                     annotationVarName,
                                                     docId,
-                                                    sentenceId,
+                                                    requirements.needsSentenceId ? sentenceId : -1,
                                                     -1, -1,
                                                     -1,
                                                     conceptualRowId
@@ -226,15 +225,16 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                              stitchIndexName, stitchLookupKey, context.isPresent(), annotationValueTypeToStore);
 
                 Set<Integer> targetAnnotationValueIds = new HashSet<>();
-                Map<Integer, String> synonymIdToOriginalTarget = new HashMap<>();
+                List<String> specificAnnotationValuesFromCondition = new ArrayList<>();
 
                 if (annotationCondition instanceof Ner nerValCond && !nerValCond.targets().isEmpty()) {
                     for (String target : nerValCond.targets()) {
                         if (target != null && !target.isBlank()) {
+                            specificAnnotationValuesFromCondition.add(target);
                             try {
                                 int targetId = synonymManager.getId(target.toLowerCase());
                                 targetAnnotationValueIds.add(targetId);
-                                synonymIdToOriginalTarget.put(targetId, target);
+                                logger.trace("Stitch with specific NER entity: '{}', targetId: {}", target, targetId);
                             } catch (Exception e) {
                                 logger.warn("Failed to get synonym ID for specific NER entity value '{}' in StitchedExecutor. This entity is unknown or DB error. Skipping this target.", target, e);
                             }
@@ -247,10 +247,10 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                     }
                 } else if (annotationCondition instanceof Pos posCond && posCond.term() != null && !posCond.term().isBlank()) {
                     String specificPosValue = posCond.term();
+                    specificAnnotationValuesFromCondition.add(specificPosValue);
                     try {
                         int targetId = synonymManager.getId(specificPosValue.toLowerCase());
                         targetAnnotationValueIds.add(targetId);
-                        synonymIdToOriginalTarget.put(targetId, specificPosValue);
                         logger.trace("Stitch with specific POS term: '{}' (for POS tag {}), targetId: {}",
                                      specificPosValue, posCond.posTag().toUpperCase(), targetId);
                     } catch (Exception e) {
@@ -265,39 +265,42 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                 if (rawBlobOpt.isPresent() && rawBlobOpt.get().length > 0) {
                     byte[] rawBlob = rawBlobOpt.get();
                     PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, requirements, context);
-                    logger.trace("Deserialized {} positions for key '{}'", positions.getNumPositions(), stitchLookupKey);
-
-                    if (positions.isEmpty()) {
-                        return resultSoA;
-                    }
-
-                    // --- Optimized Synonym Resolution (inspired by NerExecutor) ---
-                    Map<Integer, String> resolvedTermsCache = Collections.emptyMap();
-                    boolean needsResolving = !annotationVarName.isBlank() && targetAnnotationValueIds.isEmpty() &&
-                                             (annotationValueTypeToStore == ValueType.UNRESOLVED_NER_ID ||
-                                              annotationValueTypeToStore == ValueType.UNRESOLVED_POS_ID);
-
-                    if (needsResolving) {
-                        Set<Integer> uniqueSynonymIds = new HashSet<>();
-                        for (int i = 0; i < positions.getNumPositions(); i++) {
-                            uniqueSynonymIds.add(positions.getSynonymIdAt(i));
-                        }
-                        if (!uniqueSynonymIds.isEmpty()) {
-                            resolvedTermsCache = synonymManager.getTerms(uniqueSynonymIds);
-                        }
-                    }
-                    // --- End of Optimized Synonym Resolution ---
+                    logger.debug("Found {} potential co-occurrences for key '{}' in stitch index '{}' after context filtering.",
+                                 positions.getNumPositions(), stitchLookupKey, stitchIndexName);
 
                     for (int i = 0; i < positions.getNumPositions(); i++) {
                         int docId = positions.getDocIdAt(i);
-                        int sentenceId = requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1;
-                        int termBeginChar = requirements.needsPositions ? positions.getBeginCharAt(i) : -1;
-                        int termEndChar = requirements.needsPositions ? positions.getEndCharAt(i) : -1;
-                        int annotationSynonymId = positions.getSynonymIdAt(i); // Stitch index always has synonym IDs
+                        int sentenceId = positions.getSentenceIdAt(i);
+                        int termBeginChar = positions.getBeginCharAt(i);
+                        int termEndChar = positions.getEndCharAt(i);
+                        int currentAnnotationSynonymId = positions.getSynonymIdAt(i);
+                        Object annotationValueForSoA;
 
-                        // If the stitch condition requires specific entity/term values, filter here
-                        if (!targetAnnotationValueIds.isEmpty() && !targetAnnotationValueIds.contains(annotationSynonymId)) {
-                            continue; // This annotation ID doesn't match the required set
+                        if (!targetAnnotationValueIds.isEmpty()) {
+                            if (targetAnnotationValueIds.contains(currentAnnotationSynonymId)) {
+                                // Find the original annotation value that matches this synonym ID
+                                annotationValueForSoA = null;
+                                for (String originalValue : specificAnnotationValuesFromCondition) {
+                                    try {
+                                        int originalId = synonymManager.getId(originalValue.toLowerCase());
+                                        if (originalId == currentAnnotationSynonymId) {
+                                            annotationValueForSoA = originalValue;
+                                            break;
+                                        }
+                                    } catch (Exception e) {
+                                        // Continue looking
+                                    }
+                                }
+                                if (annotationValueForSoA == null) {
+                                    annotationValueForSoA = specificAnnotationValuesFromCondition.get(0); // Fallback
+                                }
+                            } else {
+                                logger.trace("Skipping co-occurrence: current annotation ID {} not in target IDs {} (for specific values {}) for stitch key '{}'",
+                                             currentAnnotationSynonymId, targetAnnotationValueIds, specificAnnotationValuesFromCondition, stitchLookupKey);
+                                continue;
+                            }
+                        } else {
+                            annotationValueForSoA = currentAnnotationSynonymId;
                         }
 
                         int conceptualRowId;
@@ -309,57 +312,38 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                             conceptualRowId = resultSoA.getNextConceptualRowId();
                         }
 
-                        // Add the 'contains' part of the stitch
                         resultSoA.add(
                             ngramTerm,
                             ValueType.TERM,
                             containsCondition.variableName(),
                             docId,
-                            sentenceId,
-                            termBeginChar,
-                            termEndChar,
+                            requirements.needsSentenceId ? sentenceId : -1,
+                            requirements.needsPositions ? termBeginChar : -1,
+                            requirements.needsPositions ? termEndChar : -1,
                             -1,
                             conceptualRowId
                         );
 
-                        // Add the 'annotation' part of the stitch
                         if (!annotationVarName.isBlank()) {
-                            String valueToStore = "";
-                            ValueType finalAnnotationValueTypeToStore = annotationValueTypeToStore;
-
-                            if (!targetAnnotationValueIds.isEmpty()) {
-                                valueToStore = synonymIdToOriginalTarget.getOrDefault(annotationSynonymId, "");
-                                if (valueToStore.isBlank()) {
-                                    logger.warn("Stitch Executor: synonym ID {} was matched but not found in the original target map. This indicates a potential logic issue.", annotationSynonymId);
-                                }
-                            } else if (needsResolving) {
-                                valueToStore = resolvedTermsCache.getOrDefault(annotationSynonymId, "");
-                                if (!valueToStore.isBlank()) {
-                                    if (annotationValueTypeToStore == ValueType.UNRESOLVED_NER_ID) {
-                                        finalAnnotationValueTypeToStore = ValueType.ENTITY;
-                                    } else { // UNRESOLVED_POS_ID
-                                        finalAnnotationValueTypeToStore = ValueType.POS_TERM;
-                                    }
-                                } else {
-                                    logger.warn("Could not resolve synonym ID {} to a term using pre-fetched cache. Storing empty value for variable '{}'.",
-                                                annotationSynonymId, annotationVarName);
-                                }
+                            if (annotationValueForSoA != null) {
+                                resultSoA.add(
+                                    annotationValueForSoA,
+                                    annotationValueTypeToStore,
+                                    annotationVarName,
+                                    docId,
+                                    requirements.needsSentenceId ? sentenceId : -1,
+                                    -1, -1,
+                                    requirements.needsSynonymIds ? currentAnnotationSynonymId : -1,
+                                    conceptualRowId
+                                );
+                            } else {
+                                logger.warn("annotationValueForSoA is null but annotationVarName ('{}') is set for stitch key '{}'. Skipping annotation binding for conceptualRowId {}.",
+                                            annotationVarName, stitchLookupKey, conceptualRowId);
                             }
-
-                            resultSoA.add(
-                                valueToStore,
-                                finalAnnotationValueTypeToStore,
-                                annotationVarName,
-                                docId,
-                                sentenceId,
-                                -1, -1, // Annotations don't have their own position
-                                annotationSynonymId,
-                                conceptualRowId
-                            );
                         }
                     }
                 } else {
-                    logger.debug("No data found for stitch key: {}", stitchLookupKey);
+                     logger.debug("No entry found for key '{}' in stitch index '{}' or blob was empty.", stitchLookupKey, stitchIndexName);
                 }
             }
         } catch (IndexAccessException e) {

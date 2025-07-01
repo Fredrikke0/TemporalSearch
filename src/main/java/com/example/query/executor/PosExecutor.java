@@ -125,7 +125,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         logger.debug("executeSpecificTermSearch: Tag='{}', TermValue='{}' (original), NormalizedTerm='{}', TargetSynonymID={}",
             tagFromQuery, termFromQuery, normalizedTargetTerm, targetSynonymId);
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, requirements, context);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeSpecificTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);
@@ -173,7 +173,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                                                     Optional<FilteringContext> context)
             throws IOException, IndexAccessException, org.rocksdb.RocksDBException, QueryExecutionException {
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, requirements, context);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeTagOnlyOrVariableTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);
@@ -181,8 +181,9 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         }
 
         PositionListSoA positions = positionsOptional.get();
+        // The positions object is already filtered by the context.
 
-        if (positions.isEmpty()) {
+        if (positions.isEmpty()) { // Defensive check
             logger.debug("executeTagOnlyOrVariableTermSearch: No positions for tag '{}' after context filtering (positions.isEmpty() check).", tagFromQuery);
             return;
         }
@@ -193,12 +194,14 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         if (numPositions == 0) return;
 
         if (variableName != null) {
+            // Collect unique synonym IDs
             Set<Integer> uniqueSynonymIds = new HashSet<>();
             for (int i = 0; i < numPositions; i++) {
                 uniqueSynonymIds.add(positions.getSynonymIdAt(i));
             }
 
-            Map<Integer, String> resolvedTermsCache = Collections.emptyMap();
+            // Fetch terms in a batch
+            Map<Integer, String> resolvedTermsCache = Collections.emptyMap(); // Default to empty
             if (!uniqueSynonymIds.isEmpty()) {
                 try {
                     resolvedTermsCache = synonymManager.getTerms(uniqueSynonymIds);
@@ -206,6 +209,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                                  resolvedTermsCache.size(), uniqueSynonymIds.size(), tagFromQuery);
                 } catch (org.rocksdb.RocksDBException e) {
                     logger.error("RocksDBException while batch fetching terms in POS variable binding for Tag '{}'", tagFromQuery, e);
+                    // Propagate as a QueryExecutionException or a more specific custom exception if desired
                     throw new QueryExecutionException("Failed to batch fetch terms from SynonymManager for POS BIND",
                                                     e, "POS(" + tagFromQuery + ") BIND " + variableName,
                                                     QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
@@ -213,12 +217,14 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
             }
 
             Map<String, Integer> resolvedTermToConceptualRowId = new java.util.HashMap<>();
+            // Map<Integer, String> resolvedSynonymIdToTermCache = new java.util.HashMap<>(); // REMOVED
 
             for (int i = 0; i < numPositions; i++) {
                 int currentSynonymId = positions.getSynonymIdAt(i);
                 String termToBind = resolvedTermsCache.get(currentSynonymId);
 
                 if (termToBind == null) {
+                    // This can happen if a synonym ID was in positions but not resolvable by getTerms (e.g. not in DB, cache issue)
                     logger.warn("executeTagOnlyOrVariableTermSearch: No term found in pre-fetched cache for synonymId {} (tag: {}). Skipping.",
                                 currentSynonymId, tagFromQuery);
                     continue;
@@ -246,14 +252,14 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
             int positionsAddedToSoa = 0;
             for (int i = 0; i < numPositions; i++) {
                 resultSoA.add(
-                    tagFromQuery,
-                        ValueType.POS_TAG_TYPE,
-                    null,
+                    tagFromQuery, // Value is the tag itself
+                    ValueType.POS_TAG_TYPE,
+                    null, // No variable name for the tag value
                     positions.getDocIdAt(i),
                     requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
                     requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                     requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    -1,
+                    -1, // No specific synonym ID is relevant when just matching the tag
                     conceptualRowIdForTag
                 );
                 positionsAddedToSoa++;

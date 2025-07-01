@@ -18,6 +18,7 @@ import com.example.query.binding.ValueType;
 import com.example.query.binding.Variable;
 import com.example.query.index.IndexManager;
 import com.example.query.model.JoinCondition;
+import com.example.query.model.JoinStep;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Logical;
@@ -377,6 +378,67 @@ public class QueryExecutor {
         }
     }
 
+    /**
+     * @deprecated This method is deprecated. Join logic has been refactored into an iterative process within {@link #executeWithContext}.
+     */
+    @Deprecated
+    QueryResultSoA executeIndependentJoin(Query query, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext, AttributeRequirements requirements) throws QueryExecutionException {
+        logger.warn("executeIndependentJoin is DEPRECATED and will be removed. Join logic is now iterative within executeWithContext.");
+        if (query.joinSteps().isEmpty()) {
+             throw new QueryExecutionException("executeIndependentJoin (DEPRECATED) called without join steps.", query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+        // Fallback or error, as this path should not be taken.
+        // For safety during transition, try to return something if forced.
+        executeJoinStepSubqueries(query.joinSteps(), indexes, subqueryContext); // Ensure subqueries are run if this path is hit
+        // Cannot perform a meaningful join here as the iterative logic is elsewhere.
+        // Return the result of the first subquery if available and forced into this path.
+        logger.error("executeIndependentJoin (DEPRECATED) was called. This indicates an issue in the execution flow. Attempting to return a placeholder result.");
+        JoinStep firstStep = query.joinSteps().get(0);
+        if (subqueryContext.hasResults(firstStep.rightSourceAlias())) {
+            return subqueryContext.getQueryResult(firstStep.rightSourceAlias());
+        }
+        return new QueryResultSoA(query.granularity(), query.granularitySize().orElse(0), requirements); // Empty result
+    }
+
+    /**
+     * @deprecated This method is deprecated. Dependent join logic is being integrated into the iterative process within {@link #executeWithContext} using a new helper method if applicable for a step.
+     */
+    @Deprecated
+    QueryResultSoA executeDependentJoin(Query query,
+                                    Map<String, IndexAccessInterface> indexes,
+                                    SubqueryContext subqueryContext,
+                                    String mainAlias,
+                                    QueryResultSoA mainConditionsResult, // Already executed main part
+                                    AttributeRequirements requirements)
+            throws QueryExecutionException {
+        logger.warn("executeDependentJoin is DEPRECATED and will be removed. Dependent join logic is now part of the iterative flow in executeWithContext.");
+        if (query.joinSteps().isEmpty()) {
+            throw new QueryExecutionException("executeDependentJoin (DEPRECATED) called without join steps.", query.source(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+        }
+        // This method should no longer be called. The logic for dependent steps will be
+        // handled within the main loop of executeWithContext, possibly by a new helper.
+        // Returning mainConditionsResult as a fallback to avoid breaking flow if called.
+        logger.error("executeDependentJoin (DEPRECATED) was called. This indicates an issue in the execution flow. Returning mainConditionsResult as placeholder.");
+        return mainConditionsResult;
+    }
+
+    /**
+     * @deprecated This method is deprecated. Subquery execution is now handled within the iterative join logic in {@link #executeWithContext}.
+     */
+    @Deprecated
+    private void executeJoinStepSubqueries(List<com.example.query.model.JoinStep> joinSteps, Map<String, IndexAccessInterface> indexes, SubqueryContext subqueryContext)
+            throws QueryExecutionException {
+        logger.warn("executeJoinStepSubqueries is DEPRECATED and should not be called directly.");
+        // Minimal logic to avoid breaking if called unexpectedly during refactoring transition
+        for (com.example.query.model.JoinStep step : joinSteps) {
+            if (!subqueryContext.hasResults(step.rightSourceAlias())) {
+                 Query subquery = step.subquery();
+                 AttributeRequirements subqueryRequirements = QueryAttributeAnalyzer.analyze(subquery);
+                 QueryResultSoA subqueryResults = executeWithRequirements(subquery, indexes, subqueryRequirements, new SubqueryContext());
+                 subqueryContext.addQueryResult(step.rightSourceAlias(), subqueryResults);
+            }
+        }
+    }
 
     private QueryResultSoA executeWithRequirements(Query query, Map<String, IndexAccessInterface> indexes,
                                         AttributeRequirements requirements, SubqueryContext subqueryContext)

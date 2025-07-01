@@ -15,9 +15,6 @@ import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.query.executor.AttributeRequirements;
-import com.example.query.executor.FilteringContext;
-
 /**
  * Core class for accessing RocksDB-based indexes.
  * Provides unified access for both read and write operations.
@@ -257,7 +254,7 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public Optional<PositionListSoA> getMergedPositions(String baseTerm, AttributeRequirements requirements, Optional<FilteringContext> context)
+    public Optional<PositionListSoA> getMergedPositions(String baseTerm, com.example.query.executor.AttributeRequirements requirements, Optional<com.example.query.executor.FilteringContext> context)
             throws IOException, IndexAccessException {
         checkOpen();
         byte[] baseTermBytes = bytes(baseTerm);
@@ -341,10 +338,30 @@ public class IndexAccess implements IndexAccessInterface {
         }
     }
 
+    // Utility methods
     public static byte[] bytes(String str) {
         if (str == null) {
             return null;
         }
         return str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    public static String asString(byte[] bytes) {
+        if (bytes == null) {
+            return null;
+        }
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+
+    /**
+     * Gets the sentences for a given document ID.
+     *
+     * @param documentId The document ID
+     * @return Array of sentences, or null if not found
+     */
+    public String[] getDocumentSentences(int documentId) {
+        logger.warn("getDocumentSentences(int) is a placeholder and not fully implemented for RocksDB.");
+        return new String[]{"Sentence 1 for " + documentId, "Sentence 2 for " + documentId};
     }
 }
