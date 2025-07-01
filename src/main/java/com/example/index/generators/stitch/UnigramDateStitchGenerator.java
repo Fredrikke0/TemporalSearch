@@ -61,7 +61,7 @@ public final class UnigramDateStitchGenerator extends AbstractNgramStitchGenerat
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
         List<AnnotationData> rawAnnotationsListFromDb = new ArrayList<>();
         String sql = """
-            SELECT sentence_id, begin_char, end_char, ner, normalized_ner
+            SELECT sentence_id, begin_char, end_char, normalized_ner
             FROM annotations
             WHERE document_id = ?
                 AND ner = 'DATE'
@@ -73,13 +73,7 @@ public final class UnigramDateStitchGenerator extends AbstractNgramStitchGenerat
             stmt.setInt(1, documentId);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    String nerTag = rs.getString("ner"); // Should always be "DATE"
                     String originalNormalizedDate = rs.getString("normalized_ner"); // Expected YYYY-MM-DD
-
-                    if (!"DATE".equals(nerTag)) {
-                         logger.warn("Fetched non-DATE NER tag '{}' for docId {} when expecting DATE. Normalized: '{}'. Skipping.", nerTag, documentId, originalNormalizedDate);
-                         continue;
-                    }
 
                     String dateKeyYYYYMMDD = NerDateIndexGenerator.normalizeDateToKeyFormat(originalNormalizedDate);
                     if (dateKeyYYYYMMDD == null) {

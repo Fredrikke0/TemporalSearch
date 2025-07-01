@@ -525,6 +525,12 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                         continue;
                     }
 
+                    // Ensure date is within the supported range of the Nash index (1925-2025) for consistency
+                    if (entryDate.isBefore(Nash.GLOBAL_LOWER_BOUND) || entryDate.isAfter(Nash.GLOBAL_UPPER_BOUND)) {
+                        iterator.next();
+                        continue;
+                    }
+
                     boolean match = TemporalExecutor.evaluateTemporalCondition(
                         type,
                         entryDate.atStartOfDay(),

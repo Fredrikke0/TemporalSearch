@@ -59,7 +59,7 @@ public final class TrigramDateStitchGenerator extends AbstractNgramStitchGenerat
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
         List<AnnotationData> rawAnnotationsListFromDb = new ArrayList<>();
         String sql = """
-            SELECT sentence_id, begin_char, end_char, ner, normalized_ner
+            SELECT sentence_id, begin_char, end_char, normalized_ner
             FROM annotations
             WHERE document_id = ?
                 AND ner = 'DATE'

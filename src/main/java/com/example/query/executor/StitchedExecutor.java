@@ -29,6 +29,8 @@ import com.example.query.model.condition.Pos;
 import com.example.query.model.condition.StitchedCondition;
 import com.example.query.model.condition.Temporal;
 
+import no.ntnu.sandbox.Nash;
+
 public final class StitchedExecutor implements ConditionExecutor<StitchedCondition> {
     private static final Logger logger = LoggerFactory.getLogger(StitchedExecutor.class);
     private static final char DELIMITER_CHAR = IndexAccessInterface.DELIMITER;
@@ -122,6 +124,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
 
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
         requirements.needsConceptualRowIds = true;
+        final Map<Integer, Map<Integer, Integer>> sentenceToConceptualRowId = new HashMap<>();
 
         try {
             if (temporalConditionDetails != null) {
@@ -144,6 +147,12 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         try {
                             LocalDate dateFromKey = TemporalExecutor.parseDateKey(datePart);
                             if (dateFromKey != null) {
+                                // Ensure date is within the supported range of the Nash index (1925-2025)
+                                if (dateFromKey.isBefore(Nash.GLOBAL_LOWER_BOUND) || dateFromKey.isAfter(Nash.GLOBAL_UPPER_BOUND)) {
+                                    iterator.next();
+                                    continue;
+                                }
+
                                 boolean matches = TemporalExecutor.evaluateTemporalCondition(
                                     temporalConditionDetails.temporalType(),
                                     dateFromKey.atStartOfDay(),
@@ -165,7 +174,14 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                             int termBeginChar = requirements.needsPositions ? positions.getBeginCharAt(i) : -1;
                                             int termEndChar = requirements.needsPositions ? positions.getEndCharAt(i) : -1;
 
-                                            int conceptualRowId = resultSoA.getNextConceptualRowId();
+                                            int conceptualRowId;
+                                            if (granularity == Query.Granularity.SENTENCE) {
+                                                conceptualRowId = sentenceToConceptualRowId
+                                                    .computeIfAbsent(docId, k -> new HashMap<>())
+                                                    .computeIfAbsent(sentenceId, k -> resultSoA.getNextConceptualRowId());
+                                            } else {
+                                                conceptualRowId = resultSoA.getNextConceptualRowId();
+                                            }
 
                                             resultSoA.add(
                                                 ngramTerm,
@@ -284,7 +300,14 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                             continue; // This annotation ID doesn't match the required set
                         }
 
-                        int conceptualRowId = resultSoA.getNextConceptualRowId();
+                        int conceptualRowId;
+                        if (granularity == Query.Granularity.SENTENCE) {
+                            conceptualRowId = sentenceToConceptualRowId
+                                .computeIfAbsent(docId, k -> new HashMap<>())
+                                .computeIfAbsent(sentenceId, k -> resultSoA.getNextConceptualRowId());
+                        } else {
+                            conceptualRowId = resultSoA.getNextConceptualRowId();
+                        }
 
                         // Add the 'contains' part of the stitch
                         resultSoA.add(
