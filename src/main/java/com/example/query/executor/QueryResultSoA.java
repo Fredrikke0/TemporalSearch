@@ -41,7 +41,7 @@ public final class QueryResultSoA {
     private IntArrayList beginChars;      // Null if not needed
     private IntArrayList endChars;        // Null if not needed
     private IntArrayList synonymIds;      // Null if not needed
-    private IntArrayList conceptualRowIds; // NEW: Groups bindings into conceptual output rows
+    private IntArrayList conceptualRowIds; // Groups bindings into conceptual output rows
 
     // Value deduplication for memory optimization
     private List<Object> uniqueValues;        // Deduplicated values (stores the actual objects)
@@ -491,65 +491,9 @@ public final class QueryResultSoA {
         logger.info("Exporting QueryResultSoA to CSV: {} (size={})", filename, size);
 
         // TODO: Implement direct CSV streaming export
-        // This will be implemented in Phase 4
         throw new UnsupportedOperationException("CSV export will be implemented in Phase 4");
     }
 
-    /**
-     * Exports results directly to JSON format using streaming approach.
-     * Maintains constant memory usage regardless of result size.
-     *
-     * @param filename The output filename
-     * @param query The original query for context
-     * @param indexes Index access for metadata lookup
-     */
-    public void exportToJson(String filename, Query query, Map<String, IndexAccessInterface> indexes) {
-        logger.info("Exporting QueryResultSoA to JSON: {} (size={})", filename, size);
-
-        // TODO: Implement direct JSON streaming export
-        // This will be implemented in Phase 4
-        throw new UnsupportedOperationException("JSON export will be implemented in Phase 4");
-    }
-
-    // --- Memory usage estimation ---
-
-    /**
-     * Estimates the memory usage of this QueryResultSoA in bytes.
-     * Useful for monitoring and optimization.
-     */
-    public long estimateMemoryUsage() {
-        long totalBytes = 0;
-
-        // Position arrays
-        totalBytes += documentIds.size() * 4; // int = 4 bytes
-        if (sentenceIds != null) totalBytes += sentenceIds.size() * 4;
-        if (beginChars != null) totalBytes += beginChars.size() * 4;
-        if (endChars != null) totalBytes += endChars.size() * 4;
-        if (synonymIds != null) totalBytes += synonymIds.size() * 4;
-        if (conceptualRowIds != null) totalBytes += conceptualRowIds.size() * 4;
-
-        // Index arrays
-        totalBytes += valueIndices.size() * 4;
-        totalBytes += variableNameIndices.size() * 4;
-        totalBytes += valueTypes.size(); // byte = 1 byte
-
-        // Deduplicated values (rough estimate)
-        totalBytes += uniqueValues.size() * 24; // Rough estimate for object overhead + content
-        totalBytes += uniqueVariableNames.size() * 24; // Rough estimate for string overhead + content
-
-        return totalBytes;
-    }
-
-    @Override
-    public String toString() {
-        long memoryUsage = estimateMemoryUsage();
-        double memoryMB = memoryUsage / (1024.0 * 1024.0);
-
-        return String.format("QueryResultSoA{size=%d, granularity=%s, granularitySize=%d, " +
-                           "uniqueValues=%d, uniqueVariableNames=%d, estimatedMemory=%.1fMB, requirements=%s}",
-                           size, granularity, granularitySize,
-                           uniqueValues.size(), uniqueVariableNames.size(), memoryMB, requirements);
-    }
 
     public void clear() {
         logger.trace("QueryResultSoA clear() (hashCode={}): BEFORE. current_size={}, current_nextConceptualRowIdGenerator={}",
@@ -721,7 +665,6 @@ public final class QueryResultSoA {
         return uniqueDocIds;
     }
 
-    // ADDED METHOD
     public Map<Integer, Set<Integer>> getUniqueDocumentSentenceIds() {
         if (sentenceIds == null || sentenceIds.isEmpty() || documentIds == null || documentIds.isEmpty()) {
             return Collections.emptyMap();

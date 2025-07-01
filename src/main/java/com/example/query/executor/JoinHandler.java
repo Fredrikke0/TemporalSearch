@@ -197,39 +197,6 @@ public class JoinHandler {
         return map;
     }
 
-    /**
-     * @deprecated This method is deprecated. Use {@link #performBinaryJoin(QueryResultSoA, String, QueryResultSoA, String, JoinCondition, JoinCondition.JoinType, Query.Granularity, int, AttributeRequirements)} instead.
-     * The new method handles a single binary join step directly.
-     */
-    @Deprecated
-    public QueryResultSoA handleJoin(
-            Query query, // query parameter is problematic for a generic binary join handler
-            SubqueryContext subqueryContext)
-            throws QueryExecutionException {
-
-        logger.error("DEPRECATED JoinHandler.handleJoin(Query, SubqueryContext) was called. This method can no longer function correctly due to Query model changes (removal of single joinCondition). " +
-                     "The caller (QueryExecutor) must be updated to use performBinaryJoin() for each JoinStep. Returning an empty result to prevent crashes.");
-
-        // Cannot reliably get a single JoinCondition from the new Query model.
-        // The old logic here is no longer valid.
-        // Return an empty QueryResultSoA based on the query's primary granularity and requirements.
-
-        AttributeRequirements fallbackRequirements = new AttributeRequirements();
-        if (query.mainAlias().isPresent() && subqueryContext.hasResults(query.mainAlias().get())) {
-            fallbackRequirements.merge(subqueryContext.getQueryResult(query.mainAlias().get()).getRequirements());
-        } else if (!query.joinSteps().isEmpty() && subqueryContext.hasResults(query.joinSteps().get(0).rightSourceAlias())) {
-            // Fallback: try to get requirements from the first subquery if main alias results not present
-             QueryResultSoA firstSubSoA = subqueryContext.getQueryResult(query.joinSteps().get(0).rightSourceAlias());
-             if (firstSubSoA != null) fallbackRequirements.merge(firstSubSoA.getRequirements());
-        }
-        fallbackRequirements.needsConceptualRowIds = true; // Joins typically need this
-
-        return new QueryResultSoA(query.granularity(), query.granularitySize().orElse(0), fallbackRequirements);
-    }
-
-    // Static helper methods previously here for MatchDetail are now part of SoAJoinOptimizer or handled by QueryResultSoA accessors.
-    // extractAliasFromColumnName, extractKeyFromColumnName, extractValueForKey can remain if they are general utility.
-
     public static String extractAliasFromColumnName(String columnName) throws QueryExecutionException {
         if (columnName == null || !columnName.contains(".")) {
             // If there's no dot, it might be a direct structural key or an unaliased variable from the main query.
@@ -250,23 +217,4 @@ public class JoinHandler {
         }
         return columnName.substring(columnName.indexOf('.') + 1);
     }
-
-    // extractValueForKey was for MatchDetail, no longer directly applicable in the same way for QueryResultSoA.
-    // The logic is now within SoAJoinOptimizer.buildKeyToConceptualIdsMap.
-    /*
-    public static Optional<Object> extractValueForKey(MatchDetail detail, String key) {
-        // ... old implementation ...
-    }
-    */
-
-    // extractTypeForKey was for MatchDetail, also superseded.
-    /*
-    private ValueType extractTypeForKey(List<MatchDetail> details, String key) {
-        // ... old implementation ...
-    }
-    */
-
-    // All private helper methods for performing joins (performHashJoinOnDate, performGenericHashJoin, performTemporalSortMergeJoin)
-    // were based on List<MatchDetail> and are now effectively replaced by the SoAJoinOptimizer methods.
-    // They can be removed.
 }

@@ -1135,25 +1135,10 @@ public class PositionListSoA {
                 return result; // No documents allowed, so result is empty
             }
 
-            // Efficiently filter using a two-pointer approach, since both lists are sorted.
-            int[] docIds = allDocIds.elements();
-            int docIdx = 0;
-            Iterator<Integer> allowedIter = allowedDocs.iterator();
-            if (allowedIter.hasNext()) {
-                int nextAllowedDoc = allowedIter.next();
-                while (docIdx < docIds.length) {
-                    if (docIds[docIdx] < nextAllowedDoc) {
-                        docIdx++;
-                    } else if (docIds[docIdx] == nextAllowedDoc) {
-                        inclusionMask[docIdx] = true;
-                        docIdx++;
-                    } else { // docIds[docIdx] > nextAllowedDoc
-                        if (allowedIter.hasNext()) {
-                            nextAllowedDoc = allowedIter.next();
-                        } else {
-                            break; // No more allowed docs to check
-                        }
-                    }
+            // Filter using the set for direct lookup (hash join style).
+            for (int i = 0; i < numPositionsInBlob; i++) {
+                if (allowedDocs.contains(allDocIds.getInt(i))) {
+                    inclusionMask[i] = true;
                 }
             }
         } else {
