@@ -173,8 +173,12 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
             _, _, strat_set_stderr = cli_process.set_strategy(base_temp_s, base_push_s, base_stitch_s)
             if strat_set_stderr and args.verbose: print(f"{progress_prefix_base} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
 
-            # Execute and capture output directly from stdout
-            _, base_output_content, err_q = cli_process.execute_query(query_text)
+            # Set output file for the CLI to write to directly
+            _, _, output_set_stderr = cli_process.set_output('csv', base_output_filepath)
+            if output_set_stderr and args.verbose: print(f"{progress_prefix_base} WARNING: Stderr on set_output: {output_set_stderr.strip()}", flush=True)
+
+            # Execute. The Java process will write the output file.
+            _, _, err_q = cli_process.execute_query(query_text)
 
             if err_q:
                  print(f"{progress_prefix_base} ERROR executing query. Stderr: {err_q.strip()}", flush=True)
@@ -184,8 +188,7 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
             else:
                 base_run_ok = True
                 print(f"{progress_prefix_base}  -> Base execution successful. Output saved to {os.path.basename(base_output_filepath)}.", flush=True)
-                with open(base_output_filepath, 'w', encoding='utf-8') as f:
-                    f.write(base_output_content)
+                # With `set_output`, the Java process writes the file directly.
         except Exception as e:
             print(f"{progress_prefix_base} CRITICAL ERROR running base strategy: {e}. This query will be skipped.", flush=True)
             all_results.append({
@@ -213,16 +216,17 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
                 _, _, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
                 if strat_set_stderr and args.verbose: print(f"{progress_prefix_other} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
 
-                _, other_output_content, err_q = cli_process.execute_query(query_text)
+                # Set output file for the CLI to write to directly
+                _, _, output_set_stderr = cli_process.set_output('csv', other_output_filepath)
+                if output_set_stderr and args.verbose: print(f"{progress_prefix_other} WARNING: Stderr on set_output: {output_set_stderr.strip()}", flush=True)
+
+                _, _, err_q = cli_process.execute_query(query_text)
                 if err_q:
                     print(f"{progress_prefix_other} ERROR executing query. Stderr: {err_q.strip()}", flush=True)
                     status = "EXECUTION_ERROR"
                     details = err_q.strip()
                 else:
-                    # Write output and compare with base
-                    with open(other_output_filepath, 'w', encoding='utf-8') as f:
-                        f.write(other_output_content)
-
+                    # File is written by Java. Now compare with base.
                     are_equal, reason = compare_csv_files_deep(base_output_filepath, other_output_filepath)
                     if are_equal:
                         status = "PASSED"
@@ -427,6 +431,18 @@ class QueryCLIInteractiveProcess:
     def set_strategy(self, temporal, pushdown, stitch):
         cmd = f"SET STRATEGY temporal={temporal} pushdown={pushdown} stitch={stitch}"
         stdout_cycle, stderr_cycle = self._send_and_await_prompt(cmd, PROMPT, COMMAND_ACK_TIMEOUT_SECONDS, "SET STRATEGY")
+        return None, stdout_cycle, stderr_cycle
+
+    def set_output(self, file_format, file_path=None):
+        if file_path:
+            # In interactive mode, SET OUTPUT <format> <filename>
+            cmd = f"SET OUTPUT {file_format} {file_path}"
+            desc = f"SET OUTPUT to {file_path}"
+        else:
+            # SET OUTPUT NONE to reset to console
+            cmd = "SET OUTPUT NONE"
+            desc = "SET OUTPUT to console"
+        stdout_cycle, stderr_cycle = self._send_and_await_prompt(cmd, PROMPT, COMMAND_ACK_TIMEOUT_SECONDS, desc)
         return None, stdout_cycle, stderr_cycle
 
     def execute_query(self, query_string):
