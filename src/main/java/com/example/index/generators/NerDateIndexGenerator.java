@@ -132,35 +132,9 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
             return index;
         }
 
-        // 1. Group by document_id and then sentence_id
-        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
-            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
-                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
-
-        List<AnnotationEntry> collectedAnnotations = new ArrayList<>();
-
-        // 2. For each sentence: sort tokens, filter by span, and collect
-        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
-            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
-                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-                collectedAnnotations.addAll(sentenceTokens); // Add all sorted tokens directly
-            });
-        });
-
-        if (collectedAnnotations.isEmpty()) {
-            // Log if filtering removed all tokens, but original batch had some
-            if(!batch.isEmpty()){
-                logger.trace("No DATE annotations to process after initial fetching and grouping. Original batch size: {}", batch.size());
-            }
-            return index;
-        }
-
-        // 3. Existing date entity merging logic now operates on collectedAnnotations
-        // Ensure it's sorted as the original logic expected (if collectedAnnotations isn't already)
-        // The grouping and per-sentence sorting + collection might not preserve the overall batch sort order
-        // that the original merging logic relied upon if it spanned across sentences after filtering.
-        // The original sort was: docId, sentId, beginChar. This is re-established here for the filtered list.
-        collectedAnnotations.sort(Comparator
+        // Span filtering is now handled upstream by Annotations.java.
+        // We just need to sort the batch by position for the merging logic to work correctly.
+        batch.sort(Comparator
             .comparingInt(AnnotationEntry::getDocumentId)
             .thenComparingInt(AnnotationEntry::getSentenceId)
             .thenComparingInt(AnnotationEntry::getBeginChar));
@@ -168,8 +142,8 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
         List<AnnotationEntry> currentMergedEntityTokens = new ArrayList<>();
 
-        for (int i = 0; i < collectedAnnotations.size(); i++) {
-            AnnotationEntry currentEntry = collectedAnnotations.get(i);
+        for (int i = 0; i < batch.size(); i++) {
+            AnnotationEntry currentEntry = batch.get(i);
             String rawNormalizedDate = currentEntry.getNormalizedNer(); // This is YYYY-MM-DD
 
             if (rawNormalizedDate == null || rawNormalizedDate.isEmpty()) {

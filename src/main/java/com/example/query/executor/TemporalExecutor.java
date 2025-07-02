@@ -410,12 +410,10 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 effectiveEnd = Nash.GLOBAL_UPPER_BOUND;
             }
 
-            // Ensure start is not after end
+            // Ensure start is not after end. If it is, the interval is empty.
             if (effectiveStart != null && effectiveEnd != null && effectiveStart.isAfter(effectiveEnd)) {
-                strategyLogger.warn("convertToNashIntervalString: Effective start date {} is after effective end date {}. Swapping them for Nash interval.", effectiveStart, effectiveEnd);
-                LocalDate temp = effectiveStart;
-                effectiveStart = effectiveEnd;
-                effectiveEnd = temp;
+                strategyLogger.warn("convertToNashIntervalString: Effective start date {} is after effective end date {}. This results in an empty interval.", effectiveStart, effectiveEnd);
+                return null; // An invalid/empty interval means no results.
             }
 
             // Ensure dates are within Nash global bounds, clamp if necessary
