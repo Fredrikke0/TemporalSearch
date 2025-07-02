@@ -149,10 +149,10 @@ public class JoinHandler {
                 }
                 finalJoinedResultSoA.add(valueToAdd, typeToAdd, variableName,
                                            lhsSoA.getDocumentIdAt(leftIdx),
-                                           outputRequirements.needsSentenceId ? lhsSoA.getSentenceIdAt(leftIdx) : -1,
-                                           outputRequirements.needsPositions ? lhsSoA.getBeginCharAt(leftIdx) : -1,
-                                           outputRequirements.needsPositions ? lhsSoA.getEndCharAt(leftIdx) : -1,
-                                           outputRequirements.needsSynonymIds ? lhsSoA.getSynonymIdAt(leftIdx) : -1,
+                                           lhsSoA.getRequirements().needsSentenceId ? lhsSoA.getSentenceIdAt(leftIdx) : -1,
+                                           lhsSoA.getRequirements().needsPositions ? lhsSoA.getBeginCharAt(leftIdx) : -1,
+                                           lhsSoA.getRequirements().needsPositions ? lhsSoA.getEndCharAt(leftIdx) : -1,
+                                           lhsSoA.getRequirements().needsSynonymIds ? lhsSoA.getSynonymIdAt(leftIdx) : -1,
                                            currentOutputConceptualId);
                 addedVariablesInCurrentOutputRow.add(variableName);
             }
@@ -171,10 +171,10 @@ public class JoinHandler {
                 }
                 finalJoinedResultSoA.add(valueToAdd, typeToAdd, variableName,
                                            rhsSoA.getDocumentIdAt(rightIdx),
-                                           outputRequirements.needsSentenceId ? rhsSoA.getSentenceIdAt(rightIdx) : -1,
-                                           outputRequirements.needsPositions ? rhsSoA.getBeginCharAt(rightIdx) : -1,
-                                           outputRequirements.needsPositions ? rhsSoA.getEndCharAt(rightIdx) : -1,
-                                           outputRequirements.needsSynonymIds ? rhsSoA.getSynonymIdAt(rightIdx) : -1,
+                                           rhsSoA.getRequirements().needsSentenceId ? rhsSoA.getSentenceIdAt(rightIdx) : -1,
+                                           rhsSoA.getRequirements().needsPositions ? rhsSoA.getBeginCharAt(rightIdx) : -1,
+                                           rhsSoA.getRequirements().needsPositions ? rhsSoA.getEndCharAt(rightIdx) : -1,
+                                           rhsSoA.getRequirements().needsSynonymIds ? rhsSoA.getSynonymIdAt(rightIdx) : -1,
                                            currentOutputConceptualId);
                 addedVariablesInCurrentOutputRow.add(variableName);
             }

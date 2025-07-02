@@ -189,7 +189,6 @@ public class IndexRunner {
                             }
                         }
                     } else if (force && Files.exists(specificIndexDir)) {
-                        logger.info("--force is true for type '{}'. Cleaning and regenerating index.", type);
                         ensureDirectoryExists(specificIndexDir, true);
                         if (!Files.exists(specificIndexDir)) Files.createDirectories(specificIndexDir);
                     }

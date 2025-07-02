@@ -1,7 +1,7 @@
 package com.example.query.binding;
 
 /**
- * Defines the type of value captured in a MatchDetail.
+ * Defines the type of value captured in a binding.
  */
 public enum ValueType {
     TERM,       // A simple text term

@@ -228,6 +228,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         AttributeRequirements combinedReqs = new AttributeRequirements();
         combinedReqs.merge(left.getRequirements());
         combinedReqs.merge(right.getRequirements());
+        combinedReqs.merge(requirements);
         combinedReqs.needsConceptualRowIds = true;
 
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, left.getGranularitySize(), combinedReqs);
@@ -417,34 +418,34 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                 for (int lIdx : leftConceptGroupIndices) {
                     logger.trace("    Adding left entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
                                  lIdx, leftSoa.getConceptualRowIdAt(lIdx), leftSoa.getDocumentIdAt(lIdx),
-                                 (combinedReqs.needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : "N/A"),
+                                 (combinedReqs.needsSentenceId && leftSoa.getRequirements().needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : "N/A"),
                                  leftSoa.getVariableNameAt(lIdx), leftSoa.getValueAt(lIdx));
                     resultSoA.add(
                         leftSoa.getValueAt(lIdx),
                         leftSoa.getValueTypeAt(lIdx),
                         leftSoa.getVariableNameAt(lIdx),
                         leftSoa.getDocumentIdAt(lIdx),
-                        combinedReqs.needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : -1,
-                        combinedReqs.needsPositions ? leftSoa.getBeginCharAt(lIdx) : -1,
-                        combinedReqs.needsPositions ? leftSoa.getEndCharAt(lIdx) : -1,
-                        combinedReqs.needsSynonymIds ? leftSoa.getSynonymIdAt(lIdx) : -1,
+                        combinedReqs.needsSentenceId && leftSoa.getRequirements().needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : -1,
+                        combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getBeginCharAt(lIdx) : -1,
+                        combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getEndCharAt(lIdx) : -1,
+                        combinedReqs.needsSynonymIds && leftSoa.getRequirements().needsSynonymIds ? leftSoa.getSynonymIdAt(lIdx) : -1,
                         conceptualIdForThisProduct
                     );
                 }
                 for (int rIdx : rightConceptGroupIndices) {
                      logger.trace("Adding right entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
                                  rIdx, rightSoa.getConceptualRowIdAt(rIdx), rightSoa.getDocumentIdAt(rIdx),
-                                 (combinedReqs.needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : "N/A"),
+                                 (combinedReqs.needsSentenceId && rightSoa.getRequirements().needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : "N/A"),
                                  rightSoa.getVariableNameAt(rIdx), rightSoa.getValueAt(rIdx));
                     resultSoA.add(
                         rightSoa.getValueAt(rIdx),
                         rightSoa.getValueTypeAt(rIdx),
                         rightSoa.getVariableNameAt(rIdx),
                         rightSoa.getDocumentIdAt(rIdx),
-                        combinedReqs.needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : -1,
-                        combinedReqs.needsPositions ? rightSoa.getBeginCharAt(rIdx) : -1,
-                        combinedReqs.needsPositions ? rightSoa.getEndCharAt(rIdx) : -1,
-                        combinedReqs.needsSynonymIds ? rightSoa.getSynonymIdAt(rIdx) : -1,
+                        combinedReqs.needsSentenceId && rightSoa.getRequirements().needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : -1,
+                        combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getBeginCharAt(rIdx) : -1,
+                        combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getEndCharAt(rIdx) : -1,
+                        combinedReqs.needsSynonymIds && rightSoa.getRequirements().needsSynonymIds ? rightSoa.getSynonymIdAt(rIdx) : -1,
                         conceptualIdForThisProduct
                     );
                 }
@@ -462,6 +463,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         AttributeRequirements combinedReqs = new AttributeRequirements();
         combinedReqs.merge(left.getRequirements());
         combinedReqs.merge(right.getRequirements());
+        combinedReqs.merge(baseRequirements);
         combinedReqs.needsConceptualRowIds = true; // OR operations also need to manage conceptual IDs
 
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, left.getGranularitySize(), combinedReqs);
@@ -476,10 +478,10 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                     left.getValueTypeAt(i),
                     left.getVariableNameAt(i),
                     left.getDocumentIdAt(i),
-                    combinedReqs.needsSentenceId ? left.getSentenceIdAt(i) : -1,
-                    combinedReqs.needsPositions ? left.getBeginCharAt(i) : -1,
-                    combinedReqs.needsPositions ? left.getEndCharAt(i) : -1,
-                    combinedReqs.needsSynonymIds ? left.getSynonymIdAt(i) : -1,
+                    combinedReqs.needsSentenceId && left.getRequirements().needsSentenceId ? left.getSentenceIdAt(i) : -1,
+                    combinedReqs.needsPositions && left.getRequirements().needsPositions ? left.getBeginCharAt(i) : -1,
+                    combinedReqs.needsPositions && left.getRequirements().needsPositions ? left.getEndCharAt(i) : -1,
+                    combinedReqs.needsSynonymIds && left.getRequirements().needsSynonymIds ? left.getSynonymIdAt(i) : -1,
                     conceptualId
                 );
                 if (conceptualId > maxLeftConceptualId) {
@@ -506,10 +508,10 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                     right.getValueTypeAt(i),
                     right.getVariableNameAt(i),
                     right.getDocumentIdAt(i),
-                    combinedReqs.needsSentenceId ? right.getSentenceIdAt(i) : -1,
-                    combinedReqs.needsPositions ? right.getBeginCharAt(i) : -1,
-                    combinedReqs.needsPositions ? right.getEndCharAt(i) : -1,
-                    combinedReqs.needsSynonymIds ? right.getSynonymIdAt(i) : -1,
+                    combinedReqs.needsSentenceId && right.getRequirements().needsSentenceId ? right.getSentenceIdAt(i) : -1,
+                    combinedReqs.needsPositions && right.getRequirements().needsPositions ? right.getBeginCharAt(i) : -1,
+                    combinedReqs.needsPositions && right.getRequirements().needsPositions ? right.getEndCharAt(i) : -1,
+                    combinedReqs.needsSynonymIds && right.getRequirements().needsSynonymIds ? right.getSynonymIdAt(i) : -1,
                     conceptualId
                 );
             }

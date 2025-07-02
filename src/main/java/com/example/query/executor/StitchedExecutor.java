@@ -43,6 +43,12 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
         this.synonymManager = synonymManager;
     }
 
+    private String reconstructValue(String key, char delimiter) {
+        // Split by the delimiter and join with space
+        String[] parts = key.split(String.valueOf(delimiter));
+        return String.join(" ", parts);
+    }
+
     @Override
     public QueryResultSoA execute(
             StitchedCondition stitchedCondition,
@@ -79,6 +85,8 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         terms.get(2).toLowerCase();
             ngramPrefix = "trigram";
         }
+
+        String humanReadableNgramTerm = reconstructValue(ngramTerm, DELIMITER_CHAR);
 
         String stitchIndexGroupIdentifier;
         String specificAnnotationTypeForLookup = null;
@@ -175,7 +183,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                                             int conceptualRowId = resultSoA.getNextConceptualRowId();
 
                                             resultSoA.add(
-                                                ngramTerm,
+                                                humanReadableNgramTerm,
                                                 ValueType.TERM,
                                                 containsCondition.variableName(),
                                                 docId,
@@ -298,7 +306,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         int conceptualRowId = resultSoA.getNextConceptualRowId();
 
                         resultSoA.add(
-                            ngramTerm,
+                            humanReadableNgramTerm,
                             ValueType.TERM,
                             containsCondition.variableName(),
                             docId,

@@ -295,7 +295,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 // Populate QueryResultSoA from uniqueMatches
                 // Group by conceptual row ID implicitly by how resultSoA.add handles it
                 // The `variableToBind` might need to be more robustly determined (e.g., if always @temporal)
-                String effectiveVarName = (variableToBind != null && !variableToBind.isEmpty()) ? variableToBind : "@temporal";
+                String effectiveVarName = (variableToBind != null && !variableToBind.isEmpty()) ? variableToBind : null;
 
                 for (UniqueTemporalMatch match : uniqueMatches) {
                     resultSoA.add(
@@ -674,9 +674,9 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             int conceptualRowsAdded = 0;
             for (int i = 0; i < filteredPositions.getNumPositions(); i++) {
                 resultSoA.add(
-                    null, // No value to bind for literal matches
-                    null, // No type
-                    null, // No variable name
+                    boundDate, // Value for the literal match
+                    ValueType.DATE, // Type of the value
+                    null, // No variable name for literal matches
                     filteredPositions.getDocIdAt(i),
                     requirements.needsSentenceId ? filteredPositions.getSentenceIdAt(i) : -1,
                     requirements.needsPositions ? filteredPositions.getBeginCharAt(i) : -1,

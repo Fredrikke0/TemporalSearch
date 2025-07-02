@@ -1,5 +1,7 @@
 package com.example.index;
 
+import java.lang.management.ManagementFactory;
+
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.CompressionType;
 import org.rocksdb.LRUCache;
@@ -23,7 +25,7 @@ public class RocksDBConfig {
     }
 
     public static final long WRITE_BUFFER_SIZE = 256L * 1024 * 1024;
-    public static final long BLOCK_CACHE_SIZE = 150L * 1024 * 1024 * 1024;
+    public static final long BLOCK_CACHE_SIZE = (long) (Runtime.getRuntime().maxMemory() * 0.3);
     public static final int BLOOM_FILTER_BITS_PER_KEY = 10;
     public static final boolean BLOOM_FILTER_USE_BLOCK_BASED_BUILDER = false;
 
