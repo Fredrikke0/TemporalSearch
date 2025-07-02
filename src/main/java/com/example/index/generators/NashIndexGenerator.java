@@ -28,6 +28,8 @@ import com.example.core.Position;
 import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.index.NashDateEntryWithId;
+import com.example.index.util.DateEntityMerger;
+import com.example.index.util.DateEntityMerger.MergedDateEntity;
 import com.example.index.util.NashSerializationUtils;
 import com.example.logging.ProgressTracker;
 
@@ -127,66 +129,31 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             return;
         }
 
-        // Span filtering is now handled upstream by Annotations.java.
-        // The SQL query already sorts the annotations, so we can iterate directly.
-        int currentDocId = -1;
-        int currentSentId = -1;
-        LocalDate currentMergedDate = null;
-        int currentMergedStartChar = -1;
-        int currentMergedEndChar = -1;
-        int currentDateIdForMergedEntity = -1;
+        // The SQL query already sorts the annotations.
+        List<MergedDateEntity> mergedEntities = DateEntityMerger.merge(allDateAnnotations);
 
-        // Iterate through sorted annotations to merge date entities
-        for (AnnotationEntry token : allDateAnnotations) {
-            int documentId = token.getDocumentId();
-            int sentenceId = token.getSentenceId();
-            String normalizedNer = token.getNormalizedNer(); // e.g., "2023-01-15"
-            LocalDate parsedDate = parseNormalizedDate(normalizedNer);
-
-            // Logic to merge consecutive identical dates
-            if (parsedDate != null && documentId == currentDocId && sentenceId == currentSentId && parsedDate.equals(currentMergedDate)) {
-                currentMergedEndChar = token.getEndChar(); // Extend current entity
-            } else {
-                // End of previous entity (if any), or start of a new document/sentence
-                if (currentDocId != -1 && currentDateIdForMergedEntity != -1) {
-                    Position finalizedPosition = new Position(
-                            currentDocId, currentSentId, currentMergedStartChar, currentMergedEndChar);
-                    listIndexToEntries.computeIfAbsent(currentDateIdForMergedEntity, k -> new ArrayList<>()) // Ensure list exists
-                                    .add(new NashDateEntryWithId(finalizedPosition, currentDateIdForMergedEntity));
-                }
-
-                // Start of a new entity
-                currentDocId = documentId;
-                currentSentId = sentenceId;
-                currentMergedDate = parsedDate;
-                currentMergedStartChar = token.getBeginChar();
-                currentMergedEndChar = token.getEndChar();
-                currentDateIdForMergedEntity = -1; // Reset
-
-                if (parsedDate != null) {
-                    final LocalDate finalDocDate = parsedDate;
-                    currentDateIdForMergedEntity = dateToId.computeIfAbsent(parsedDate, date -> {
-                        idToDate.add(date);
-                        int newId = idToDate.size() - 1;
-                        String interval = String.format("[%s , %s]",
-                                NASH_INTERVAL_FORMATTER.format(finalDocDate),
-                                NASH_INTERVAL_FORMATTER.format(finalDocDate));
-                        intervalStrings.add(interval);
-                        // listIndexToEntries.put(newId, new ArrayList<>()); // Already handled by computeIfAbsent above for the value
-                        return newId;
-                    });
-                } else {
-                    logger.trace("Skipping invalid/unparseable normalized_ner date: {} for token at doc/sent/char: {}/{}/{}",
-                                    normalizedNer, documentId, sentenceId, token.getBeginChar());
-                }
+        for (MergedDateEntity entity : mergedEntities) {
+            LocalDate parsedDate = parseNormalizedDate(entity.normalizedDate());
+            if (parsedDate == null) {
+                logger.trace("Skipping invalid/unparseable normalized_ner date: {} for entity at doc/sent: {}/{}",
+                                entity.normalizedDate(), entity.documentId(), entity.sentenceId());
+                continue;
             }
-        }
-        // Add the last processed entity after loops complete
-        if (currentDocId != -1 && currentDateIdForMergedEntity != -1) {
-            Position finalizedPosition = new Position(
-                    currentDocId, currentSentId, currentMergedStartChar, currentMergedEndChar);
-            listIndexToEntries.computeIfAbsent(currentDateIdForMergedEntity, k -> new ArrayList<>()) // Ensure list exists
-                            .add(new NashDateEntryWithId(finalizedPosition, currentDateIdForMergedEntity));
+
+            final LocalDate finalDocDate = parsedDate;
+            int dateId = dateToId.computeIfAbsent(parsedDate, date -> {
+                idToDate.add(date);
+                int newId = idToDate.size() - 1;
+                String interval = String.format("[%s , %s]",
+                        NASH_INTERVAL_FORMATTER.format(finalDocDate),
+                        NASH_INTERVAL_FORMATTER.format(finalDocDate));
+                intervalStrings.add(interval);
+                return newId;
+            });
+
+            Position finalizedPosition = new Position(entity.documentId(), entity.sentenceId(), entity.beginChar(), entity.endChar());
+            listIndexToEntries.computeIfAbsent(dateId, k -> new ArrayList<>())
+                            .add(new NashDateEntryWithId(finalizedPosition, dateId));
         }
 
         logger.info("Finished processing fetched annotations. Found {} unique dates for Nash intervals.", idToDate.size());

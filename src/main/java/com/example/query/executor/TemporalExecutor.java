@@ -625,7 +625,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     // For BEFORE queries, iterate from beginning up to (but not including) the reference date
                     if (queryStartDate != null) {
                         startKey = formatDateKey(Nash.GLOBAL_LOWER_BOUND);
-                        endKey = formatDateKey(queryStartDate);
+                        endKey = formatDateKey(queryStartDate.minusDays(1));
                     }
                     // No start key - iterate from the beginning of the index
                     break;
@@ -634,7 +634,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     // For BEFORE_EQUAL, iterate from beginning up to and including the reference date
                     if (queryStartDate != null) {
                         startKey = formatDateKey(Nash.GLOBAL_LOWER_BOUND);
-                        endKey = formatDateKey(queryStartDate.plusDays(1));
+                        endKey = formatDateKey(queryStartDate);
                     }
                     // No start key - iterate from the beginning of the index
                     break;
