@@ -45,9 +45,13 @@ public class RocksDBBrowser {
         "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash",
         "synonym_manager_db",
         // Stitch indexes
-        "stitch_unigram_date", "stitch_unigram_ner", "stitch_unigram_pos", "stitch_unigram_dependency",
-        "stitch_bigram_date", "stitch_bigram_ner", "stitch_bigram_pos", "stitch_bigram_dependency",
-        "stitch_trigram_date", "stitch_trigram_ner", "stitch_trigram_pos", "stitch_trigram_dependency"
+        "stitch_unigram_date", "stitch_unigram_ner",
+        "stitch_bigram_date", "stitch_bigram_ner",
+        "stitch_trigram_date", "stitch_trigram_ner"
+    ));
+
+    private static final List<String> SUMMARY_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
+        "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos"
     ));
 
     public static void main(String[] args) throws IOException {
@@ -58,12 +62,13 @@ public class RocksDBBrowser {
 
         List<String> availableIndexChoices = new ArrayList<>(ALL_INDEX_TYPES);
         availableIndexChoices.add("all");
+        availableIndexChoices.add("summary");
 
         parser.addArgument("-i", "--index-type")
                 .choices(availableIndexChoices)
                 .metavar("INDEX_TYPE")
                 .required(true)
-                .help("Type of index to browse (e.g., unigram, stitch, synonym_manager_db). Use 'all' to perform the operation on all known index types sequentially.");
+                .help("Type of index to browse (e.g., unigram, stitch, synonym_manager_db). Use 'all' to perform the operation on all known index types sequentially. Use 'summary' for a position count summary.");
 
         parser.addArgument("-d", "--db-path")
                 .metavar("DB_PATH")
@@ -108,7 +113,9 @@ public class RocksDBBrowser {
                 // globalSynonymManager will remain null
             }
 
-            if ("all".equalsIgnoreCase(indexType)) {
+            if ("summary".equalsIgnoreCase(indexType)) {
+                displaySummaryStats(basePath);
+            } else if ("all".equalsIgnoreCase(indexType)) {
                 for (String singleIndexType : ALL_INDEX_TYPES) {
                     System.out.printf("\n--- Processing Index: %s ---\n", singleIndexType);
                     try {
@@ -549,5 +556,46 @@ public class RocksDBBrowser {
             typeHint = " (Next ID Counter)";
         }
         System.out.printf("Key: %s%s, Value: %s%n", keyStr, typeHint, valueStr);
+    }
+
+    private static void displaySummaryStats(String basePath) {
+        System.out.println("Index Position Summary");
+        System.out.println("=====================================");
+        System.out.printf("%-20s | %s%n", "Index Name", "Total Positions");
+        System.out.println("----------------------|-----------------");
+
+        for (String indexType : SUMMARY_INDEX_TYPES) {
+            Path dbPathActual = Paths.get(basePath, indexType);
+            File dbFile = dbPathActual.toFile();
+
+            if (!dbFile.exists() || !dbFile.isDirectory()) {
+                System.out.printf("%-20s | %s%n", indexType, "Not found");
+                continue;
+            }
+
+            Options options = new Options();
+            options.setCreateIfMissing(false);
+            long totalPositions = 0;
+            try (RocksDB db = RocksDB.openReadOnly(options, dbFile.getAbsolutePath())) {
+                try (RocksIterator iterator = db.newIterator()) {
+                    for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
+                        try {
+                            byte[] value = iterator.value();
+                            totalPositions += PositionListSoA.getNumPositionsFromBlob(value);
+                        } catch (Exception e) {
+                            logger.warn("Could not deserialize entry value in index '{}' during summary calculation: {}. Skipping position count.", indexType, e.getMessage());
+                        }
+                    }
+                }
+                System.out.printf("%-20s | %,d%n", indexType, totalPositions);
+            } catch (RocksDBException e) {
+                System.out.printf("%-20s | %s%n", indexType, "Error opening DB");
+                logger.error("Error opening RocksDB database at {}: {}", dbPathActual.toString(), e.getMessage());
+            } finally {
+                if (options != null) {
+                    options.close();
+                }
+            }
+        }
     }
 }
