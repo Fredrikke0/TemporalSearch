@@ -116,6 +116,19 @@ def _determine_strategies_for_query(query_info, is_verbose):
     return strategies_to_run
 
 def run_warm_mode(cli_process, queries_to_run, args, all_run_results_accumulator, file_output_dir):
+    # --- One-time preload run (not timed / not recorded) ---
+    if queries_to_run:
+        try:
+            first_q = queries_to_run[0]['text']
+            # Base strategy is fine for preload
+            cli_process.set_strategy('naive', 'none', 'none')
+            cli_process.execute_query(first_q)
+            if args.verbose:
+                print("    (WarmMode) Preload run executed to open indexes.", flush=True)
+        except Exception as e_pre:
+            if args.verbose:
+                print(f"    (WarmMode) Preload run failed/ignored: {e_pre}", flush=True)
+
     NUM_TIMED_RUNS_WARM = 3
     print(f"  Warm Cache Mode: Queries in order. 1 warm-up + {NUM_TIMED_RUNS_WARM} timed runs per setting.", flush=True)
     current_queries_for_warm_mode = list(queries_to_run) # Process in original order
@@ -304,6 +317,18 @@ def run_warm_mode(cli_process, queries_to_run, args, all_run_results_accumulator
             })
 
 def run_cold_mode(cli_process, queries_to_run, args, all_run_results_accumulator, file_output_dir):
+    # One-time preload run (not part of timing)
+    if queries_to_run:
+        try:
+            first_q = queries_to_run[0]['text']
+            cli_process.set_strategy('naive', 'none', 'none')
+            cli_process.execute_query(first_q)
+            if args.verbose:
+                print("    (ColdMode) Preload run executed to open indexes.", flush=True)
+        except Exception as e_pre:
+            if args.verbose:
+                print(f"    (ColdMode) Preload run failed/ignored: {e_pre}", flush=True)
+
     NUM_COLD_PASSES = 3
     print(f"  Cold Cache Mode: {NUM_COLD_PASSES} passes. All (query, strategy) combinations are generated, then shuffled before each pass. 1 execution per combination per pass.", flush=True)
 
@@ -489,11 +514,11 @@ def run_cold_mode(cli_process, queries_to_run, args, all_run_results_accumulator
         })
 
 class QueryCLIInteractiveProcess:
-    def __init__(self, jar_path, db_file, index_dir, initial_temporal_strategy, initial_pushdown_strategy, initial_stitch_strategy, is_verbose=False):
+    def __init__(self, jar_path, db_file, index_root_dir, initial_temporal_strategy, initial_pushdown_strategy, initial_stitch_strategy, is_verbose=False):
         print("[BENCHMARK.PY] Initializing QueryCLIInteractiveProcess...", flush=True)
         self.jar_path = jar_path
         self.db_file = db_file
-        self.index_dir = index_dir
+        self.index_root_dir = index_root_dir
         self.is_verbose = is_verbose
         self.process = None
         self._last_command_timestamp = time.monotonic()
@@ -508,7 +533,7 @@ class QueryCLIInteractiveProcess:
 
         if not os.path.exists(jar_path):
             raise FileNotFoundError(f"Error: JAR file not found at {jar_path}. Please build the project.")
-        if not os.path.exists(db_file):
+        if db_file and not os.path.exists(db_file):
             raise FileNotFoundError(f"Error: Database file not found: {db_file}")
 
         command = [
@@ -520,8 +545,11 @@ class QueryCLIInteractiveProcess:
             "--enable-native-access=ALL-UNNAMED",
             "--sun-misc-unsafe-memory-access=allow",
             "-jar", jar_path,
-            "--db-file", db_file,
-            "--index-dir", index_dir,
+        ]
+        if db_file:
+            command += ["--db-file", db_file]
+        command += [
+            "--index-root-dir", index_root_dir,
             "--temporal-strategy", initial_temporal_strategy,
             "--pushdown-strategy", initial_pushdown_strategy,
             "--stitch-strategy", initial_stitch_strategy
@@ -755,8 +783,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark QueryCLI.java using interactive mode.")
     parser.add_argument("--query-dir", required=True, help="Path to a directory containing query files. Each file's first line must be 'BENCHMARK_TYPE: <TYPE>', where TYPE is 1HOP, 2HOP, or 3HOP.")
     parser.add_argument("--jar-path", default=DEFAULT_JAR_PATH, help=f"Path to QueryCLI JAR (default: {DEFAULT_JAR_PATH})")
-    parser.add_argument("--db-file", required=True, help="Path to QueryCLI SQLite database file.")
-    parser.add_argument("--index-dir", required=True, help="Path to QueryCLI index directory.")
+    parser.add_argument("--db-file", required=False, help="Path to QueryCLI SQLite database file. If omitted CLI resolves from manifest.")
+    parser.add_argument("--index-root-dir", required=True, help="Root directory containing project index folders.")
     parser.add_argument("--full", action="store_true", help="Run cold and warm cache modes. Default: cold only.")
     parser.add_argument("--verbose", action="store_true", help="Verbose output from benchmark script and QueryCLI.")
     parser.add_argument("--output-dir", required=True, help="Directory to store all benchmark results. A subdirectory will be created for each query file's benchmark type and name.")
@@ -778,8 +806,8 @@ if __name__ == "__main__":
             exit(f"Error creating output directory {args.output_dir}: {e}")
 
     print(f"Using JAR: {args.jar_path}", flush=True)
-    print(f"Using DB File: {args.db_file}", flush=True)
-    print(f"Using Index Dir: {args.index_dir}", flush=True)
+    print(f"Using DB File: {args.db_file or '[resolved from manifest]'}", flush=True)
+    print(f"Using Index Root Dir: {args.index_root_dir}", flush=True)
     print(f"Initial CLI strategies (hardcoded): T:nash, P:optimized, S:optimized", flush=True)
     print(f"Cache Mode: {'full (cold + warm)' if args.full else 'cold only'}. Runs/Passes: Warm (1 warmup + 3 timed), Cold (3 passes, 1 exec per pass).", flush=True)
     print(f"Timeouts: QueryExec={QUERY_EXEC_TIMEOUT_SECONDS}s, CLIStartup={CLI_STARTUP_TIMEOUT_SECONDS}s, CmdAck={COMMAND_ACK_TIMEOUT_SECONDS}s, PromptWait={PROMPT}", flush=True)
@@ -862,7 +890,7 @@ if __name__ == "__main__":
             cli_process_for_mode = None
             try:
                 cli_process_for_mode = QueryCLIInteractiveProcess(
-                    args.jar_path, args.db_file, args.index_dir,
+                    args.jar_path, args.db_file, args.index_root_dir,
                     "nash", "optimized", "optimized", # Hardcoded initial strategies
                     is_verbose=args.verbose
                 )

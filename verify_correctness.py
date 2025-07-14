@@ -9,6 +9,7 @@ import threading
 import time
 import traceback
 
+# Adjusted for new CLI API redesign
 DEFAULT_JAR_PATH = "target/query-cli.jar"
 # Timeouts for interactive mode
 QUERY_EXEC_TIMEOUT_SECONDS = 60 * 15  # 15 minutes for a single query to execute and return PROMPT
@@ -275,11 +276,11 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
 
 
 class QueryCLIInteractiveProcess:
-    def __init__(self, jar_path, db_file, index_dir, initial_temporal_strategy, initial_pushdown_strategy, initial_stitch_strategy, is_verbose=False):
+    def __init__(self, jar_path, db_file, index_root_dir, initial_temporal_strategy, initial_pushdown_strategy, initial_stitch_strategy, is_verbose=False):
         print("[VERIFY.PY] Initializing QueryCLIInteractiveProcess...", flush=True)
         self.jar_path = jar_path
         self.db_file = db_file
-        self.index_dir = index_dir
+        self.index_root_dir = index_root_dir
         self.is_verbose = is_verbose
         self.process = None
         self._last_command_timestamp = time.monotonic()
@@ -294,7 +295,7 @@ class QueryCLIInteractiveProcess:
 
         if not os.path.exists(jar_path):
             raise FileNotFoundError(f"Error: JAR file not found at {jar_path}. Please build the project.")
-        if not os.path.exists(db_file):
+        if db_file and not os.path.exists(db_file):
             raise FileNotFoundError(f"Error: Database file not found: {db_file}")
 
         command = [
@@ -304,8 +305,11 @@ class QueryCLIInteractiveProcess:
             "--enable-native-access=ALL-UNNAMED",
             "--sun-misc-unsafe-memory-access=allow",
             "-jar", jar_path,
-            "--db-file", db_file,
-            "--index-dir", index_dir,
+        ]
+        if db_file:
+            command += ["--db-file", db_file]
+        command += [
+            "--index-root-dir", index_root_dir,
             "--temporal-strategy", initial_temporal_strategy,
             "--pushdown-strategy", initial_pushdown_strategy,
             "--stitch-strategy", initial_stitch_strategy
@@ -518,8 +522,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run queries with different strategies and verify that their outputs are identical.")
     parser.add_argument("--query-dir", required=True, help="Path to a directory containing query files. Each file's name should contain '1hop', '2hop', or '3hop'.")
     parser.add_argument("--jar-path", default=DEFAULT_JAR_PATH, help=f"Path to QueryCLI JAR (default: {DEFAULT_JAR_PATH})")
-    parser.add_argument("--db-file", required=True, help="Path to QueryCLI SQLite database file.")
-    parser.add_argument("--index-dir", required=True, help="Path to QueryCLI index directory.")
+    parser.add_argument("--db-file", required=False, help="Path to QueryCLI SQLite database file. If omitted, CLI will resolve from manifest.")
+    parser.add_argument("--index-root-dir", required=True, help="Root directory that contains project index folders.")
     parser.add_argument("--verbose", action="store_true", help="Verbose output from verification script and QueryCLI.")
     parser.add_argument("--output-dir", required=True, help="Directory to store outputs for failed verifications.")
     args = parser.parse_args()
@@ -534,8 +538,8 @@ if __name__ == "__main__":
     os.makedirs(args.output_dir, exist_ok=True)
 
     print(f"Using JAR: {args.jar_path}", flush=True)
-    print(f"Using DB File: {args.db_file}", flush=True)
-    print(f"Using Index Dir: {args.index_dir}", flush=True)
+    print(f"Using DB File: {args.db_file or '[resolved from manifest]'}", flush=True)
+    print(f"Using Index Root Dir: {args.index_root_dir}", flush=True)
     print(f"Initial CLI strategies (hardcoded): T:nash, P:optimized, S:optimized", flush=True)
     print(f"Verification output for failures will be saved in subdirectories under: {args.output_dir}", flush=True)
 
@@ -591,7 +595,7 @@ if __name__ == "__main__":
         cli_process = None
         try:
             cli_process = QueryCLIInteractiveProcess(
-                args.jar_path, args.db_file, args.index_dir,
+                args.jar_path, args.db_file, args.index_root_dir,
                 "nash", "optimized", "optimized", # Hardcoded initial strategies
                 is_verbose=args.verbose
             )

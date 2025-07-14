@@ -59,6 +59,10 @@ public class QueryCLI implements AutoCloseable {
     // No shared components in the new design; every query builds its own managers.
     private final boolean interactiveMode;
 
+    // Caches for interactive mode (project name -> resources)
+    private final java.util.Map<String, IndexManager> projectIndexManagers = new java.util.HashMap<>();
+    private final java.util.Map<String, TableResultService> projectTableServices = new java.util.HashMap<>();
+
     /**
      * Creates a new QueryCLI instance.
      *
@@ -146,13 +150,41 @@ public class QueryCLI implements AutoCloseable {
                 return;
             }
 
-            // Always build fresh components per query (simpler design)
-            SqliteAccessor.initialize(this.dbFilePath); // Initialize for this specific call
-            TableResultService currentTableResultService = new TableResultService(this.dbFilePath);
-            localIndexManager = new IndexManager(projectIndexDir, projectName, query, this.currentTemporalStrategyName, this.currentStitchStrategyName);
-            IndexManager currentIndexManagerToUse = localIndexManager; // Will be closed in finally
-            SynonymManager currentSynonymManager = currentIndexManagerToUse.getSynonymManager();
-            logger.debug("Created per-query IndexManager instance.");
+            TableResultService currentTableResultService;
+            IndexManager currentIndexManagerToUse;
+            SynonymManager currentSynonymManager;
+
+            if (interactiveMode) {
+                // Reuse or create and cache IndexManager & TableResultService for this project
+                currentIndexManagerToUse = projectIndexManagers.get(projectName);
+                if (currentIndexManagerToUse == null) {
+                    // Build a maximal preload query to force all index types to open
+                    String preloadQueryStr = String.format("SELECT DOCUMENT_ID FROM %s WHERE CONTAINS('preload_x') AND NER(PERSON) AND POS(NN) AND DEPENDS('dep','rel','dep_rel') AND DATE(= 2000)", projectName);
+                    Query preloadQuery;
+                    try {
+                        preloadQuery = parser.parse(preloadQueryStr);
+                    } catch (QueryParseException e) {
+                        // Fallback: use the actual query for required indexes only
+                        preloadQuery = query;
+                    }
+                    currentIndexManagerToUse = new IndexManager(projectIndexDir, projectName, preloadQuery, "nash", "optimized");
+                    projectIndexManagers.put(projectName, currentIndexManagerToUse);
+
+                    // TableResultService per project (DB path may differ across projects)
+                    projectTableServices.put(projectName, new TableResultService(this.dbFilePath));
+                    logger.info("Initialized and cached IndexManager for project '{}'.", projectName);
+                }
+                currentTableResultService = projectTableServices.get(projectName);
+                currentSynonymManager = currentIndexManagerToUse.getSynonymManager();
+            } else {
+                // Non-interactive: fresh components each query
+                SqliteAccessor.initialize(this.dbFilePath);
+                currentTableResultService = new TableResultService(this.dbFilePath);
+                localIndexManager = new IndexManager(projectIndexDir, projectName, query, this.currentTemporalStrategyName, this.currentStitchStrategyName);
+                currentIndexManagerToUse = localIndexManager;
+                currentSynonymManager = currentIndexManagerToUse.getSynonymManager();
+            }
+            logger.debug("Ready IndexManager and TableResultService for execution.");
             logger.info("Using database at: {}", this.dbFilePath); // Re-log for clarity if needed
 
                 // Add warning for stitch strategy and granularity mismatch
@@ -256,8 +288,17 @@ public class QueryCLI implements AutoCloseable {
     @Override
     public void close() throws IndexAccessException {
         logger.info("Closing QueryCLI resources...");
-        // No sharedIndexManager, sharedSynonymManager, sharedTableResultService to close here
-        // as they are not persistent across queries in the new design.
+        if (!projectIndexManagers.isEmpty()) {
+            for (IndexManager mgr : projectIndexManagers.values()) {
+                try {
+                    mgr.close();
+                } catch (IndexAccessException e) {
+                    logger.warn("Error closing IndexManager during CLI shutdown: {}", e.getMessage());
+                }
+            }
+            projectIndexManagers.clear();
+            projectTableServices.clear();
+        }
     }
 
     private boolean sharedComponentsReady() {
