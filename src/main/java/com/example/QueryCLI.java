@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.index.util.SynonymManager;
+import com.example.project.ProjectManifest;
 import com.example.query.QueryParseException;
 import com.example.query.QueryParser;
 import com.example.query.QuerySemanticValidator;
@@ -39,8 +40,8 @@ import tech.tablesaw.api.Table;
  */
 public class QueryCLI implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(QueryCLI.class);
-    private final String dbFilePath;
-    private final Path indexDirPath;
+    private String dbFilePath; // may be null until resolved from manifest
+    private final Path indexRootDir;
 
     // Core components
     private final QueryParser parser;
@@ -55,10 +56,7 @@ public class QueryCLI implements AutoCloseable {
     private Optional<String> currentExportFormat = Optional.empty();
     private Optional<String> currentExportFilename = Optional.empty();
 
-    // Shared components for interactive mode
-    private IndexManager sharedIndexManager;
-    private TableResultService sharedTableResultService;
-    private SynonymManager sharedSynonymManager;
+    // No shared components in the new design; every query builds its own managers.
     private final boolean interactiveMode;
 
     /**
@@ -75,7 +73,7 @@ public class QueryCLI implements AutoCloseable {
      */
     public QueryCLI(String dbFilePath, Path indexDirPath, String initialTemporalStrategy, PushdownStrategy initialPushdownStrategy, String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename, boolean interactiveMode) {
         this.dbFilePath = dbFilePath;
-        this.indexDirPath = indexDirPath;
+        this.indexRootDir = indexDirPath;
         this.parser = new QueryParser();
         this.validator = new QuerySemanticValidator();
 
@@ -86,10 +84,6 @@ public class QueryCLI implements AutoCloseable {
         this.currentExportFilename = initialExportFilename;
 
         this.interactiveMode = interactiveMode;
-
-        if (this.interactiveMode) {
-            initializeSharedComponents();
-        }
 
         logger.info("Initialized QueryCLI. DB file: {}, Index dir: {}. Interactive: {}", dbFilePath, indexDirPath, interactiveMode);
         logger.info("Initial Strategies - Temporal: {}, Pushdown: {}, Stitch: {}", currentTemporalStrategyName, currentPushdownStrategy, currentStitchStrategyName);
@@ -107,37 +101,7 @@ public class QueryCLI implements AutoCloseable {
         return fileName;
     }
 
-    private void initializeSharedComponents() {
-        try {
-            logger.info("Initializing shared components for interactive mode...");
-            SqliteAccessor.initialize(this.dbFilePath);
-            this.sharedTableResultService = new TableResultService(this.dbFilePath);
-
-            String projectName = deriveProjectNameFromIndexPath(this.indexDirPath);
-            // Maximal preloading query for IndexManager initialization
-            // FROM clause uses the derived project name.
-            String maxPreloadQueryStr = String.format("SELECT DOCUMENT_ID FROM %s WHERE CONTAINS('preload_a preload_b preload_c') AND NER(PERSON) AND POS(NN) AND DEPENDS('dep', 'rel', 'dep_rel') AND DATE(= 2000-01-01)", projectName);
-
-            Query maxPreloadQuery = this.parser.parse(maxPreloadQueryStr);
-            // No validation needed for this internal preload query.
-
-            // Use "nash" and "optimized" for maximal preloading as per design
-            this.sharedIndexManager = new IndexManager(this.indexDirPath, projectName, maxPreloadQuery, "nash", "optimized");
-            this.sharedSynonymManager = this.sharedIndexManager.getSynonymManager();
-            logger.info("Shared components initialized successfully (IndexManager, TableResultService, SynonymManager). Project: '{}'", projectName);
-
-        } catch (QueryParseException e) {
-            logger.error("Failed to parse maximal preloading query during shared component initialization: {}", e.getMessage(), e);
-            System.err.println("ERROR: Critical failure initializing shared components (preload query parse): " + e.getMessage());
-            // sharedIndexManager, etc., will remain null. Query execution will fail later.
-        } catch (IndexAccessException e) {
-            logger.error("Failed to initialize IndexManager or SynonymManager for shared components: {}", e.getMessage(), e);
-            System.err.println("ERROR: Critical failure initializing shared components (IndexManager/SynonymManager): " + e.getMessage());
-        } catch (Exception e) {
-            logger.error("Unexpected critical error during shared component initialization: {}", e.getMessage(), e);
-            System.err.println("ERROR: Unexpected critical failure during shared component initialization: " + e.getMessage());
-        }
-    }
+    // initializeSharedComponents removed in new design (no persistent shared objects).
 
     /**
      * Executes a query string using current strategy and output settings.
@@ -155,7 +119,24 @@ public class QueryCLI implements AutoCloseable {
 
             String projectName = query.source();
             logger.debug("Using project name from FROM clause: {}", projectName);
-            logger.debug("Using index base directory: {}", this.indexDirPath);
+            logger.debug("Using index root directory: {}", this.indexRootDir);
+
+            // Resolve the project-specific index directory
+            java.nio.file.Path projectIndexDir = this.indexRootDir.resolve(projectName);
+
+            // If dbFilePath is not provided, attempt to read from manifest
+            if (this.dbFilePath == null) {
+                java.nio.file.Path manifestPath = projectIndexDir.resolve(ProjectManifest.defaultFileName());
+                try {
+                    this.dbFilePath = ProjectManifest.load(manifestPath).dbFile().toString();
+                    logger.info("Resolved database path from manifest: {}", this.dbFilePath);
+                } catch (IOException ex) {
+                    String msg = "Failed to read project manifest at " + manifestPath + ": " + ex.getMessage();
+                    logger.error(msg, ex);
+                    System.err.println("Error: " + msg);
+                    return;
+                }
+            }
 
             if (!new java.io.File(this.dbFilePath).exists()) {
                 String errorMessage = String.format("Database file not found: %s.", this.dbFilePath);
@@ -165,31 +146,13 @@ public class QueryCLI implements AutoCloseable {
                 return;
             }
 
-            TableResultService currentTableResultService;
-            SynonymManager currentSynonymManager;
-            IndexManager currentIndexManagerToUse; // The IndexManager instance for this execution
-
-            if (this.interactiveMode) {
-                if (this.sharedIndexManager == null || this.sharedTableResultService == null || this.sharedSynonymManager == null) {
-                    logger.error("Interactive mode active, but shared components are not initialized. Cannot execute query '{}'.", queryStr);
-                    System.err.println("Error: Shared components not ready. Query execution aborted.");
-                    // Still print benchmark times to not hang benchmark.py, even if zero/error.
-                    return; // Exit executeQuery early
-                }
-                currentTableResultService = this.sharedTableResultService;
-                currentSynonymManager = this.sharedSynonymManager;
-                currentIndexManagerToUse = this.sharedIndexManager; // Use shared, not closed here
-                logger.debug("Using shared IndexManager for interactive query.");
-            } else {
-                // Non-interactive: create all components locally for this single query
-                SqliteAccessor.initialize(this.dbFilePath); // Initialize for this specific call
-                currentTableResultService = new TableResultService(this.dbFilePath);
-                // Create IndexManager with current strategy settings from CLI args
-                localIndexManager = new IndexManager(this.indexDirPath, projectName, query, this.currentTemporalStrategyName, this.currentStitchStrategyName);
-                currentIndexManagerToUse = localIndexManager; // Will be closed in finally
-                currentSynonymManager = currentIndexManagerToUse.getSynonymManager();
-                logger.debug("Created local IndexManager for single-shot query.");
-            }
+            // Always build fresh components per query (simpler design)
+            SqliteAccessor.initialize(this.dbFilePath); // Initialize for this specific call
+            TableResultService currentTableResultService = new TableResultService(this.dbFilePath);
+            localIndexManager = new IndexManager(projectIndexDir, projectName, query, this.currentTemporalStrategyName, this.currentStitchStrategyName);
+            IndexManager currentIndexManagerToUse = localIndexManager; // Will be closed in finally
+            SynonymManager currentSynonymManager = currentIndexManagerToUse.getSynonymManager();
+            logger.debug("Created per-query IndexManager instance.");
             logger.info("Using database at: {}", this.dbFilePath); // Re-log for clarity if needed
 
                 // Add warning for stitch strategy and granularity mismatch
@@ -293,23 +256,12 @@ public class QueryCLI implements AutoCloseable {
     @Override
     public void close() throws IndexAccessException {
         logger.info("Closing QueryCLI resources...");
-        if (sharedIndexManager != null) {
-            try {
-                sharedIndexManager.close();
-                logger.info("Shared IndexManager closed successfully.");
-            } catch (IndexAccessException e) {
-                logger.error("Failed to close shared IndexManager: {}", e.getMessage(), e);
-                throw e; // Propagate to signal error during close
-            } finally {
-                sharedIndexManager = null;
-                sharedSynonymManager = null; // Was part of sharedIndexManager
-                sharedTableResultService = null; // Not AutoCloseable, just dereference
-            }
-        }
+        // No sharedIndexManager, sharedSynonymManager, sharedTableResultService to close here
+        // as they are not persistent across queries in the new design.
     }
 
     private boolean sharedComponentsReady() {
-        return this.sharedIndexManager != null && this.sharedTableResultService != null && this.sharedSynonymManager != null;
+        return true; // No persistent shared components to check
     }
 
     /**
@@ -323,12 +275,13 @@ public class QueryCLI implements AutoCloseable {
                 .description("Execute queries against indexed projects. Queries specify the project via the FROM clause.");
 
         cliArgParser.addArgument("--db-file")
-                .required(true)
-                .help("Path to the project's SQLite database file.");
+                .required(false)
+                .help("Optional absolute path to a SQLite database file. If omitted, the path is read from the manifest inside the project index directory determined by the FROM clause.");
 
-        cliArgParser.addArgument("--index-dir")
-                .required(true)
-                .help("Path to the directory containing project indexes.");
+        cliArgParser.addArgument("--index-root-dir")
+                .required(false)
+                .setDefault(".")
+                .help("Path to the root directory containing all project index folders. Defaults to current working directory.");
 
         cliArgParser.addArgument("--export")
                 .help("Export results to a file in the specified format: csv:filename.csv, json:filename.json, or html:filename.html. Sets initial export for single query or interactive mode.");
@@ -353,7 +306,7 @@ public class QueryCLI implements AutoCloseable {
         try {
             Namespace ns = cliArgParser.parseArgs(args);
             String dbFile = ns.getString("db_file");
-            Path indexDir = Path.of(ns.getString("index_dir")); // Use Path directly
+            Path indexDir = Path.of(ns.getString("index_root_dir")); // Use Path directly
             String exportArg = ns.getString("export");
             String initialTemporalStrategy = ns.getString("temporal_strategy");
             PushdownStrategy initialPushdownStrategy = PushdownStrategy.fromString(ns.getString("pushdown_strategy"));
@@ -377,10 +330,6 @@ public class QueryCLI implements AutoCloseable {
 
             try (QueryCLI cli = new QueryCLI(dbFile, indexDir, initialTemporalStrategy, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactive)) {
                 if (interactive) {
-                    if (!cli.sharedComponentsReady()) {
-                        System.err.println("FATAL: Shared components failed to initialize. Interactive mode cannot start.");
-                        return; // Exit if shared components are not ready
-                    }
 
                 Scanner scanner = new Scanner(System.in);
                     System.out.println("QueryCLI Interactive Mode");

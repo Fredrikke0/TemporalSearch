@@ -44,9 +44,10 @@
 
     <!-- Suppress non-critical messages from noisy libraries -->
     <logger name="com.example.index.RocksDBConfig" level="WARN"/>
-    <logger name="edu.stanford.nlp" level="WARN"/>
+    <logger name="edu.stanford.nlp" level="ERROR"/>
     <logger name="org.rocksdb" level="WARN"/>
     <logger name="org.xerial.snappy" level="WARN"/> <!-- For Snappy compression -->
+    <logger name="sutime" level="ERROR"/>
     <!-- Add any other noisy libraries here -->
 
 

@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.annotation.Annotations;
+import com.example.project.ProjectManifest;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
@@ -142,7 +143,7 @@ public class Pipeline {
                 .dest("custom_temp_dir")
                 .type(String.class)
                 .required(false)
-                .help("Path to a custom base directory for temporary files during index generation. If not specified, defaults to '<index_dir_path>/indexes/temp/'.");
+                .help("Path to a custom base directory for temporary files during index generation. If not specified, defaults to '<project_dir>/temp/'.");
 
         Namespace ns;
         try {
@@ -155,8 +156,16 @@ public class Pipeline {
         // --- Argument Processing and Validation ---
         String stage = ns.getString("stage");
         Path dbFilePath = Path.of(ns.getString("db_file_path")).toAbsolutePath();
-        Path indexDirPath = Path.of(ns.getString("index_dir_path")).toAbsolutePath();
-        Path indexBasePath = indexDirPath.resolve("indexes");
+        Path indexRootDirPath = Path.of(ns.getString("index_dir_path")).toAbsolutePath(); // directory containing multiple project index dirs
+
+        // Derive project name from database file (remove extension)
+        String projectName = dbFilePath.getFileName().toString().replaceFirst("\\.[^.]+$", "");
+
+        // Each project gets its own directory directly under the root
+        Path projectDirPath = indexRootDirPath.resolve(projectName);
+
+        // For the rest of the pipeline code, this directory functions as the base index directory
+        Path indexBasePath = projectDirPath;
 
         boolean force = ns.getBoolean("force");
         Integer limit = ns.getInt("limit");
@@ -166,7 +175,7 @@ public class Pipeline {
         java.util.List<String> cliRequestedIndexTypes = ns.getList("index_type"); // Renamed for clarity
 
         logger.info("Starting Pipeline (DB: '{}', Index Dir: '{}', Stage: {}, CLI Requested Index Types: {})",
-                    dbFilePath, indexDirPath, stage, cliRequestedIndexTypes);
+                    dbFilePath, indexRootDirPath, stage, cliRequestedIndexTypes);
 
         // --- Project Initialization & Validation ---
 
@@ -178,18 +187,18 @@ public class Pipeline {
         logger.debug("Using database file: {}", dbFilePath.toAbsolutePath());
 
         // Create index directory and its 'indexes' subdirectory if they don't exist
-        if (!Files.exists(indexDirPath)) {
-            logger.info("Index directory '{}' does not exist. Creating...", indexDirPath.toAbsolutePath());
-            Files.createDirectories(indexDirPath);
+        if (!Files.exists(indexRootDirPath)) {
+            logger.info("Index directory '{}' does not exist. Creating...", indexRootDirPath.toAbsolutePath());
+            Files.createDirectories(indexRootDirPath);
         } else {
-            logger.debug("Using existing index directory '{}'", indexDirPath.toAbsolutePath());
+            logger.debug("Using existing index directory '{}'", indexRootDirPath.toAbsolutePath());
         }
 
-        if (!Files.exists(indexBasePath)) {
-            logger.info("Base indexes directory '{}' does not exist within index directory. Creating...", indexBasePath.toAbsolutePath());
-            Files.createDirectories(indexBasePath);
+        if (!Files.exists(projectDirPath)) {
+            logger.info("Project directory '{}' does not exist. Creating...", projectDirPath.toAbsolutePath());
+            Files.createDirectories(projectDirPath);
         } else {
-            logger.debug("Using existing base indexes directory '{}'", indexBasePath.toAbsolutePath());
+            logger.debug("Using existing project directory '{}'", projectDirPath.toAbsolutePath());
         }
 
         // --- Stage Execution ---
@@ -318,6 +327,14 @@ public class Pipeline {
                 force
             );
             logger.info("Indexing stage completed.");
+        }
+
+        // Write/update manifest for this project directory
+        try {
+            ProjectManifest.write(projectDirPath, dbFilePath);
+            logger.info("Wrote project manifest to {}", projectDirPath.resolve(ProjectManifest.defaultFileName()).toAbsolutePath());
+        } catch (IOException e) {
+            logger.error("Failed to write project manifest: {}", e.getMessage(), e);
         }
 
         logger.info("Pipeline completed successfully!");
