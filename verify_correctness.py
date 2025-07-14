@@ -145,7 +145,8 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
         benchmark_type = query_info['benchmark_type']
         source_file = query_info['source_file']
 
-        print(f"\n--- Verifying Query {original_query_id_str} (File: {source_file}, Type: {benchmark_type}) ---", flush=True)
+        # Print header without ending newline; subsequent status will follow on same line
+        print(f"\n--- Verifying Query {original_query_id_str} (File: {source_file}, Type: {benchmark_type}) --- ", end='', flush=True)
         if args.verbose: print(f"    Query Text: {query_text}", flush=True)
 
 
@@ -161,7 +162,7 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
 
         # --- Run base strategy first to get the ground truth ---
         base_temp_s, base_push_s, base_stitch_s = base_strategy_tuple
-        progress_prefix_base = f"    [BASE Q:{original_query_id_str} T:{base_temp_s},P:{base_push_s},S:{base_stitch_s}]"
+        progress_prefix_base = f"\n    [BASE Q:{original_query_id_str} T:{base_temp_s},P:{base_push_s},S:{base_stitch_s}]"
 
         safe_query_part = re.sub(r'[^a-zA-Z0-9_-]', '_', query_text)[:30]
         base_output_filename = f"{original_query_id_str}_{safe_query_part}_BASE.csv"
@@ -171,30 +172,39 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
         try:
             # Set strategy
             _, _, strat_set_stderr = cli_process.set_strategy(base_temp_s, base_push_s, base_stitch_s)
-            if strat_set_stderr and args.verbose: print(f"{progress_prefix_base} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
+            if strat_set_stderr and args.verbose:
+                print(f"{progress_prefix_base} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
 
             # Set output file for the CLI to write to directly
             _, _, output_set_stderr = cli_process.set_output('csv', base_output_filepath)
-            if output_set_stderr and args.verbose: print(f"{progress_prefix_base} WARNING: Stderr on set_output: {output_set_stderr.strip()}", flush=True)
+            if output_set_stderr and args.verbose:
+                print(f"{progress_prefix_base} WARNING: Stderr on set_output: {output_set_stderr.strip()}", flush=True)
 
             # Execute. The Java process will write the output file.
             _, _, err_q = cli_process.execute_query(query_text)
 
             if err_q:
-                 print(f"{progress_prefix_base} ERROR executing query. Stderr: {err_q.strip()}", flush=True)
-                 all_results.append({
-                    "query_id": original_query_id_str, "strategy": "BASE", "status": "BASE_FAILED_EXEC", "details": err_q.strip()
-                 })
+                print(f"{progress_prefix_base} ERROR executing query. Stderr: {err_q.strip()}", flush=True)
+                all_results.append({
+                    "query_id": original_query_id_str,
+                    "strategy": "BASE",
+                    "status": "BASE_FAILED_EXEC",
+                    "details": err_q.strip()
+                })
             else:
                 base_run_ok = True
-                print(f"{progress_prefix_base}  -> Base execution successful. Output saved to {os.path.basename(base_output_filepath)}.", flush=True)
+                if args.verbose:  # Only print success message when verbose
+                    print(f"{progress_prefix_base}  -> Base execution successful. Output saved to {os.path.basename(base_output_filepath)}.", flush=True)
                 # With `set_output`, the Java process writes the file directly.
         except Exception as e:
             print(f"{progress_prefix_base} CRITICAL ERROR running base strategy: {e}. This query will be skipped.", flush=True)
             all_results.append({
-                "query_id": original_query_id_str, "strategy": "BASE", "status": "BASE_ERROR", "details": str(e)
+                "query_id": original_query_id_str,
+                "strategy": "BASE",
+                "status": "BASE_ERROR",
+                "details": str(e)
             })
-            continue # Skip to next query
+            continue  # Skip to next query
 
         if not base_run_ok:
             print(f"    (Q:{original_query_id_str} - Base run failed, cannot verify other strategies. Skipping.)", flush=True)
@@ -202,9 +212,11 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
 
         # --- Run other strategies and compare against the base run ---
         other_strategies = [s for s in strategies_to_run if s != base_strategy_tuple]
+        any_failure = False  # Track if any comparison failed for this query
+
         for temp_s, push_s, stitch_s in other_strategies:
             strategy_str = f"T:{temp_s},P:{push_s},S:{stitch_s}"
-            progress_prefix_other = f"    [CMP Q:{original_query_id_str} {strategy_str}]"
+            progress_prefix_other = f"\n    [CMP Q:{original_query_id_str} {strategy_str}]"
 
             other_output_filename = f"{original_query_id_str}_{safe_query_part}_T{temp_s}_P{push_s}_S{stitch_s}.csv"
             other_output_filepath = os.path.join(file_output_dir, other_output_filename)
@@ -214,33 +226,39 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
 
             try:
                 _, _, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
-                if strat_set_stderr and args.verbose: print(f"{progress_prefix_other} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
+                if strat_set_stderr and args.verbose:
+                    print(f"{progress_prefix_other} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
 
                 # Set output file for the CLI to write to directly
                 _, _, output_set_stderr = cli_process.set_output('csv', other_output_filepath)
-                if output_set_stderr and args.verbose: print(f"{progress_prefix_other} WARNING: Stderr on set_output: {output_set_stderr.strip()}", flush=True)
+                if output_set_stderr and args.verbose:
+                    print(f"{progress_prefix_other} WARNING: Stderr on set_output: {output_set_stderr.strip()}", flush=True)
 
                 _, _, err_q = cli_process.execute_query(query_text)
                 if err_q:
                     print(f"{progress_prefix_other} ERROR executing query. Stderr: {err_q.strip()}", flush=True)
                     status = "EXECUTION_ERROR"
                     details = err_q.strip()
+                    any_failure = True
                 else:
                     # File is written by Java. Now compare with base.
                     are_equal, reason = compare_csv_files_deep(base_output_filepath, other_output_filepath)
                     if are_equal:
                         status = "PASSED"
-                        print(f"{progress_prefix_other}  -> PASSED.", flush=True)
-                        os.remove(other_output_filepath) # Clean up if it matches
+                        if args.verbose:  # Only print pass in verbose mode
+                            print(f"{progress_prefix_other}  -> PASSED.", flush=True)
+                        os.remove(other_output_filepath)  # Clean up if it matches
                     else:
                         status = "FAILED"
                         details = f"Output differs from base. Reason: {reason}. Files saved: {base_output_filename}, {os.path.basename(other_output_filepath)}"
                         print(f"{progress_prefix_other}  -> FAILED. {details}", flush=True)
+                        any_failure = True
 
             except Exception as e:
                 status = "VERIFY_ERROR"
                 details = str(e)
                 print(f"{progress_prefix_other} CRITICAL ERROR during verification: {e}", flush=True)
+                any_failure = True
 
             all_results.append({
                 "query_id": original_query_id_str,
@@ -248,6 +266,10 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
                 "status": status,
                 "details": details
             })
+
+        # After all strategy comparisons, output a concise summary if nothing failed and not in verbose mode
+        if not any_failure and not args.verbose:
+            print("ALL PASSED", flush=True)
 
     return all_results
 

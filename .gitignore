@@ -20,3 +20,4 @@ sandbox_og
 dump/
 projects/
 benchmark/
+*.csv
