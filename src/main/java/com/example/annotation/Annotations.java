@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 
 import org.slf4j.Logger;
@@ -32,6 +33,27 @@ public class Annotations {
     private static final Logger logger = LoggerFactory.getLogger(Annotations.class);
     private static final int MAX_DOCUMENT_LENGTH = 20000; // Max length to process; longer documents will be truncated.
     private static final int DOCUMENT_PROCESSING_TIMEOUT_MINUTES = 5; // Timeout for a single CoreNLP task
+
+    private static final Set<String> POS_SKIP = Set.of(
+        ",", ".", ":", "``", "''", "$", "SYM", "HYPH", "NFP",
+        "AFX", "LS", "X", "-LRB-", "-RRB-", "FW", "ADD"
+    );
+
+    /** Returns true if this token should be persisted. */
+    private static boolean keepToken(CoreLabel tok) {
+        String text = tok.word();
+        String pos  = tok.tag();
+
+        if (text == null || text.isBlank()) return false;
+        if (pos  != null && POS_SKIP.contains(pos)) return false;
+        // Also remove tokens that are ONLY punctuation and got past the POS check
+        if (!text.chars().anyMatch(Character::isLetterOrDigit)) {
+            return false;
+        }
+        // Remove tokens starting with apostrophe
+        if (text.startsWith("'")) return false;
+        return true;
+    }
 
     private static StanfordCoreNLP createCoreNLPPipeline(int threads) {
         CoreNLPConfig config = new CoreNLPConfig(threads);
@@ -83,35 +105,36 @@ public class Annotations {
                 if (rs.next()) annotationsTableExists = true;
             }
 
-            int startDocumentIdForProcessing = -1;
-            String findMinUnannotatedSql = """
-                SELECT MIN(d.document_id)
-                FROM documents d
-                LEFT JOIN (SELECT DISTINCT document_id FROM annotations) a
-                ON d.document_id = a.document_id
-                WHERE a.document_id IS NULL
-                """;
-
+            long maxDocIdOverall = 0;
             try (Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery(findMinUnannotatedSql)) {
+                 ResultSet rs = stmt.executeQuery("SELECT MAX(document_id) FROM documents")) {
                 if (rs.next()) {
-                    int minUnannotated = rs.getInt(1);
-                    if (!rs.wasNull()) {
-                        startDocumentIdForProcessing = minUnannotated;
-                    }
+                    maxDocIdOverall = rs.getLong(1);
                 }
-            } catch (SQLException e) {
-                // This can happen if 'annotations' table doesn't exist.
-                logger.info("Could not query for unannotated documents (e.g., 'annotations' table might not exist). Needs processing from the start (document_id: {}).", minDocIdOverall, e);
-                return new AnnotationStatus(true, minDocIdOverall); // Assume processing needed from start
             }
 
-            if (startDocumentIdForProcessing != -1) {
-                logger.info("Found unannotated documents. Annotation should start/resume from document_id: {}", startDocumentIdForProcessing);
-                return new AnnotationStatus(true, startDocumentIdForProcessing);
+            // If there is no annotations table or it has no rows, start from the minimum doc id
+            long maxAnnotatedDocId = 0;
+            if (annotationsTableExists) {
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery("SELECT COALESCE(MAX(document_id),0) FROM annotations")) {
+                    if (rs.next()) {
+                        maxAnnotatedDocId = rs.getLong(1);
+                    }
+                }
+            }
+
+            int nextDocIdToProcess = (int) (maxAnnotatedDocId + 1);
+            if (nextDocIdToProcess <= 0) {
+                nextDocIdToProcess = minDocIdOverall; // Fallback safety
+            }
+
+            if (nextDocIdToProcess > maxDocIdOverall) {
+                logger.info("All documents up to {} appear to be annotated. No new documents to process.", maxDocIdOverall);
+                return new AnnotationStatus(false, nextDocIdToProcess);
             } else {
-                logger.info("All documents in the 'documents' table appear to have corresponding entries in 'annotations'. No new documents to process.");
-                return new AnnotationStatus(false, minDocIdOverall);
+                logger.info("Next document to annotate: {} (max annotated so far: {}, max in documents table: {}).", nextDocIdToProcess, maxAnnotatedDocId, maxDocIdOverall);
+                return new AnnotationStatus(true, nextDocIdToProcess);
             }
         }
     }
@@ -119,7 +142,6 @@ public class Annotations {
     /**
      * Identifies unannotated documents and re-numbers their document_ids to be higher than
      * the current maximum document_id in the documents table.
-     * Assumes 'documents' and 'annotations' tables exist.
      */
     public static void fixDocumentIds(Path projectDbPath) throws SQLException {
         String url = "jdbc:sqlite:" + projectDbPath;
@@ -129,7 +151,6 @@ public class Annotations {
             conn.setAutoCommit(false);
 
             List<Integer> unannotatedDocIds = new ArrayList<>();
-            // This query will fail if 'documents' or 'annotations' table does not exist.
             String findUnannotatedSql = """
                 SELECT d.document_id
                 FROM documents d
@@ -207,13 +228,11 @@ public class Annotations {
     }
 
     /**
-     * Runs annotation from a specific document ID, deleting any existing annotation/dependency rows for each doc before inserting new ones.
-     * Processes up to 'limit' documents in this run (limit is per run, not total).
-     * Respects resumability: resumes from the last annotated document.
-     * Also accepts a force flag to control cleanup behavior.
-     * Includes an option to fix document IDs for unannotated documents before processing.
+     * Manages the entire annotation stage. It checks status, handles ID fixing,
+     * determines the start document, and executes the annotation process.
+     * This is the primary entry point for the annotation pipeline.
      */
-    public static void runAnnotation(Path projectDbPath, int initialStartDocumentId, int threads, int batchSize, Integer limit, boolean force, boolean fixIds) throws Exception {
+    public static void runAnnotationStage(Path projectDbPath, int threads, int batchSize, Integer limit, boolean force, boolean fixIds, Integer cliStartDocId) throws Exception {
         if (fixIds) {
             logger.info("Fix IDs flag is true. Attempting to re-number unannotated document IDs.");
             try {
@@ -226,57 +245,72 @@ public class Annotations {
         }
 
         AnnotationStatus currentStatus = getAnnotationStatus(projectDbPath);
-        int effectiveStartDocumentId;
-        boolean effectivelyNeedsProcessing = currentStatus.needsProcessing;
+        int startId;
+        boolean needsProcessing = currentStatus.needsProcessing;
 
-        if (force) {
-            effectiveStartDocumentId = initialStartDocumentId;
-            effectivelyNeedsProcessing = true;
-            logger.info("Force flag is true. Annotation will start/resume from document_id {} (user-provided or default if 1).", effectiveStartDocumentId);
-        } else {
-            if (!currentStatus.needsProcessing) {
-                logger.info("No documents require annotation (according to getAnnotationStatus) and force flag is false. Nothing to do.");
-                return;
+        if (cliStartDocId != null) {
+            startId = cliStartDocId;
+            logger.trace("Using command-line specified --start-doc-id: {}", startId);
+            if (force) {
+                logger.trace("--force is also active. Annotation will start from {} and overwrite existing annotations from this ID onwards.", startId);
             }
-            effectiveStartDocumentId = currentStatus.startDocumentId;
-            logger.info("Annotation will start/resume from document_id {} (determined by current status).", effectiveStartDocumentId);
+        } else if (force) {
+            startId = 1;
+            logger.trace("--force active, starting annotation from document_id 1.");
+        } else {
+            startId = currentStatus.startDocumentId;
+            logger.trace("Resuming annotation based on status, starting from document_id: {}", startId);
         }
 
+        if (force || needsProcessing) {
+             logger.info("Starting annotation process (startId={}, force={}, limit={}, threads={}, batchSize={})",
+                            startId, force, limit == null ? "none" : limit, threads, batchSize);
+             performAnnotation(projectDbPath, startId, threads, batchSize, limit, force);
+        } else {
+             logger.info("Annotation already complete according to status check. Skipping. Use --force to re-annotate.");
+        }
+    }
+
+    /**
+     * Runs the core annotation loop from a specific document ID.
+     * This method assumes that the decision to run has already been made.
+     */
+    private static void performAnnotation(Path projectDbPath, int startDocumentId, int threads, int batchSize, Integer limit, boolean force) throws Exception {
         String url = "jdbc:sqlite:" + projectDbPath;
         try (Connection conn = DriverManager.getConnection(url)) {
             conn.setAutoCommit(false);
             createTables(conn, false);
 
             if (force) {
-                logger.info("Force flag is true. Deleting existing annotations and dependencies for document_id >= {}", effectiveStartDocumentId);
+                logger.info("Force flag is true. Deleting existing annotations and dependencies for document_id >= {}", startDocumentId);
                 try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id >= ?");
                      PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id >= ?")) {
 
-                    delAnn.setInt(1, effectiveStartDocumentId);
+                    delAnn.setInt(1, startDocumentId);
                     delAnn.executeUpdate();
 
-                    delDep.setInt(1, effectiveStartDocumentId);
+                    delDep.setInt(1, startDocumentId);
                     delDep.executeUpdate();
 
                     conn.commit();
                 } catch (SQLException e) {
-                    logger.error("Error during forced delete for document_id >= " + effectiveStartDocumentId, e);
+                    logger.error("Error during forced delete for document_id >= " + startDocumentId, e);
                     throw e;
                 }
-            } else if (effectivelyNeedsProcessing && effectiveStartDocumentId > 1) {
-                logger.info("Resuming or starting from specific ID (force=false, effectivelyNeedsProcessing=true). Performing cleanup for document_id: {}", effectiveStartDocumentId);
+            } else {
+                logger.info("Resuming or starting from specific ID (force=false). Performing cleanup for document_id: {}", startDocumentId);
                 try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?");
                      PreparedStatement delDep = conn.prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
 
-                    delAnn.setInt(1, effectiveStartDocumentId);
+                    delAnn.setInt(1, startDocumentId);
                     delAnn.executeUpdate();
 
-                    delDep.setInt(1, effectiveStartDocumentId);
+                    delDep.setInt(1, startDocumentId);
                     delDep.executeUpdate();
 
                     conn.commit();
                 } catch (SQLException e) {
-                    logger.error("Error during pre-emptive delete for document_id=" + effectiveStartDocumentId, e);
+                    logger.error("Error during pre-emptive delete for document_id=" + startDocumentId, e);
                     throw e;
                 }
             }
@@ -284,17 +318,17 @@ public class Annotations {
             long estimatedDocsInScope = 0;
             String maxIdSql = "SELECT COALESCE(MAX(document_id), 0) FROM documents WHERE document_id >= ?";
             try (PreparedStatement maxIdStmt = conn.prepareStatement(maxIdSql)) {
-                maxIdStmt.setInt(1, effectiveStartDocumentId);
+                maxIdStmt.setInt(1, startDocumentId);
                 try (ResultSet maxIdRs = maxIdStmt.executeQuery()) {
                     if (maxIdRs.next()) {
                         long queriedMaxId = maxIdRs.getLong(1);
                         if (queriedMaxId > 0) {
-                            estimatedDocsInScope = (queriedMaxId >= effectiveStartDocumentId) ? (queriedMaxId - effectiveStartDocumentId + 1) : 0;
+                            estimatedDocsInScope = (queriedMaxId >= startDocumentId) ? (queriedMaxId - startDocumentId + 1) : 0;
                         }
                     }
                 }
             }
-            if (estimatedDocsInScope == 0 && effectiveStartDocumentId == 1) {
+            if (estimatedDocsInScope == 0 && startDocumentId == 1) {
                 try (PreparedStatement totalCheckStmt = conn.prepareStatement("SELECT COALESCE(MAX(document_id), 0) FROM documents");
                      ResultSet totalRs = totalCheckStmt.executeQuery()) {
                     if (totalRs.next() && totalRs.getLong(1) == 0) {
@@ -310,15 +344,15 @@ public class Annotations {
 
             if (limit != null) {
                 totalDocumentsToProcessThisRun = limit;
-                logger.info("Attempting to process up to {} documents starting from document_id {} (limit specified). Estimated {} documents in available range starting from this ID.", limit, effectiveStartDocumentId, estimatedDocsInScope);
+                logger.info("Attempting to process up to {} documents starting from document_id {} (limit specified). Estimated {} documents in available range starting from this ID.", limit, startDocumentId, estimatedDocsInScope);
             } else {
                 totalDocumentsToProcessThisRun = estimatedDocsInScope;
                 if (estimatedDocsInScope > 0) {
-                    logger.info("Attempting to process all {} estimated documents starting from document_id {} (no limit specified).", estimatedDocsInScope, effectiveStartDocumentId);
+                    logger.info("Attempting to process all {} estimated documents starting from document_id {} (no limit specified).", estimatedDocsInScope, startDocumentId);
                 } else {
                     boolean docsActuallyExist = false;
                     try (PreparedStatement checkExistStmt = conn.prepareStatement("SELECT 1 FROM documents WHERE document_id >= ? LIMIT 1")) {
-                        checkExistStmt.setInt(1, effectiveStartDocumentId);
+                        checkExistStmt.setInt(1, startDocumentId);
                         try(ResultSet rsCheck = checkExistStmt.executeQuery()) {
                             if (rsCheck.next()) {
                                 docsActuallyExist = true;
@@ -327,26 +361,23 @@ public class Annotations {
                     }
                     if (docsActuallyExist) {
                          if (estimatedDocsInScope == 0) totalDocumentsToProcessThisRun = 1;
-                         logger.info("Attempting to process documents starting from document_id {} (no limit specified, estimated 0 but start ID might exist).", effectiveStartDocumentId);
+                         logger.info("Attempting to process documents starting from document_id {} (no limit specified, estimated 0 but start ID might exist).", startDocumentId);
                     } else {
-                        logger.info("No documents found to process at or after document_id {} (no limit specified, and start ID does not exist).", effectiveStartDocumentId);
+                        logger.info("No documents found to process at or after document_id {} (no limit specified, and start ID does not exist).", startDocumentId);
                         if (totalDocumentsToProcessThisRun == 0) return;
                     }
                 }
             }
 
-            if (totalDocumentsToProcessThisRun == 0 && effectivelyNeedsProcessing) {
-                 logger.info("No documents to process in this run, despite 'effectivelyNeedsProcessing' being true. This might be due to ID fixing or an empty range from {}.", effectiveStartDocumentId);
-                 return;
-            }
-            if (totalDocumentsToProcessThisRun == 0 && !effectivelyNeedsProcessing){
-                 logger.info("No documents to process in this run (effectivelyNeedsProcessing is false and count is 0).");
+            if (totalDocumentsToProcessThisRun == 0) {
+                 logger.info("No documents to process in this run. This might be due to an empty range from {}.", startDocumentId);
                  return;
             }
 
             final int FETCH_CHUNK_SIZE = batchSize * 10;
-            int currentFetchStartId = effectiveStartDocumentId;
+            int currentFetchStartId = startDocumentId;
             int totalProcessedInThisRun = 0;
+            int totalScheduledInThisRun = 0;
 
             int totalUserThreads = threads;
             int numCoreNLPInternalThreads;
@@ -385,7 +416,7 @@ public class Annotations {
                 while (true) {
                     int documentsToFetchThisChunk = FETCH_CHUNK_SIZE;
                     if (limit != null) {
-                        int remaining = limit - totalProcessedInThisRun;
+                        int remaining = limit - totalScheduledInThisRun;
                         if (remaining <= 0) break;
                         documentsToFetchThisChunk = Math.min(FETCH_CHUNK_SIZE, remaining);
                     }
@@ -427,6 +458,18 @@ public class Annotations {
                         futures.add(future);
                         docIdsInFlight.add(doc.documentId);
 
+                        // Track how many documents we've scheduled to avoid over-scheduling beyond the limit
+                        if (limit != null) {
+                            totalScheduledInThisRun++;
+                            if (totalScheduledInThisRun >= limit) {
+                                // We have scheduled up to the limit; no need to add more documents in this chunk
+                                // Break out of the inner loop so we don't schedule extra tasks
+                                int remainingDocsInChunk = documentsChunk.size() - (docIdsInFlight.size());
+                                // remainingDocsInChunk is unused but kept for clarity – we simply stop scheduling further docs in this chunk.
+                                break;
+                            }
+                        }
+
                         if (futures.size() >= batchSize) {
                             for (int i = 0; i < futures.size(); i++) {
                                 java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
@@ -461,38 +504,55 @@ public class Annotations {
                             docIdsInFlight.clear();
                         }
                     }
+
+                    // If we broke early out of the documentsChunk loop due to reaching the scheduling limit,
+                    // ensure that we discard any documents in the chunk that we did not schedule.
+                    if (limit != null && totalScheduledInThisRun >= limit) {
+                        // Remove any remaining DocumentData objects in documentsChunk that were not scheduled
+                        // (They are after the current index in the original loop). Since we broke the loop,
+                        // nothing further is needed here, but this clarifies intention.
+                    }
+
+                    // Process any remaining futures from the chunk that didn't form a full batch
+                    if (!futures.isEmpty()) {
+                        for (int i = 0; i < futures.size(); i++) {
+                            java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
+                            int docId = docIdsInFlight.get(i);
+                            try {
+                                AnnotationResult result = f.get(DOCUMENT_PROCESSING_TIMEOUT_MINUTES, java.util.concurrent.TimeUnit.MINUTES);
+                                if (result != null) {
+                                    batchResults.add(result);
+                                }
+                            } catch (java.util.concurrent.TimeoutException e) {
+                                logger.warn("Timeout ({} min) processing document_id={} (in remaining batch). Skipping this document.", DOCUMENT_PROCESSING_TIMEOUT_MINUTES, docId);
+                            } catch (Exception e) {
+                                logger.error("Error during annotation task execution for documentId=" + docId, e);
+                            }
+                        }
+
+                        for (AnnotationResult result : batchResults) {
+                            insertData(conn, result.annotations, result.dependencies);
+                            committedAnnotationsInBatch++;
+                            totalProcessedInThisRun++;
+                            pb.step();
+                        }
+
+                        if (committedAnnotationsInBatch > 0) {
+                            conn.commit();
+                            logger.trace("Committed remaining batch of {} annotation results (for {} documents).", committedAnnotationsInBatch, batchResults.size());
+                            committedAnnotationsInBatch = 0;
+                        }
+
+                        batchResults.clear();
+                        futures.clear();
+                        docIdsInFlight.clear();
+                    }
+
                     documentsChunk.clear();
                     if (limit != null && totalProcessedInThisRun >= limit) {
                         logger.info("Reached processing limit ({}) for this run.", limit);
                         break;
                     }
-                }
-
-                for (int i = 0; i < futures.size(); i++) {
-                    java.util.concurrent.Future<AnnotationResult> f = futures.get(i);
-                    int docId = docIdsInFlight.get(i);
-                    try {
-                        AnnotationResult result = f.get(DOCUMENT_PROCESSING_TIMEOUT_MINUTES, java.util.concurrent.TimeUnit.MINUTES);
-                        if (result != null) {
-                            batchResults.add(result);
-                        }
-                    } catch (java.util.concurrent.TimeoutException e) {
-                        logger.warn("Timeout ({} min) processing document_id={} (in remaining batch). Skipping this document.", DOCUMENT_PROCESSING_TIMEOUT_MINUTES, docId);
-                    } catch (Exception e) {
-                        logger.error("Error during annotation task execution for documentId=" + docId, e);
-                    }
-                }
-
-                for (AnnotationResult result : batchResults) {
-                    insertData(conn, result.annotations, result.dependencies);
-                    committedAnnotationsInBatch++;
-                    totalProcessedInThisRun++;
-                    pb.step();
-                }
-
-                if (committedAnnotationsInBatch > 0) {
-                    conn.commit();
-                    logger.trace("Committed final {} annotation results (for {} documents).", committedAnnotationsInBatch, batchResults.size());
                 }
                  pb.setExtraMessage(String.format("Completed %d / %d", totalProcessedInThisRun, totalDocumentsToProcessThisRun));
 
@@ -536,7 +596,6 @@ public class Annotations {
                             begin_char INTEGER,
                             end_char INTEGER,
                             token TEXT,
-                            lemma TEXT,
                             pos TEXT,
                             ner TEXT,
                             normalized_ner TEXT,
@@ -545,7 +604,6 @@ public class Annotations {
                     """);
 
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_annotations_document_id ON annotations (document_id)");
-            stmt.execute("CREATE INDEX IF NOT EXISTS idx_ann_did_sid_token_lemma ON annotations (document_id, sentence_id, token, lemma)");
 
             stmt.execute("""
                         CREATE TABLE IF NOT EXISTS dependencies (
@@ -616,6 +674,9 @@ public class Annotations {
 
             // Process tokens
             for (CoreLabel token : coreLabels) {
+                if (!keepToken(token)) {
+                    continue;
+                }
                 if (token.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
                 Map<String, Object> annotation = new HashMap<>();
                 annotation.put("document_id", documentId);
@@ -623,7 +684,6 @@ public class Annotations {
                 annotation.put("begin_char", token.beginPosition());
                 annotation.put("end_char", token.endPosition());
                 annotation.put("token", token.word());
-                annotation.put("lemma", token.lemma());
                 annotation.put("pos", token.tag());
                 annotation.put("ner", token.ner());
                 annotation.put("normalized_ner",
@@ -640,7 +700,7 @@ public class Annotations {
                                 keptTokensForThisSentence.get(keptTokensForThisSentence.size()-1).word(),
                                 keptTokensForThisSentence.get(keptTokensForThisSentence.size()-1).endPosition());
 
-                        logger.debug("Sentence (doc_id: {}, sentence_id: {}) annotation processing truncated by length. Token with text: '{}' (begin_char: {}, end_char: {}) exceeded span limit (first_token_begin_char: {} + max_span: {} = {}). Last token included: {}.",
+                        logger.trace("Sentence (doc_id: {}, sentence_id: {}) annotation processing truncated by length. Token with text: '{}' (begin_char: {}, end_char: {}) exceeded span limit (first_token_begin_char: {} + max_span: {} = {}). Last token included: {}.",
                                 documentId,
                                 sentenceId,
                                 token.word(),
@@ -662,6 +722,11 @@ public class Annotations {
                 for (SemanticGraphEdge edge : dependencies_graph.edgeIterable()) {
                     IndexedWord source = edge.getSource();
                     IndexedWord target = edge.getTarget();
+
+                    // Filter out dependencies if either token was filtered out
+                    if (!keepToken(source.backingLabel()) || !keepToken(target.backingLabel())) {
+                        continue;
+                    }
 
                     // Ensure both source and target tokens fully fall within the allowed character span
                     if (source.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH &&
@@ -696,8 +761,8 @@ public class Annotations {
         String annotationSQL = """
                     INSERT INTO annotations (
                         document_id, sentence_id, begin_char, end_char, token,
-                        lemma, pos, ner, normalized_ner
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        pos, ner, normalized_ner
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """;
 
         String dependencySQL = """
@@ -716,10 +781,9 @@ public class Annotations {
                 annotationStmt.setInt(3, (Integer) annotation.get("begin_char"));
                 annotationStmt.setInt(4, (Integer) annotation.get("end_char"));
                 annotationStmt.setString(5, (String) annotation.get("token"));
-                annotationStmt.setString(6, (String) annotation.get("lemma"));
-                annotationStmt.setString(7, (String) annotation.get("pos"));
-                annotationStmt.setString(8, (String) annotation.get("ner"));
-                annotationStmt.setString(9, (String) annotation.get("normalized_ner"));
+                annotationStmt.setString(6, (String) annotation.get("pos"));
+                annotationStmt.setString(7, (String) annotation.get("ner"));
+                annotationStmt.setString(8, (String) annotation.get("normalized_ner"));
 
                 annotationStmt.addBatch();
             }

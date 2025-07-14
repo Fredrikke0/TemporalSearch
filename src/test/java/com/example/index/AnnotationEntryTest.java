@@ -25,7 +25,7 @@ class AnnotationEntryTest extends BaseIndexTest {
         int annotationId = 101;
         String token = "cat";
         String pos = "NOUN";
-        AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, token, pos, null, null, "cat");
+        AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, token, pos, null, null);
 
         assertEquals(annotationId, entry.getAnnotationId());
         assertEquals(1, entry.getDocumentId());
@@ -39,7 +39,7 @@ class AnnotationEntryTest extends BaseIndexTest {
     @Test
     void testNullHandling() {
         // Test with null token and POS
-        AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, null, null, null, null, null);
+        AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, null, null, null, null);
         assertNull(entry.getToken()); // Check token
         assertNull(entry.getPos());
     }
@@ -47,7 +47,7 @@ class AnnotationEntryTest extends BaseIndexTest {
     @Test
     void testEmptyStrings() {
         // Test with empty strings
-        AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, "", "", null, null, "");
+        AnnotationEntry entry = new AnnotationEntry(1, 1, 1, 0, 3, "", "", null, null);
         assertEquals("", entry.getToken()); // Check token
         assertEquals("", entry.getPos());
     }
@@ -61,7 +61,7 @@ class AnnotationEntryTest extends BaseIndexTest {
     void testAnnotationId() {
         // Test annotation ID getter
         int annotationId = 42;
-        AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, "test", "NOUN", null, null, "test");
+        AnnotationEntry entry = new AnnotationEntry(annotationId, 1, 1, 0, 3, "test", "NOUN", null, null);
         assertEquals(annotationId, entry.getAnnotationId());
     }
 }

@@ -7,14 +7,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
@@ -29,7 +24,6 @@ import com.google.common.collect.ListMultimap;
  * Uses streaming processing and external sorting for efficient memory usage.
  */
 public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
-    private static final Logger logger = LoggerFactory.getLogger(UnigramIndexGenerator.class);
 
     public UnigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
@@ -51,11 +45,11 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         boolean isFirstBatch = (lastProcessedEntry == null);
 
         if (isFirstBatch) {
-            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
-                    "FROM annotations WHERE pos NOT IN ('FW', 'ADD') ORDER BY annotation_id LIMIT ?";
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
+                    "FROM annotations ORDER BY annotation_id LIMIT ?";
         } else {
-            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos " +
-                    "FROM annotations WHERE annotation_id > ? AND pos NOT IN ('FW', 'ADD') ORDER BY annotation_id LIMIT ?";
+            query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
+                    "FROM annotations WHERE annotation_id > ? ORDER BY annotation_id LIMIT ?";
         }
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
@@ -77,10 +71,9 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         token,
-                        rs.getString("pos"),
+                        null, // pos
                         null, // ner
-                        null, // normalizedNer
-                        null  // lemma
+                        null // normalizedNer
                     );
                     batch.add(entry);
                 }
@@ -94,26 +87,12 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
 
-        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
-            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
-                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
-
-        List<AnnotationEntry> allFilteredTokens = new ArrayList<>();
-
-        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
-            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
-                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-
-                allFilteredTokens.addAll(sentenceTokens);
-            });
-        });
-
-        for (AnnotationEntry entry : allFilteredTokens) {
+        for (AnnotationEntry entry : batch) {
             if (entry.getToken() == null || entry.getToken().isEmpty()) {
                 continue;
             }
             String tokenLower = entry.getToken().toLowerCase();
-            if (isStopword(tokenLower) || !isValidToken(tokenLower)) {
+            if (isStopword(tokenLower)) {
                 continue;
             }
 
@@ -127,48 +106,9 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         return index;
     }
 
-    /**
-     * Validates if a token should be included in the index.
-     * Uses a middle-ground approach: keeps mixed alphanumeric tokens but filters out
-     * purely numeric or purely punctuation tokens.
-     *
-     * @param token The token to validate (should be lowercase)
-     * @return true if the token should be indexed, false otherwise
-     */
-    private static boolean isValidToken(String token) {
-        if (token == null || token.isEmpty()) {
-            return false;
-        }
-
-        // Filter out tokens starting with apostrophe (parsing artifacts)
-        if (token.startsWith("'")) {
-            return false;
-        }
-
-        boolean hasLetter = false;
-        boolean hasDigit = false;
-        boolean hasOther = false;
-
-        for (int i = 0; i < token.length(); i++) {
-            char c = token.charAt(i);
-            if (Character.isLetter(c)) {
-                hasLetter = true;
-            } else if (Character.isDigit(c)) {
-                hasDigit = true;
-            } else {
-                hasOther = true;
-            }
-        }
-
-        // Keep tokens that have at least one letter
-        // This includes: pure letters, letters+digits, letters+punctuation, letters+digits+punctuation
-        // Filters out: pure numbers, pure punctuation, digits+punctuation (no letters)
-        return hasLetter;
-    }
-
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // Unigrams are derived from annotations, so count documents with annotations. This is an intentional approximation for speed.
+        // Unigrams are derived from annotations, so count annotations. This is an intentional approximation for speed.
         String countSql = "SELECT MAX(annotation_id) FROM annotations";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
@@ -177,19 +117,5 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             }
         }
         return 0;
-    }
-
-    /**
-     * Helper method to sanitize text by escaping null bytes.
-     * This prevents conflicts with our delimiter while preserving the original meaning.
-     *
-     * @param text The text to sanitize
-     * @return The sanitized text with null bytes escaped
-     */
-    private static String sanitizeText(String text) {
-        if (text == null) {
-            return null;
-        }
-        return text.replace(DELIMITER, ESCAPE_CHAR + "0" + ESCAPE_CHAR).trim();
     }
 }

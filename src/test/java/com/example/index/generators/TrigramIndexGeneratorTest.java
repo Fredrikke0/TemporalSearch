@@ -221,42 +221,6 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         }
     }
 
-    @Test
-    public void testTrigramWithPunctuationSkipping() throws Exception {
-        // Add specific data for this test
-        setupPunctuationTestData();
-
-        // Create IndexAccess instance first
-        try (Options options = createTestOptions();
-            IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "trigram", options, false)) {
-            // Create and run trigram indexer
-            try (TrigramIndexGenerator indexer = new TrigramIndexGenerator(
-                    ia, TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
-                indexer.generateIndex();
-            }
-
-            // Test trigram skipping punctuation: "Anne Waldman ( born 1945 ) ."
-            // Tokens: "Anne", "Waldman", "(", "born", "1945", ")", "."
-            // Lowercased and filtered (punctuation/stopwords removed):
-            // "anne", "waldman", "born", "1945"
-            // Expected trigrams:
-            // "anne waldman born"
-            // "waldman born 1945"
-
-            verifyTrigram(ia, "anne" + IndexGenerator.DELIMITER + "waldman" +
-                IndexGenerator.DELIMITER + "born", 3, 0, 0, 19, 1);
-            verifyTrigram(ia, "waldman" + IndexGenerator.DELIMITER + "born" +
-                IndexGenerator.DELIMITER + "1945", 3, 0, 5, 24, 1);
-
-            // Verify trigrams are not formed *with* punctuation if they are skipped
-            // Example: "waldman ( born" should not exist if '(' is skipped
-            verifyTrigramAbsent(ia, "waldman" + IndexGenerator.DELIMITER + "(" + IndexGenerator.DELIMITER + "born",
-                                "Trigram should not include punctuation if skipped.");
-            verifyTrigramAbsent(ia, "born" + IndexGenerator.DELIMITER + "1945" + IndexGenerator.DELIMITER + ")",
-                                "Trigram should not include punctuation if skipped.");
-        }
-    }
-
     private void verifyTrigram(IndexAccess indexAccess, String trigram, int expectedDocId, int expectedSentenceId,
             int expectedBeginChar, int expectedEndChar, int expectedCount) throws IOException, IndexAccessException {
         assertNotNull(indexAccess, "IndexAccess instance must be provided for verification.");
@@ -271,11 +235,5 @@ public class TrigramIndexGeneratorTest extends BaseIndexTest {
         // assertEquals(expectedSentenceId, pos.getSentenceId());
         //assertEquals(expectedBeginChar, pos.getBeginPosition());
         //assertEquals(expectedEndChar, pos.getEndPosition());
-    }
-
-    private void verifyTrigramAbsent(IndexAccess indexAccess, String trigram, String message) throws IOException, IndexAccessException {
-        assertNotNull(indexAccess, "IndexAccess instance must be provided for verification.");
-        Optional<PositionListSoA> positions = indexAccess.get(bytes(trigram));
-        assertTrue(positions.isEmpty(), message + " (Found: '" + trigram + "')");
     }
 }

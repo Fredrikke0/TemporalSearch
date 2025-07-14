@@ -93,7 +93,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
         logger.info("Fetching all DATE annotations from database for Nash index...");
         String query = "SELECT a.document_id, a.sentence_id, a.begin_char, a.end_char, " +
-                       "a.normalized_ner, a.token, a.pos, a.ner, a.lemma, a.annotation_id " +
+                       "a.normalized_ner, a.token, a.pos, a.ner, a.annotation_id " +
                        "FROM annotations a " +
                        "WHERE a.ner = 'DATE' AND a.normalized_ner IS NOT NULL " +
                        "ORDER BY a.document_id, a.sentence_id, a.begin_char";
@@ -111,8 +111,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                     rs.getString("token"),
                     rs.getString("pos"),
                     rs.getString("ner"),
-                    rs.getString("normalized_ner"),
-                    rs.getString("lemma")
+                    rs.getString("normalized_ner")
                 ));
             }
         }

@@ -52,7 +52,7 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
             currentBatch++;
 
             // Simulate a batch with one entry
-            return List.of(new AnnotationEntry(currentBatch, currentBatch, currentBatch, currentBatch, currentBatch + 5, "token" + currentBatch, "NOUN", null, null, null));
+            return List.of(new AnnotationEntry(currentBatch, currentBatch, currentBatch, currentBatch, currentBatch + 5, "token" + currentBatch, "NOUN", null, null));
         }
 
         @Override

@@ -86,11 +86,11 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         String sql;
         // Keyset pagination on annotation_id for NER='DATE' entries
         if (lastProcessedEntry == null) {
-            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
+            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner " +
                   "FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL " +
                   "ORDER BY annotation_id LIMIT ?";
         } else {
-            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
+            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner " +
                   "FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL AND annotation_id > ? " +
                   "ORDER BY annotation_id LIMIT ?";
         }
@@ -117,8 +117,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                             rs.getString("token"),
                             rs.getString("pos"),
                             rs.getString("ner"),
-                            normalizedNer, // Pass the raw normalized_ner
-                            rs.getString("lemma")
+                            normalizedNer // Pass the raw normalized_ner
                         ));
                     }
                 }

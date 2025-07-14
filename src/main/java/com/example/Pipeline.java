@@ -198,35 +198,17 @@ public class Pipeline {
         if (stage.equals("all") || stage.equals("annotate")) {
             logger.info("--- Annotation Stage ---");
             logger.debug("About to run annotation on DB: {}", dbFilePath.toAbsolutePath());
-            int threads = ns.getInt("threads");
-            int batchSize = ns.getInt("batch_size"); // Used for commit frequency
 
-            Annotations.AnnotationStatus status = Annotations.getAnnotationStatus(dbFilePath);
-
-            if (force || status.needsProcessing) {
-                int startId;
-                if (cliStartDocId != null) {
-                    startId = cliStartDocId;
-                    logger.info("Using command-line specified --start-doc-id: {}", startId);
-                    if (force) {
-                        logger.info("--force is also active. Annotation will start from {} and overwrite existing annotations from this ID onwards.", startId);
-                    }
-                } else if (force) {
-                    startId = 1;
-                    logger.info("--force active, starting annotation from document_id 1.");
-                } else {
-                    startId = status.startDocumentId;
-                    logger.info("Resuming annotation based on status, starting from document_id: {}", startId);
-                }
-
-                logger.info("Starting annotation (startDocumentId={}, force={}, limit={}, threads={}, batchSize={}, fixIds={})",
-                            startId, force, limit == null ? "none" : limit, threads, batchSize, fixIds);
-                // Ensure limit is passed correctly
-                Annotations.runAnnotation(dbFilePath, startId, threads, batchSize, limit, force, fixIds);
-                logger.info("Annotation stage completed.");
-            } else {
-                logger.info("Annotation already complete according to status check. Skipping. Use --force to re-annotate.");
-            }
+            Annotations.runAnnotationStage(
+                dbFilePath,
+                ns.getInt("threads"),
+                ns.getInt("batch_size"),
+                ns.getInt("limit"),
+                ns.getBoolean("force"),
+                ns.getBoolean("fix_ids"),
+                ns.get("cli_start_doc_id")
+            );
+            logger.info("Annotation stage completed.");
         }
 
         // Run indexing stage if requested ('all' or 'index')

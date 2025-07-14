@@ -79,7 +79,6 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                         token,
                         null,
                         null,
-                        null,
                         null
                     );
                     batch.add(entry);
@@ -91,98 +90,55 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
 
     @Override
     protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
-        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
-            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
-                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
-
-        List<AnnotationEntry> sentenceSpanFilteredTokens = new ArrayList<>();
-
-        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
-            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
-                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-
-                sentenceSpanFilteredTokens.addAll(sentenceTokens);
-            });
-        });
-
-        List<AnnotationEntry> fullyFilteredBatch = sentenceSpanFilteredTokens.stream()
-            .filter(entry -> entry != null && entry.getToken() != null && !entry.getToken().isEmpty())
-            .map(entry -> {
-                String lowerToken = entry.getToken().toLowerCase();
-                if (isStopword(lowerToken) || !isValidToken(lowerToken)) {
-                    return null;
-                }
-                return new AnnotationEntry(entry.getAnnotationId(), entry.getDocumentId(), entry.getSentenceId(),
-                                           entry.getBeginChar(), entry.getEndChar(), lowerToken, entry.getPos(),
-                                           entry.getNer(), entry.getNormalizedNer(), entry.getLemma());
-            })
-            .filter(entry -> entry != null)
-            .collect(Collectors.toList());
+        batch.sort(Comparator.comparingInt(AnnotationEntry::getDocumentId)
+            .thenComparingInt(AnnotationEntry::getSentenceId)
+            .thenComparingInt(AnnotationEntry::getBeginChar));
 
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> positionLists = new HashMap<>();
 
-        for (int i = 0; i < fullyFilteredBatch.size() - 1; i++) {
-            AnnotationEntry firstEntry = fullyFilteredBatch.get(i);
-            AnnotationEntry secondEntry = fullyFilteredBatch.get(i + 1);
+        for (int i = 0; i < batch.size() - 1; i++) {
+            AnnotationEntry firstEntry = batch.get(i);
+            AnnotationEntry secondEntry = batch.get(i + 1);
 
-            if (firstEntry.getDocumentId() == secondEntry.getDocumentId() &&
-                firstEntry.getSentenceId() == secondEntry.getSentenceId()) {
-
-                String key = String.format("%s%s%s",
-                    firstEntry.getToken(),
-                    DELIMITER,
-                    secondEntry.getToken());
-
-                PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
-                posList.add(secondEntry.getDocumentId(), secondEntry.getSentenceId(),
-                    firstEntry.getBeginChar(), secondEntry.getEndChar());
+            if (firstEntry.getDocumentId() != secondEntry.getDocumentId() ||
+                firstEntry.getSentenceId() != secondEntry.getSentenceId()) {
+                continue; // Moved to a new sentence or document
             }
+
+            // Check for non-adjacency between all parts of the bigram.
+            if (secondEntry.getBeginChar() > firstEntry.getEndChar() + 2) {
+                continue;
+            }
+
+            String firstToken = firstEntry.getToken();
+            String secondToken = secondEntry.getToken();
+
+            if (firstToken == null || firstToken.isEmpty() || secondToken == null || secondToken.isEmpty()) {
+                continue;
+            }
+
+            String firstTokenLower = firstToken.toLowerCase();
+            String secondTokenLower = secondToken.toLowerCase();
+
+            if (isStopword(firstTokenLower) || isStopword(secondTokenLower)) {
+                continue;
+            }
+
+            String key = String.format("%s%s%s",
+                firstTokenLower,
+                DELIMITER,
+                secondTokenLower);
+
+            PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
+            posList.add(secondEntry.getDocumentId(), secondEntry.getSentenceId(),
+                firstEntry.getBeginChar(), secondEntry.getEndChar());
         }
 
         for (Map.Entry<String, PositionListSoA> entry : positionLists.entrySet()) {
             index.put(entry.getKey(), entry.getValue());
         }
         return index;
-    }
-
-    /**
-     * Validates if a token should be included in the index.
-     * Uses a middle-ground approach: keeps mixed alphanumeric tokens but filters out
-     * purely numeric or purely punctuation tokens.
-     *
-     * @param token The token to validate (should be lowercase)
-     * @return true if the token should be indexed, false otherwise
-     */
-    private static boolean isValidToken(String token) {
-        if (token == null || token.isEmpty()) {
-            return false;
-        }
-
-        // Filter out tokens starting with apostrophe (parsing artifacts)
-        if (token.startsWith("'")) {
-            return false;
-        }
-
-        boolean hasLetter = false;
-        boolean hasDigit = false;
-        boolean hasOther = false;
-
-        for (int i = 0; i < token.length(); i++) {
-            char c = token.charAt(i);
-            if (Character.isLetter(c)) {
-                hasLetter = true;
-            } else if (Character.isDigit(c)) {
-                hasDigit = true;
-            } else {
-                hasOther = true;
-            }
-        }
-
-        // Keep tokens that have at least one letter
-        // This includes: pure letters, letters+digits, letters+punctuation, letters+digits+punctuation
-        // Filters out: pure numbers, pure punctuation, digits+punctuation (no letters)
-        return hasLetter;
     }
 
     @Override

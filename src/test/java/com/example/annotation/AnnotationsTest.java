@@ -531,15 +531,15 @@ class AnnotationsTest {
     }
 
     private void runAnnotations() throws Exception {
-        // Use the static runAnnotation method
-        Annotations.runAnnotation(
+        // Use the static runAnnotationStage method
+        Annotations.runAnnotationStage(
             dbFile,         // Path projectDbPath
-            1,              // int startDocumentId
             1,              // int threads
             10,             // int batchSize
             null,           // Integer limit (null for no limit)
             true,           // boolean force (true to clean up from startDocId)
-            false           // boolean fixIds (default to false for tests)
+            false,          // boolean fixIds (default to false for tests)
+            1               // Integer cliStartDocId
         );
     }
 

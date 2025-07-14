@@ -93,8 +93,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
                         rs.getString("token"),
                         rs.getString("pos"),
                         null, // ner
-                        null, // normalizedNer
-                        null  // lemma
+                        null // normalizedNer
                     );
                     batch.add(entry);
                 }
@@ -109,28 +108,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
 
-        // 1. Group by document_id and then sentence_id
-        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
-            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
-                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
-
-        List<AnnotationEntry> sentenceSpanFilteredTokens = new ArrayList<>();
-
-        // 2. For each sentence: sort tokens, filter by span, and collect
-        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
-            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
-                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-                sentenceSpanFilteredTokens.addAll(sentenceTokens);
-            });
-        });
-
-        if (sentenceSpanFilteredTokens.isEmpty() && !batch.isEmpty()) {
-            logger.trace("All POS annotations filtered out by sentence span limit. Original batch size: {}", batch.size());
-            // No return here, allow tempAggregator to remain empty, resulting in empty index for this batch
-        }
-
-        // 3. Process the sentenceSpanFilteredTokens
-        for (AnnotationEntry entry : sentenceSpanFilteredTokens) {
+        for (AnnotationEntry entry : batch) {
             if (entry.getPos() == null || entry.getPos().isEmpty() || entry.getToken() == null || entry.getToken().isEmpty()) {
                 continue;
             }

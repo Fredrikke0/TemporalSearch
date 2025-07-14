@@ -31,7 +31,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
     private static final Logger logger = LoggerFactory.getLogger(AbstractNgramStitchGenerator.class);
 
     protected final SynonymManager synonymManager;
-    protected final int N; // Size of the N-gram (e.g., 1 for unigram, 2 for bigram, 3 for trigram)
+    protected final int N;
     private Integer lastProcessedDocumentId = null;
 
     /**
@@ -40,21 +40,20 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
     protected interface SentenceSpanFilterable {
         int sentenceId();
         int beginChar();
-        String getFilterLogDetail(); // For providing context (e.g., NER tag, POS tag) in log messages
+        String getFilterLogDetail();
     }
 
     public record AnnotationData(
         int sentenceId,
         int beginChar,
         int endChar,
-        String annotationKeyComponent, // e.g., "NNP", "PERSON", "20230101"
-        String specificValueForSynonym // e.g., "castro", "john doe", or "20230101" for dates
+        String annotationKeyComponent,
+        String specificValueForSynonym
     ) implements SentenceSpanFilterable {
         @Override
         public String getFilterLogDetail() {
             return annotationKeyComponent;
         }
-        // Note: sentenceId() and beginChar() are implicitly provided by the record components
     }
 
     // Record to hold processed token information before forming N-grams or for unigrams
@@ -67,11 +66,11 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
     protected record NgramStitchEntry(
             int documentId,
             int sentenceId,
-            int ngramBeginChar, // For unigram, this is unigramBeginChar
-            int ngramEndChar,   // For unigram, this is unigramEndChar
-            String ngramKey, // e.g., "token1<DELIM>token2" or just "token1" for unigram
-            String annotationKeyComponent, // e.g., "NNP", "PERSON", "20230101"
-            int specificValueSynonymId,  // SynonymId of the specific annotated term
+            int ngramBeginChar,
+            int ngramEndChar,
+            String ngramKey,
+            String annotationKeyComponent,
+            int specificValueSynonymId,
             int annotationBeginChar,
             int annotationEndChar
     ) implements IndexEntry {
@@ -81,9 +80,9 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         @Override
         public int getSentenceId() { return this.sentenceId; }
         @Override
-        public int getBeginChar() { return this.ngramBeginChar; } // N-gram's or Unigram's span
+        public int getBeginChar() { return this.ngramBeginChar; }
         @Override
-        public int getEndChar() { return this.ngramEndChar; }   // N-gram's or Unigram's span
+        public int getEndChar() { return this.ngramEndChar; }
 
         public String value() {
             return ngramKey + IndexAccessInterface.DELIMITER + annotationKeyComponent;
@@ -232,7 +231,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         String sql = """
             SELECT sentence_id, begin_char, end_char, token
             FROM annotations
-            WHERE document_id = ? AND pos NOT IN ('FW', 'ADD')
+            WHERE document_id = ?
             ORDER BY sentence_id, begin_char
         """;
 
@@ -243,7 +242,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
                     String token = rs.getString("token");
                     String normalizedToken = token.toLowerCase();
 
-                    if (isStopword(normalizedToken) || !isValidToken(normalizedToken)) {
+                    if (isStopword(normalizedToken)) {
                         continue;
                     }
                     tokensBySentence.computeIfAbsent(rs.getInt("sentence_id"), k -> new ArrayList<>())
@@ -254,33 +253,41 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
 
         Map<Integer, List<NgramData>> ngramsBySentence = new HashMap<>();
         for (Map.Entry<Integer, List<ProcessedTokenInfo>> entry : tokensBySentence.entrySet()) {
-            List<ProcessedTokenInfo> originalSentenceTokens = entry.getValue();
+            List<ProcessedTokenInfo> sentenceTokens = entry.getValue();
             Integer sentenceId = entry.getKey();
 
-            if (originalSentenceTokens.isEmpty()) {
-                continue;
-            }
-
-            List<ProcessedTokenInfo> effectiveSentenceTokens = new ArrayList<>(originalSentenceTokens);
-
-            if (effectiveSentenceTokens.size() < N) {
+            if (sentenceTokens.isEmpty() || sentenceTokens.size() < N) {
                 continue;
             }
 
             List<NgramData> sentenceNgrams = new ArrayList<>();
             if (N == 1) { // Handle Unigrams
-                for (ProcessedTokenInfo tokenInfo : effectiveSentenceTokens) {
+                for (ProcessedTokenInfo tokenInfo : sentenceTokens) {
                     sentenceNgrams.add(new NgramData(tokenInfo.beginChar(), tokenInfo.endChar(), tokenInfo.token()));
                 }
             } else { // Handle N-grams (N > 1)
-                for (int i = 0; i <= effectiveSentenceTokens.size() - N; i++) {
+                for (int i = 0; i <= sentenceTokens.size() - N; i++) {
+                    // Adjacency Check: Ensure all tokens in the N-gram were truly consecutive.
+                    boolean isAdjacent = true;
+                    for (int j = 0; j < N - 1; j++) {
+                        ProcessedTokenInfo current = sentenceTokens.get(i + j);
+                        ProcessedTokenInfo next = sentenceTokens.get(i + j + 1);
+                        if (next.beginChar() > current.endChar() + 2) {
+                            isAdjacent = false;
+                            break;
+                        }
+                    }
+                    if (!isAdjacent) {
+                        continue;
+                    }
+
                     List<String> ngramComponentTokens = new ArrayList<>();
                     for (int j = 0; j < N; j++) {
-                        ngramComponentTokens.add(effectiveSentenceTokens.get(i + j).token());
+                        ngramComponentTokens.add(sentenceTokens.get(i + j).token());
                     }
                     String ngramKey = String.join(String.valueOf(IndexAccessInterface.DELIMITER), ngramComponentTokens);
-                    int ngramBeginChar = effectiveSentenceTokens.get(i).beginChar();
-                    int ngramEndChar = effectiveSentenceTokens.get(i + N - 1).endChar();
+                    int ngramBeginChar = sentenceTokens.get(i).beginChar();
+                    int ngramEndChar = sentenceTokens.get(i + N - 1).endChar();
                     sentenceNgrams.add(new NgramData(ngramBeginChar, ngramEndChar, ngramKey));
                 }
             }
@@ -291,50 +298,10 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         return ngramsBySentence;
     }
 
-    /**
-     * Validates if a token should be included in the index.
-     * Uses a middle-ground approach: keeps mixed alphanumeric tokens but filters out
-     * purely numeric or purely punctuation tokens.
-     *
-     * @param token The token to validate (should be lowercase)
-     * @return true if the token should be indexed, false otherwise
-     */
-    private static boolean isValidToken(String token) {
-        if (token == null || token.isEmpty()) {
-            return false;
-        }
-
-        // Filter out tokens starting with apostrophe (parsing artifacts)
-        if (token.startsWith("'")) {
-            return false;
-        }
-
-        boolean hasLetter = false;
-        boolean hasDigit = false;
-        boolean hasOther = false;
-
-        for (int i = 0; i < token.length(); i++) {
-            char c = token.charAt(i);
-            if (Character.isLetter(c)) {
-                hasLetter = true;
-            } else if (Character.isDigit(c)) {
-                hasDigit = true;
-            } else {
-                hasOther = true;
-            }
-        }
-
-        // Keep tokens that have at least one letter
-        // This includes: pure letters, letters+digits, letters+punctuation, letters+digits+punctuation
-        // Filters out: pure numbers, pure punctuation, digits+punctuation (no letters)
-        return hasLetter;
-    }
-
     @Override
     protected ListMultimap<String, PositionListSoA> processBatch(List<NgramStitchEntry> batch) {
         ListMultimap<String, PositionListSoA> indexData = ArrayListMultimap.create();
         Map<String, PositionListSoA> tempAggregator = new HashMap<>();
-        int filteredCount = 0;
 
         for (NgramStitchEntry entry : batch) {
             String compositeKey = entry.value();
@@ -343,7 +310,6 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             if (ngramKeyForFiltering == null || ngramKeyForFiltering.isEmpty() ||
                 entry.annotationKeyComponent() == null || entry.annotationKeyComponent().isEmpty()) {
                 logger.trace("Filtered N-gram stitch entry due to null/empty N-gram key or annotation component. Key: '{}', Annotation: '{}'", ngramKeyForFiltering, entry.annotationKeyComponent());
-                filteredCount++;
                 continue;
             }
 

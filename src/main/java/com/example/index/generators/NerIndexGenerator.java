@@ -61,11 +61,11 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         List<AnnotationEntry> batch = new ArrayList<>();
         String sql;
         if (lastProcessedEntry == null) {
-            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
+            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner " +
                   "FROM annotations WHERE ner != 'O' AND ner != 'DATE' " +
                   "ORDER BY annotation_id LIMIT ?";
         } else {
-            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma " +
+            sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner " +
                   "FROM annotations WHERE ner != 'O' AND ner != 'DATE' AND annotation_id > ? " +
                   "ORDER BY annotation_id LIMIT ?";
         }
@@ -88,8 +88,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
                         rs.getString("token"),
                         rs.getString("pos"),
                         rs.getString("ner"),
-                        rs.getString("normalized_ner"),
-                        rs.getString("lemma")
+                        rs.getString("normalized_ner")
                     ));
                 }
             }
@@ -104,30 +103,8 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
             return resultMultimap;
         }
 
-        // 1. Group by document_id and then sentence_id
-        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
-            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
-                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
-
-        List<AnnotationEntry> collectedAnnotations = new ArrayList<>();
-
-        // 2. For each sentence: sort tokens, filter by span, and collect
-        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
-            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
-                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-                collectedAnnotations.addAll(sentenceTokens);
-            });
-        });
-
-        if (collectedAnnotations.isEmpty()) {
-            if(!batch.isEmpty()){
-                logger.trace("No NER annotations to process after initial fetching and grouping. Original batch size: {}", batch.size());
-            }
-            return resultMultimap;
-        }
-
-        // 3. Re-sort the collectedAnnotations as the entity merging logic expects overall sorted order
-        collectedAnnotations.sort(Comparator
+        // Sort the entire batch by position. This is all that's needed for the merging logic.
+        batch.sort(Comparator
             .comparingInt(AnnotationEntry::getDocumentId)
             .thenComparingInt(AnnotationEntry::getSentenceId)
             .thenComparingInt(AnnotationEntry::getBeginChar));
@@ -141,8 +118,8 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         int currentEntitySentId = -1;
         int currentEntityBeginChar = -1;
 
-        // 4. Entity merging logic now uses collectedAnnotations
-        for (AnnotationEntry entry : collectedAnnotations) {
+        // Entity merging logic now uses the sorted batch directly
+        for (AnnotationEntry entry : batch) {
             String nerTag = entry.getNer();
             boolean entityBreak = false;
 

@@ -14,10 +14,9 @@ public final class AnnotationEntry implements IndexEntry {
     private final String pos;
     private final String ner;            // Added NER type
     private final String normalizedNer;  // Added normalized NER value
-    private final String lemma;          // Added lemma
 
     public AnnotationEntry(long annotationId, int documentId, int sentenceId, int beginChar, int endChar,
-            String token, String pos, String ner, String normalizedNer, String lemma) {
+            String token, String pos, String ner, String normalizedNer) {
         this.annotationId = annotationId;
         this.documentId = documentId;
         this.sentenceId = sentenceId;
@@ -27,7 +26,6 @@ public final class AnnotationEntry implements IndexEntry {
         this.pos = pos;
         this.ner = ner;
         this.normalizedNer = normalizedNer;
-        this.lemma = lemma;
     }
 
     /**
@@ -80,7 +78,4 @@ public final class AnnotationEntry implements IndexEntry {
         return normalizedNer;
     }
 
-    public String getLemma() {
-        return lemma;
-    }
 }

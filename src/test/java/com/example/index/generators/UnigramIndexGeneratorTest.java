@@ -99,10 +99,10 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
     private void insertBasicTestData() throws SQLException {
         try (Statement stmt = sqliteConn.createStatement()) {
             stmt.execute("INSERT INTO documents (document_id, timestamp) VALUES (1, '2024-03-20')");
-            stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos) " +
-                        "VALUES (1, 1, 0, 4, 'test', 'NN')");
-            stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos) " +
-                        "VALUES (1, 1, 5, 9, 'word', 'NN')");
+            stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token) " +
+                        "VALUES (1, 1, 0, 4, 'test')");
+            stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token) " +
+                        "VALUES (1, 1, 5, 9, 'word')");
         }
     }
 
@@ -123,7 +123,6 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         assertEquals(0, first.getBeginChar());
         assertEquals(4, first.getEndChar());
         assertEquals("test", first.getToken());
-        assertEquals("NN", first.getPos());
 
         AnnotationEntry second = entries.get(1);
         assertEquals(1, second.getDocumentId());
@@ -131,16 +130,15 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         assertEquals(5, second.getBeginChar());
         assertEquals(9, second.getEndChar());
         assertEquals("word", second.getToken());
-        assertEquals("NN", second.getPos());
     }
 
     @Test
     void testProcessBatch() throws IOException {
         // Create test entries
         List<AnnotationEntry> batch = List.of(
-            new AnnotationEntry(1, 1, 1, 0, 4, "Test", "NN", null, null, "test"),
-            new AnnotationEntry(2, 1, 1, 5, 9, "word", "NN", null, null, "word"),
-            new AnnotationEntry(3, 1, 1, 10, 13, "the", "DT", null, null, "the") // stopword
+            new AnnotationEntry(1, 1, 1, 0, 4, "Test", null, null, null),
+            new AnnotationEntry(2, 1, 1, 5, 9, "word", null, null, null),
+            new AnnotationEntry(3, 1, 1, 10, 13, "the", null, null, null) // stopword
         );
 
         // Process batch
@@ -168,12 +166,12 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
     void testProcessBatchWithOverlaps() throws IOException {
         // Create test entries with overlapping and adjacent positions
         List<AnnotationEntry> batch = List.of(
-            new AnnotationEntry(1, 1, 1, 0, 4, "test", "NN", null, null, "test"),
-            new AnnotationEntry(2, 1, 1, 2, 6, "test", "NN", null, null, "test"), // overlaps first "test"
-            new AnnotationEntry(3, 1, 1, 10, 14, "word", "NN", null, null, "word"),
-            new AnnotationEntry(4, 1, 1, 15, 19, "word", "NN", null, null, "word"), // adjacent to first "word"
-            new AnnotationEntry(5, 1, 1, 20, 26, "repeat", "NN", null, null, "repeat"),
-            new AnnotationEntry(6, 1, 1, 20, 26, "repeat", "NN", null, null, "repeat") // exact match with previous
+            new AnnotationEntry(1, 1, 1, 0, 4, "test", null, null, null),
+            new AnnotationEntry(2, 1, 1, 2, 6, "test", null, null, null), // overlaps first "test"
+            new AnnotationEntry(3, 1, 1, 10, 14, "word", null, null, null),
+            new AnnotationEntry(4, 1, 1, 15, 19, "word", null, null, null), // adjacent to first "word"
+            new AnnotationEntry(5, 1, 1, 20, 26, "repeat", null, null, null),
+            new AnnotationEntry(6, 1, 1, 20, 26, "repeat", null, null, null) // exact match with previous
         );
 
         // Process batch
@@ -259,25 +257,25 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
 
     private List<AnnotationEntry> createSampleData() {
         List<AnnotationEntry> entries = new ArrayList<>();
-        entries.add(new AnnotationEntry(1, 1, 1, 0, 3, "Cat", "NN", null, null, "cat"));
-        entries.add(new AnnotationEntry(2, 1, 1, 4, 6, "is", "VBZ", null, null, "be"));
-        entries.add(new AnnotationEntry(3, 1, 1, 7, 11, "cute", "JJ", null, null, "cute"));
+        entries.add(new AnnotationEntry(1, 1, 1, 0, 3, "Cat", null, null, null));
+        entries.add(new AnnotationEntry(2, 1, 1, 4, 6, "is", null, null, null));
+        entries.add(new AnnotationEntry(3, 1, 1, 7, 11, "cute", null, null, null));
         return entries;
     }
 
     private List<AnnotationEntry> createComplexSampleData() {
         List<AnnotationEntry> entries = new ArrayList<>();
         // Sentence 1
-        entries.add(new AnnotationEntry(1, 1, 1, 0, 3, "The", "DT", null, null, "the"));
-        entries.add(new AnnotationEntry(2, 1, 1, 4, 8, "quick", "JJ", null, null, "quick"));
-        entries.add(new AnnotationEntry(3, 1, 1, 9, 14, "brown", "JJ", null, null, "brown"));
-        entries.add(new AnnotationEntry(4, 1, 1, 15, 18, "fox", "NN", null, null, "fox"));
+        entries.add(new AnnotationEntry(1, 1, 1, 0, 3, "The", null, null, null));
+        entries.add(new AnnotationEntry(2, 1, 1, 4, 8, "quick", null, null, null));
+        entries.add(new AnnotationEntry(3, 1, 1, 9, 14, "brown", null, null, null));
+        entries.add(new AnnotationEntry(4, 1, 1, 15, 18, "fox", null, null, null));
         // Sentence 2 (different document)
-        entries.add(new AnnotationEntry(5, 2, 1, 0, 4, "Lazy", "JJ", null, null, "lazy"));
-        entries.add(new AnnotationEntry(6, 2, 1, 5, 8, "dogs", "NNS", null, null, "dog"));
+        entries.add(new AnnotationEntry(5, 2, 1, 0, 4, "Lazy", null, null, null));
+        entries.add(new AnnotationEntry(6, 2, 1, 5, 8, "dogs", null, null, null));
         // Stopword and punctuation
-        entries.add(new AnnotationEntry(7, 3, 1, 0, 2, "in", "IN", null, null, "in")); // stopword
-        entries.add(new AnnotationEntry(8, 3, 1, 3, 4, ".", ".", null, null, "."));   // punctuation
+        entries.add(new AnnotationEntry(7, 3, 1, 0, 2, "in", null, null, null)); // stopword
+        entries.add(new AnnotationEntry(8, 3, 1, 3, 4, ".", null, null, null));   // punctuation
         return entries;
     }
 

@@ -76,14 +76,14 @@ public class CoreNLPConfig {
             }
         }
 
-        // Parser specific settings
+        // Depparse parser specific settings
         props.setProperty("parse.maxlen", String.valueOf(MAX_SENTENCE_LENGTH));
         // props.setProperty("parse.binaryTrees", "false");
         props.setProperty("parse.buildgraphs", "true");
         props.setProperty("parse.keepPunct", "false");  // Don't create nodes for punctuation
         props.setProperty("parse.nthreads", String.valueOf(threads));
 
-        // Ner settings - Commented out settings are default settings
+        // NER settings - Commented out settings are default settings
         // props.setProperty("ner.useSUTime", "true");
         // props.setProperty("ner.applyNumericClassifiers", "true");
         // props.setProperty("ner.applyFineGrained", "true");        // Disable for speed

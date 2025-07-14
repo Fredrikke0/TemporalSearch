@@ -11,10 +11,6 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.PositionListSoA;
@@ -25,13 +21,11 @@ import com.google.common.collect.ListMultimap;
 
 /**
  * Generates a streaming trigram index from annotation entries.
- * Each entry maps a sequence of three consecutive lemmatized tokens to their positions in the corpus.
+ * Each entry maps a sequence of three consecutive tokens to their positions in the corpus.
  * Uses streaming processing and external sorting for efficient memory usage.
  *
- * This implementation is now RocksDB-based (see IndexGenerator).
  */
 public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
-    private static final Logger logger = LoggerFactory.getLogger(TrigramIndexGenerator.class);
 
     public TrigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
@@ -50,12 +44,12 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
 
         if (isFirstBatch) {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
-                    "FROM annotations WHERE pos NOT IN ('FW', 'ADD') " +
+                    "FROM annotations " +
                     "ORDER BY annotation_id LIMIT ?";
         } else {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
                     "FROM annotations " +
-                    "WHERE annotation_id > ? AND pos NOT IN ('FW', 'ADD') " +
+                    "WHERE annotation_id > ?" +
                     "ORDER BY annotation_id LIMIT ?";
         }
 
@@ -80,8 +74,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                         token,
                         null, // pos
                         null, // ner
-                        null, // normalizedNer
-                        null  // lemma
+                        null // normalizedNer
                     );
                     batch.add(entry);
                 }
@@ -93,101 +86,64 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
 
     @Override
     protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
-        Map<Integer, Map<Integer, List<AnnotationEntry>>> groupedByDocumentAndSentence = batch.stream()
-            .collect(Collectors.groupingBy(AnnotationEntry::getDocumentId,
-                Collectors.groupingBy(AnnotationEntry::getSentenceId)));
-
-        List<AnnotationEntry> sentenceSpanFilteredTokens = new ArrayList<>();
-
-        groupedByDocumentAndSentence.forEach((documentId, sentencesMap) -> {
-            sentencesMap.forEach((sentenceId, sentenceTokens) -> {
-                sentenceTokens.sort(Comparator.comparingInt(AnnotationEntry::getBeginChar));
-
-                sentenceSpanFilteredTokens.addAll(sentenceTokens);
-            });
-        });
-
-        List<AnnotationEntry> fullyFilteredBatch = sentenceSpanFilteredTokens.stream()
-            .filter(entry -> entry != null && entry.getToken() != null && !entry.getToken().isEmpty())
-            .map(entry -> {
-                String lowerToken = entry.getToken().toLowerCase();
-                if (isStopword(lowerToken) || !isValidToken(lowerToken)) {
-                    return null;
-                }
-                return new AnnotationEntry(entry.getAnnotationId(), entry.getDocumentId(), entry.getSentenceId(),
-                                           entry.getBeginChar(), entry.getEndChar(), lowerToken, entry.getPos(),
-                                           entry.getNer(), entry.getNormalizedNer(), entry.getLemma());
-            })
-            .filter(entry -> entry != null)
-            .collect(Collectors.toList());
+        batch.sort(Comparator.comparingInt(AnnotationEntry::getDocumentId)
+            .thenComparingInt(AnnotationEntry::getSentenceId)
+            .thenComparingInt(AnnotationEntry::getBeginChar));
 
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> positionLists = new HashMap<>();
 
-        for (int i = 0; i < fullyFilteredBatch.size() - 2; i++) { // Need 3 tokens for a trigram
-            AnnotationEntry firstEntry = fullyFilteredBatch.get(i);
-            AnnotationEntry secondEntry = fullyFilteredBatch.get(i + 1);
-            AnnotationEntry thirdEntry = fullyFilteredBatch.get(i + 2);
+        for (int i = 0; i < batch.size() - 2; i++) { // Need 3 tokens for a trigram
+            AnnotationEntry firstEntry = batch.get(i);
+            AnnotationEntry secondEntry = batch.get(i + 1);
+            AnnotationEntry thirdEntry = batch.get(i + 2);
 
-            if (firstEntry.getDocumentId() == secondEntry.getDocumentId() && firstEntry.getSentenceId() == secondEntry.getSentenceId() &&
-                secondEntry.getDocumentId() == thirdEntry.getDocumentId() && secondEntry.getSentenceId() == thirdEntry.getSentenceId()) {
-
-                String key = String.format("%s%s%s%s%s",
-                    firstEntry.getToken(), // Already lowercased
-                    DELIMITER,
-                    secondEntry.getToken(), // Already lowercased
-                    DELIMITER,
-                    thirdEntry.getToken()); // Already lowercased
-
-                PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
-                posList.add(thirdEntry.getDocumentId(), thirdEntry.getSentenceId(),
-                    firstEntry.getBeginChar(), thirdEntry.getEndChar());
+            if (firstEntry.getDocumentId() != secondEntry.getDocumentId() || firstEntry.getSentenceId() != secondEntry.getSentenceId() ||
+                secondEntry.getDocumentId() != thirdEntry.getDocumentId() || secondEntry.getSentenceId() != thirdEntry.getSentenceId()) {
+                continue;
             }
+
+            // Check for non-adjacency between all parts of the trigram.
+            if (secondEntry.getBeginChar() > firstEntry.getEndChar() + 2 ||
+                thirdEntry.getBeginChar() > secondEntry.getEndChar() + 2) {
+                continue;
+            }
+
+            String firstToken = firstEntry.getToken();
+            String secondToken = secondEntry.getToken();
+            String thirdToken = thirdEntry.getToken();
+
+            if (firstToken == null || firstToken.isEmpty() ||
+                secondToken == null || secondToken.isEmpty() ||
+                thirdToken == null || thirdToken.isEmpty()) {
+                continue;
+            }
+
+            String t1 = firstToken.toLowerCase();
+            String t2 = secondToken.toLowerCase();
+            String t3 = thirdToken.toLowerCase();
+
+            if (isStopword(t1) || isStopword(t2) || isStopword(t3)) {
+                continue;
+            }
+
+
+            String key = String.format("%s%s%s%s%s",
+                t1,
+                DELIMITER,
+                t2,
+                DELIMITER,
+                t3);
+
+            PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
+            posList.add(thirdEntry.getDocumentId(), thirdEntry.getSentenceId(),
+                firstEntry.getBeginChar(), thirdEntry.getEndChar());
         }
 
         for (Map.Entry<String, PositionListSoA> entry : positionLists.entrySet()) {
             index.put(entry.getKey(), entry.getValue());
         }
         return index;
-    }
-
-    /**
-     * Validates if a token should be included in the index.
-     * Uses a middle-ground approach: keeps mixed alphanumeric tokens but filters out
-     * purely numeric or purely punctuation tokens.
-     *
-     * @param token The token to validate (should be lowercase)
-     * @return true if the token should be indexed, false otherwise
-     */
-    private static boolean isValidToken(String token) {
-        if (token == null || token.isEmpty()) {
-            return false;
-        }
-
-        // Filter out tokens starting with apostrophe (parsing artifacts)
-        if (token.startsWith("'")) {
-            return false;
-        }
-
-        boolean hasLetter = false;
-        boolean hasDigit = false;
-        boolean hasOther = false;
-
-        for (int i = 0; i < token.length(); i++) {
-            char c = token.charAt(i);
-            if (Character.isLetter(c)) {
-                hasLetter = true;
-            } else if (Character.isDigit(c)) {
-                hasDigit = true;
-            } else {
-                hasOther = true;
-            }
-        }
-
-        // Keep tokens that have at least one letter
-        // This includes: pure letters, letters+digits, letters+punctuation, letters+digits+punctuation
-        // Filters out: pure numbers, pure punctuation, digits+punctuation (no letters)
-        return hasLetter;
     }
 
     @Override
