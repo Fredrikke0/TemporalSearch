@@ -207,28 +207,18 @@ public class QuerySemanticValidator {
                 boolean govIsWildcard = "*".equals(gov);
                 boolean relIsWildcard = "*".equals(rel);
                 boolean depIsWildcard = "*".equals(dep);
-                boolean govIsVariable = gov != null && gov.startsWith("?");
-                boolean relIsVariable = rel != null && rel.startsWith("?");
-                boolean depIsVariable = dep != null && dep.startsWith("?");
 
-                if (govIsWildcard) {
-                    if ((rel != null && !relIsVariable && !relIsWildcard) || (dep != null && !depIsVariable && !depIsWildcard)) {
-                        throw new QueryParseException("Invalid DEPENDS: If governor is '*', other specific non-variable relation/dependent parts are not allowed. Use variables (e.g., DEP(*, ?, ?)) or ensure other parts are also '*'.");
-                    }
+                // Rule: Only the dependent may be the wildcard "*".
+                if (govIsWildcard || relIsWildcard) {
+                    throw new QueryParseException("Invalid DEPENDS: only the dependent part may use the wildcard '*'.");
                 }
-                if (relIsWildcard) {
-                    if ((gov != null && !govIsVariable && !govIsWildcard) || (dep != null && !depIsVariable && !depIsWildcard)) {
-                        throw new QueryParseException("Invalid DEPENDS: If relation is '*', other specific non-variable governor/dependent parts are not allowed. Use variables or ensure other parts are also '*'.");
-                    }
+
+                // Validate terms for illegal wildcard usage (e.g., prefix '*term').
+                validateTerm(gov, "DEPENDS", "governor");
+                validateTerm(rel, "DEPENDS", "relation");
+                if (!depIsWildcard) {
+                    validateTerm(dep, "DEPENDS", "dependent");
                 }
-                if (depIsWildcard) {
-                    if ((gov != null && !govIsVariable && !govIsWildcard) || (rel != null && !relIsVariable && !relIsWildcard)) {
-                        throw new QueryParseException("Invalid DEPENDS: If dependent is '*', other specific non-variable governor/relation parts are not allowed. Use variables or ensure other parts are also '*'.");
-                    }
-                }
-                if (gov != null && !govIsVariable) validateTerm(gov, "DEPENDS", "governor");
-                if (rel != null && !relIsVariable) validateTerm(rel, "DEPENDS", "relation");
-                if (dep != null && !depIsVariable) validateTerm(dep, "DEPENDS", "dependent");
             }
         }
     }

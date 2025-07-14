@@ -245,7 +245,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
                     if (serializedEntriesBytes.isPresent()) {
                         strategyLogger.trace("NashTemporalStrategy: Found data for prefix '{}'. Deserializing with PositionListSoA.", prefix);
-                        PositionListSoA positionsSoA = PositionListSoA.deserializeWithFilters(serializedEntriesBytes.get(), context);
+                        PositionListSoA positionsSoA = PositionListSoA.deserializeWithFilters(serializedEntriesBytes.get(), context, requirements);
                         strategyLogger.trace("NashTemporalStrategy: Deserialized {} entries using PositionListSoA for prefix '{}'. Filtered size: {}.",
                                              PositionListSoA.getNumPositionsFromBlob(serializedEntriesBytes.get()), prefix, positionsSoA.getNumPositions());
 
@@ -534,7 +534,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     );
 
                     if (match) {
-                        PositionListSoA positionList = PositionListSoA.deserializeWithFilters(valueBytes, context);
+                        PositionListSoA positionList = PositionListSoA.deserializeWithFilters(valueBytes, context, requirements);
                         strategyLogger.trace("NaiveTemporalStrategy: Original blob for key '{}' indicated {} positions. Filtered size: {}.",
                                              currentKey, PositionListSoA.getNumPositionsFromBlob(valueBytes), positionList.getNumPositions());
                         if (positionList.isEmpty()){

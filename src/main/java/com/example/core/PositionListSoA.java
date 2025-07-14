@@ -20,6 +20,7 @@ import org.slf4j.LoggerFactory;
 
 import com.example.index.StitchPosition;
 import com.example.query.executor.FilteringContext;
+import com.example.query.executor.AttributeRequirements;
 import com.example.query.model.Query;
 
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -433,7 +434,6 @@ public class PositionListSoA {
             writeUncompressed = true;
         } else {
             // For delta-coded arrays (that were not RLE):
-            // Use override or threshold to decide.
             CompressionOverride effectiveOverride = (override == null) ? CompressionOverride.DEFAULT : override;
             writeUncompressed = (effectiveOverride == CompressionOverride.FORCE_UNCOMPRESSED) ||
                               (effectiveOverride == CompressionOverride.DEFAULT && numElementsInArray < UNCOMPRESSED_THRESHOLD);
@@ -1058,107 +1058,119 @@ public class PositionListSoA {
     }
 
     // Method from design document: PositionListSoA.deserializeWithFilters
-    public static PositionListSoA deserializeWithFilters(byte[] blob, Optional<FilteringContext> context)
+    public static PositionListSoA deserializeWithFilters(byte[] blob, Optional<FilteringContext> context, AttributeRequirements requirements)
             throws IOException {
         if (blob == null || blob.length == 0) {
-            return new PositionListSoA(); // Return empty if blob is null or empty
+            return new PositionListSoA();
         }
 
-        // If context is not present or is unrestricted, use the standard deserialization
-        if (context.isEmpty() || context.get().isUnrestricted()) {
-            logger.trace("deserializeWithFilters: Context is empty or unrestricted, calling deserializeFromCompositeBlob.");
-            return deserializeFromCompositeBlob(blob);
-        }
+        PositionListSoA instance = new PositionListSoA();
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(blob);
+             DataInputStream dis = new DataInputStream(bais)) {
 
-        FilteringContext activeContext = context.get();
-        //logger.debug("deserializeWithFilters: Active context present. Granularity: {}, AllowedDocsPresent: {}, AllowedDocSentsPresent: {}",
-        //        activeContext.granularity(), activeContext.allowedDocumentIds().isPresent(), activeContext.allowedDocumentSentenceIds().isPresent());
+            int numPositionsInBlob = dis.readInt();
+            if (numPositionsInBlob < 0) {
+                 throw new IOException("Invalid numPositions: " + numPositionsInBlob);
+            }
+            // We will populate instance via add(); reset logical count to 0 now.
+            instance.numPositions = 0;
+            if (numPositionsInBlob == 0) return instance;
 
-        PositionListSoA result = new PositionListSoA();
-        DataInputStream dis = new DataInputStream(new ByteArrayInputStream(blob));
+            // Decide which attributes are actually needed
+            boolean needSentenceIds = requirements.needsSentenceId || (context.isPresent() && context.get().granularity() == Query.Granularity.SENTENCE);
+            boolean needPositions   = requirements.needsPositions;
+            boolean needSynonymIds  = requirements.needsSynonymIds;
 
-        int numPositionsInBlob = dis.readInt();
-        if (numPositionsInBlob == 0) {
-            dis.close();
-            return result; // Empty result if blob represents no positions
-        }
+            // Mandatory read: document IDs (also used for context filtering)
+            IntArrayList allDocIds = readCompressedIntArray(dis, numPositionsInBlob, true);
 
-        // Step 1: Deserialize all potential data arrays from the blob
-        // Match the structure of deserializeFromCompositeBlob and serializeToCompositeBlob
-        IntArrayList allDocIds = readCompressedIntArray(dis, numPositionsInBlob, true);     // applyDelta = true
-        IntArrayList allSentIds = readCompressedIntArray(dis, numPositionsInBlob, true);    // applyDelta = true
-        IntArrayList allBeginChars = readCompressedIntArray(dis, numPositionsInBlob, true); // applyDelta = true
-        IntArrayList allEndChars = readCompressedIntArray(dis, numPositionsInBlob, true);   // applyDelta = true
-        IntArrayList allSynonymIds = readCompressedIntArray(dis, numPositionsInBlob, false); // applyDelta = false
-
-        dis.close();
-
-        // Step 2: Create an inclusion mask
-        boolean[] inclusionMask = new boolean[numPositionsInBlob];
-        int selectedCount = 0;
-
-        // Step 3: Document ID Filtering
-        Optional<Set<Integer>> allowedDocIdsOpt = activeContext.allowedDocumentIds();
-        if (allowedDocIdsOpt.isPresent()) {
-            Set<Integer> allowedDocs = allowedDocIdsOpt.get();
-            if (allowedDocs.isEmpty()) {
-                logger.debug("deserializeWithFilters: Context has empty allowedDocumentIds set. Returning empty result.");
-                return result; // No documents allowed, so result is empty
+            IntArrayList allSentIds = null;
+            if (needSentenceIds) {
+                allSentIds = readCompressedIntArray(dis, numPositionsInBlob, true);
+            } else {
+                skipCompressedIntArray(dis, numPositionsInBlob);
             }
 
-            // Filter using the set for direct lookup (hash join style).
-            for (int i = 0; i < numPositionsInBlob; i++) {
-                if (allowedDocs.contains(allDocIds.getInt(i))) {
-                    inclusionMask[i] = true;
-                }
+            IntArrayList allBeginChars = null;
+            if (needPositions) {
+                allBeginChars = readCompressedIntArray(dis, numPositionsInBlob, true);
+            } else {
+                skipCompressedIntArray(dis, numPositionsInBlob);
             }
-        } else {
-            // No document ID filter from context, so all documents initially pass this stage
-            Arrays.fill(inclusionMask, true);
-        }
 
-        // Step 4: Sentence ID Filtering (if applicable)
-        if (activeContext.granularity() == Query.Granularity.SENTENCE && allSentIds != null) {
-            Optional<Map<Integer, Set<Integer>>> allowedDocSentIdsOpt = activeContext.allowedDocumentSentenceIds();
-            if (allowedDocSentIdsOpt.isPresent()) {
-                Map<Integer, Set<Integer>> allowedDocSents = allowedDocSentIdsOpt.get();
-                if (allowedDocSents.isEmpty() && allowedDocIdsOpt.isPresent()) {
-                    // If allowedDocSents is empty AND there was some doc restriction, it means no sentences are allowed for those docs.
-                    // If allowedDocIdsOpt was NOT present, an empty allowedDocSents might mean "no sentence restriction for any doc".
-                    // This case is a bit ambiguous; however, FilteringContext.intersect handles this by making allowedDocSentIds an empty map
-                    // if the doc intersection is empty. If doc intersection is not empty but sentence intersection IS, then this applies.
-                    logger.debug("deserializeWithFilters: Context has empty allowedDocumentSentenceIds map for sentence granularity. Filtering all.");
-                    return result; // Effectively, no sentences allowed.
+            IntArrayList allEndChars = null;
+            if (needPositions) {
+                allEndChars = readCompressedIntArray(dis, numPositionsInBlob, true);
+            } else {
+                skipCompressedIntArray(dis, numPositionsInBlob);
+            }
+
+            IntArrayList allSynonymIds = null;
+            if (needSynonymIds) {
+                allSynonymIds = readCompressedIntArray(dis, numPositionsInBlob, false);
+            } else {
+                skipCompressedIntArray(dis, numPositionsInBlob);
+            }
+
+            // --- Filtering logic (same as original) ---
+            boolean[] inclusionMask = new boolean[numPositionsInBlob];
+
+            Optional<Set<Integer>> allowedDocIdsOpt = context.flatMap(FilteringContext::allowedDocumentIds);
+            if (allowedDocIdsOpt.isPresent()) {
+                Set<Integer> allowedDocs = allowedDocIdsOpt.get();
+                if (allowedDocs.isEmpty()) {
+                    return instance; // Nothing allowed
                 }
-
                 for (int i = 0; i < numPositionsInBlob; i++) {
-                    if (inclusionMask[i]) { // Only check if it passed document filtering
-                        int docId = allDocIds.getInt(i);
-                        int sentId = (allSentIds != null) ? allSentIds.getInt(i) : -1;
-                        Set<Integer> allowedSentsForDoc = allowedDocSents.get(docId);
-                        if (allowedSentsForDoc == null || !allowedSentsForDoc.contains(sentId)) {
-                            inclusionMask[i] = false; // Filter out this position
+                    if (allowedDocs.contains(allDocIds.getInt(i))) {
+                        inclusionMask[i] = true;
+                    }
+                }
+            } else {
+                java.util.Arrays.fill(inclusionMask, true);
+            }
+
+            if (needSentenceIds && context.isPresent() && context.get().granularity() == Query.Granularity.SENTENCE && allSentIds != null) {
+                Optional<Map<Integer, Set<Integer>>> allowedDocSentIdsOpt = context.get().allowedDocumentSentenceIds();
+                if (allowedDocSentIdsOpt.isPresent()) {
+                    Map<Integer, Set<Integer>> allowedDocSents = allowedDocSentIdsOpt.get();
+                    for (int i = 0; i < numPositionsInBlob; i++) {
+                        if (inclusionMask[i]) {
+                            int docId = allDocIds.getInt(i);
+                            int sentId = allSentIds.getInt(i);
+                            Set<Integer> allowedSentsForDoc = allowedDocSents.get(docId);
+                            if (allowedSentsForDoc == null || !allowedSentsForDoc.contains(sentId)) {
+                                inclusionMask[i] = false;
+                            }
                         }
                     }
                 }
             }
-            // If allowedDocSentIdsOpt is not present, no sentence-specific filtering is done, rely on doc filter.
-        }
 
-        // Step 5: Populate the result PositionListSoA with filtered data
-        for (int i = 0; i < numPositionsInBlob; i++) {
-            if (inclusionMask[i]) {
-                int docId = allDocIds.getInt(i);
-                int sentId = (allSentIds != null) ? allSentIds.getInt(i) : -1;
-                int beginChar = (allBeginChars != null) ? allBeginChars.getInt(i) : -1;
-                int endChar = (allEndChars != null) ? allEndChars.getInt(i) : -1;
-                int synonymId = (allSynonymIds != null) ? allSynonymIds.getInt(i) : -1;
-                result.add(docId, sentId, beginChar, endChar, synonymId);
-                selectedCount++;
+            // --- Build final PositionListSoA ---
+            for (int i = 0; i < numPositionsInBlob; i++) {
+                if (inclusionMask[i]) {
+                    int docId = allDocIds.getInt(i);
+                    int sentId = (allSentIds != null) ? allSentIds.getInt(i) : -1;
+                    int beginChar = (allBeginChars != null) ? allBeginChars.getInt(i) : -1;
+                    int endChar = (allEndChars != null) ? allEndChars.getInt(i) : -1;
+                    int synonymId = (allSynonymIds != null) ? allSynonymIds.getInt(i) : -1;
+                    instance.add(docId, sentId, beginChar, endChar, synonymId);
+                }
             }
+            return instance;
+        } catch (java.io.EOFException e) {
+            throw new IOException("Unexpected end of file during deserialization (selective).", e);
         }
-        //logger.debug("deserializeWithFilters: Selected {} positions out of {} from blob after filtering.", selectedCount, numPositionsInBlob);
-        return result;
+    }
+
+    // Backwards-compat wrapper (eager deserialize)
+    public static PositionListSoA deserializeWithFilters(byte[] blob, Optional<FilteringContext> context) throws IOException {
+        AttributeRequirements eager = new AttributeRequirements();
+        eager.needsSentenceId = true;
+        eager.needsPositions = true;
+        eager.needsSynonymIds = true;
+        return deserializeWithFilters(blob, context, eager);
     }
 
     /**

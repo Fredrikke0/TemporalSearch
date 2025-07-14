@@ -153,7 +153,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         }
 
         byte[] rawBlob = rawBlobOptional.get();
-        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
 
         if (positions.isEmpty()) {
             logger.debug("executeEntityTypeOnlySearch: No positions for type '{}' after context filtering.", normalizedEntityType);
@@ -233,7 +233,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
 
         byte[] rawBlob = rawBlobOptional.get();
-        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
 
         if (positions.isEmpty()) {
             logger.debug("executeSpecificEntityFilterSearch: No positions for type '{}' after initial context filtering.", normalizedEntityType);
@@ -324,7 +324,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
 
         byte[] rawBlob = rawBlobOptional.get();
-        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
 
         logger.trace("executeVariableBindingSearch: Decompressed raw arrays. DocIds size: {}, SynonymIds size: {}", positions.getNumPositions(), positions.getSynonymIds().size());
 

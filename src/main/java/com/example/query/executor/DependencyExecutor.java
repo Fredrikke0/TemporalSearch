@@ -72,9 +72,9 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
             // Determine if any part is a variable placeholder (e.g., "?gov"), a literal wildcard "*",
             // or if a BIND clause is active (which implies iterative search for binding).
             // A field is considered "specific literal" if it's not null, not a variable placeholder, and not a wildcard.
-            boolean govIsSpecificLiteral = (governor != null && !governor.startsWith("?") && !"*".equals(governor));
-            boolean relIsSpecificLiteral = (relation != null && !relation.startsWith("?") && !"*".equals(relation));
-            boolean depIsSpecificLiteral = (dependent != null && !dependent.startsWith("?") && !"*".equals(dependent));
+            boolean govIsSpecificLiteral = (governor != null && !"*".equals(governor));
+            boolean relIsSpecificLiteral = (relation != null && !"*".equals(relation));
+            boolean depIsSpecificLiteral = (dependent != null && !"*".equals(dependent));
 
             if (govIsSpecificLiteral && relIsSpecificLiteral && depIsSpecificLiteral && !isVariableBinding) {
                 // All parts are specific literals, and no BINDing is happening.
@@ -134,7 +134,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
         if (rawBlobOptional.isPresent()) {
             byte[] rawBlob = rawBlobOptional.get();
-            PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+            PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
 
             if (positions.isEmpty()) {
                 logger.debug("No positions for dependency relation '{}' after applying context filters.", searchKey);
@@ -177,11 +177,11 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
         // Relation filter must be present for BIND, but can be '*' for non-BIND wildcard searches.
         // Initialize filters to handle literals, '?' (which results in null here after model building), or '*'.
-        String governorFilterLower = (condition.governor() != null && !condition.governor().startsWith("?"))
+        String governorFilterLower = (condition.governor() != null && !"*".equals(condition.governor()))
                                      ? condition.governor().toLowerCase() : null;
-        String relationFilterLower = (condition.relation() != null && !condition.relation().startsWith("?"))
+        String relationFilterLower = (condition.relation() != null && !"*".equals(condition.relation()))
                                      ? condition.relation().toLowerCase() : null;
-        String dependentFilterLower = (condition.dependent() != null && !condition.dependent().startsWith("?"))
+        String dependentFilterLower = (condition.dependent() != null && !"*".equals(condition.dependent()))
                                       ? condition.dependent().toLowerCase() : null;
 
         logger.debug("Executing variable search for dependency relations with gov filter: '{}', rel filter: '{}', dep filter: '{}', binding to var: {}",
@@ -240,7 +240,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     }
 
                     String valueToBind = String.join(":", currentGovernor, currentRelation, currentDependent);
-                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context);
+                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context, requirements);
 
                     if (positions.isEmpty()) {
                         iterator.next();

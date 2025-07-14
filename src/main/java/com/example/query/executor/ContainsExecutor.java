@@ -207,7 +207,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                 }
 
                 // Deserialize the value to PositionListSoA
-                PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context);
+                PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context, requirements);
 
                 // Always reconstruct value for human readability if it contained delimiters
                 String actualValue = reconstructValue(key, DELIMITER);
@@ -307,7 +307,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             if (rawBlobOptional.isPresent()) {
                 try {
                     byte[] rawBlob = rawBlobOptional.get();
-                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context);
+                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
 
                     if (positions.isEmpty()) {
                         logger.debug("No positions for pattern '{}' after context filtering.", pattern);
