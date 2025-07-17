@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ArrayBlockingQueue;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -375,7 +377,8 @@ public class Annotations {
             }
 
             final int FETCH_CHUNK_SIZE = batchSize * 10;
-            int currentFetchStartId = startDocumentId;
+            int currentFetchStartId = startDocumentId; // retained for logging but not used in OFFSET-based fetch
+            long currentOffset = 0;
             int totalProcessedInThisRun = 0;
             int totalScheduledInThisRun = 0;
 
@@ -412,7 +415,59 @@ public class Annotations {
                 .setUpdateIntervalMillis(200)
                 .showSpeed();
 
-            try (ProgressBar pb = pbb.build()) {
+            ProgressBar pb = pbb.build();
+
+            // --- Result queue and writer thread setup ---
+            final int COMMIT_BATCH_SIZE = batchSize * 4; // commit less often than progress steps
+            final BlockingQueue<AnnotationResult> resultQueue = new ArrayBlockingQueue<>(COMMIT_BATCH_SIZE * 4);
+
+            final AnnotationResult POISON_PILL = new AnnotationResult(null, null);
+
+            Thread writerThread = new Thread(() -> {
+                try (Connection writeConn = DriverManager.getConnection(url)) {
+                    writeConn.setAutoCommit(false);
+                    createTables(writeConn, false);
+
+                    java.util.List<AnnotationResult> buffer = new java.util.ArrayList<>();
+
+                    while (true) {
+                        AnnotationResult res;
+                        try {
+                            res = resultQueue.take();
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+
+                        if (res == POISON_PILL) {
+                            // Flush remaining
+                            for (AnnotationResult r : buffer) {
+                                insertData(writeConn, r.annotations, r.dependencies);
+                            }
+                            if (!buffer.isEmpty()) {
+                                writeConn.commit();
+                            }
+                            break;
+                        }
+
+                        buffer.add(res);
+                        pb.step(); // advance progress bar immediately upon receiving a result
+                        if (buffer.size() >= COMMIT_BATCH_SIZE) {
+                            for (AnnotationResult r : buffer) {
+                                insertData(writeConn, r.annotations, r.dependencies);
+                            }
+                            writeConn.commit();
+                            buffer.clear();
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.error("Writer thread encountered error", e);
+                }
+            }, "Annotations-Writer");
+
+            writerThread.start();
+
+            try {
                 while (true) {
                     int documentsToFetchThisChunk = FETCH_CHUNK_SIZE;
                     if (limit != null) {
@@ -422,12 +477,13 @@ public class Annotations {
                     }
                     if (documentsToFetchThisChunk <= 0 && limit !=null) break; // Optimization if limit dictates 0 to fetch
 
-                    String chunkQuery = queryBase + " LIMIT ?";
+                    String chunkQuery = queryBase + " LIMIT ? OFFSET ?";
                     List<DocumentData> documentsChunk = new ArrayList<>();
 
                     try (PreparedStatement chunkStmt = conn.prepareStatement(chunkQuery)) {
-                        chunkStmt.setInt(1, currentFetchStartId);
+                        chunkStmt.setInt(1, startDocumentId);
                         chunkStmt.setInt(2, documentsToFetchThisChunk);
+                        chunkStmt.setLong(3, currentOffset);
 
                         try (ResultSet rs = chunkStmt.executeQuery()) {
                             while (rs.next()) {
@@ -443,9 +499,7 @@ public class Annotations {
                         logger.debug("No more documents found starting from document_id {}. Processing complete for this run.", currentFetchStartId);
                         break;
                     }
-                    if (!documentsChunk.isEmpty()) {
-                        currentFetchStartId = documentsChunk.get(documentsChunk.size() -1).documentId + 1;
-                    }
+                    currentOffset += documentsChunk.size();
 
 
                     logger.trace("Fetched {} documents in chunk starting from document_id {}", documentsChunk.size(), documentsChunk.get(0).documentId);
@@ -487,10 +541,13 @@ public class Annotations {
                             }
 
                             for (AnnotationResult result : batchResults) {
-                                insertData(conn, result.annotations, result.dependencies);
-                                committedAnnotationsInBatch++;
+                                try {
+                                    resultQueue.put(result); // Put results into the queue
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                    logger.error("Interrupted while enqueuing annotation result", ie);
+                                }
                                 totalProcessedInThisRun++;
-                                pb.step();
                             }
 
                             if (committedAnnotationsInBatch > 0) {
@@ -531,10 +588,13 @@ public class Annotations {
                         }
 
                         for (AnnotationResult result : batchResults) {
-                            insertData(conn, result.annotations, result.dependencies);
-                            committedAnnotationsInBatch++;
+                            try {
+                                resultQueue.put(result); // Put results into the queue
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                logger.error("Interrupted while enqueuing annotation result", ie);
+                            }
                             totalProcessedInThisRun++;
-                            pb.step();
                         }
 
                         if (committedAnnotationsInBatch > 0) {
@@ -566,6 +626,19 @@ public class Annotations {
                     executor.shutdownNow();
                     Thread.currentThread().interrupt();
                 }
+                // Signal writer thread to stop
+                try {
+                    resultQueue.put(POISON_PILL);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    logger.error("Interrupted while sending poison pill to writer thread", ie);
+                }
+                try {
+                    writerThread.join();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                pb.close();
             }
         }
     }
