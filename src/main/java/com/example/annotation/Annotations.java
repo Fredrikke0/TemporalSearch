@@ -379,24 +379,33 @@ public class Annotations {
             int totalProcessedInThisRun = 0;
             int totalScheduledInThisRun = 0;
 
-            int totalUserThreads = threads;
-            int numCoreNLPInternalThreads;
-            int numExecutorThreads;
+            final int totalUserThreads = threads; // total thread budget provided by user
+            final int INTERNAL_THREADS_PER_PIPELINE = 3; // configurable constant; each pipeline uses this many internal threads
 
-            if (totalUserThreads <= 1) {
-                numCoreNLPInternalThreads = 1;
+            int numExecutorThreads;
+            int numCoreNLPInternalThreads;
+
+            // Ensure the combined threads (1 outer + internal) per worker do not exceed the total budget.
+            int threadsPerWorker = INTERNAL_THREADS_PER_PIPELINE + 1; // 1 executor thread + internal threads
+
+            if (totalUserThreads < threadsPerWorker) {
+                // Not enough threads to allocate full worker; fall back to single-threaded executor and minimal internal threads.
                 numExecutorThreads = 1;
+                numCoreNLPInternalThreads = Math.max(1, totalUserThreads - 1);
             } else {
-                numExecutorThreads = Math.max(1, (int) Math.ceil(totalUserThreads * 0.8));
-                numCoreNLPInternalThreads = Math.max(1, totalUserThreads - numExecutorThreads);
-                if (numCoreNLPInternalThreads == 0) {
-                    numCoreNLPInternalThreads = 1;
-                    numExecutorThreads = Math.max(1, totalUserThreads - 1);
-                }
+                numExecutorThreads = totalUserThreads / threadsPerWorker;
+                if (numExecutorThreads == 0) numExecutorThreads = 1; // safety
+                numCoreNLPInternalThreads = INTERNAL_THREADS_PER_PIPELINE;
             }
 
-            StanfordCoreNLP pipeline = createCoreNLPPipeline(numCoreNLPInternalThreads);
-            logger.debug("CoreNLP pipeline initialized for processing with {} internal threads.", numCoreNLPInternalThreads);
+            logger.debug("Thread allocation: totalUserThreads={}, executorThreads={}, internalThreadsPerPipeline={}, totalThreadsUsed={} (<= budget)",
+                    totalUserThreads, numExecutorThreads, numCoreNLPInternalThreads,
+                    numExecutorThreads * (numCoreNLPInternalThreads + 1));
+            final int threadsPerPipeline = numCoreNLPInternalThreads; // copy for lambda (effectively final)
+            // Each executor thread gets its own pipeline instance, created lazily on first access.
+            final ThreadLocal<StanfordCoreNLP> pipelineThreadLocal = ThreadLocal.withInitial(() ->
+                    createCoreNLPPipeline(threadsPerPipeline));
+            logger.debug("ThreadLocal CoreNLP pipelines initialized; each worker will lazily create its own instance with {} internal threads.", threadsPerPipeline);
             logger.debug("ExecutorService configured for {} parallel document tasks.", numExecutorThreads);
 
             ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(numExecutorThreads);
@@ -452,6 +461,7 @@ public class Annotations {
 
                     for (DocumentData doc : documentsChunk) {
                         java.util.concurrent.Future<AnnotationResult> future = executor.submit(() -> {
+                            StanfordCoreNLP pipeline = pipelineThreadLocal.get();
                             AnnotationResult result = processTextWithCoreNLP(pipeline, doc.text, doc.documentId, doc.timestamp);
                             return result;
                         });
