@@ -406,7 +406,6 @@ public class Annotations {
             List<java.util.concurrent.Future<AnnotationResult>> futures = new ArrayList<>();
             List<Integer> docIdsInFlight = new ArrayList<>();
             List<AnnotationResult> batchResults = new ArrayList<>();
-            int committedAnnotationsInBatch = 0;
 
             ProgressBarBuilder pbb = new ProgressBarBuilder()
                 .setTaskName("Annotating")
@@ -442,7 +441,7 @@ public class Annotations {
                         if (res == POISON_PILL) {
                             // Flush remaining
                             for (AnnotationResult r : buffer) {
-                                insertData(writeConn, r.annotations, r.dependencies);
+                                insertData(writeConn, r.annotations(), r.dependencies());
                             }
                             if (!buffer.isEmpty()) {
                                 writeConn.commit();
@@ -454,7 +453,7 @@ public class Annotations {
                         pb.step(); // advance progress bar immediately upon receiving a result
                         if (buffer.size() >= COMMIT_BATCH_SIZE) {
                             for (AnnotationResult r : buffer) {
-                                insertData(writeConn, r.annotations, r.dependencies);
+                                insertData(writeConn, r.annotations(), r.dependencies());
                             }
                             writeConn.commit();
                             buffer.clear();
@@ -502,15 +501,15 @@ public class Annotations {
                     currentOffset += documentsChunk.size();
 
 
-                    logger.trace("Fetched {} documents in chunk starting from document_id {}", documentsChunk.size(), documentsChunk.get(0).documentId);
+                    logger.debug("Fetched {} documents in chunk starting from document_id {}", documentsChunk.size(), documentsChunk.get(0).documentId());
 
                     for (DocumentData doc : documentsChunk) {
                         java.util.concurrent.Future<AnnotationResult> future = executor.submit(() -> {
-                            AnnotationResult result = processTextWithCoreNLP(pipeline, doc.text, doc.documentId, doc.timestamp);
+                            AnnotationResult result = processTextWithCoreNLP(pipeline, doc.text(), doc.documentId(), doc.timestamp());
                             return result;
                         });
                         futures.add(future);
-                        docIdsInFlight.add(doc.documentId);
+                        docIdsInFlight.add(doc.documentId());
 
                         // Track how many documents we've scheduled to avoid over-scheduling beyond the limit
                         if (limit != null) {
@@ -540,20 +539,14 @@ public class Annotations {
                                 }
                             }
 
-                            for (AnnotationResult result : batchResults) {
+                            for (var result : batchResults) {
                                 try {
-                                    resultQueue.put(result); // Put results into the queue
+                                    resultQueue.put(result);
                                 } catch (InterruptedException ie) {
                                     Thread.currentThread().interrupt();
                                     logger.error("Interrupted while enqueuing annotation result", ie);
                                 }
                                 totalProcessedInThisRun++;
-                            }
-
-                            if (committedAnnotationsInBatch > 0) {
-                                conn.commit();
-                                logger.trace("Committed batch of {} annotation results (for {} documents).", committedAnnotationsInBatch, batchResults.size());
-                                committedAnnotationsInBatch = 0;
                             }
 
                             batchResults.clear();
@@ -587,20 +580,14 @@ public class Annotations {
                             }
                         }
 
-                        for (AnnotationResult result : batchResults) {
+                        for (var result : batchResults) {
                             try {
-                                resultQueue.put(result); // Put results into the queue
+                                resultQueue.put(result);
                             } catch (InterruptedException ie) {
                                 Thread.currentThread().interrupt();
                                 logger.error("Interrupted while enqueuing annotation result", ie);
                             }
                             totalProcessedInThisRun++;
-                        }
-
-                        if (committedAnnotationsInBatch > 0) {
-                            conn.commit();
-                            logger.trace("Committed remaining batch of {} annotation results (for {} documents).", committedAnnotationsInBatch, batchResults.size());
-                            committedAnnotationsInBatch = 0;
                         }
 
                         batchResults.clear();
@@ -643,15 +630,8 @@ public class Annotations {
         }
     }
 
-    private static class AnnotationResult {
-        final List<Map<String, Object>> annotations;
-        final List<Map<String, Object>> dependencies;
-
-        AnnotationResult(List<Map<String, Object>> annotations, List<Map<String, Object>> dependencies) {
-            this.annotations = annotations;
-            this.dependencies = dependencies;
-        }
-    }
+    private static record AnnotationResult(List<Map<String, Object>> annotations,
+                                          List<Map<String, Object>> dependencies) {}
 
     private static void createTables(Connection conn, boolean overwrite) throws SQLException {
         try (Statement stmt = conn.createStatement()) {
@@ -801,7 +781,6 @@ public class Annotations {
                         continue;
                     }
 
-                    // Ensure both source and target tokens fully fall within the allowed character span
                     if (source.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH &&
                         target.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
 
@@ -877,16 +856,6 @@ public class Annotations {
         }
     }
 
-    private static class DocumentData {
-        final int documentId;
-        final String text;
-        final String timestamp;
-
-        DocumentData(int documentId, String text, String timestamp) {
-            this.documentId = documentId;
-            this.text = text;
-            this.timestamp = timestamp;
-        }
-    }
+    private static record DocumentData(int documentId, String text, String timestamp) {}
 }
 
