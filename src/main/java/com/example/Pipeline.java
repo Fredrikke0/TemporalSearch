@@ -97,7 +97,7 @@ public class Pipeline {
 
         var annotateGroup = parser.addArgumentGroup("Annotation stage arguments (used in 'annotate' or 'all' stage)");
         annotateGroup.addArgument("-b", "--batch-size")
-                .setDefault(300)
+                .setDefault(800)
                 .type(Integer.class)
                 .help("Number of documents to commit per transaction during annotation");
 

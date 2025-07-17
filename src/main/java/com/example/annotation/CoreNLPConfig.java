@@ -62,8 +62,8 @@ public class CoreNLPConfig {
 
         // Core annotators - only what we actually use in Annotations.java
         String annotators = USE_PARSE_ANNOTATOR ?
-            "tokenize,ssplit,pos,lemma,ner,parse" :
-            "tokenize,ssplit,pos,lemma,ner,depparse";
+            "tokenize,ssplit,pos,ner,parse" :
+            "tokenize,ssplit,pos,ner,depparse";
         props.setProperty("annotators", annotators);
         props.setProperty("threads", String.valueOf(threads));
 
