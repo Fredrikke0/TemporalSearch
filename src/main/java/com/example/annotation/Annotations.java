@@ -13,8 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ArrayBlockingQueue;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -280,6 +278,16 @@ public class Annotations {
     private static void performAnnotation(Path projectDbPath, int startDocumentId, int threads, int batchSize, Integer limit, boolean force) throws Exception {
         String url = "jdbc:sqlite:" + projectDbPath;
         try (Connection conn = DriverManager.getConnection(url)) {
+            // Configure SQLite for concurrent read/write and better throughput.
+            // IMPORTANT: Set journal_mode while NOT in an explicit transaction.
+            try (Statement pragma = conn.createStatement()) {
+                pragma.execute("PRAGMA journal_mode=WAL");
+                pragma.execute("PRAGMA synchronous=NORMAL");
+                pragma.execute("PRAGMA busy_timeout=60000");
+                pragma.execute("PRAGMA temp_store=MEMORY");
+                // Modest cache to avoid huge memory footprint on shared servers
+                pragma.execute("PRAGMA cache_size=-200000"); // ~200MB
+            }
             conn.setAutoCommit(false);
             createTables(conn, false);
 
@@ -316,6 +324,9 @@ public class Annotations {
                     throw e;
                 }
             }
+
+            // Keep transaction control for explicit batching and commits
+            conn.setAutoCommit(false);
 
             long estimatedDocsInScope = 0;
             String maxIdSql = "SELECT COALESCE(MAX(document_id), 0) FROM documents WHERE document_id >= ?";
@@ -377,8 +388,7 @@ public class Annotations {
             }
 
             final int FETCH_CHUNK_SIZE = batchSize * 10;
-            int currentFetchStartId = startDocumentId; // retained for logging but not used in OFFSET-based fetch
-            long currentOffset = 0;
+            int currentFetchStartId = startDocumentId;
             int totalProcessedInThisRun = 0;
             int totalScheduledInThisRun = 0;
 
@@ -416,57 +426,8 @@ public class Annotations {
 
             ProgressBar pb = pbb.build();
 
-            // --- Result queue and writer thread setup ---
-            final int COMMIT_BATCH_SIZE = batchSize * 4; // commit less often than progress steps
-            final BlockingQueue<AnnotationResult> resultQueue = new ArrayBlockingQueue<>(COMMIT_BATCH_SIZE * 4);
-
-            final AnnotationResult POISON_PILL = new AnnotationResult(null, null);
-
-            Thread writerThread = new Thread(() -> {
-                try (Connection writeConn = DriverManager.getConnection(url)) {
-                    writeConn.setAutoCommit(false);
-                    createTables(writeConn, false);
-
-                    java.util.List<AnnotationResult> buffer = new java.util.ArrayList<>();
-
-                    while (true) {
-                        AnnotationResult res;
-                        try {
-                            res = resultQueue.take();
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-
-                        if (res == POISON_PILL) {
-                            // Flush remaining
-                            for (AnnotationResult r : buffer) {
-                                insertData(writeConn, r.annotations(), r.dependencies());
-                            }
-                            if (!buffer.isEmpty()) {
-                                writeConn.commit();
-                            }
-                            break;
-                        }
-
-                        buffer.add(res);
-                        pb.step(); // advance progress bar immediately upon receiving a result
-                        if (buffer.size() >= COMMIT_BATCH_SIZE) {
-                            for (AnnotationResult r : buffer) {
-                                insertData(writeConn, r.annotations(), r.dependencies());
-                            }
-                            writeConn.commit();
-                            buffer.clear();
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.error("Writer thread encountered error", e);
-                }
-            }, "Annotations-Writer");
-
-            writerThread.start();
-
             try {
+                int committedAnnotationsInBatch = 0;
                 while (true) {
                     int documentsToFetchThisChunk = FETCH_CHUNK_SIZE;
                     if (limit != null) {
@@ -476,13 +437,12 @@ public class Annotations {
                     }
                     if (documentsToFetchThisChunk <= 0 && limit !=null) break; // Optimization if limit dictates 0 to fetch
 
-                    String chunkQuery = queryBase + " LIMIT ? OFFSET ?";
+                    String chunkQuery = queryBase + " LIMIT ?";
                     List<DocumentData> documentsChunk = new ArrayList<>();
 
                     try (PreparedStatement chunkStmt = conn.prepareStatement(chunkQuery)) {
-                        chunkStmt.setInt(1, startDocumentId);
+                        chunkStmt.setInt(1, currentFetchStartId);
                         chunkStmt.setInt(2, documentsToFetchThisChunk);
-                        chunkStmt.setLong(3, currentOffset);
 
                         try (ResultSet rs = chunkStmt.executeQuery()) {
                             while (rs.next()) {
@@ -498,7 +458,9 @@ public class Annotations {
                         logger.debug("No more documents found starting from document_id {}. Processing complete for this run.", currentFetchStartId);
                         break;
                     }
-                    currentOffset += documentsChunk.size();
+                    if (!documentsChunk.isEmpty()) {
+                        currentFetchStartId = documentsChunk.get(documentsChunk.size() - 1).documentId() + 1;
+                    }
 
 
                     logger.debug("Fetched {} documents in chunk starting from document_id {}", documentsChunk.size(), documentsChunk.get(0).documentId());
@@ -517,8 +479,6 @@ public class Annotations {
                             if (totalScheduledInThisRun >= limit) {
                                 // We have scheduled up to the limit; no need to add more documents in this chunk
                                 // Break out of the inner loop so we don't schedule extra tasks
-                                int remainingDocsInChunk = documentsChunk.size() - (docIdsInFlight.size());
-                                // remainingDocsInChunk is unused but kept for clarity – we simply stop scheduling further docs in this chunk.
                                 break;
                             }
                         }
@@ -540,15 +500,15 @@ public class Annotations {
                             }
 
                             for (var result : batchResults) {
-                                try {
-                                    resultQueue.put(result);
-                                } catch (InterruptedException ie) {
-                                    Thread.currentThread().interrupt();
-                                    logger.error("Interrupted while enqueuing annotation result", ie);
-                                }
+                                insertData(conn, result.annotations(), result.dependencies());
+                                committedAnnotationsInBatch++;
                                 totalProcessedInThisRun++;
+                                pb.step();
                             }
-
+                            if (committedAnnotationsInBatch > 0) {
+                                conn.commit();
+                                committedAnnotationsInBatch = 0;
+                            }
                             batchResults.clear();
                             futures.clear();
                             docIdsInFlight.clear();
@@ -579,17 +539,16 @@ public class Annotations {
                                 logger.error("Error during annotation task execution for documentId=" + docId, e);
                             }
                         }
-
                         for (var result : batchResults) {
-                            try {
-                                resultQueue.put(result);
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                                logger.error("Interrupted while enqueuing annotation result", ie);
-                            }
+                            insertData(conn, result.annotations(), result.dependencies());
+                            committedAnnotationsInBatch++;
                             totalProcessedInThisRun++;
+                            pb.step();
                         }
-
+                        if (committedAnnotationsInBatch > 0) {
+                            conn.commit();
+                            committedAnnotationsInBatch = 0;
+                        }
                         batchResults.clear();
                         futures.clear();
                         docIdsInFlight.clear();
@@ -611,18 +570,6 @@ public class Annotations {
                     }
                 } catch (InterruptedException e) {
                     executor.shutdownNow();
-                    Thread.currentThread().interrupt();
-                }
-                // Signal writer thread to stop
-                try {
-                    resultQueue.put(POISON_PILL);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    logger.error("Interrupted while sending poison pill to writer thread", ie);
-                }
-                try {
-                    writerThread.join();
-                } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
                 pb.close();
