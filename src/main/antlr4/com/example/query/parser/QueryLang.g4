@@ -106,7 +106,7 @@ STRING
     : '"' ( ~["] | '""' )+ '"'   // Non-empty double-quoted strings
     | '\'' ( ~['] | '\'\'' )+ '\'' // Non-empty single-quoted strings
     ;
-INTEGER_LITERAL: [0-9]+; // Renamed: For numeric literals like 123
+INTEGER_LITERAL: [0-9]+; // For numeric literals like 123
 
 // Whitespace and Comments (Skipped)
 WS: [ \t\r\n]+ -> skip;
@@ -264,9 +264,6 @@ entityType // Should align with VALID_NER_TYPES in QuerySemanticValidator (case-
     | ORDINAL
     | PERCENT
     | SET
-    | WILDCARD   // Special case handled in validator
-    | STRING     // Allow quoted string for unknown/future types? Validation needed.
-    | IDENTIFIER // Allow unquoted identifier? Validation needed.
     ;
 
 containsExpression

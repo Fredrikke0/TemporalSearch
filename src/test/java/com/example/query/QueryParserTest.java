@@ -57,7 +57,7 @@ class QueryParserTest {
     @Test
     @DisplayName("Parse query with CONTAINS condition")
     void parseContainsCondition() throws QueryParseException {
-        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE CONTAINS(\"artificial intelligence\")";
+        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE CONTAINS('artificial intelligence')";
         Query query = parser.parse(queryStr);
 
         assertEquals("wikipedia", query.source());
@@ -66,7 +66,6 @@ class QueryParserTest {
         Condition condition = query.conditions().get(0);
         assertTrue(condition instanceof Contains);
 
-        // Check the terms list instead of the 'value' field
         List<String> expectedTerms = List.of("artificial", "intelligence");
         assertEquals(expectedTerms, ((Contains) condition).terms());
     }
@@ -82,18 +81,6 @@ class QueryParserTest {
 
         Ner condition = (Ner) query.conditions().get(0);
         assertEquals("PERSON", condition.entityType());
-        assertNull(condition.qualifiedVariableName());
-        assertFalse(condition.isVariable());
-    }
-
-    @Test
-    @DisplayName("Parse query with NER wildcard type")
-    void parseNerWildcardType() throws QueryParseException {
-        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE NER(*)";
-        Query query = parser.parse(queryStr);
-
-        Ner condition = (Ner) query.conditions().get(0);
-        assertEquals("*", condition.entityType());
         assertNull(condition.qualifiedVariableName());
         assertFalse(condition.isVariable());
     }
@@ -165,7 +152,7 @@ class QueryParserTest {
     @Test
     @DisplayName("Parse query with dependency condition")
     void parseDependencyCondition() throws QueryParseException {
-        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE DEPENDS(\"cat\", \"nsubj\", \"eats\")";
+        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE DEPENDS('cat', 'nsubj', 'eats')";
         Query query = parser.parse(queryStr);
 
         assertTrue(query.conditions().get(0) instanceof Dependency);
@@ -180,7 +167,7 @@ class QueryParserTest {
     @DisplayName("Parse query with multiple conditions using AND")
     void parseMultipleConditions() throws QueryParseException {
         String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia " +
-                         "WHERE CONTAINS(\"physics\") " +
+                         "WHERE CONTAINS('physics') " +
                          "AND NER(PERSON)";
         Query query = parser.parse(queryStr);
 
@@ -218,8 +205,8 @@ class QueryParserTest {
     @DisplayName("Parse complex query with all features")
     void parseComplexQuery() throws QueryParseException {
         String queryStr = "SELECT t1.TITLE, t1.publication FROM wikipedia ALIAS t1 WHERE " +
-                          "CONTAINS(\"theory of relativity\") " +
-                          "AND NER(\"PERSON\") BIND scientist " +
+                          "CONTAINS('theory of relativity') " +
+                          "AND NER(PERSON) BIND scientist " +
                           "AND DATE(< 2000) BIND publication " +
                           "ORDER BY t1.TITLE " +
                           "LIMIT 5";
@@ -270,7 +257,7 @@ class QueryParserTest {
     @DisplayName("Parse query with nested conditions")
     void parseNestedConditions() throws QueryParseException {
         String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia " +
-                         "WHERE (CONTAINS(\"physics\") AND NER(PERSON))";
+                         "WHERE (CONTAINS('physics') AND NER(PERSON))";
         Query query = parser.parse(queryStr);
 
         assertEquals(1, query.conditions().size());
@@ -285,7 +272,7 @@ class QueryParserTest {
     @DisplayName("Parse query with subquery - Requires JOIN")
     void parseSubquery() throws QueryParseException {
         String queryStr = "SELECT t1.TITLE FROM wikipedia AS t1 " +
-                         "JOIN (SELECT docId FROM corpus WHERE NER(\"DATE\") BIND date) ALIAS t2 " +
+                         "JOIN (SELECT docId FROM corpus WHERE NER(DATE) BIND date) ALIAS t2 " +
                          "ON t1.docId CONTAINS t2.docId";
 
         // Expecting QueryParseException because the grammar doesn't support FROM alias or JOIN column comparison yet
@@ -317,7 +304,7 @@ class QueryParserTest {
     @Test
     @DisplayName("Parse query with OR condition")
     void parseOrCondition() throws QueryParseException {
-        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE CONTAINS(\"physics\") OR NER(PERSON)";
+        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE CONTAINS('physics') OR NER(PERSON)";
         Query query = parser.parse(queryStr);
 
         assertEquals(1, query.conditions().size());
@@ -342,7 +329,7 @@ class QueryParserTest {
     @Test
     @DisplayName("Parse query with NOT condition")
     void parseNotCondition() throws QueryParseException {
-        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE NOT CONTAINS(\"irrelevant\")";
+        String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE NOT CONTAINS('irrelevant')";
         Query query = parser.parse(queryStr);
 
         assertEquals(1, query.conditions().size());
@@ -359,7 +346,7 @@ class QueryParserTest {
     @DisplayName("Parse query with mixed logical operators")
     void parseMixedLogicalOperators() throws QueryParseException {
         String queryStr = "SELECT COUNT(DOCUMENTS) FROM wikipedia ALIAS t1 " +
-                         "WHERE (CONTAINS(\"physics\") OR CONTAINS(\"chemistry\")) " +
+                         "WHERE (CONTAINS('physics') OR CONTAINS('chemistry')) " +
                          "AND NER(PERSON) BIND scientist";
         Query query = parser.parse(queryStr);
 
@@ -403,8 +390,8 @@ class QueryParserTest {
         "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE",  // Incomplete WHERE clause
         "SELECT COUNT(DOCUMENTS) FROM wikipedia ORDER",  // Incomplete ORDER BY
         "SELECT COUNT(DOCUMENTS) FROM wikipedia LIMIT",  // Missing limit value
-        "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE CONTAINS(\"physics\") NER(\"PERSON\")",  // Missing AND
-        "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE DATE(?date) < abc"  // Invalid date format
+        "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE CONTAINS('physics') NER(PERSON)",  // Missing AND
+        "SELECT COUNT(DOCUMENTS) FROM wikipedia WHERE DATE(2000) < abc"  // Invalid date format
     })
     @DisplayName("Parse invalid queries should throw exception")
     void parseInvalidQueriesShouldThrowException(String queryStr) {
@@ -415,15 +402,12 @@ class QueryParserTest {
     @DisplayName("Parse query with subquery and join")
     void testSubqueryWithJoin() throws QueryParseException {
         String queryStr = "SELECT t1.TITLE FROM wikipedia ALIAS t1 " +
-                         "JOIN (SELECT DOCUMENT_ID FROM archive WHERE CONTAINS(\"report\")) ALIAS sub " +
+                         "JOIN (SELECT DOCUMENT_ID FROM archive WHERE CONTAINS('report')) ALIAS sub " +
                          "ON t1.DOCUMENT_ID CONTAINS sub.DOCUMENT_ID";
 
-        // Assuming Stage 3 fully implemented JOIN ON qualified.qualified
-        // If JOIN ON still expects variable names, this needs adjustment.
         Query query = assertDoesNotThrow(() -> parser.parse(queryStr),
             "Parsing should succeed if JOIN ON supports qualified columns");
 
-        // Basic checks after parsing
         assertEquals("wikipedia", query.source());
         assertEquals("t1", query.mainAlias().orElse(null));
         assertEquals(1, query.joinSteps().size());
@@ -445,15 +429,11 @@ class QueryParserTest {
     @Test
     @DisplayName("Parse query selecting qualified identifier - Requires FROM alias")
     void parseSelectQualifiedIdentifier() throws QueryParseException {
-        String queryStr = "SELECT t1.scientist FROM wikipedia ALIAS t1 WHERE NER(\"PERSON\") BIND scientist";
+        String queryStr = "SELECT t1.scientist FROM wikipedia ALIAS t1 WHERE NER(PERSON) BIND scientist";
 
-        // Grammar now supports FROM...ALIAS, so parsing should succeed.
-        // Remove assertThrows. Full validation of qualified identifiers is in Stage 3.
         Query query = assertDoesNotThrow(() -> parser.parse(queryStr),
             "Parsing should succeed now that FROM...ALIAS is supported grammatically");
 
-        // Optional: Add basic checks that reflect successful parsing,
-        // keeping in mind Stage 3 will handle deeper validation.
         assertEquals("wikipedia", query.source());
         assertTrue(query.mainAlias().isPresent(), "Main alias should be present");
         assertEquals("t1", query.mainAlias().get(), "Main alias should be 't1'");
@@ -463,13 +443,6 @@ class QueryParserTest {
         assertEquals(1, query.conditions().size());
         assertTrue(query.conditions().get(0) instanceof Ner);
 
-        // Commented out checks that rely on Stage 3 implementation details
-        /*
-        assertEquals("t1", query.mainAlias().orElse(null)); // Check alias
-        SelectColumn column = query.selectColumns().get(0);
-        assertTrue(column instanceof VariableColumn); // Assuming VariableColumn handles qualified names for now
-        assertEquals("scientist", ((VariableColumn) column).getColumnName());
-        */
     }
 
     // --- GROUP BY Parsing Tests ---

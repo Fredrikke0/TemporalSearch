@@ -638,15 +638,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     @Override
     public Object visitEntityType(QueryLangParser.EntityTypeContext ctx) {
-        if (ctx.WILDCARD() != null) {
-            return "*";
-        }
-        if (ctx.STRING() != null) {
-            return unquote(ctx.STRING().getText());
-        }
-        if (ctx.IDENTIFIER() != null) {
-            return ctx.IDENTIFIER().getText();
-        }
         // Handle NER type tokens
         if (ctx.PERSON() != null) return "PERSON";
         if (ctx.LOCATION() != null) return "LOCATION";

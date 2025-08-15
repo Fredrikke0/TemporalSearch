@@ -51,7 +51,7 @@ public class QuerySemanticValidator {
     // Define the set of valid NER entity types (uppercase)
     private static final Set<String> VALID_NER_TYPES = Set.of(
         "PERSON", "ORGANIZATION", "LOCATION", "DATE", "TIME",
-        "DURATION", "MONEY", "NUMBER", "ORDINAL", "PERCENT", "SET", "*"
+        "DURATION", "MONEY", "NUMBER", "ORDINAL", "PERCENT", "SET"
     );
 
     // Helper method to validate individual terms for disallowed wildcard usage
@@ -115,7 +115,7 @@ public class QuerySemanticValidator {
         for (Condition condition : conditions) {
             if (condition instanceof Ner nerCondition) {
                 String entityType = nerCondition.entityType();
-                String comparisonType = "*".equals(entityType) ? "*" : entityType.toUpperCase();
+                String comparisonType = entityType.toUpperCase();
                 if (!VALID_NER_TYPES.contains(comparisonType)) {
                     String validTypesString = String.join(", ", VALID_NER_TYPES);
                     throw new QueryParseException(String.format(

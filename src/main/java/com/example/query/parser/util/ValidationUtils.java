@@ -39,26 +39,6 @@ public class ValidationUtils {
         }
     }
 
-    /**
-     * Validates that a string represents a valid entity type.
-     *
-     * @param entityType the entity type to validate
-     * @throws IllegalArgumentException if the entity type is invalid
-     */
-    public static void validateEntityType(String entityType) {
-        // Add validation logic for supported entity types
-        if (entityType == null || entityType.trim().isEmpty()) {
-            throw new IllegalArgumentException("Entity type cannot be null or empty");
-        }
-
-        // Validate against known entity types (extend as needed)
-        switch (entityType.toUpperCase()) {
-            case "PERSON", "LOCATION", "ORGANIZATION", "DATE", "TIME", "MONEY", "PERCENT" -> {
-                // Valid entity types
-            }
-            default -> throw new IllegalArgumentException("Invalid entity type: " + entityType);
-        }
-    }
 
     /**
      * Validates that a comparison operator is supported.
