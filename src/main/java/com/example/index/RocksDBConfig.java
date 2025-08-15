@@ -19,7 +19,6 @@ import org.slf4j.LoggerFactory;
 public class RocksDBConfig {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBConfig.class);
 
-    // Load RocksDB native library.
     static {
         RocksDB.loadLibrary();
     }
@@ -29,7 +28,6 @@ public class RocksDBConfig {
     public static final int BLOOM_FILTER_BITS_PER_KEY = 10;
     public static final boolean BLOOM_FILTER_USE_BLOCK_BASED_BUILDER = false;
 
-    // Constants for DB Open optimizations
     private static final long MAX_MANIFEST_FILE_SIZE = 64L * 1024 * 1024; // 64MB
     private static final long MAX_TOTAL_WAL_SIZE = 512L * 1024 * 1024; // 512MB
 
@@ -80,11 +78,11 @@ public class RocksDBConfig {
                    BLOCK_CACHE_SIZE / (1024 * 1024 * 1024),
                    options.compressionType(),
                    options.statistics() != null,
-                   true, // Corresponds to setSkipStatsUpdateOnDbOpen(true)
-                   Runtime.getRuntime().availableProcessors(), // Corresponds to setMaxFileOpeningThreads
+                   true,
+                   Runtime.getRuntime().availableProcessors(),
                    MAX_MANIFEST_FILE_SIZE / (1024 * 1024),
                    MAX_TOTAL_WAL_SIZE / (1024 * 1024),
-                   true); // Corresponds to setSkipCheckingSstFileSizesOnDbOpen(true)
+                   true);
 
         return options;
     }

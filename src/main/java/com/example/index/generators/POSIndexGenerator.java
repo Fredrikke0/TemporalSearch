@@ -7,11 +7,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
@@ -31,8 +29,6 @@ import com.google.common.collect.ListMultimap;
  * Specific tokens (e.g., "apple") are mapped to integer IDs using a shared SynonymManager,
  * and these IDs are stored in PositionListSoA.synonymId.
  * Uses streaming processing and external sorting for efficient memory usage.
- *
- * This implementation is now RocksDB-based (see IndexGenerator).
  */
 public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(POSIndexGenerator.class);
@@ -141,15 +137,6 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // String countSql = "SELECT MAX(annotation_id) FROM annotations WHERE pos != ''";
-        // try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
-        //      ResultSet rs = stmt.executeQuery()) {
-        //     if (rs.next()) {
-        //         return rs.getLong(1);
-        //     }
-        // }
-        // return 0;
-        // Return 0 to indicate an indeterminate progress bar, as MAX(annotation_id) is not representative.
         return 0;
     }
 

@@ -16,15 +16,14 @@ import com.example.logging.ProgressTracker;
 /**
  * Utility class for compressing and decompressing temporary index files.
  * Uses GZIP compression to reduce disk space usage while maintaining reasonable
- * compression/decompression speed.
+ * compression/decompression speed. (Unused)
  */
 public class CompressionUtils {
     private static final Logger logger = LoggerFactory.getLogger(CompressionUtils.class);
-    private static final int BUFFER_SIZE = 8192; // 8KB buffer
+    private static final int BUFFER_SIZE = 8192;
     private static final ProgressTracker progress = new ProgressTracker();
 
     private CompressionUtils() {
-        // Utility class, prevent instantiation
     }
 
     /**
@@ -57,11 +56,12 @@ public class CompressionUtils {
         long endTime = System.currentTimeMillis();
 
         double compressionRatio = (double) originalSize / compressedSize;
-        logger.debug("Compressed {} ({} KB -> {} KB, {:.1f}x reduction) in {} ms",
+        String formattedCompressionRatio = String.format("%.1f", compressionRatio);
+        logger.debug("Compressed {} ({} KB -> {} KB, {}x reduction) in {} ms",
             sourcePath.getFileName(),
             originalSize / 1024,
             compressedSize / 1024,
-            compressionRatio,
+            formattedCompressionRatio,
             endTime - startTime);
 
         return compressionRatio;

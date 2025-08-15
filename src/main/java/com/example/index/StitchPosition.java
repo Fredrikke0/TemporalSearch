@@ -12,9 +12,6 @@ public class StitchPosition extends Position {
     private final int annotationBeginChar; // Begin char of the linked annotation
     private final int annotationEndChar;   // End char of the linked annotation
 
-    // Type identifier for serialization
-    public static final byte POSITION_TYPE = 1;
-
     public StitchPosition(
         int documentId,
         int sentenceId,

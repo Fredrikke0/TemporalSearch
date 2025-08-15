@@ -35,33 +35,6 @@ import com.google.common.collect.ListMultimap;
  * Extracts dates from the normalized_ner column where ner type is "DATE",
  * normalizes them to YYYYMMDD format, and stores their positions.
  * Uses streaming processing and external sorting for efficient memory usage.
- *
- * This implementation is now RocksDB-based (see IndexGenerator).
- *
- * <h2>Date Extraction and Indexing Process</h2>
- * <ol>
- *   <li>The NLP pipeline identifies date mentions in the text using Named Entity Recognition (NER)</li>
- *   <li>Date entities are normalized to YYYY-MM-DD format during NLP processing</li>
- *   <li>This index generator extracts those normalized dates and converts them to YYYYMMDD format for storage</li>
- *   <li>For each date mention, the document ID, sentence ID, and character position are recorded</li>
- * </ol>
- *
- * <h2>Relationship with DATE Operator in Queries</h2>
- * <p>When querying with the DATE operator (e.g., DATE(CONTAINS [2023, 2024])), the system will:
- * <ol>
- *   <li>Use the Nash index to quickly filter documents containing date mentions in the specified range</li>
- *   <li>When used with GRANULARITY SENTENCE, resolve the specific sentences that contain these date mentions</li>
- * </ol>
- * <p>Available predicates for DATE queries:
- * <ul>
- *   <li>CONTAINS: Returns documents where mentioned dates fall entirely within the query range</li>
- *   <li>INTERSECT: Returns documents with any date mention that overlaps the query range (more lenient)</li>
- *   <li>CONTAINED_BY: Returns documents where mentioned dates contain the entire query range</li>
- *   <li>BEFORE, AFTER, EQUAL: Compare with specific date values</li>
- * </ul>
- *
- * <p>For optimal results with date range searches spanning multiple years, use the INTERSECT predicate
- * rather than CONTAINS, as CONTAINS requires dates to be fully contained within the range.
  */
 public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(NerDateIndexGenerator.class);
@@ -105,8 +78,6 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String normalizedNer = rs.getString("normalized_ner");
-                    // Lenient parsing will be handled by normalizeDate and processBatch
-                    // No strict check here anymore, just ensure it's not null/empty before adding
                     if (normalizedNer != null && !normalizedNer.trim().isEmpty()) {
                         batch.add(new AnnotationEntry(
                             rs.getLong("annotation_id"),
@@ -117,7 +88,7 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
                             rs.getString("token"),
                             rs.getString("pos"),
                             rs.getString("ner"),
-                            normalizedNer // Pass the raw normalized_ner
+                            normalizedNer
                         ));
                     }
                 }
@@ -208,7 +179,6 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
             }
         }
 
-        // Check again for year 0000 after parsing attempts (e.g. if a lenient parser somehow allowed it)
         if (parsedDate.getYear() == 0) {
              logger.debug("Parsed date resulted in year 0000 for input '{}', which is invalid.", trimmedDate);
              return null;
@@ -224,7 +194,6 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // Return 0 to indicate an indeterminate progress bar, as MAX(annotation_id) is not representative.
         return 0;
     }
 }

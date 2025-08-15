@@ -88,9 +88,6 @@ public class SynonymManager implements AutoCloseable {
                     termToIdCache.put(term, id);
                     idToTermCache.put(id, term);
                 }
-                // "id" to term mapping is implicitly handled by the "term" to id entries
-                // and reconstructed if needed, or could be stored explicitly if preferred.
-                // For now, this covers the primary lookup direction for getId.
             }
         }
         logger.info("Loaded {} term-ID mappings from {}", termToIdCache.size(), dbPath);
@@ -130,14 +127,7 @@ public class SynonymManager implements AutoCloseable {
         byte[] termBytes = db.get(idKey);
         if (termBytes != null) {
             String term = new String(termBytes, StandardCharsets.UTF_8);
-            // Populate cache for future lookups
-            // Be cautious about concurrent modifications if other threads might be adding terms.
-            // For now, assume single-threaded or appropriate external synchronization for cache updates here.
             idToTermCache.put(id, term);
-            // We also need to ensure termToIdCache is consistent if this term was unknown.
-            // This scenario (ID exists, but term not in termToIdCache) implies an inconsistency
-            // or that loadAllMappings didn't cover all cases, which should be investigated.
-            // For safety, let's ensure termToIdCache is also updated if we fetch from DB.
             if (!termToIdCache.containsKey(term)) {
                  termToIdCache.put(term, id);
             }
