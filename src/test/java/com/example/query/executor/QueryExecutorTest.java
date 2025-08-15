@@ -27,8 +27,7 @@ import org.rocksdb.RocksIterator;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionList;
+import com.example.core.PositionListSoA;
 import com.example.index.util.SynonymManager; // Added
 import com.example.query.binding.ValueType;
 import com.example.query.index.IndexManager; // Added import for IndexManager
@@ -109,16 +108,16 @@ class QueryExecutorTest {
 
         // Mock unigram iterator to provide a universe for NOT tests
         // Let's define a universe of documents {1, 2, 3, 4}
-        PositionList posListDoc1 = new PositionList(); posListDoc1.add(new Position(1, 0, 0, 1));
-        PositionList posListDoc2 = new PositionList(); posListDoc2.add(new Position(2, 0, 0, 1));
-        PositionList posListDoc3 = new PositionList(); posListDoc3.add(new Position(3, 0, 0, 1));
-        PositionList posListDoc4 = new PositionList(); posListDoc4.add(new Position(4, 0, 0, 1));
+        PositionListSoA posListDoc1 = new PositionListSoA(); posListDoc1.add(1, 0, 0, 1);
+        PositionListSoA posListDoc2 = new PositionListSoA(); posListDoc2.add(2, 0, 0, 1);
+        PositionListSoA posListDoc3 = new PositionListSoA(); posListDoc3.add(3, 0, 0, 1);
+        PositionListSoA posListDoc4 = new PositionListSoA(); posListDoc4.add(4, 0, 0, 1);
 
         // Create mock entries for the iterator
-        Map.Entry<byte[], byte[]> entry1 = Map.entry("key1".getBytes(), posListDoc1.serialize());
-        Map.Entry<byte[], byte[]> entry2 = Map.entry("key2".getBytes(), posListDoc2.serialize());
-        Map.Entry<byte[], byte[]> entry3 = Map.entry("key3".getBytes(), posListDoc3.serialize());
-        Map.Entry<byte[], byte[]> entry4 = Map.entry("key4".getBytes(), posListDoc4.serialize());
+        Map.Entry<byte[], byte[]> entry1 = Map.entry("key1".getBytes(), posListDoc1.serializeToCompositeBlob());
+        Map.Entry<byte[], byte[]> entry2 = Map.entry("key2".getBytes(), posListDoc2.serializeToCompositeBlob());
+        Map.Entry<byte[], byte[]> entry3 = Map.entry("key3".getBytes(), posListDoc3.serializeToCompositeBlob());
+        Map.Entry<byte[], byte[]> entry4 = Map.entry("key4".getBytes(), posListDoc4.serializeToCompositeBlob());
 
         // Stub the iterator behavior
         lenient().when(unigramIndex.iterateFromFirst()).thenReturn(unigramIterator);
@@ -135,15 +134,7 @@ class QueryExecutorTest {
         // These are not needed here if ConditionExecutors' execute methods are mocked directly in tests.
     }
 
-    // Helper to count unique conceptual row IDs
-    private long countUniqueConceptualRows(QueryResultSoA soa) {
-        if (soa == null || soa.isEmpty() || !soa.getRequirements().needsConceptualRowIds) return 0;
-        Set<Integer> uniqueIds = new HashSet<>();
-        for (int i = 0; i < soa.size(); i++) {
-            uniqueIds.add(soa.getConceptualRowIdAt(i));
-        }
-        return uniqueIds.size();
-    }
+
 
     private QueryResultSoA createMockQueryResultSoA(Query.Granularity granularity, int granularitySize, List<TestDataEntry> entries, AttributeRequirements reqs) {
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, reqs != null ? reqs : testRequirements);
@@ -158,6 +149,7 @@ class QueryExecutorTest {
         return resultSoA;
     }
 
+    @SuppressWarnings("unused")
     private QueryResultSoA createMockQueryResultSoA(Query.Granularity granularity, int granularitySize, List<TestDataEntry> entries) {
         return createMockQueryResultSoA(granularity, granularitySize, entries, testRequirements);
     }

@@ -258,7 +258,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     private byte[] mergeBlobsForSegment(List<byte[]> blobs, String termForLogging) throws IOException {
         if (blobs.isEmpty()) {
             logger.warn("mergeBlobsForSegment called with empty list for term: {}", termForLogging);
-            return new PositionListSoA().serializeToCompositeBlob(PositionListSoA.CompressionOverride.DEFAULT);
+            return new PositionListSoA().serializeToCompositeBlob();
         }
         if (blobs.size() == 1) {
             return blobs.get(0);
@@ -280,12 +280,12 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 PositionListSoA chunk = PositionListSoA.deserializeFromCompositeBlob(blob);
                 mergedSoA.addAll(chunk);
             }
-            return mergedSoA.serializeToCompositeBlob(PositionListSoA.CompressionOverride.DEFAULT);
+            return mergedSoA.serializeToCompositeBlob();
         } else {
             // Use memory-safe N-way compressed merge for larger segments.
             logger.trace("Using N-way compressed merge for term '{}' segment ({} blobs, {} positions)",
                          termForLogging, blobs.size(), totalPositionsInThisSegment);
-            return PositionListSoA.mergeNCompressedBlobs(blobs, PositionListSoA.CompressionOverride.DEFAULT);
+            return PositionListSoA.mergeNCompressedBlobs(blobs);
         }
     }
 

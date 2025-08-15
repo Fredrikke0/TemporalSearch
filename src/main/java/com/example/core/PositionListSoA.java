@@ -36,7 +36,6 @@ import me.lemire.integercompression.differential.Delta;
  * This class is designed for memory efficiency and selective attribute access,
  * particularly for large datasets.
  *
- * See design/root_problems/positionlist-blobs.md for detailed design.
  */
 public class PositionListSoA {
 
@@ -51,26 +50,8 @@ public class PositionListSoA {
     private int numPositions;        // Number of logical positions stored, also the size of each active list
 
     private static final IntegerCODEC CODEC = new FastPFOR128();
-    public static final int UNCOMPRESSED_THRESHOLD = 20; // Small arrays might not benefit from compression.
+    public static final int UNCOMPRESSED_THRESHOLD = 20; // Small arrays do not benefit from compression.
     public static final int RLE_ENCODED_MARKER = Integer.MIN_VALUE + 2024; // Marker for Run-Length Encoded constant arrays
-
-    /**
-     * Defines compression override behavior for serialization.
-     */
-    public enum CompressionOverride {
-        /**
-         * Uses the default compression logic (e.g., UNCOMPRESSED_THRESHOLD, RLE).
-         */
-        DEFAULT,
-        /**
-         * Forces compression if applicable (e.g., FastPFOR, RLE), ignoring thresholds like UNCOMPRESSED_THRESHOLD.
-         */
-        FORCE_COMPRESSION,
-        /**
-         * Forces data to be written uncompressed. RLE will not be applied.
-         */
-        FORCE_UNCOMPRESSED
-    }
 
     /**
      * Convenience constructor, defaults to a non-stitch list (isStitchList = false).
@@ -272,23 +253,14 @@ public class PositionListSoA {
     public Iterator<Position> positionIterator() {
         return new Iterator<Position>() {
             private int currentIndex = 0;
-            private final int expectedNumPositions = numPositions; // For fail-fast behavior (optional)
 
             @Override
             public boolean hasNext() {
-                // Optional: Check for concurrent modification
-                // if (expectedNumPositions != numPositions) {
-                //    throw new ConcurrentModificationException();
-                // }
                 return currentIndex < numPositions;
             }
 
             @Override
             public Position next() {
-                // Optional: Check for concurrent modification
-                // if (expectedNumPositions != numPositions) {
-                //    throw new ConcurrentModificationException();
-                // }
                 if (!hasNext()) {
                     throw new NoSuchElementException();
                 }
@@ -311,37 +283,17 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs during serialization.
      */
     public byte[] serializeToCompositeBlob() throws IOException {
-        return serializeToCompositeBlob(CompressionOverride.DEFAULT);
-    }
-
-    /**
-     * Serializes the {@code PositionListSoA} into a single composite binary blob
-     * with a specific compression override.
-     * The blob contains a metadata header followed by individually compressed attribute arrays.
-     *
-     * Structure:
-     * - num_positions (int)
-     * - For each attribute array (docIds, sentenceIds, beginChars, endChars, and synonymIds):
-     *   - Compressed data (prefixed by its own length metadata, see writeCompressedIntArray)
-     *
-     * @param compressionOverride The compression strategy to use.
-     * @return A byte array representing the serialized {@code PositionListSoA}.
-     * @throws IOException If an I/O error occurs during serialization.
-     */
-    public byte[] serializeToCompositeBlob(CompressionOverride compressionOverride) throws IOException {
-
-
         ByteArrayOutputStream baos = new ByteArrayOutputStream(this.numPositions * 10); // Adjusted estimate for 5 arrays
         try (DataOutputStream dos = new DataOutputStream(baos)) {
             // 1. Write Metadata Header
             dos.writeInt(this.numPositions);
 
             // 2. Write Attribute Blobs
-            writeCompressedIntArrayList(dos, this.documentIds, true, compressionOverride);     // applyDelta = true
-            writeCompressedIntArrayList(dos, this.sentenceIds, true, compressionOverride);     // applyDelta = true
-            writeCompressedIntArrayList(dos, this.beginChars, true, compressionOverride);      // applyDelta = true
-            writeCompressedIntArrayList(dos, this.endChars, true, compressionOverride);        // applyDelta = true
-            writeCompressedIntArrayList(dos, this.synonymIds, false, compressionOverride);     // applyDelta = false
+            writeCompressedIntArrayList(dos, this.documentIds, true);     // applyDelta = true
+            writeCompressedIntArrayList(dos, this.sentenceIds, true);     // applyDelta = true
+            writeCompressedIntArrayList(dos, this.beginChars, true);      // applyDelta = true
+            writeCompressedIntArrayList(dos, this.endChars, true);        // applyDelta = true
+            writeCompressedIntArrayList(dos, this.synonymIds, false);     // applyDelta = false
             dos.flush();
         }
 
@@ -365,51 +317,25 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs.
      */
     public static void writeCompressedIntArray(DataOutputStream out, int[] data, int numElementsInArray, boolean applyDelta) throws IOException {
-        writeCompressedIntArray(out, data, numElementsInArray, applyDelta, CompressionOverride.DEFAULT);
-    }
-
-    /**
-     * Writes an integer array to the output stream, compressing it based on the override.
-     * The format is:
-     * 1. originalLength (int): Number of integers in the original array.
-     * 2. compressedLengthOrMarker (int):
-     *    - If negative: -originalLength, indicating data is uncompressed.
-     *    - If positive: Number of integers in the compressed data.
-     *    - If RLE_ENCODED_MARKER: data is RLE encoded.
-     * 3. data (int[] or int): Actual integer data (either uncompressed, compressed, or the RLE value).
-     *
-     * @param out The DataOutputStream to write to.
-     * @param data The integer array to write.
-     * @param numElementsInArray The number of elements from the beginning of the array to write.
-     * @param applyDelta Whether to apply delta coding before compression.
-     * @param override The compression override strategy.
-     * @throws IOException If an I/O error occurs.
-     */
-    public static void writeCompressedIntArray(DataOutputStream out, int[] data, int numElementsInArray, boolean applyDelta, CompressionOverride override) throws IOException {
         if (numElementsInArray == 0) {
             out.writeInt(0); // Marker for empty array
             return;
         }
 
         // 1. Attempt RLE first if data is constant.
-        // This applies regardless of applyDelta, unless caller specifically forces FORCE_UNCOMPRESSED.
-        // RLE is generally superior for constant arrays.
-        if (override != CompressionOverride.FORCE_UNCOMPRESSED) {
-            boolean allSame = true;
-            int firstValue = data[0];
-            for (int i = 1; i < numElementsInArray; i++) {
-                if (data[i] != firstValue) {
-                    allSame = false;
-                    break;
-                }
-            }
-            if (allSame) {
-                out.writeInt(RLE_ENCODED_MARKER);
-                out.writeInt(firstValue);
-                return;
+        boolean allSame = true;
+        int firstValue = data[0];
+        for (int i = 1; i < numElementsInArray; i++) {
+            if (data[i] != firstValue) {
+                allSame = false;
+                break;
             }
         }
-
+        if (allSame) {
+            out.writeInt(RLE_ENCODED_MARKER);
+            out.writeInt(firstValue);
+            return;
+        }
 
         // If we are here, data was not RLE encoded.
         int[] dataToWrite = data; // Use original data by default
@@ -418,18 +344,14 @@ public class PositionListSoA {
             Delta.delta(dataToWrite); // Apply delta in-place on the copy
         }
 
-        // Determine if we should write uncompressed based on various factors.
+        // Determine if we should write uncompressed based on default policy.
         boolean writeUncompressed;
         if (!applyDelta) {
-            // For non-delta arrays (that were not RLE), always write them uncompressed.
-            // The `override` parameter does not affect this decision for non-delta arrays,
-            // as FastPFOR is not suitable for them anyway.
+            // For non-delta arrays (e.g., synonymIds), always write uncompressed (except RLE handled above).
             writeUncompressed = true;
         } else {
-            // For delta-coded arrays (that were not RLE):
-            CompressionOverride effectiveOverride = (override == null) ? CompressionOverride.DEFAULT : override;
-            writeUncompressed = (effectiveOverride == CompressionOverride.FORCE_UNCOMPRESSED) ||
-                              (effectiveOverride == CompressionOverride.DEFAULT && numElementsInArray < UNCOMPRESSED_THRESHOLD);
+            // For delta-coded arrays, use threshold to decide.
+            writeUncompressed = numElementsInArray < UNCOMPRESSED_THRESHOLD;
         }
 
         if (writeUncompressed) {
@@ -438,8 +360,7 @@ public class PositionListSoA {
                 out.writeInt(dataToWrite[i]); // dataToWrite is potentially delta-coded if applyDelta was true
             }
         } else {
-            // COMPRESSED PATH (only for applyDelta = true, not RLE, not forced uncompressed, and exceeded threshold)
-            // This implies applyDelta must have been true to reach here.
+            // COMPRESSED PATH (only for applyDelta = true, not RLE, and exceeded threshold)
             IntegerCODEC chosenCodec = PositionListSoA.CODEC; // Default FastPFOR128 for delta-coded arrays
 
             IntWrapper inpos = new IntWrapper(0);
@@ -461,8 +382,6 @@ public class PositionListSoA {
             chosenCodec.compress(dataToCompress, inpos, dataToCompress.length, compressedInts, outpos);
 
             int compressedSizeInInts = outpos.get();
-            // No longer manually convert to byte[], write ints directly using DataOutputStream
-            // The stored size marker is in bytes, so it's compressedSizeInInts * 4
             out.writeInt(compressedSizeInInts * 4);
             for (int i = 0; i < compressedSizeInInts; i++) {
                 out.writeInt(compressedInts[i]);
@@ -507,7 +426,7 @@ public class PositionListSoA {
 
             instance.endChars = readCompressedIntArray(dis, instance.numPositions, true);
 
-            instance.synonymIds = readCompressedIntArray(dis, instance.numPositions, false); // No delta on synonym IDs typically
+            instance.synonymIds = readCompressedIntArray(dis, instance.numPositions, false); // No delta on synonym IDs.
 
 
             // Post-deserialization validation
@@ -983,15 +902,11 @@ public class PositionListSoA {
 
         this.clear();
 
-        // The TreeSet is already sorted by the comparator. Add them back in order.
+
         for (PositionTuple pt : uniquePositionTuples) {
             this.add(pt.docId(), pt.sentId(), pt.begin(), pt.end(), pt.synId());
         }
-        // numPositions is updated by the add calls.
-        // The list is already sorted due to TreeSet iteration order and how items were added.
-        // If an explicit re-sort to exactly match the sort() method behavior is needed (e.g. for stability guarantees not provided by this TreeSet approach)
-        // then uncomment: this.sort();
-        // However, for just unique sorted positions, this is sufficient.
+
     }
 
     /**
@@ -1004,11 +919,11 @@ public class PositionListSoA {
      * @param override The compression override strategy.
      * @throws IOException If an I/O error occurs.
      */
-    private void writeCompressedIntArrayList(DataOutputStream dos, IntArrayList list, boolean applyDelta, CompressionOverride override) throws IOException {
-        writeCompressedIntArray(dos, list.elements(), list.size(), applyDelta, override);
+    private void writeCompressedIntArrayList(DataOutputStream dos, IntArrayList list, boolean applyDelta) throws IOException {
+        writeCompressedIntArray(dos, list.elements(), list.size(), applyDelta);
     }
 
-    // Method from design document: PositionListSoA.deserializeWithFilters
+
     public static PositionListSoA deserializeWithFilters(byte[] blob, Optional<FilteringContext> context, AttributeRequirements requirements)
             throws IOException {
         if (blob == null || blob.length == 0) {
@@ -1137,7 +1052,7 @@ public class PositionListSoA {
     public static byte[] mergeCompressedBlobs(byte[] blob1, byte[] blob2) throws IOException {
         if (blob1 == null || blob1.length == 0) {
             if (blob2 == null || blob2.length == 0) {
-                return new PositionListSoA().serializeToCompositeBlob(CompressionOverride.DEFAULT);
+                return new PositionListSoA().serializeToCompositeBlob();
             }
             return blob2;
         }
@@ -1152,7 +1067,7 @@ public class PositionListSoA {
         if (totalPositions == 0) {
             // Both blobs might represent empty lists, or one/both are malformed to appear empty.
             // Return a canonical empty blob.
-            return new PositionListSoA().serializeToCompositeBlob(CompressionOverride.DEFAULT);
+            return new PositionListSoA().serializeToCompositeBlob();
         }
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream(totalPositions * 8);
@@ -1162,35 +1077,35 @@ public class PositionListSoA {
             IntArrayList docIds1 = decompressDocIds(blob1);
             IntArrayList docIds2 = decompressDocIds(blob2);
             docIds1.addAll(docIds2);
-            writeCompressedIntArray(dos, docIds1.elements(), docIds1.size(), true, CompressionOverride.DEFAULT);
+            writeCompressedIntArray(dos, docIds1.elements(), docIds1.size(), true);
             docIds1 = null; // Help GC
             docIds2 = null; // Help GC
 
             IntArrayList sentIds1 = decompressSentenceIds(blob1);
             IntArrayList sentIds2 = decompressSentenceIds(blob2);
             sentIds1.addAll(sentIds2);
-            writeCompressedIntArray(dos, sentIds1.elements(), sentIds1.size(), true, CompressionOverride.DEFAULT);
+            writeCompressedIntArray(dos, sentIds1.elements(), sentIds1.size(), true);
             sentIds1 = null; // Help GC
             sentIds2 = null; // Help GC
 
             IntArrayList beginChars1 = decompressBeginChars(blob1);
             IntArrayList beginChars2 = decompressBeginChars(blob2);
             beginChars1.addAll(beginChars2);
-            writeCompressedIntArray(dos, beginChars1.elements(), beginChars1.size(), true, CompressionOverride.DEFAULT);
+            writeCompressedIntArray(dos, beginChars1.elements(), beginChars1.size(), true);
             beginChars1 = null; // Help GC
             beginChars2 = null; // Help GC
 
             IntArrayList endChars1 = decompressEndChars(blob1);
             IntArrayList endChars2 = decompressEndChars(blob2);
             endChars1.addAll(endChars2);
-            writeCompressedIntArray(dos, endChars1.elements(), endChars1.size(), true, CompressionOverride.DEFAULT);
+            writeCompressedIntArray(dos, endChars1.elements(), endChars1.size(), true);
             endChars1 = null; // Help GC
             endChars2 = null; // Help GC
 
             IntArrayList synonymIds1 = decompressSynonymIds(blob1);
             IntArrayList synonymIds2 = decompressSynonymIds(blob2);
             synonymIds1.addAll(synonymIds2);
-            writeCompressedIntArray(dos, synonymIds1.elements(), synonymIds1.size(), false, CompressionOverride.DEFAULT); // applyDelta = false
+            writeCompressedIntArray(dos, synonymIds1.elements(), synonymIds1.size(), false); // applyDelta = false
             // synonymIds1 = null; // Help GC - these are the last ones, less critical but good practice
             // synonymIds2 = null; // Help GC
 
@@ -1214,7 +1129,7 @@ public class PositionListSoA {
         if (blob1 == null || blob1.length == 0) {
             if (blob2 == null || blob2.length == 0) {
                 // Both are empty, return a canonical empty blob
-                return new PositionListSoA().serializeToCompositeBlob(CompressionOverride.DEFAULT);
+                return new PositionListSoA().serializeToCompositeBlob();
             }
             // Blob1 is empty, blob2 is not, return blob2
             return blob2;
@@ -1230,7 +1145,7 @@ public class PositionListSoA {
         list1.addAll(list2); // Add all elements from list2 to list1
 
         // Serialize the merged list1 back to a blob
-        return list1.serializeToCompositeBlob(CompressionOverride.DEFAULT);
+        return list1.serializeToCompositeBlob();
     }
 
     /**
@@ -1239,13 +1154,12 @@ public class PositionListSoA {
      * all attributes of all blobs simultaneously.
      *
      * @param blobsToMerge A list of byte arrays, each a serialized PositionListSoA.
-     * @param compressionOverride The compression strategy for the output blob.
      * @return A new compressed blob containing the merged data.
      * @throws IOException If an I/O error occurs.
      */
-    public static byte[] mergeNCompressedBlobs(List<byte[]> blobsToMerge, CompressionOverride compressionOverride) throws IOException {
+    public static byte[] mergeNCompressedBlobs(List<byte[]> blobsToMerge) throws IOException {
         if (blobsToMerge == null || blobsToMerge.isEmpty()) {
-            return new PositionListSoA().serializeToCompositeBlob(compressionOverride);
+            return new PositionListSoA().serializeToCompositeBlob();
         }
 
         // Filter out null or empty blobs and get total positions
@@ -1260,7 +1174,7 @@ public class PositionListSoA {
         }
 
         if (totalFinalPositions == 0 && validBlobs.isEmpty()) { // Ensure if totalFinalPositions is 0 due to all blobs being empty/invalid, we return empty.
-             return new PositionListSoA().serializeToCompositeBlob(compressionOverride);
+             return new PositionListSoA().serializeToCompositeBlob();
         }
          // If totalFinalPositions is 0 but validBlobs is not empty (e.g. contains blobs representing 0 positions),
          // we should still proceed to write an empty PositionListSoA structure (num_positions = 0 followed by empty arrays).
@@ -1275,44 +1189,44 @@ public class PositionListSoA {
                 for (byte[] blob : validBlobs) {
                     mergedDocIds.addAll(decompressDocIds(blob));
                 }
-                writeCompressedIntArray(dos, mergedDocIds.elements(), mergedDocIds.size(), true, compressionOverride);
+                writeCompressedIntArray(dos, mergedDocIds.elements(), mergedDocIds.size(), true);
                 mergedDocIds = null; // Help GC
 
                 IntArrayList mergedSentIds = new IntArrayList(totalFinalPositions);
                 for (byte[] blob : validBlobs) {
                     mergedSentIds.addAll(decompressSentenceIds(blob));
                 }
-                writeCompressedIntArray(dos, mergedSentIds.elements(), mergedSentIds.size(), true, compressionOverride);
+                writeCompressedIntArray(dos, mergedSentIds.elements(), mergedSentIds.size(), true);
                 mergedSentIds = null;
 
                 IntArrayList mergedBeginChars = new IntArrayList(totalFinalPositions);
                 for (byte[] blob : validBlobs) {
                     mergedBeginChars.addAll(decompressBeginChars(blob));
                 }
-                writeCompressedIntArray(dos, mergedBeginChars.elements(), mergedBeginChars.size(), true, compressionOverride);
+                writeCompressedIntArray(dos, mergedBeginChars.elements(), mergedBeginChars.size(), true);
                 mergedBeginChars = null;
 
                 IntArrayList mergedEndChars = new IntArrayList(totalFinalPositions);
                 for (byte[] blob : validBlobs) {
                     mergedEndChars.addAll(decompressEndChars(blob));
                 }
-                writeCompressedIntArray(dos, mergedEndChars.elements(), mergedEndChars.size(), true, compressionOverride);
+                writeCompressedIntArray(dos, mergedEndChars.elements(), mergedEndChars.size(), true);
                 mergedEndChars = null;
 
                 IntArrayList mergedSynonymIds = new IntArrayList(totalFinalPositions);
                 for (byte[] blob : validBlobs) {
                     mergedSynonymIds.addAll(decompressSynonymIds(blob));
                 }
-                writeCompressedIntArray(dos, mergedSynonymIds.elements(), mergedSynonymIds.size(), false, compressionOverride);
+                writeCompressedIntArray(dos, mergedSynonymIds.elements(), mergedSynonymIds.size(), false);
                 // mergedSynonymIds = null; // Last one
             } else {
                 // If totalFinalPositions is 0, we still need to write out the structure for empty arrays.
                 // writeCompressedIntArray handles numElementsInArray == 0 correctly by writing a 0 marker.
-                writeCompressedIntArray(dos, new int[0], 0, true, compressionOverride); // docIds
-                writeCompressedIntArray(dos, new int[0], 0, true, compressionOverride); // sentIds
-                writeCompressedIntArray(dos, new int[0], 0, true, compressionOverride); // beginChars
-                writeCompressedIntArray(dos, new int[0], 0, true, compressionOverride); // endChars
-                writeCompressedIntArray(dos, new int[0], 0, false, compressionOverride); // synonymIds
+                writeCompressedIntArray(dos, new int[0], 0, true); // docIds
+                writeCompressedIntArray(dos, new int[0], 0, true); // sentIds
+                writeCompressedIntArray(dos, new int[0], 0, true); // beginChars
+                writeCompressedIntArray(dos, new int[0], 0, true); // endChars
+                writeCompressedIntArray(dos, new int[0], 0, false); // synonymIds
             }
             dos.flush();
         }
