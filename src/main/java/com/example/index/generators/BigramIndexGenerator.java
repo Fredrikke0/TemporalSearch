@@ -148,8 +148,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // Since bigrams are derived from annotations, we can use the total annotation count
-        // or a more specific count if available that better reflects pairs.
+        // Rough estimate, but fast.
         String countSql = "SELECT MAX(annotation_id) FROM annotations";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {

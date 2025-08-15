@@ -159,8 +159,7 @@ public final class HypernymIndexGenerator extends IndexGenerator<DependencyEntry
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // Hypernyms are derived from dependencies, so count documents with dependencies.
-        // This might be an overestimate if not all dependencies yield hypernyms, but it's a starting point.
+        // Rough estimate, but fast.
         String inClause = HYPERNYM_RELATIONS.stream()
             .map(r -> "'" + r.replace("'", "''") + "'")
             .collect(Collectors.joining(", "));

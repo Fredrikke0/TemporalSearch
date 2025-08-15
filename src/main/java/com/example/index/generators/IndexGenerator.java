@@ -60,7 +60,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     protected final Path tempFilePathForSorting;
     protected final Set<String> stopwords;
 
-    // New field to track terms written to the index by this generator instance
     private long totalTermsWrittenToIndex = 0;
 
     /**
@@ -125,7 +124,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         this.tempFilePathForSorting = this.tempDir.resolve("sorted.tmp");
 
         try {
-            long totalDocs = getDocumentCountForIndex(); // `this` is used here before constructor finishes
+            long totalDocs = getDocumentCountForIndex();
             this.progress.startIndex(this.effectiveIndexName, totalDocs);
         } catch (SQLException e) {
             throw new IOException("Failed to get document count for index: " + this.effectiveIndexName, e);
@@ -357,7 +356,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         // Process the last (or only) segment for this term
         if (!blobsForCurrentSegment.isEmpty()) {
             byte[] segmentToWrite = mergeBlobsForSegment(blobsForCurrentSegment, term);
-            // No longer checking positionsInFinalSegment > 0 here.
 
             String keyToWrite = (segmentCounterForThisTerm == 0) ? term : term + "#" + segmentCounterForThisTerm;
             byte[] termKeyBytes = bytes(keyToWrite);
@@ -376,7 +374,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 putsInBatch++;
                 currentSizeBytes += termKeyBytes.length + termValueBytes.length;
                 runningTotalSegmentsWritten++; // Increment global counter
-                // segmentCounterForThisTerm++; // Not needed, it's the last segment for this term call
             } catch (org.rocksdb.RocksDBException e) {
                 throw new IOException("Failed to put to WriteBatch for final term segment: " + keyToWrite, e);
             }
@@ -393,7 +390,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     protected void writeToLevelDB(File sortedFile) throws IOException {
         logger.info("Starting to write to RocksDB from sorted file: {}", sortedFile.getAbsolutePath());
-        long totalTermsProcessedFromFile = 0; // Renamed for clarity within this method
+        long totalTermsProcessedFromFile = 0;
         long totalSegmentsWritten = 0;
         final long TARGET_BATCH_BYTES = 8 * 1024 * 1024;
         long currentBatchSizeBytes = 0;
@@ -430,7 +427,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                                     batch,
                                     currentBatchSizeBytes,
                                     putsInCurrentBatch,
-                                    totalSegmentsWritten, // Pass current global total
+                                    totalSegmentsWritten,
                                     TARGET_BATCH_BYTES,
                                     this.indexAccess,
                                     this.progress,
@@ -440,7 +437,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                             batch = result.batch();
                             currentBatchSizeBytes = result.currentBatchSizeBytes();
                             putsInCurrentBatch = result.putsInCurrentBatch();
-                            totalSegmentsWritten = result.totalSegmentsWrittenAfterCall(); // Update global total
+                            totalSegmentsWritten = result.totalSegmentsWrittenAfterCall();
                             totalTermsProcessedFromFile++; // Increment for each term from file that had blobs
                         }
                         // Reset for the new term
@@ -461,7 +458,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                         batch,
                         currentBatchSizeBytes,
                         putsInCurrentBatch,
-                        totalSegmentsWritten, // Pass current global total
+                        totalSegmentsWritten,
                         TARGET_BATCH_BYTES,
                         this.indexAccess,
                         this.progress,
@@ -469,19 +466,19 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                         1000L
                 );
                 batch = result.batch();
-                currentBatchSizeBytes = result.currentBatchSizeBytes(); // Though not used after this, good to update
+                currentBatchSizeBytes = result.currentBatchSizeBytes();
                 putsInCurrentBatch = result.putsInCurrentBatch();
-                totalSegmentsWritten = result.totalSegmentsWrittenAfterCall(); // Update global total
-                totalTermsProcessedFromFile++; // Increment for the last term if it had blobs
+                totalSegmentsWritten = result.totalSegmentsWrittenAfterCall();
+                totalTermsProcessedFromFile++;
             }
 
             if (putsInCurrentBatch > 0) {
                  writeBatchWithRetry(batch, 3, 1000, putsInCurrentBatch);
-                 progress.updateIndex(putsInCurrentBatch); // Keep progress update for DB writes
+                 progress.updateIndex(putsInCurrentBatch);
                 logger.info("Written final batch of {} DB entries to RocksDB. Total unique terms processed from file: {}, total segments written: {}",
                         putsInCurrentBatch, totalTermsProcessedFromFile, totalSegmentsWritten);
             }
-            this.totalTermsWrittenToIndex = totalTermsProcessedFromFile; // Store the final count
+            this.totalTermsWrittenToIndex = totalTermsProcessedFromFile;
 
         } catch (IOException e) {
             logger.error("IOException during writeToRocksDB. Last term processed: {}. Total unique terms processed from file: {}, total segments: {}. Error: {}",
@@ -495,7 +492,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             if (batch != null) {
                 batch.close();
             }
-            // Simplified log message
             logger.info("Finished writing to RocksDB for index [{}]. Total unique base terms written: {}. Total segments written: {}.",
                 getIndexName(), this.totalTermsWrittenToIndex, totalSegmentsWritten);
         }

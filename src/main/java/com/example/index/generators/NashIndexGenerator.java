@@ -128,7 +128,6 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             return;
         }
 
-        // The SQL query already sorts the annotations.
         List<MergedDateEntity> mergedEntities = DateEntityMerger.merge(allDateAnnotations);
 
         for (MergedDateEntity entity : mergedEntities) {
@@ -186,7 +185,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 long potentialAggregatedEntryCount = 0;
                 java.util.Collection<Integer> dateIdsForThisPrefix = invertedIndex.get(nashPrefix);
                 if (dateIdsForThisPrefix == null) {
-                    dateIdsForThisPrefix = Collections.emptyList(); // Should not happen with MultiMap but defensive
+                    dateIdsForThisPrefix = Collections.emptyList();
                 }
 
                 for (Integer dateIdFromNash : dateIdsForThisPrefix) {
@@ -199,20 +198,18 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 logger.trace("Processing Nash prefix: '{}'. Maps to {} unique dates. Aggregating a total of ~{} NashDateEntryWithId objects.",
                             nashPrefix, dateIdsForThisPrefix.size(), potentialAggregatedEntryCount);
 
-                if (potentialAggregatedEntryCount > 50_000_000) { // Log a strong warning if it's very large
-                    // Estimate based on PositionListSoA might be different, but this warning is about raw entry count
+                if (potentialAggregatedEntryCount > 50_000_000) {
                     long estimatedRawBytes = (potentialAggregatedEntryCount * 20L) + 4L;
                     logger.warn("HIGH POTENTIAL FOR LARGE SERIALIZED BLOB (using PositionListSoA now): Nash prefix '{}' will attempt to aggregate {} entries. Old estimated raw serialized byte array size: ~{} bytes.",
                                 nashPrefix, potentialAggregatedEntryCount, estimatedRawBytes);
                 }
 
-                PositionListSoA aggregatedEntriesSoA = new PositionListSoA(); // Changed from List<NashDateEntryWithId>
+                PositionListSoA aggregatedEntriesSoA = new PositionListSoA();
                 for (Integer dateIdFromNash : dateIdsForThisPrefix) {
                     List<NashDateEntryWithId> entriesForDate = listIndexToEntries.get(dateIdFromNash);
                     if (entriesForDate != null) {
                         for (NashDateEntryWithId entry : entriesForDate) {
                             Position pos = entry.position();
-                            // Add to PositionListSoA, using dateId as synonymId
                             aggregatedEntriesSoA.add(pos.getDocumentId(), pos.getSentenceId(), pos.getBeginPosition(), pos.getEndPosition(), entry.dateId());
                         }
                     } else {
@@ -221,15 +218,8 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 }
 
                 if (!aggregatedEntriesSoA.isEmpty()) {
-                    // PositionListSoA's serializeToCompositeBlob handles compression.
-                    // Sorting aggregatedEntriesSoA.sort() could be done here if needed to optimize delta coding further,
-                    // but PositionListSoA's delta coding works on individual arrays which are built in added order.
-                    // The main benefit of sorting would be for docId, sentId arrays if they are not already largely sorted by the aggregation logic.
-                    // Given the structure (iteration by nashPrefix, then by dateIdFromNash, then by entriesForDate),
-                    // the order might not be optimal for docId/sentId compression across all entries for a single Nash prefix.
-                    // However, let's try without explicit sort first.
-
-                    byte[] serializedEntries = aggregatedEntriesSoA.serializeToCompositeBlob(); // Changed serialization
+                    aggregatedEntriesSoA.sort();
+                    byte[] serializedEntries = aggregatedEntriesSoA.serializeToCompositeBlob();
                     indexAccess.put(bytes(nashPrefix), serializedEntries);
                     termsWritten++;
                     if (termsWritten % 1000 == 0) {
@@ -241,7 +231,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             indexAccess.put(NashSerializationUtils.DATE_LOOKUP_KEY, serializedLookup);
             logger.info("Written date lookup table ({} entries) to RocksDB.", idToDate.size());
             long endTime = System.currentTimeMillis();
-            this.nashTermsWritten = termsWritten; // Update the field
+            this.nashTermsWritten = termsWritten;
             logger.info("Successfully generated Nash index. Total unique prefixes written: {}. Time taken: {} ms",
                     termsWritten, (endTime - startTime));
         } catch (IndexAccessException e) {
@@ -256,7 +246,7 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private void writeEmptyNashIndex(IndexAccessInterface idxAccess) throws IOException, IndexAccessException {
         idxAccess.put(NashSerializationUtils.DATE_LOOKUP_KEY, NashSerializationUtils.serializeDateLookup(Collections.emptyList()));
         logger.info("Wrote empty date lookup table for Nash index.");
-        this.nashTermsWritten = 0; // Ensure count is 0 if index is empty
+        this.nashTermsWritten = 0;
     }
 
     private LocalDate parseNormalizedDate(String dateStr) {
@@ -265,7 +255,6 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
             return null;
         }
         try {
-            // NerDateIndexGenerator.normalizeDateToKeyFormat returns a string in 'yyyyMMdd' format.
             return LocalDate.parse(key, DateTimeFormatter.ofPattern("yyyyMMdd"));
         } catch (DateTimeParseException e) {
             // This path should ideally not be taken if normalizeDateToKeyFormat is correct.
@@ -276,8 +265,6 @@ public final class NashIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // For Nash index, we are interested in documents that have DATE entities
-        // which also have a corresponding entry in `political_actors` or `event_summaries`.
         String countSql = "SELECT COUNT(DISTINCT document_id) FROM annotations WHERE ner = 'DATE' AND normalized_ner IS NOT NULL";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
              ResultSet rs = stmt.executeQuery()) {
