@@ -22,10 +22,6 @@ public final class UnigramPosStitchGenerator extends AbstractNgramStitchGenerato
     private static final Logger logger = LoggerFactory.getLogger(UnigramPosStitchGenerator.class);
     public static final String MY_INDEX_NAME = "stitch_unigram_pos";
 
-    // SQL fragment to exclude common punctuation and symbols for POS.
-    // No longer directly references the list from POSIndexGenerator for consistency.
-    // public static final String POS_TAGS_TO_EXCLUDE_SQL_FRAGMENT = "pos NOT IN " + POSIndexGenerator.POS_TAGS_TO_EXCLUDE_SQL;
-
     public UnigramPosStitchGenerator(
             IndexAccessInterface indexAccess,
             String stopwordsPath,
@@ -52,9 +48,6 @@ public final class UnigramPosStitchGenerator extends AbstractNgramStitchGenerato
         if (type != AnnotationType.POS) {
             throw new IllegalArgumentException("UnigramPosStitchIndexGenerator's populateSpecificAnnotationSynonyms called with incorrect type: " + type);
         }
-        // POS stitch index uses the token itself as the specific value for the synonym.
-        // The synonym manager is used to get an ID for each such token.
-        // This is handled by the parent AbstractNgramStitchGenerator when requiresSynonymIdForAnnotationValue() is true.
         logger.debug("populateSpecificAnnotationSynonyms for UnigramPosStitchIndexGenerator relies on parent to handle token synonym IDs.");
     }
 

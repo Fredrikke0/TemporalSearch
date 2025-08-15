@@ -73,7 +73,7 @@ public final class UnigramDateStitchGenerator extends AbstractNgramStitchGenerat
             stmt.setInt(1, documentId);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    String originalNormalizedDate = rs.getString("normalized_ner"); // Expected YYYY-MM-DD
+                    String originalNormalizedDate = rs.getString("normalized_ner");
 
                     String dateKeyYYYYMMDD = NerDateIndexGenerator.normalizeDateToKeyFormat(originalNormalizedDate);
                     if (dateKeyYYYYMMDD == null) {
@@ -141,8 +141,8 @@ public final class UnigramDateStitchGenerator extends AbstractNgramStitchGenerat
         if (mergedAnnotations.isEmpty() && !rawAnnotationsListFromDb.isEmpty()) {
              logger.trace("All raw DATE annotations for document ID {} resulted in an empty merged list for {} index. Raw count: {}", documentId, MY_INDEX_NAME, rawAnnotationsListFromDb.size());
         } else {
-            logger.trace("Fetched {} raw DATE annotations, (span filtering now in Annotations.java), merged into {} annotations for document ID {} for {} index.",
-                         rawAnnotationsListFromDb.size(), /* rawAnnotationsListFromDb.size(), */ mergedAnnotations.size(), documentId, MY_INDEX_NAME);
+            logger.trace("Fetched {} raw DATE annotations, merged into {} annotations for document ID {} for {} index.",
+                         rawAnnotationsListFromDb.size(), mergedAnnotations.size(), documentId, MY_INDEX_NAME);
         }
         return mergedAnnotations;
     }

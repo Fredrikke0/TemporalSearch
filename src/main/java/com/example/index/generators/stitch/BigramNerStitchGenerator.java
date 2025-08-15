@@ -7,6 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Objects;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -52,18 +53,16 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
     }
 
     // Temporary internal record to hold raw annotation data including the token
-    private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag, int originalAnnotationEndChar) implements SentenceSpanFilterable {
+    private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag) implements SentenceSpanFilterable {
         @Override
         public String getFilterLogDetail() {
             return "NER: " + nerTag + ", Token: " + token;
         }
-        // sentenceId() and beginChar() are implicitly provided by the record components
     }
 
     @Override
     protected List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException {
         List<RawAnnotation> rawAnnotationsFromDb = new ArrayList<>();
-        // Modified SQL to fetch 'token'
         String sql = String.format("""
             SELECT sentence_id, begin_char, end_char, token, ner
             FROM annotations
@@ -80,10 +79,9 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
                     rawAnnotationsFromDb.add(new RawAnnotation(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
-                        rs.getInt("end_char"), // This is the end_char of the individual token
+                        rs.getInt("end_char"), // end_char of the individual token
                         rs.getString("token"),
-                        rs.getString("ner"),
-                        rs.getInt("end_char") // Store original end_char for adjacency check
+                        rs.getString("ner")
                     ));
                 }
             }
@@ -124,7 +122,7 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
                         currentEntitySentId,
                         currentEntityBeginChar,
                         previousTokenEndChar, // endChar is from the last token of the completed entity
-                        currentEntityType.toUpperCase(),
+                        Objects.requireNonNull(currentEntityType).toUpperCase(),
                         entityValue
                     ));
                 }
@@ -139,7 +137,7 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
                 currentEntityBeginChar = currentAnnotation.beginChar();
             }
             currentEntityRawTokens.add(currentAnnotation.token());
-            previousTokenEndChar = currentAnnotation.originalAnnotationEndChar(); // Update for next adjacency check
+            previousTokenEndChar = currentAnnotation.endChar(); // Update for next adjacency check
 
             // If it's the last annotation in the list, process any pending entity
             if (i == rawAnnotationsFromDb.size() - 1) {
@@ -149,7 +147,7 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
                         currentEntitySentId,
                         currentEntityBeginChar,
                         previousTokenEndChar, // endChar of the last token
-                        currentEntityType.toUpperCase(),
+                        Objects.requireNonNull(currentEntityType).toUpperCase(),
                         entityValue
                     ));
                 }

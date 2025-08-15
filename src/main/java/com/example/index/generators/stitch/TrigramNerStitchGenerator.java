@@ -7,6 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Objects;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -52,7 +53,7 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
     }
 
     // Temporary internal record to hold raw annotation data including the token
-    private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag, int originalAnnotationEndChar) implements SentenceSpanFilterable {
+    private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag) implements SentenceSpanFilterable {
         @Override
         public String getFilterLogDetail() {
             return "NER: " + nerTag + ", Token: " + token;
@@ -80,10 +81,9 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
                     rawAnnotationsFromDb.add(new RawAnnotation(
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
-                        rs.getInt("end_char"), // This is the end_char of the individual token
+                        rs.getInt("end_char"),
                         rs.getString("token"),
-                        rs.getString("ner"),
-                        rs.getInt("end_char") // Store original end_char for adjacency check
+                        rs.getString("ner")
                     ));
                 }
             }
@@ -123,7 +123,7 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
                         currentEntitySentId,
                         currentEntityBeginChar,
                         previousTokenEndChar,
-                        currentEntityType.toUpperCase(),
+                        Objects.requireNonNull(currentEntityType).toUpperCase(),
                         entityValue
                     ));
                 }
@@ -137,7 +137,7 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
                 currentEntityBeginChar = currentAnnotation.beginChar();
             }
             currentEntityRawTokens.add(currentAnnotation.token());
-            previousTokenEndChar = currentAnnotation.originalAnnotationEndChar();
+            previousTokenEndChar = currentAnnotation.endChar();
 
             if (i == rawAnnotationsFromDb.size() - 1) {
                 if (!currentEntityRawTokens.isEmpty() && currentEntityType != null) {
@@ -146,7 +146,7 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
                         currentEntitySentId,
                         currentEntityBeginChar,
                         previousTokenEndChar,
-                        currentEntityType.toUpperCase(),
+                        Objects.requireNonNull(currentEntityType).toUpperCase(),
                         entityValue
                     ));
                 }

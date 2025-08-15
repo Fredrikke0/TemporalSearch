@@ -7,6 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Objects;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -51,7 +52,7 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
         logger.debug("populateSpecificAnnotationSynonyms is a no-op for UnigramNerStitchIndexGenerator as NER tags are not stored in SynonymManager and normalized_ner IDs are handled by the parent.");
     }
 
-    private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag, int originalAnnotationEndChar) implements SentenceSpanFilterable {
+    private record RawAnnotation(int sentenceId, int beginChar, int endChar, String token, String nerTag) implements SentenceSpanFilterable {
         @Override
         public String getFilterLogDetail() {
             return "NER: " + nerTag + ", Token: " + token;
@@ -79,8 +80,7 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
                         rs.getString("token"),
-                        rs.getString("ner"),
-                        rs.getInt("end_char")
+                        rs.getString("ner")
                     ));
                 }
             }
@@ -121,7 +121,7 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
                         currentEntitySentId,
                         currentEntityBeginChar,
                         previousTokenEndChar,
-                        currentEntityType.toUpperCase(),
+                        Objects.requireNonNull(currentEntityType).toUpperCase(),
                         entityValue
                     ));
                 }
@@ -135,7 +135,7 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
                 currentEntityBeginChar = currentAnnotation.beginChar();
             }
             currentEntityRawTokens.add(currentAnnotation.token());
-            previousTokenEndChar = currentAnnotation.originalAnnotationEndChar();
+            previousTokenEndChar = currentAnnotation.endChar();
 
             if (i == rawAnnotationsFromDb.size() - 1) {
                 if (!currentEntityRawTokens.isEmpty() && currentEntityType != null) {
@@ -144,7 +144,7 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
                         currentEntitySentId,
                         currentEntityBeginChar,
                         previousTokenEndChar,
-                        currentEntityType.toUpperCase(),
+                        Objects.requireNonNull(currentEntityType).toUpperCase(),
                         entityValue
                     ));
                 }
@@ -161,7 +161,7 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
 
     @Override
     protected boolean requiresSynonymIdForAnnotationValue() {
-        return true; // Default from AbstractUnigramStitchGenerator, NER values use synonym ID
+        return true;
     }
 
     @Override
