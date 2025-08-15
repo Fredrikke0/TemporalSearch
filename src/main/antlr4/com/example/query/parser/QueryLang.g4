@@ -64,6 +64,9 @@ RIGHT: 'RIGHT';
 BEGIN: 'BEGIN';
 END: 'END';
 GROUP: 'GROUP';
+DOCUMENT_ID: 'DOCUMENT_ID';
+SENTENCE_ID: 'SENTENCE_ID';
+
 
 // NER Entity Type Keywords (Must match VALID_NER_TYPES in validator, case-insensitive)
 PERSON: 'PERSON';
@@ -256,11 +259,11 @@ entityType // Should align with VALID_NER_TYPES in QuerySemanticValidator (case-
     : PERSON
     | LOCATION
     | ORGANIZATION
-    | DATE       // Use existing DATE token
+    | DATE
     | TIME
     | DURATION
     | MONEY
-    | NUMBER     // Use reverted NUMBER token
+    | NUMBER
     | ORDINAL
     | PERCENT
     | SET
@@ -370,10 +373,6 @@ posTag
     | identifier
     ;
 
-// Define DOCUMENT_ID and SENTENCE_ID if they are not already keywords
-// Assuming they are needed for qualifiedStructuralColumn but not elsewhere as keywords yet
-DOCUMENT_ID: 'DOCUMENT_ID';
-SENTENCE_ID: 'SENTENCE_ID';
 
 
 groupByClause
@@ -388,4 +387,10 @@ groupByItem
     : qualifiedIdentifier  // e.g., alias.myVar, alias.DOCUMENT_ID
     | variable             // e.g., myVar (implicitly $main.myVar)
     | identifier           // Potentially for simple, unqualified column names if design evolves
+    | TITLE                // Allow unqualified structural columns to parse; validator will enforce qualification
+    | TIMESTAMP
+    | DOCUMENT_ID
+    | SENTENCE_ID
+    | BEGIN
+    | END
     ;

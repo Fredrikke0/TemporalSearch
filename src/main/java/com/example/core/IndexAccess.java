@@ -29,7 +29,6 @@ public class IndexAccess implements IndexAccessInterface {
     private final String indexType;
     private final AtomicBoolean isOpen;
     private final Options options; // Store options for closing
-    private final boolean readOnly; // Added to store read-only state
 
     /**
      * Creates a new IndexAccess instance for a specific index type.
@@ -45,7 +44,7 @@ public class IndexAccess implements IndexAccessInterface {
         this.indexPath = indexPath.toString();
         this.isOpen = new AtomicBoolean(true);
         this.options = options;
-        this.readOnly = readOnly;
+
 
         try {
             File indexDir = new File(this.indexPath);
@@ -229,10 +228,7 @@ public class IndexAccess implements IndexAccessInterface {
         return indexType;
     }
 
-    // Method for IndexGenerator internal verification
-    public RocksDB getDbForVerification() {
-        return this.db;
-    }
+
 
     /**
      * Checks if the index is still open.
@@ -346,22 +342,8 @@ public class IndexAccess implements IndexAccessInterface {
         return str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
-    public static String asString(byte[] bytes) {
-        if (bytes == null) {
-            return null;
-        }
-        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
-    }
 
 
-    /**
-     * Gets the sentences for a given document ID.
-     *
-     * @param documentId The document ID
-     * @return Array of sentences, or null if not found
-     */
-    public String[] getDocumentSentences(int documentId) {
-        logger.warn("getDocumentSentences(int) is a placeholder and not fully implemented for RocksDB.");
-        return new String[]{"Sentence 1 for " + documentId, "Sentence 2 for " + documentId};
-    }
+
+
 }

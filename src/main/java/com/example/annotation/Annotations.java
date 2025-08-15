@@ -278,14 +278,11 @@ public class Annotations {
     private static void performAnnotation(Path projectDbPath, int startDocumentId, int threads, int batchSize, Integer limit, boolean force) throws Exception {
         String url = "jdbc:sqlite:" + projectDbPath;
         try (Connection conn = DriverManager.getConnection(url)) {
-            // Configure SQLite for concurrent read/write and better throughput.
-            // IMPORTANT: Set journal_mode while NOT in an explicit transaction.
             try (Statement pragma = conn.createStatement()) {
                 pragma.execute("PRAGMA journal_mode=WAL");
                 pragma.execute("PRAGMA synchronous=NORMAL");
                 pragma.execute("PRAGMA busy_timeout=60000");
                 pragma.execute("PRAGMA temp_store=MEMORY");
-                // Modest cache to avoid huge memory footprint on shared servers
                 pragma.execute("PRAGMA cache_size=-200000"); // ~200MB
             }
             conn.setAutoCommit(false);

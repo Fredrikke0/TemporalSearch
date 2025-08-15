@@ -505,15 +505,5 @@ class QueryParserTest {
         assertEquals(1, query.groupByColumns().size());
         assertEquals("w.DOCUMENT_ID", query.groupByColumns().get(0));
     }
-
-    @Test
-    @DisplayName("Parse query with GROUP BY unqualified structural column in aliased query")
-    void parseGroupByUnqualifiedStructuralColumnAliased() throws QueryParseException {
-        String queryStr = "SELECT COUNT(*) FROM wikipedia ALIAS w GROUP BY DOCUMENT_ID";
-        // QueryModelBuilder should throw an error for unqualified structural columns as well if an alias is present.
-        QueryParseException exception = assertThrows(QueryParseException.class, () -> parser.parse(queryStr));
-        assertTrue(exception.getMessage().contains("Unqualified variable 'DOCUMENT_ID' used in GROUP BY where qualification (e.g., 'alias.DOCUMENT_ID') is required."),
-                   "Error message should indicate 'DOCUMENT_ID' needs qualification as 'alias.DOCUMENT_ID'. Actual: " + exception.getMessage());
-    }
     // --- END GROUP BY Parsing Tests ---
 }

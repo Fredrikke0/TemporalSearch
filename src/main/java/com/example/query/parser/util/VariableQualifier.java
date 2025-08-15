@@ -85,26 +85,5 @@ public class VariableQualifier {
             : qualifiedName;
     }
 
-    /**
-     * Extracts the alias from a qualified variable.
-     *
-     * @param qualifiedName the qualified variable name
-     * @return the alias part, or empty if not qualified
-     */
-    public static Optional<String> extractAlias(String qualifiedName) {
-        if (qualifiedName.contains(".")) {
-            return Optional.of(qualifiedName.substring(0, qualifiedName.indexOf(".")));
-        }
-        return Optional.empty();
-    }
 
-    /**
-     * Checks if a variable name is already qualified.
-     *
-     * @param variableName the variable name to check
-     * @return true if the variable contains a dot (is qualified)
-     */
-    public static boolean isQualified(String variableName) {
-        return variableName.contains(".");
-    }
 }

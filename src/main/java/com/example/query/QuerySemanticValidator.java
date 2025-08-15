@@ -421,6 +421,10 @@ public class QuerySemanticValidator {
         Map<String, VariableRegistry> subqueryAliasToRegistryMap = query.joinSteps().stream()
             .collect(Collectors.toMap(JoinStep::rightSourceAlias, step -> step.subquery().variableRegistry()));
 
+        // Build the set of all known aliases in scope for structural column checks
+        Set<String> allKnownAliasesInScope = new HashSet<>(subqueryAliasToRegistryMap.keySet());
+        allKnownAliasesInScope.add(currentQueryEffectiveAlias);
+
         List<String> availableVarsForErrorMessage;
 
         for (String groupByColumnOriginalName : query.groupByColumns()) {
@@ -450,8 +454,23 @@ public class QuerySemanticValidator {
                         aliasFromItem, groupByColumnOriginalName, currentQueryEffectiveAlias, subqueryAliasToRegistryMap.keySet()
                     ));
                 }
+
+                // If this is a structural column (e.g., alias.DOCUMENT_ID), allow it without registry validation
+                if (isStructuralColumn(groupByColumnOriginalName, query.mainAlias(), query.joinSteps(), allKnownAliasesInScope)) {
+                    continue;
+                }
             } else { // Unqualified item
-                // Unqualified names in GROUP BY must belong to the current query's effective alias.
+                // If the unqualified item is a structural field, require explicit qualification for clarity
+                Set<String> knownStructuralFields = Set.of("TITLE", "TIMESTAMP", "DOCUMENT_ID", "SENTENCE_ID", "BEGIN", "END");
+                String upperName = groupByColumnOriginalName.toUpperCase();
+                if (knownStructuralFields.contains(upperName)) {
+                    throw new QueryParseException(String.format(
+                        "Unqualified structural column '%s' in GROUP BY; '%s' needs qualification as 'alias.%s'.",
+                        groupByColumnOriginalName, groupByColumnOriginalName, upperName
+                    ));
+                }
+
+                // Unqualified non-struct names must belong to the current query's effective alias.
                 // The variable in the registry is stored qualified.
                 columnToCheckInRegistry = currentQueryEffectiveAlias + "." + groupByColumnOriginalName;
                 registryToUse = currentQueryRegistry;
@@ -471,9 +490,6 @@ public class QuerySemanticValidator {
                 ));
             }
         }
-        // Note: The logic for checking SELECT column compatibility with GROUP BY (aggregates vs. grouped columns)
-        // has been removed from this method to keep it focused on validating GROUP BY items themselves.
-        // That is a separate validation concern (aggregate consistency).
         logger.debug("GROUP BY clause for effective alias '{}' validated successfully.", currentQueryEffectiveAlias);
     }
 

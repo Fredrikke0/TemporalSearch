@@ -8,14 +8,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.TreeSet;
+
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.index.AnnotationType;
 import com.example.index.StitchPosition;
-import com.example.logging.LogSampler;
+
 
 import me.lemire.integercompression.FastPFOR128;
 import me.lemire.integercompression.IntWrapper;
@@ -31,7 +31,7 @@ import me.lemire.integercompression.IntegerCODEC;
  */
 public class PositionList {
     private static final Logger logger = LoggerFactory.getLogger(PositionList.class);
-    private static final LogSampler logSampler = new LogSampler(0.001);
+
     private final List<Position> positions;
     private static final IntegerCODEC codec = new FastPFOR128();
 
@@ -45,12 +45,6 @@ public class PositionList {
             return;
         }
         positions.add(position);
-
-        // if (logSampler.shouldLog()) {
-        //     logger.debug("Added position - docId: {}, sentenceId: {}, begin: {}, end: {}",
-        //         position.getDocumentId(), position.getSentenceId(),
-        //         position.getBeginPosition(), position.getEndPosition());
-        // }
     }
 
     public List<Position> getPositions() {
@@ -351,68 +345,11 @@ public class PositionList {
                 list.add(new Position(docIds[i], sentenceIds[i], beginPositions[i], endPositions[i]));
             }
         }
-        // if (logSampler.shouldLog()) {
-        //     logger.debug("Deserialized {} positions successfully.", list.size());
-        // }
+
         return list;
     }
 
-    public synchronized void merge(PositionList other) {
-        if (other == null) {
-            logger.warn("Attempted to merge with null PositionList");
-            return;
-        }
 
-        int initialSize = positions.size();
-        int otherSize = other.size();
-
-        try {
-            // Use TreeSet with custom comparator for ordered deduplication
-            TreeSet<Position> positionSet = new TreeSet<>((a, b) -> {
-                // First compare document IDs
-                int docCompare = Integer.compare(a.getDocumentId(), b.getDocumentId());
-                if (docCompare != 0) return docCompare;
-
-                // Then compare sentence IDs
-                int sentCompare = Integer.compare(a.getSentenceId(), b.getSentenceId());
-                if (sentCompare != 0) return sentCompare;
-
-                // For positions within the same sentence, we need to be careful:
-                // - For overlapping positions (within 2 chars), treat them as the same
-                // - For non-overlapping positions, keep them separate
-                int beginDiff = Math.abs(a.getBeginPosition() - b.getBeginPosition());
-                int endDiff = Math.abs(a.getEndPosition() - b.getEndPosition());
-
-                // If positions overlap significantly, treat them as the same
-                if (beginDiff <= 2 && endDiff <= 2) {
-                    logger.debug("Overlapping positions: {} and {}", a, b);
-                    return 0; // Treat as equal/same position
-                }
-
-                // Otherwise, order by begin position then end position
-                int beginCompare = Integer.compare(a.getBeginPosition(), b.getBeginPosition());
-                if (beginCompare != 0) return beginCompare;
-
-                return Integer.compare(a.getEndPosition(), b.getEndPosition());
-            });
-
-            // Add all positions to the set for deduplication
-            positionSet.addAll(positions);
-            positionSet.addAll(other.getPositions());
-
-            // Clear and re-add all positions in sorted order
-            positions.clear();
-            positions.addAll(positionSet);
-
-            if (logSampler.shouldLog()) {
-                logger.debug("Merged {} + {} positions into {} unique positions",
-                    initialSize, otherSize, positions.size());
-            }
-        } catch (Exception e) {
-            logger.error("Failed to merge position lists: {}", e.getMessage(), e);
-            throw e;
-        }
-    }
 
     public int size() {
         return positions.size();
@@ -440,17 +377,5 @@ public class PositionList {
      * @param data The serialized byte array of a PositionList.
      * @return The count of positions, or 0 if the data is invalid or empty.
      */
-    public static int getPositionCountFromSerialized(byte[] data) {
-        if (data == null || data.length < 4) { // Minimum 4 bytes for an int (the count)
-            // logger.debug("Cannot get position count from null, empty, or too short data array (length: {}).", data == null ? "null" : data.length);
-            return 0;
-        }
-        ByteBuffer buffer = ByteBuffer.wrap(data);
-        try {
-            return buffer.getInt(); // The first int in the serialized data is the count of positions.
-        } catch (java.nio.BufferUnderflowException e) {
-            logger.warn("Buffer underflow when trying to read position count from serialized data. Data length: {}. Expected at least 4 bytes for count.", data.length, e);
-            return 0; // Or throw a custom exception if this case should be handled more strictly.
-        }
-    }
+
 }

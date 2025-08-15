@@ -329,7 +329,7 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs during serialization.
      */
     public byte[] serializeToCompositeBlob(CompressionOverride compressionOverride) throws IOException {
-        // logger.debug("Serializing PositionListSoA: numPositions = {}", this.numPositions);
+
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream(this.numPositions * 10); // Adjusted estimate for 5 arrays
         try (DataOutputStream dos = new DataOutputStream(baos)) {
@@ -337,19 +337,14 @@ public class PositionListSoA {
             dos.writeInt(this.numPositions);
 
             // 2. Write Attribute Blobs
-            // logger.debug("Serializing docIds: size = {}", this.documentIds.size());
             writeCompressedIntArrayList(dos, this.documentIds, true, compressionOverride);     // applyDelta = true
-            // logger.debug("Serializing sentenceIds: size = {}", this.sentenceIds.size());
             writeCompressedIntArrayList(dos, this.sentenceIds, true, compressionOverride);     // applyDelta = true
-            // logger.debug("Serializing beginChars: size = {}", this.beginChars.size());
             writeCompressedIntArrayList(dos, this.beginChars, true, compressionOverride);      // applyDelta = true
-            // logger.debug("Serializing endChars: size = {}", this.endChars.size());
             writeCompressedIntArrayList(dos, this.endChars, true, compressionOverride);        // applyDelta = true
-            // logger.debug("Serializing synonymIds: size = {}", this.synonymIds.size());
             writeCompressedIntArrayList(dos, this.synonymIds, false, compressionOverride);     // applyDelta = false
             dos.flush();
         }
-        // logger.debug("Serialization complete. Total blob size: {} bytes.", baos.size());
+
         return baos.toByteArray();
     }
 
@@ -409,18 +404,16 @@ public class PositionListSoA {
                 }
             }
             if (allSame) {
-                // logger.debug("writeCompressedIntArray: Writing RLE data. Value={}, NumElements={}", firstValue, numElementsInArray);
                 out.writeInt(RLE_ENCODED_MARKER);
                 out.writeInt(firstValue);
                 return;
             }
         }
-        // logger.debug("writeCompressedIntArray: Data not RLE (or RLE skipped by override). NumElements={}", numElementsInArray);
+
 
         // If we are here, data was not RLE encoded.
         int[] dataToWrite = data; // Use original data by default
         if (applyDelta && numElementsInArray > 0) {
-            // logger.debug("writeCompressedIntArray: Applying delta to data. NumElements={}", numElementsInArray);
             dataToWrite = Arrays.copyOf(data, numElementsInArray); // Create a copy for delta transformation
             Delta.delta(dataToWrite); // Apply delta in-place on the copy
         }
@@ -506,25 +499,15 @@ public class PositionListSoA {
                 return instance;
             }
 
-            // logger.debug("Deserializing documentIds for {} positions...", instance.numPositions);
             instance.documentIds = readCompressedIntArray(dis, instance.numPositions, true);
-            // logger.debug("Deserialized documentIds size: {}", instance.documentIds.size());
 
-            // logger.debug("Deserializing sentenceIds for {} positions...", instance.numPositions);
             instance.sentenceIds = readCompressedIntArray(dis, instance.numPositions, true);
-            // logger.debug("Deserialized sentenceIds size: {}", instance.sentenceIds.size());
 
-            // logger.debug("Deserializing beginChars for {} positions...", instance.numPositions);
             instance.beginChars = readCompressedIntArray(dis, instance.numPositions, true);
-            // logger.debug("Deserialized beginChars size: {}", instance.beginChars.size());
 
-            // logger.debug("Deserializing endChars for {} positions...", instance.numPositions);
             instance.endChars = readCompressedIntArray(dis, instance.numPositions, true);
-            // logger.debug("Deserialized endChars size: {}", instance.endChars.size());
 
-            // logger.debug("Deserializing synonymIds for {} positions...", instance.numPositions);
             instance.synonymIds = readCompressedIntArray(dis, instance.numPositions, false); // No delta on synonym IDs typically
-            // logger.debug("Deserialized synonymIds size: {}", instance.synonymIds.size());
 
 
             // Post-deserialization validation
@@ -540,7 +523,7 @@ public class PositionListSoA {
                 logger.error(errorMessage);
                 throw new IOException(errorMessage);
             }
-            // logger.debug("deserializeFromCompositeBlob: END. Successfully deserialized.");
+
 
             return instance;
         } catch (java.io.EOFException e) {
@@ -590,9 +573,7 @@ public class PositionListSoA {
             for (int i = 0; i < numExpectedPositions; i++) {
                 list.add(value);
             }
-            // logger.debug("readCompressedIntArray: Read RLE data, value = {}, numExpectedPositions = {}.", value, numExpectedPositions);
-            // RLE data does not undergo delta transformation, so return directly.
-            // This is correct for both applyInverseDelta true and false cases if the original was RLE.
+
             return list;
         }
 
@@ -602,7 +583,6 @@ public class PositionListSoA {
             // Data for arrays where inverse delta is not applied (e.g., synonymIds).
             // These arrays were written raw/uncompressed (if not RLE, which is handled above).
             // So, arraySizeOrMarker here should be the raw byte count (numExpectedPositions * 4).
-            // logger.debug("readCompressedIntArray: Reading non-delta array (e.g. synonymIds). applyInverseDelta=false. numExpectedPositions={}, arraySizeOrMarker={}", numExpectedPositions, arraySizeOrMarker);
             if (arraySizeOrMarker != numExpectedPositions * 4) {
                 throw new IOException(String.format(
                     "Data format error for non-delta array (expected raw uncompressed): numExpectedPositions=%d, expected raw byte size %d, but stream marker is %d. Not RLE.",
@@ -613,8 +593,7 @@ public class PositionListSoA {
             for (int i = 0; i < numExpectedPositions; i++) {
                 dataPayload[i] = in.readInt();
             }
-            // logger.debug("readCompressedIntArray: Read as UNCOMPRESSED (because !applyInverseDelta). numExpectedPositions={}, read {} ints.", numExpectedPositions, dataPayload.length);
-            // No inverse delta needs to be applied, as it wasn't delta-coded.
+
         } else {
             // applyInverseDelta is TRUE. Data was potentially delta-coded.
             // It could have been written uncompressed (due to threshold for delta-arrays) or compressed.
@@ -639,7 +618,6 @@ public class PositionListSoA {
                     throw new IOException("Invalid compressed data size marker: " + arraySizeOrMarker + " (must be >0 and multiple of 4).");
                 }
                 int numIntsInCompressedPayload = arraySizeOrMarker / 4;
-                // No longer read into byte[] and manually convert. Read ints directly.
                 int[] compressedInts = new int[numIntsInCompressedPayload];
                 for (int i = 0; i < numIntsInCompressedPayload; i++) {
                     compressedInts[i] = in.readInt();
@@ -653,14 +631,7 @@ public class PositionListSoA {
                 IntWrapper inPos = new IntWrapper(0);
                 IntWrapper outPos = new IntWrapper(0);
 
-                if ((numExpectedPositions == 405888 && !applyInverseDelta) || logger.isDebugEnabled() && !applyInverseDelta) {
-                     logger.debug("Before chosenCodec.uncompress ({} {}): compressedInts.length={}, numIntsInPayload={}, numExpectedPositions={}, tempDecompressed.length={}",
-                                  (numExpectedPositions == 405888 ? "TARGETED" : "DIAG"), chosenCodec.toString(),
-                                  compressedInts.length, numIntsInCompressedPayload, numExpectedPositions, tempDecompressed.length);
-                } else if (logger.isTraceEnabled()){
-                     logger.trace("Before chosenCodec.uncompress ({}): compressedInts.length={}, numIntsInPayload={}, numExpectedPositions={}, tempDecompressed.length={}",
-                                  chosenCodec.toString(), compressedInts.length, numIntsInCompressedPayload, numExpectedPositions, tempDecompressed.length);
-                }
+
 
                 // For FastPFOR, the 'len' parameter to uncompress is the number of compressed ints in the input stream.
                 // The output buffer (tempDecompressed) must be large enough for the *padded* original count.
@@ -678,7 +649,7 @@ public class PositionListSoA {
                 // Truncate to the exact numExpectedPositions if FastPFOR produced more due to padding.
                 // VariableByte should produce exactly numExpectedPositions if compression was done on numExpectedPositions.
                 dataPayload = Arrays.copyOf(tempDecompressed, numExpectedPositions);
-                // logger.debug("readCompressedIntArray: Decompressed with {}, padded count {}, truncated to {}.", codecName, actualDecompressedPaddedCount, dataPayload.length);
+
             }
         }
 
@@ -705,14 +676,12 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs or the blob is too short.
      */
     public static int getNumPositionsFromBlob(byte[] compositeBlob) throws IOException {
-        // logger.debug("getNumPositionsFromBlob: START. Blob size = {} bytes", compositeBlob != null ? compositeBlob.length : "null");
         if (compositeBlob == null || compositeBlob.length < 4) { // Need at least 4 bytes for an int
             logger.warn("getNumPositionsFromBlob: blob is null or too short (size={}) to contain numPositions.", compositeBlob != null ? compositeBlob.length : "null");
             return 0;
         }
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(compositeBlob))) {
             int numPositionsRead = dis.readInt();
-            // logger.debug("getNumPositionsFromBlob: END. Read numPositions = {}", numPositionsRead);
             return numPositionsRead;
         } catch (IOException e) {
             logger.error("getNumPositionsFromBlob: IOException while reading numPositions. Blob size: {}. Error: {}", compositeBlob.length, e.getMessage());
@@ -728,17 +697,14 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs or the blob is malformed.
      */
     public static IntArrayList decompressDocIds(byte[] compositeBlob) throws IOException {
-        // logger.debug("decompressDocIds: Attempting to decompress doc IDs from blob (size={})", compositeBlob != null ? compositeBlob.length : "null");
         if (compositeBlob == null || compositeBlob.length < 4) { // Min: 4 for numPos, then array data
             logger.warn("decompressDocIds: blob is null or too short.");
             return new IntArrayList(0);
         }
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(compositeBlob))) {
             int numPositions = dis.readInt();
-            // logger.debug("decompressDocIds: Read numPositions = {}", numPositions);
             if (numPositions == 0) return new IntArrayList(0);
             IntArrayList result = readCompressedIntArray(dis, numPositions, true); // applyInverseDelta = true
-            // logger.debug("decompressDocIds: Successfully decompressed {} doc IDs.", result.size());
             return result;
         } catch (IOException e) {
             logger.error("decompressDocIds: IOException. Blob size: {}. Error: {}", compositeBlob.length, e.getMessage());
@@ -754,19 +720,15 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs or the blob is malformed.
      */
     public static IntArrayList decompressSentenceIds(byte[] compositeBlob) throws IOException {
-        // logger.debug("decompressSentenceIds: Attempting to decompress sentence IDs from blob (size={})", compositeBlob != null ? compositeBlob.length : "null");
         if (compositeBlob == null || compositeBlob.length < 4) {
             logger.warn("decompressSentenceIds: blob is null or too short.");
             return new IntArrayList(0);
         }
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(compositeBlob))) {
             int numPositions = dis.readInt();
-            // logger.debug("decompressSentenceIds: Read numPositions = {}", numPositions);
             if (numPositions == 0) return new IntArrayList(0);
             skipCompressedIntArray(dis, numPositions); // Skip DocIDs
-            // logger.debug("decompressSentenceIds: Skipped doc IDs.");
             IntArrayList result = readCompressedIntArray(dis, numPositions, true); // applyInverseDelta = true
-            // logger.debug("decompressSentenceIds: Successfully decompressed {} sentence IDs.", result.size());
             return result;
         } catch (IOException e) {
             logger.error("decompressSentenceIds: IOException. Blob size: {}. Error: {}", compositeBlob.length, e.getMessage());
@@ -782,33 +744,28 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs.
      */
     private static void skipCompressedIntArray(DataInputStream dis, int numExpectedPositions) throws IOException {
-        // logger.debug("skipCompressedIntArray: START. numExpectedPositions={}", numExpectedPositions);
         if (numExpectedPositions == 0) {
-            // logger.debug("skipCompressedIntArray: numExpectedPositions is 0, nothing to skip.");
             return;
         }
         int arraySizeOrMarker = dis.readInt(); // This is compressed size in bytes, or RLE_MARKER, or uncompressed size in bytes
-        // logger.debug("skipCompressedIntArray: Read arraySize/marker = {}", arraySizeOrMarker);
 
         if (arraySizeOrMarker == RLE_ENCODED_MARKER) {
             dis.readInt(); // Skip the RLE value
-            // logger.debug("skipCompressedIntArray: Skipped RLE value.");
         } else if (arraySizeOrMarker > 0) {
             // arraySizeOrMarker is byte count for compressed or uncompressed data
             long skipped = dis.skipBytes(arraySizeOrMarker);
-            // logger.debug("skipCompressedIntArray: Skipped {} bytes for array data (expected to skip {}).", skipped, arraySizeOrMarker);
             if (skipped != arraySizeOrMarker) {
                 logger.warn("skipCompressedIntArray: Failed to skip the expected number of bytes. Expected: {}, Actual: {}. Stream might be corrupted or at EOF.", arraySizeOrMarker, skipped);
                 throw new IOException("Failed to skip expected bytes for compressed array data. Expected: " + arraySizeOrMarker + ", Actual: " + skipped);
             }
         } else if (arraySizeOrMarker == 0) {
-             // logger.debug("skipCompressedIntArray: arraySizeOrMarker is 0 (empty array), nothing to skip beyond the size int itself.");
+
         } else {
             // This case should ideally not be reached if arraySizeOrMarker is negative but not RLE_MARKER
             logger.warn("skipCompressedIntArray: Encountered unexpected arraySize/marker value: {}. Cannot reliably skip.", arraySizeOrMarker);
             throw new IOException("Unexpected arraySize/marker in skipCompressedIntArray: " + arraySizeOrMarker);
         }
-        // logger.debug("skipCompressedIntArray: END. Skipped based on marker/size: {}", arraySizeOrMarker);
+
     }
 
     /**
@@ -819,14 +776,12 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs or the blob is malformed.
      */
     public static IntArrayList decompressBeginChars(byte[] compositeBlob) throws IOException {
-        // logger.debug("decompressBeginChars: Attempting from blob (size={})", compositeBlob != null ? compositeBlob.length : "null");
         if (compositeBlob == null || compositeBlob.length < 4) return new IntArrayList(0);
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(compositeBlob))) {
             int numPositions = dis.readInt();
             if (numPositions == 0) return new IntArrayList(0);
             skipCompressedIntArray(dis, numPositions); // DocIDs
             skipCompressedIntArray(dis, numPositions); // SentenceIDs
-            // logger.debug("decompressBeginChars: Skipped doc and sentence IDs for {} positions.", numPositions);
             return readCompressedIntArray(dis, numPositions, true);
         }
     }
@@ -839,7 +794,6 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs or the blob is malformed.
      */
     public static IntArrayList decompressEndChars(byte[] compositeBlob) throws IOException {
-        // logger.debug("decompressEndChars: Attempting from blob (size={})", compositeBlob != null ? compositeBlob.length : "null");
         if (compositeBlob == null || compositeBlob.length < 4) return new IntArrayList(0);
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(compositeBlob))) {
             int numPositions = dis.readInt();
@@ -847,7 +801,6 @@ public class PositionListSoA {
             skipCompressedIntArray(dis, numPositions); // DocIDs
             skipCompressedIntArray(dis, numPositions); // SentenceIDs
             skipCompressedIntArray(dis, numPositions); // BeginChars
-            // logger.debug("decompressEndChars: Skipped doc, sentence, and begin_char IDs for {} positions.", numPositions);
             return readCompressedIntArray(dis, numPositions, true);
         }
     }
@@ -862,7 +815,6 @@ public class PositionListSoA {
      * @throws IOException If an I/O error occurs, the blob is malformed, or it's not a stitch list blob.
      */
     public static IntArrayList decompressSynonymIds(byte[] compositeBlob) throws IOException {
-        // logger.debug("decompressSynonymIds: Attempting from blob (size={})", compositeBlob != null ? compositeBlob.length : "null");
         if (compositeBlob == null || compositeBlob.length < 4) return new IntArrayList(0);
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(compositeBlob))) {
             int numPositions = dis.readInt();
@@ -871,7 +823,6 @@ public class PositionListSoA {
             skipCompressedIntArray(dis, numPositions); // SentenceIDs
             skipCompressedIntArray(dis, numPositions); // BeginChars
             skipCompressedIntArray(dis, numPositions); // EndChars
-            // logger.debug("decompressSynonymIds: Skipped doc, sentence, begin_char, and end_char IDs for {} positions.", numPositions);
             return readCompressedIntArray(dis, numPositions, false); // No delta
         }
     }

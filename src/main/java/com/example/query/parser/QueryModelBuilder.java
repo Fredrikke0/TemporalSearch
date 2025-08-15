@@ -2,7 +2,6 @@ package com.example.query.parser;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -34,8 +33,6 @@ import com.example.query.parser.util.VariableQualifier;
  */
 public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     private static final Logger logger = LoggerFactory.getLogger(QueryModelBuilder.class);
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
-    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ISO_DATE_TIME;
     public static final String DEFAULT_MAIN_ALIAS = "$main"; // Default alias for main query without ALIAS
 
     // Variable registry for tracking variables - qualified names will be used internally
@@ -783,16 +780,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         return result;
     }
 
-    private Temporal.ComparisonType mapComparisonOp(String operator) {
-        return switch (operator) {
-            case "<" -> Temporal.ComparisonType.LT;
-            case ">" -> Temporal.ComparisonType.GT;
-            case "<=" -> Temporal.ComparisonType.LE;
-            case ">=" -> Temporal.ComparisonType.GE;
-            case "==" -> Temporal.ComparisonType.EQ;
-            default -> throw new IllegalArgumentException("Invalid comparison operator: " + operator);
-        };
-    }
+
 
     /**
      * Maps a date operator string from the query language to the unified TemporalPredicate enum.
@@ -1630,6 +1618,18 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             } else {
                 throw new IllegalStateException("Expected StructuralColumn or VariableColumn from visitQualifiedIdentifier in GROUP BY, got: " + (colObj != null ? colObj.getClass().getName() : "null"));
             }
+        } else if (ctx.TITLE() != null || ctx.TIMESTAMP() != null || ctx.DOCUMENT_ID() != null || ctx.SENTENCE_ID() != null || ctx.BEGIN() != null || ctx.END() != null) {
+            String tokenText = ctx.getText();
+            String upperName = tokenText.toUpperCase();
+            if (qualificationRequired) {
+                throw new IllegalStateException(String.format(
+                    "Unqualified structural column '%s' in GROUP BY; '%s' needs qualification as 'alias.%s'.",
+                    tokenText, tokenText, upperName
+                ));
+            }
+            groupByColumnName = effectiveMainAlias + "." + upperName;
+            variableRegistry.registerProducer(groupByColumnName, VariableType.ANY, "GROUP_BY_STRUCTURAL_UNQUALIFIED_TOKEN");
+            logger.debug("Registered unqualified structural GROUP BY item '{}' as producer with type ANY.", groupByColumnName);
         } else if (ctx.variable() != null) {
             String varName = ctx.variable().getText(); // This is a plain identifier by grammar
             if (qualificationRequired) {
