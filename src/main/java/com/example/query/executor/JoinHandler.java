@@ -25,11 +25,7 @@ import com.example.query.model.TemporalPredicate;
 public class JoinHandler {
     private static final Logger logger = LoggerFactory.getLogger(JoinHandler.class);
 
-    // The TemporalMatch record was for MatchDetail, can be removed if not adapted for SoA directly.
-    // private record TemporalMatch(LocalDate date, MatchDetail detail) {}
-
     public JoinHandler() {
-        // Constructor remains simple
     }
 
     /**
@@ -58,9 +54,6 @@ public class JoinHandler {
             int outputGranularitySize,
             AttributeRequirements outputRequirements
     ) throws QueryExecutionException {
-        logger.debug("Performing binary {} JOIN between LHS ('{}', {} entries) and RHS ('{}', {} entries) ON {}",
-                     joinType, lhsAlias, lhsSoA.size(), rhsAlias, rhsSoA.size(), condition);
-
         if (lhsSoA == null) {
             throw new QueryExecutionException(
                 String.format("LHS QueryResultSoA for alias '%s' is null in performBinaryJoin.", lhsAlias),
@@ -71,6 +64,9 @@ public class JoinHandler {
                 String.format("RHS QueryResultSoA for alias '%s' is null in performBinaryJoin.", rhsAlias),
                 "join", QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
+
+        logger.debug("Performing binary {} JOIN between LHS ('{}', {} entries) and RHS ('{}', {} entries) ON {}",
+                     joinType, lhsAlias, lhsSoA.size(), rhsAlias, rhsSoA.size(), condition);
 
         // Ensure input SoAs have conceptualRowIds if required by their own internal state/needs
         // The outputRequirements passed in should already reflect that the output needs conceptualRowIds.
@@ -136,47 +132,16 @@ public class JoinHandler {
 
             List<Integer> leftIndices = leftConceptualIdToIndices.getOrDefault(pair.leftConceptualRowId(), Collections.emptyList());
             for (int leftIdx : leftIndices) {
-                String variableName = lhsSoA.getVariableNameAt(leftIdx);
-                if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) continue;
-
-                Object valueToAdd = lhsSoA.getValueAt(leftIdx);
-                ValueType typeToAdd = lhsSoA.getValueTypeAt(leftIdx);
-
-                if (operatorType == JoinCondition.JoinOperatorType.EQUALITY && variableName.equals(lhsAlias + "." + leftKey)) {
-                    valueToAdd = pair.joinKeyValue();
-                    if (valueToAdd instanceof LocalDate) typeToAdd = ValueType.DATE;
-                    else if (valueToAdd instanceof String || valueToAdd instanceof Number) typeToAdd = ValueType.TERM;
-                }
-                finalJoinedResultSoA.add(valueToAdd, typeToAdd, variableName,
-                                           lhsSoA.getDocumentIdAt(leftIdx),
-                                           lhsSoA.getRequirements().needsSentenceId ? lhsSoA.getSentenceIdAt(leftIdx) : -1,
-                                           lhsSoA.getRequirements().needsPositions ? lhsSoA.getBeginCharAt(leftIdx) : -1,
-                                           lhsSoA.getRequirements().needsPositions ? lhsSoA.getEndCharAt(leftIdx) : -1,
-                                           lhsSoA.getRequirements().needsSynonymIds ? lhsSoA.getSynonymIdAt(leftIdx) : -1,
-                                           currentOutputConceptualId);
-                addedVariablesInCurrentOutputRow.add(variableName);
+                addBindingFromSource(lhsSoA, leftIdx, finalJoinedResultSoA,
+                                     currentOutputConceptualId, addedVariablesInCurrentOutputRow,
+                                     operatorType, lhsAlias, leftKey, pair.joinKeyValue());
             }
 
             List<Integer> rightIndices = rightConceptualIdToIndices.getOrDefault(pair.rightConceptualRowId(), Collections.emptyList());
             for (int rightIdx : rightIndices) {
-                String variableName = rhsSoA.getVariableNameAt(rightIdx);
-                if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) continue;
-
-                Object valueToAdd = rhsSoA.getValueAt(rightIdx);
-                ValueType typeToAdd = rhsSoA.getValueTypeAt(rightIdx);
-                if (operatorType == JoinCondition.JoinOperatorType.EQUALITY && variableName.equals(rhsAlias + "." + rightKey)) {
-                    valueToAdd = pair.joinKeyValue(); // For RHS, this ensures consistency if joinKey was from LHS
-                    if (valueToAdd instanceof LocalDate) typeToAdd = ValueType.DATE;
-                    else if (valueToAdd instanceof String || valueToAdd instanceof Number) typeToAdd = ValueType.TERM;
-                }
-                finalJoinedResultSoA.add(valueToAdd, typeToAdd, variableName,
-                                           rhsSoA.getDocumentIdAt(rightIdx),
-                                           rhsSoA.getRequirements().needsSentenceId ? rhsSoA.getSentenceIdAt(rightIdx) : -1,
-                                           rhsSoA.getRequirements().needsPositions ? rhsSoA.getBeginCharAt(rightIdx) : -1,
-                                           rhsSoA.getRequirements().needsPositions ? rhsSoA.getEndCharAt(rightIdx) : -1,
-                                           rhsSoA.getRequirements().needsSynonymIds ? rhsSoA.getSynonymIdAt(rightIdx) : -1,
-                                           currentOutputConceptualId);
-                addedVariablesInCurrentOutputRow.add(variableName);
+                addBindingFromSource(rhsSoA, rightIdx, finalJoinedResultSoA,
+                                     currentOutputConceptualId, addedVariablesInCurrentOutputRow,
+                                     operatorType, rhsAlias, rightKey, pair.joinKeyValue());
             }
         }
 
@@ -216,5 +181,56 @@ public class JoinHandler {
             return columnName; // Assume it's a direct key if no alias part
         }
         return columnName.substring(columnName.indexOf('.') + 1);
+    }
+
+    /**
+     * Adds a single binding from a source SoA row into the output SoA, respecting join semantics
+     * and ensuring each variable is only added once per conceptual output row.
+     */
+    private void addBindingFromSource(
+            QueryResultSoA sourceSoA,
+            int sourceIndex,
+            QueryResultSoA outputSoA,
+            int outputConceptualRowId,
+            Set<String> addedVariablesInCurrentOutputRow,
+            JoinCondition.JoinOperatorType operatorType,
+            String sourceAlias,
+            String sourceKey,
+            Object joinKeyValue
+    ) {
+        String variableName = sourceSoA.getVariableNameAt(sourceIndex);
+        if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) {
+            return;
+        }
+
+        Object valueToAdd = sourceSoA.getValueAt(sourceIndex);
+        ValueType typeToAdd = sourceSoA.getValueTypeAt(sourceIndex);
+
+        if (operatorType == JoinCondition.JoinOperatorType.EQUALITY && variableName.equals(sourceAlias + "." + sourceKey)) {
+            valueToAdd = joinKeyValue;
+            typeToAdd = inferValueType(joinKeyValue, typeToAdd);
+        }
+
+        outputSoA.add(
+                valueToAdd,
+                typeToAdd,
+                variableName,
+                sourceSoA.getDocumentIdAt(sourceIndex),
+                sourceSoA.getRequirements().needsSentenceId ? sourceSoA.getSentenceIdAt(sourceIndex) : -1,
+                sourceSoA.getRequirements().needsPositions ? sourceSoA.getBeginCharAt(sourceIndex) : -1,
+                sourceSoA.getRequirements().needsPositions ? sourceSoA.getEndCharAt(sourceIndex) : -1,
+                sourceSoA.getRequirements().needsSynonymIds ? sourceSoA.getSynonymIdAt(sourceIndex) : -1,
+                outputConceptualRowId
+        );
+        addedVariablesInCurrentOutputRow.add(variableName);
+    }
+
+    /**
+     * Infers a ValueType from a Java value, falling back to a provided default when not recognized.
+     */
+    private static ValueType inferValueType(Object value, ValueType fallback) {
+        if (value instanceof LocalDate) return ValueType.DATE;
+        if (value instanceof String || value instanceof Number) return ValueType.TERM;
+        return fallback;
     }
 }

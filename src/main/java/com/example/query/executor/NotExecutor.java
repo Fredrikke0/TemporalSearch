@@ -20,10 +20,9 @@ import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Not;
 
 /**
- * Executes a NOT condition.
- * This executor is currently disabled pending refactoring for QueryResult.
+ * Executes a NOT condition over the universe defined by the filtering context
+ * or approximated via the unigram index.
  */
-// @Disabled // Re-enable this executor
 public final class NotExecutor implements ConditionExecutor<Not> {
     private static final Logger logger = LoggerFactory.getLogger(NotExecutor.class);
     private static final String UNIGRAM_INDEX_NAME = "unigram"; // Target index for universe approximation
@@ -60,26 +59,17 @@ public final class NotExecutor implements ConditionExecutor<Not> {
         Set<Object> ids = new HashSet<>(); // Use Object to hold Integer or SimpleEntry
         if (granularity == Query.Granularity.DOCUMENT) {
             for (int i = 0; i < queryResult.size(); i++) {
-                // Ensure we only add unique document IDs, conceptual IDs might map to same docId multiple times
-                // This needs to be reviewed: if a conceptual ID maps to a doc ID, that doc ID is "hit".
-                // We are interested in the set of *document IDs* that the subquery matched.
-                // A simple iteration might give duplicate doc IDs if multiple bindings map to the same doc.
-                // Using a Set naturally handles this.
-                 ids.add(queryResult.getDocumentIdAt(i));
+                // Collect unique document IDs from sub-result
+                ids.add(queryResult.getDocumentIdAt(i));
             }
         } else { // SENTENCE granularity
             for (int i = 0; i < queryResult.size(); i++) {
                 if (queryResult.getRequirements().needsSentenceId) {
                     ids.add(new SimpleEntry<>(queryResult.getDocumentIdAt(i), queryResult.getSentenceIdAt(i)));
                 } else {
-                    // This case should ideally not happen if granularity is SENTENCE.
-                    // Or, if it does, it implies only doc ID is available, which is like DOCUMENT granularity for this entry.
-                    // Log a warning, and potentially add just the doc ID if that makes sense.
-                    logger.warn("Sentence granularity requested for NOT, but sub-result for conceptual ID {} lacks sentence ID. Doc ID: {}",
-                                queryResult.getConceptualRowIdAt(i), queryResult.getDocumentIdAt(i));
-                    // Fallback: add document ID if sentence ID is missing but required by granularity.
-                    // This behavior might need refinement based on strictness.
-                    // ids.add(queryResult.getDocumentIdAt(i)); // Option: treat as document-level match if sentId missing
+                    // Sentence granularity requested but sentence IDs are missing; warn and skip
+                    logger.warn("Sentence granularity requested for NOT, but sub-result lacks sentence ID. Doc ID: {}",
+                                queryResult.getDocumentIdAt(i));
                 }
             }
         }
@@ -226,7 +216,6 @@ public final class NotExecutor implements ConditionExecutor<Not> {
 
         // Directly populate the QueryResultSoA
         QueryResultSoA finalResult = new QueryResultSoA(granularity, granularitySize, requirements);
-        int conceptualRowIdCounter = 0;
 
         for (Object id : resultIds) {
             int docId;
@@ -254,7 +243,7 @@ public final class NotExecutor implements ConditionExecutor<Not> {
                 -1,                               // beginChar (placeholder)
                 -1,                               // endChar (placeholder)
                 -1,                               // synonymId (placeholder)
-                conceptualRowIdCounter++
+                finalResult.getNextConceptualRowId()
             );
         }
         logger.info("NOT condition execution complete. Produced {} result entries.", finalResult.size());

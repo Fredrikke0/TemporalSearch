@@ -17,10 +17,8 @@ public class AttributeRequirements {
 
     /**
      * Creates AttributeRequirements with default values.
-     * Document ID is always required for result grouping.
      */
     public AttributeRequirements() {
-        // Default values set in field declarations
     }
 
 

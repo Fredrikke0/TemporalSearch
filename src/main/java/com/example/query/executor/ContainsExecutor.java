@@ -24,6 +24,10 @@ import com.example.query.model.condition.Contains;
  * Handles n-gram pattern matching and variable binding.
  * Returns QueryResultSoA.
  *
+ * Wildcards (simplified behavior): Only a trailing '*' on the entire pattern triggers a prefix scan
+ * against the selected index (e.g., "apple*"). Any '*' elsewhere (including per-token) is treated
+ * as a literal character.
+ *
  * @see com.example.query.model.condition.Contains
  */
 public final class ContainsExecutor implements ConditionExecutor<Contains> {
@@ -55,11 +59,20 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         logger.debug(">>> Executing ContainsExecutor");
         logger.debug("Executing CONTAINS condition with AttributeRequirements: {}, FilteringContext isPresent: {}",
                      requirements.getRequiredSoAAttributes(), context.isPresent());
-        // TODO: If context is present and specifies empty doc/sentence IDs, can we early exit here?
-        // if (context.isPresent() && context.get().allowedDocumentIds().map(Set::isEmpty).orElse(false)) {
-        //     logger.debug("FilteringContext indicates no allowed document IDs, returning empty result for CONTAINS.");
-        //     return new QueryResultSoA(granularity, granularitySize, requirements);
-        // }
+        // Early exit if the FilteringContext explicitly restricts to an empty set
+        if (context.isPresent()) {
+            FilteringContext fc = context.get();
+            if (fc.allowedDocumentIds().isPresent() && fc.allowedDocumentIds().get().isEmpty()) {
+                logger.debug("FilteringContext has empty allowedDocumentIds; returning empty result for CONTAINS.");
+                return new QueryResultSoA(granularity, granularitySize, requirements);
+            }
+            if (requirements.needsSentenceId && fc.granularity() == Query.Granularity.SENTENCE) {
+                if (fc.allowedDocumentSentenceIds().isPresent() && fc.allowedDocumentSentenceIds().get().isEmpty()) {
+                    logger.debug("FilteringContext has empty allowedDocumentSentenceIds at sentence granularity; returning empty result for CONTAINS.");
+                    return new QueryResultSoA(granularity, granularitySize, requirements);
+                }
+            }
+        }
 
         QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
         int conceptualRowIdCounter = 0;
@@ -68,6 +81,15 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         if (terms.isEmpty()) {
             throw new QueryExecutionException(
                 "Contains condition must have at least one term.",
+                condition.toString(),
+                QueryExecutionException.ErrorType.INVALID_CONDITION
+            );
+        }
+
+        // Enforce supported n-gram sizes (1..3) for simplified behavior
+        if (terms.size() > 3) {
+            throw new QueryExecutionException(
+                "CONTAINS supports 1 to 3 terms; received " + terms.size() + ".",
                 condition.toString(),
                 QueryExecutionException.ErrorType.INVALID_CONDITION
             );
@@ -137,12 +159,12 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
     }
 
     /**
-     * Constructs search patterns from terms, handling wildcards.
-     * For example, ["apple", "*", "day"] would generate patterns for all trigrams
-     * starting with "apple" and ending with "day".
+     * Constructs search patterns from terms (simplified wildcard behavior).
+     * Builds a single lowercased pattern string. Only if the final pattern ends with '*'
+     * will a prefix search be performed later; any '*' elsewhere is treated literally.
      *
-     * @param terms The list of terms, possibly containing wildcards
-     * @return Set of search patterns to look for
+     * @param terms The list of terms (may include literal '*')
+     * @return Set with a single search pattern to look for
      */
     private Set<String> constructSearchPatterns(List<String> terms) {
         Set<String> patterns = new HashSet<>();
@@ -202,14 +224,11 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                 String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
 
                 if (!key.startsWith(prefix)) {
-                    // We've iterated past the prefix range
                     break;
                 }
 
-                // Deserialize the value to PositionListSoA
                 PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context, requirements);
 
-                // Always reconstruct value for human readability if it contained delimiters
                 String actualValue = reconstructValue(key, DELIMITER);
 
                 for (int i = 0; i < positions.getNumPositions(); i++) {
@@ -218,12 +237,11 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                         ValueType.TERM,
                         isVariable ? variableName : null,
                         positions.getDocIdAt(i),
-                        // Use requirements to determine if these attributes are needed and available in PositionListSoA
                         requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
                         requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                         requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                         requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                        conceptualRowIdCounter++ // Assign a new ID for each detail
+                        conceptualRowIdCounter++
                     );
                 }
                 iterator.next();
@@ -236,10 +254,8 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                 QueryExecutionException.ErrorType.INTERNAL_ERROR
             );
         } catch (IndexAccessException iae) {
-            // Re-throw if it's already an IndexAccessException from the iterator itself
             throw iae;
         } catch (Exception e) {
-            // Catch-all for other unexpected errors during iteration or processing
             throw new QueryExecutionException(
                 "Unexpected error during prefix search: " + e.getMessage(),
                 e,
@@ -257,8 +273,6 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
      * Replaces NGRAM_DELIMITER with a space.
      */
     private String reconstructValue(String key, char delimiter) {
-        // Split by the delimiter and join with space
-        // Need to handle the delimiter carefully if it's a regex special char
         String[] parts = key.split(String.valueOf(delimiter));
         return String.join(" ", parts);
     }
@@ -266,6 +280,9 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
     /**
      * Executes a search for a specific pattern using selective deserialization for better performance.
      * This method only deserializes the attributes actually needed, reducing memory usage and processing time.
+     *
+     * Simplified wildcard behavior: if and only if the entire pattern ends with '*', perform a prefix scan.
+     * Otherwise, perform a direct key lookup. Any '*' not in the final position is treated literally.
      *
      * @param pattern The pattern to search for
      * @param isVariable Whether this corresponds to a variable in the original condition
@@ -285,18 +302,13 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         throws QueryExecutionException, IndexAccessException {
 
         logger.debug("Executing optimized pattern search for: {}, variable: {}, contextIsPresent: {}", pattern, variableName, context.isPresent());
-        int originalConceptualRowIdCounter = conceptualRowIdCounter;
 
-        // Pattern is already lowercased by constructSearchPatterns
         if (pattern == null || pattern.trim().isEmpty()) {
             logger.warn("Skipping empty pattern in CONTAINS condition");
             return conceptualRowIdCounter;
         }
 
-        // NEW SIMPLIFIED WILDCARD HANDLING:
         if (pattern.endsWith("*") && pattern.length() > 1) {
-            // Pattern ends with '*' and is not just "*". Treat as prefix search.
-            // E.g., "term*", "term1<DELIMITER>term2*"
             String prefix = pattern.substring(0, pattern.length() - 1);
             logger.debug("Pattern '{}' ends with '*', performing prefix search for '{}'", pattern, prefix);
             return executePrefixSearch(prefix, isVariable, variableName, index, condition, resultSoA, conceptualRowIdCounter, requirements, context);

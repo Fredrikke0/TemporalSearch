@@ -127,31 +127,6 @@ public record Dependency(
     @Override
     public void registerVariables(VariableRegistry registry) {
         logger.debug("Registering variables for DEPENDS({}, {}, {})", governor, relation, dependent);
-
-        // Produced and Consumed variables are now registered directly in QueryModelBuilder
-        // using qualified names for registry lookup.
-
-        /*
-        if (isVariable) {
-            logger.debug("Registering {} as producer variable", variableName);
-            registry.registerProducer(variableName, getProducedVariableType(), getType());
-        }
-
-        // Register consumed variables
-        if (isVariableReference(governor)) {
-            logger.debug("Registering {} as consumer variable (governor)", governor);
-            registry.registerConsumer(governor, VariableType.ANY, getType());
-        } else {
-            logger.debug("Governor '{}' is not a variable reference", governor);
-        }
-
-        if (isVariableReference(dependent)) {
-            logger.debug("Registering {} as consumer variable (dependent)", dependent);
-            registry.registerConsumer(dependent, VariableType.ANY, getType());
-        } else {
-            logger.debug("Dependent '{}' is not a variable reference", dependent);
-        }
-        */
     }
 
     @Override

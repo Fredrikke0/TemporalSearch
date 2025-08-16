@@ -11,7 +11,7 @@ import com.example.query.binding.VariableType;
  * Represents a POS (Part-of-Speech) condition in the query language.
  * This condition checks for terms with a specific POS tag, optionally binding the term.
  *
- * **Note:** POS tags are stored and queried in lowercase.
+ * **Note:** POS tags are stored and queried in uppercase.
  *
  * Available POS tags (based on CoreNLP annotations on the Wikipedia dataset):
  *
@@ -87,17 +87,10 @@ public record Pos(
             if (qualifiedVariableName.isBlank()) {
                 throw new IllegalArgumentException("qualifiedVariableName cannot be blank when isVariable is true");
             }
-            // Term can be null (e.g. POS(tag) BIND ?var - term is irrelevant for binding value which is the tag)
-            // or term could be a variable name if another executor type consumes it (e.g. POS(tag, ?textVar))
         } else {
-            // If not a variable binding, then qualifiedVariableName must be null.
             if (qualifiedVariableName != null) {
                 throw new IllegalArgumentException("qualifiedVariableName must be null when isVariable is false");
             }
-            // For PosExecutor: term must be null (it throws if term is not null).
-            // For other potential executors using POS(tag, 'literal'): term would be non-null.
-            // The check `Objects.requireNonNull(term, "term cannot be null when isVariable is false");` is removed
-            // to allow PosExecutor to work with Pos conditions representing POS(tag).
         }
 
         // No defensive copy needed for Strings
@@ -182,6 +175,8 @@ public record Pos(
         if (isVariable) {
             // Format: POS(Tag) BIND alias.var
             return String.format("POS(%s) BIND %s", posTag, qualifiedVariableName);
+        } else if (term == null) {
+            return String.format("POS(%s)", posTag);
         } else {
             return String.format("POS(%s, %s)", posTag, term);
         }

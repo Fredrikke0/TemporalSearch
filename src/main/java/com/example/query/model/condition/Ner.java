@@ -24,11 +24,6 @@ import com.example.query.binding.VariableType;
  * - PERCENT: Percentage values
  * - SET: Set expressions (e.g., "weekly", "monthly")
  *
- * Usage examples:
- * - NER("PERSON", "?person") - Binds person entities to variable
- * - NER("ORGANIZATION") - Matches any organization
- * - NER("DATE", "?date") - Binds date expressions to variable
- * - NER("MONEY") - Matches any monetary amount
  */
 public record Ner(
     String entityType,

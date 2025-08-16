@@ -31,9 +31,6 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
     private final String stitchStrategy;
     private final Query.Granularity queryGranularity;
 
-    // Helper record for Sentence granularity keys
-    private record DocSentIdPair(int docId, int sentId) {}
-
     /**
      * Creates a new LogicalConditionExecutor that uses the provided factory to create
      * executors for subconditions.
@@ -71,7 +68,6 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         return executeInternal(condition, indexes, granularity, granularitySize, corpusName, requirements, context);
     }
 
-    // --- Internal execution logic using QueryResultSoA ---
     private QueryResultSoA executeInternal(Logical condition, Map<String, IndexAccessInterface> indexes,
                                       Query.Granularity granularity,
                                       int granularitySize,
@@ -313,7 +309,6 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                 } else if (comparison > 0) {
                     rightIdx++;
                 } else {
-                    // Found matching (docId, sentenceId) pair
                     int granuleMatchDocId = leftDocId;
                     int granuleMatchSentId = leftSentId;
 
@@ -529,7 +524,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
     }
 
     /**
-     * New private helper method to fuse stitchable pairs.
+     * private helper method to fuse stitchable pairs.
      * Logic: Greedy, Single-Pass, Multi-Fusion, Non-Adjacent.
      */
     private List<Condition> fuseAllNonOverlappingStitchablePairs(List<Condition> originalConditions) {
@@ -540,7 +535,6 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
 
         ArrayList<Condition> resultingConditions = new ArrayList<>();
         boolean[] consumed = new boolean[originalConditions.size()];
-        // No need to initialize to false, default is false for boolean arrays
 
         for (int i = 0; i < originalConditions.size(); i++) {
             if (consumed[i]) {
@@ -608,9 +602,6 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                 resultingConditions.add(c1); // Add c1 unmodified
             }
         }
-        // Add any remaining unconsumed conditions (should only happen if originalConditions.size() is odd and last one is not consumed)
-        // This loop is actually not needed if the outer loop goes to originalConditions.size() and checks !consumed[i] before adding c1
-        // The current logic of adding c1 if !foundPairForC1 handles all cases correctly.
 
         if (resultingConditions.size() < originalConditions.size()) {
             logger.info("Stitch fusion transformed {} conditions into {} conditions.", originalConditions.size(), resultingConditions.size());

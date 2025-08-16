@@ -157,14 +157,11 @@ public class SoAJoinOptimizer {
                 Set<Integer> rightConceptualIds = (smallerMap == leftMap) ? conceptualIdsFromLargerMap : conceptualIdsFromSmallerMap;
 
                 for (int leftCid : leftConceptualIds) {
-                    for (int rightCid : rightConceptualIds) {
-                        // Basic self-join on the exact same conceptual ID from the exact same input SoA instance might be problematic
-                        // depending on how JoinHandler processes these. If leftSoA == rightSoA and leftCid == rightCid,
-                        // it means an item is joining with itself. This check is subtle.
-                        // For now, allow all pairs; JoinHandler's logic for creating output rows is key.
-                        results.add(new SoAJoinKeyMatch(leftCid, rightCid, key));
-                    }
-                }
+					for (int rightCid : rightConceptualIds) {
+						// Allow all pairs (including self-pairs); JoinHandler governs output rows.
+						results.add(new SoAJoinKeyMatch(leftCid, rightCid, key));
+					}
+				}
             }
         }
         logger.debug("Map combination yielded {} key matches.", results.size());
@@ -257,23 +254,12 @@ public class SoAJoinOptimizer {
         if (!soa.getRequirements().needsConceptualRowIds) {
              logger.warn("Extracting temporal pairs for SoA (key: '{}'), but it lacks conceptualRowIds. Results may be incomplete or incorrect.", keyName);
         }
-
-        Set<Integer> processedConceptualIdsForKey = new HashSet<>();
-
-
         for (int i = 0; i < soa.size(); i++) {
-            int conceptualId = soa.getConceptualRowIdAt(i); // Always get conceptual ID
-
-            // Process each conceptualId only once for a given date key to avoid duplicate date points from the same conceptual row.
-            // However, different variables within the same conceptual row might hold different dates.
-            // The current design implies a keyName targets a specific variable or a structural date.
-            // For simplicity, if multiple entries for the *same keyName* exist under *one conceptualId*,
-            // we will take the first valid date encountered. This simplification might need review
-            // if a single conceptual row can have multiple distinct dates for the *same join key variable*.
+            int conceptualId = soa.getConceptualRowIdAt(i);
 
             String varNameAtIndex = soa.getVariableNameAt(i);
             boolean isTargetKey = (varNameAtIndex != null && (varNameAtIndex.equals(keyName) || varNameAtIndex.equals("?" + keyName)));
-            boolean isStructuralDate = isStructuralDateKey(keyName); // Re-use existing helper
+            boolean isStructuralDate = isStructuralDateKey(keyName);
 
             Object value = null;
             ValueType type = null;
@@ -281,85 +267,23 @@ public class SoAJoinOptimizer {
             if (isTargetKey) {
                 value = soa.getValueAt(i);
                 type = soa.getValueTypeAt(i);
-            } else if (isStructuralDate) { // Check if keyName refers to a structural date (e.g. "date")
-                // This case is tricky. If keyName is "date", does it mean any date associated with the conceptualId?
-                // Or a specific structurally defined date column if QueryResultSoA had one?
-                // Assuming for now it implies looking for a ValueType.DATE under the conceptualId
-                // matching *any* variable if keyName is a generic "date".
-                // This might be too broad. A stricter interpretation:
-                // If keyName is "date", it must match a variable named "date" or a specific date attribute.
-                // Let's stick to: if keyName is a known structural key like "date", we check the type.
-                // If it is a variable, we match the variable name.
-
-                // Simplified: If the keyName is "date" (structural), we look for any value of type DATE.
-                // If keyName is a variable e.g. "$eventDate", we only look at that variable.
+            } else if (isStructuralDate) {
                  if (soa.getValueTypeAt(i) == ValueType.DATE) {
                     value = soa.getValueAt(i);
                     type = ValueType.DATE;
-                }
+                 }
             }
 
-
             if (value instanceof LocalDate && type == ValueType.DATE) {
-                // To ensure we only add one date per conceptual ID *for this specific key*,
-                // we can use a composite key for the set if needed, or simplify.
-                // The problem arises if conceptualId 1 has varX=dateA and varY=dateB, and we join on "date".
-                // Current buildKeyToConceptualIdsMap adds conceptualId once if *any* var matches.
-                // For temporal join, we need specific (date, conceptualId) pairs.
-
-                // Modification: A conceptual ID can yield multiple temporal pairs if it has multiple distinct date values
-                // for different variables that could all be aliased to the same join key in a more complex query.
-                // However, the keyName here is specific. So, for a given conceptualId and a given keyName,
-                // there should typically be one date.
-                // The current loop structure iterates all rows. If conceptualId X appears in rows 5 and 10,
-                // and keyName matches for both, we might add (date_at_row5, X) and (date_at_row10, X).
-                // If these dates are different, it's an issue for "one date per conceptualID per key".
-                // We will rely on the fact that `getValueAt(i)` and `getVariableNameAt(i)` give the specific binding.
-
-                // Let's assume for a given conceptualId and keyName, there's effectively one date.
-                // If not, the first one encountered for that conceptualId and keyName match is taken.
-                // To handle multiple distinct dates for the same conceptualID but different actual sources
-                // that map to the same `keyName` (e.g. through aliases in SELECT), this might need rework.
-                // For now, keep it simple: one (LocalDate, conceptualId) pair if a match is found.
-                // The processedConceptualIdsForKey set helps if multiple raw rows in SoA point to the same conceptualId
-                // and carry the same variable (keyName) - we only want that date once.
-
-                if (processedConceptualIdsForKey.add(conceptualId)) { // Add if not already processed for this key for this conceptualId
-                    pairs.add(new TemporalConceptualPair((LocalDate) value, conceptualId));
-                } else {
-                    // If we already processed this conceptualId for this keyName, check if the date is different.
-                    // This situation is complex: e.g. conceptualId 7 has varAnniv=2000-01-01 (row 3) and varAnniv=2000-01-01 (row 8)
-                    // The set above handles this fine.
-                    // But if conceptualId 7 has varA=2000-01-01 (row 3) and varB=2000-02-02 (row 8) and join key is $someDate
-                    // which could be varA or varB based on query. This needs resolver for keyName -> actual value in conceptualId.
-                    // The current SoA structure (flat list of bindings) makes this slightly indirect.
-                    // buildKeyToConceptualIdsMap has a similar challenge.
-
-                    // Sticking to: extract all (value, conceptualId) where value is a date and matches keyName.
-                    // Then let sorting and subsequent logic handle it.
-                    // The `processedConceptualIdsForKey` might be too restrictive if the same conceptual ID
-                    // can genuinely have multiple distinct date values for the *same* join key (e.g. if the key is not specific enough).
-                    // Removing `processedConceptualIdsForKey` to capture all specified dates. Duplicates will be handled by Set semantics later if needed.
-                    // Actually, for temporal pair extraction, multiple identical (date, conceptualId) are fine if they stem from different raw bindings
-                    // that all resolve to the same conceptualId and join key. The join logic itself (e.g. unique SoAJoinKeyMatch) handles final pairing.
-                }
-                 // Simpler: if it's a date and matches the key, add it.
-                 // The `buildKeyToConceptualIdsMap` logic is more about finding *any* conceptual ID that has a key.
-                 // Here we need all specific (date, conceptualID) instances matching the key.
-                 pairs.add(new TemporalConceptualPair((LocalDate) value, conceptualId));
-
-
+                pairs.add(new TemporalConceptualPair((LocalDate) value, conceptualId));
             } else if (value != null && type != ValueType.DATE && (isTargetKey || isStructuralDate) ) {
                  logger.warn("Temporal join key '{}' for conceptual ID {} resolved to value '{}' of type {} but expected LocalDate. Skipping this entry.",
                             keyName, conceptualId, value, type);
             }
         }
-        // Remove duplicate TemporalConceptualPair if they arise from multiple bindings
-        // for the exact same date and conceptual ID under the same key.
-        // A simple List to Set to List conversion would do this.
         if (!pairs.isEmpty()) {
-            return new ArrayList<>(new HashSet<>(pairs)); // Deduplicate identical pairs
+            return new ArrayList<>(new HashSet<>(pairs));
         }
-        return pairs; // Return distinct pairs
+        return pairs;
     }
 }

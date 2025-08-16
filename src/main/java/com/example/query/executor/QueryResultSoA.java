@@ -8,12 +8,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.core.IndexAccessInterface;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 
@@ -21,7 +19,6 @@ import it.unimi.dsi.fastutil.bytes.ByteArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrays;
 import it.unimi.dsi.fastutil.ints.IntComparator;
-import tech.tablesaw.api.Table;
 
 /**
  * Structure of Arrays (SoA) implementation for query results with massive memory optimization.
@@ -62,13 +59,7 @@ public final class QueryResultSoA {
     private Query.Granularity granularity;
     private int granularitySize;
 
-    // Static value interning map for across-query optimization
-    private static final Map<Object, Integer> GLOBAL_VALUE_INTERNER = new ConcurrentHashMap<>();
-    private static final List<Object> GLOBAL_UNIQUE_VALUES = Collections.synchronizedList(new ArrayList<>());
-    private static final Map<String, Integer> GLOBAL_VARIABLE_INTERNER = new ConcurrentHashMap<>();
-    private static final List<String> GLOBAL_UNIQUE_VARIABLE_NAMES = Collections.synchronizedList(new ArrayList<>());
 
-    private int maxConceptualRowId = -1; // Tracks the highest conceptual row ID encountered
     private int nextConceptualRowIdGenerator = 0; // Counter for getNextConceptualRowId()
 
     /**
@@ -160,7 +151,6 @@ public final class QueryResultSoA {
         valueTypes.add((byte) valueType.ordinal());
 
         size++;
-        this.maxConceptualRowId = Math.max(this.maxConceptualRowId, conceptualRowId); // Ensure maxConceptualRowId is updated
 
         logger.trace("QueryResultSoA add() (hashCode={}): AFTER. new_size={}, current_nextConceptualRowIdGenerator={}. Added: value={}, type={}, var={}, docId={}, conceptualRowId={}",
                      System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator,
@@ -461,39 +451,6 @@ public final class QueryResultSoA {
         return groupedMatches;
     }
 
-    // --- Export and Table Generation (User-Driven Strategy) ---
-
-    /**
-     * Creates a Tablesaw Table for display purposes (preview mode).
-     * This method is optimized for small result sets (typically 20 rows for preview).
-     *
-     * @param query The original query for context
-     * @param indexes Index access for metadata lookup
-     * @return A Tablesaw Table suitable for formatted display
-     */
-    public Table toTable(Query query, Map<String, IndexAccessInterface> indexes) {
-        logger.debug("Converting QueryResultSoA to Table for display (size={})", size);
-
-        // TODO: Implement table generation using SelectColumn processors
-        // This will be implemented in Phase 4
-        throw new UnsupportedOperationException("Table generation will be implemented in Phase 4");
-    }
-
-    /**
-     * Exports results directly to CSV format using streaming approach.
-     * Maintains constant memory usage regardless of result size.
-     *
-     * @param filename The output filename
-     * @param query The original query for context
-     * @param indexes Index access for metadata lookup
-     */
-    public void exportToCsv(String filename, Query query, Map<String, IndexAccessInterface> indexes) {
-        logger.info("Exporting QueryResultSoA to CSV: {} (size={})", filename, size);
-
-        // TODO: Implement direct CSV streaming export
-        throw new UnsupportedOperationException("CSV export will be implemented in Phase 4");
-    }
-
 
     public void clear() {
         logger.trace("QueryResultSoA clear() (hashCode={}): BEFORE. current_size={}, current_nextConceptualRowIdGenerator={}",
@@ -512,7 +469,7 @@ public final class QueryResultSoA {
         if (this.synonymIds != null) this.synonymIds.clear();
         this.conceptualRowIds.clear();
         this.size = 0;
-        this.maxConceptualRowId = -1;
+        // No separate max conceptual row tracking
         this.nextConceptualRowIdGenerator = 0; // Reset conceptual row ID counter
         logger.trace("QueryResultSoA clear() (hashCode={}): AFTER. new_size={}, new_nextConceptualRowIdGenerator={}",
                      System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator);
@@ -653,7 +610,6 @@ public final class QueryResultSoA {
         this.valueTypes = sortedValueTypes;
     }
 
-    // ADDED METHOD
     public Set<Integer> getUniqueDocumentIds() {
         if (documentIds == null || documentIds.isEmpty()) {
             return Collections.emptySet();

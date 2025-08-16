@@ -19,8 +19,6 @@ public record FilteringContext(
     }
 
     public boolean isUnrestricted() {
-        // True if no document IDs are specified (or the set is empty)
-        // AND no document-sentence ID pairs are specified (or the map is empty)
         boolean docsUnrestricted = allowedDocumentIds.map(Set::isEmpty).orElse(true);
         boolean sentsUnrestricted = allowedDocumentSentenceIds.map(Map::isEmpty).orElse(true);
         return docsUnrestricted && sentsUnrestricted;
@@ -56,8 +54,6 @@ public record FilteringContext(
                     Set<Integer> sentencesFromNew = newConstraintSentences.get(docId);
 
                     if (sentencesFromNew == null || sentencesFromNew.isEmpty()) {
-                        // New constraints offer no sentences for this docId, so it implies no sentences can match.
-                        // Do not add this docId to finalSentMap, effectively removing it from sentence consideration.
                         continue;
                     }
 
@@ -65,19 +61,13 @@ public record FilteringContext(
                         .flatMap(m -> Optional.ofNullable(m.get(docId)));
 
                     if (this.allowedDocumentSentenceIds.isEmpty() || !sentencesFromOldOpt.isPresent()) {
-                        // Case 1: Old context was Optional.empty() for sentences (unrestricted globally at sentence level for allowed docs)
-                        // OR Case 3: Old context's allowedDocumentSentenceIds Opt was present, but this docId was NOT in its map (unrestricted for this specific doc)
-                        // Take all sentences from the new constraints (which are non-empty here).
                         finalSentMap.put(docId, new HashSet<>(sentencesFromNew));
                     } else {
-                        // Case 2: Old context had specific sentence restrictions for this doc (sentencesFromOldOpt.isPresent() is true).
-                        // Intersect them with new constraints' sentences (which are non-empty).
                         Set<Integer> intersection = new HashSet<>(sentencesFromOldOpt.get());
                         intersection.retainAll(sentencesFromNew);
                         if (!intersection.isEmpty()) {
                             finalSentMap.put(docId, intersection);
                         }
-                        // If intersection is empty, docId is not added to finalSentMap.
                     }
                 }
             }
@@ -86,8 +76,4 @@ public record FilteringContext(
         return new FilteringContext(nextDocIds, nextDocSentIds, this.granularity);
     }
 
-    // Getters are implicitly provided by the record type
-    // public Optional<Set<Integer>> getAllowedDocumentIds() { return allowedDocumentIds; }
-    // public Optional<Map<Integer, Set<Integer>>> getAllowedDocumentSentenceIds() { return allowedDocumentSentenceIds; }
-    // public Query.Granularity getGranularity() { return granularity; }
 }

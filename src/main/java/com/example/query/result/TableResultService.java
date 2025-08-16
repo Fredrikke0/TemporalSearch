@@ -97,6 +97,10 @@ public class TableResultService {
             selectColumns = createDefaultSelectColumns(query, result);
             createdDefaultColumns = true;
         }
+        // Ensure non-null for downstream usage
+        if (selectColumns == null) {
+            selectColumns = Collections.emptyList();
+        }
 
         Table table = Table.create(query.mainAlias().orElse("QueryResults"));
         Map<String, Column<?>> columnMap = new HashMap<>();
@@ -127,7 +131,7 @@ public class TableResultService {
         }
 
         // This case is now only reachable if result is NOT empty, but we failed to determine selectColumns.
-        if (createdDefaultColumns && selectColumns.isEmpty()) {
+        if (createdDefaultColumns && (selectColumns == null || selectColumns.isEmpty())) {
             logger.warn("QueryResultSoA has data, but no columns were selected (explicitly or by default after attempting). Returning table with no columns.");
             return Table.create(query.mainAlias().orElse("QueryResults_NoColumns")); // Fallback to table with no columns
         }
@@ -186,7 +190,7 @@ public class TableResultService {
                     // Continue to allow population of columns that don't depend on SoA indices (e.g. constants, if any)
                 }
 
-                for (SelectColumn selectColumn : selectColumns) {
+                for (SelectColumn selectColumn : (selectColumns != null ? selectColumns : Collections.<SelectColumn>emptyList())) {
                     Column<?> tableCol = columnMap.get(selectColumn.getColumnName());
                     if (tableCol != null) {
                         logger.trace("Populating column '{}' for conceptualRowId {} (raw indices: {}) at table_row {}.",
@@ -205,7 +209,7 @@ public class TableResultService {
                 logger.info("Applying GROUP BY clause with columns: {}", query.groupByColumns());
                 table = applyGroupBy(table, query);
             }
-            else if (selectColumns.stream().anyMatch(col -> col instanceof CountColumn)) {
+            else if ((selectColumns != null) && selectColumns.stream().anyMatch(col -> col instanceof CountColumn)) {
                 logger.debug("No GROUP BY clause, but CountColumn found. Applying legacy CountColumn aggregation.");
                 table = CountColumn.applyCountAggregations(table);
             }

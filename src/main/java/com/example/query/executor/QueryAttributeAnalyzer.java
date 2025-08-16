@@ -5,7 +5,6 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.query.model.JoinCondition;
 import com.example.query.model.Query;
 import com.example.query.model.SelectColumn;
 import com.example.query.model.SnippetColumn;
@@ -52,15 +51,8 @@ public class QueryAttributeAnalyzer {
         // Analyze granularity requirements
         analyzeGranularity(query.granularity(), requirements);
 
-        // Analyze conditions for stitch requirements
+        // Analyze conditions to determine attribute requirements
         analyzeConditions(query.conditions(), requirements);
-
-        // Analyze join conditions from JoinSteps
-        if (!query.joinSteps().isEmpty()) {
-            for (com.example.query.model.JoinStep step : query.joinSteps()) {
-                analyzeJoinCondition(step.onCondition(), requirements);
-            }
-        }
 
         // Analyze subqueries recursively from JoinSteps, propagating parent requirements
         for (com.example.query.model.JoinStep step : query.joinSteps()) {
@@ -95,6 +87,7 @@ public class QueryAttributeAnalyzer {
 
     /**
      * Analyzes SELECT columns to determine attribute requirements.
+     * Conceptual row IDs are required to assemble output rows and for joins.
      */
     private static void analyzeSelectColumns(List<SelectColumn> selectColumns, AttributeRequirements requirements) {
         requirements.needsConceptualRowIds = true;
@@ -163,32 +156,5 @@ public class QueryAttributeAnalyzer {
             // Recursively analyze logical conditions
             analyzeConditions(logical.conditions(), requirements);
         }
-        // Note: Temporal conditions are handled in analyzeJoinCondition if they involve joins
-    }
-
-    /**
-     * Analyzes join conditions to determine attribute requirements.
-     */
-    private static void analyzeJoinCondition(JoinCondition joinCondition, AttributeRequirements requirements) {
-        if (joinCondition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL) {
-            logger.trace("Found temporal join, requiring date values");
-        }
-        // Additional join analysis can be added here as needed
-    }
-
-    /**
-     * Detects if a query has stitch-eligible patterns.
-     * This is a placeholder for future optimization where queries like
-     * CONTAINS('term') AND NER(TYPE, 'term') can be routed to stitch indexes.
-     *
-     * @param conditions The conditions to analyze
-     * @return true if stitch-eligible patterns are detected
-     */
-    public static boolean hasStitchEligiblePatterns(List<Condition> conditions) {
-        // TODO: Implement stitch pattern detection
-        // Look for patterns like: CONTAINS('term') AND NER(TYPE, 'term')
-        // or: CONTAINS('term') AND POS(TAG, 'term')
-        // These can be optimized using stitch indexes
-        return false; // Placeholder for future implementation
     }
 }

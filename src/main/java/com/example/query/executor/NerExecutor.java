@@ -119,14 +119,13 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
             logger.debug("NER condition execution produced {} conceptual result rows, total SoA size: {}", conceptualRowsAdded, resultSoA.size());
 
-            // Sort by document ID to ensure merge join optimization works correctly
             resultSoA.sort();
 
             return resultSoA;
 
         } catch (IndexAccessException | IOException e) {
             throw new QueryExecutionException("Error accessing NER index: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
-        } catch (Exception e) { // Catch broader exceptions to ensure proper wrapping
+        } catch (Exception e) {
             if (e instanceof QueryExecutionException qee) {
                 throw qee;
             }
@@ -194,7 +193,6 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         if (targetValuesFromQuery.isEmpty()) {
             logger.warn("executeSpecificEntityFilterSearch called for Type='{}' with empty targetValuesFromQuery. This might yield unexpected behavior.",
                         normalizedEntityType);
-            // Depending on strictness, could throw or return 0. Returning 0 for safety.
             return 0;
         }
 
@@ -210,7 +208,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             } catch (RocksDBException e) {
                 logger.error("RocksDBException while getting ID for term '{}' in executeSpecificEntityFilterSearch", normalizedTargetTerm, e);
                 throw new IndexAccessException("Failed to get synonym ID for term: " + normalizedTargetTerm, NER_INDEX_NAME, IndexAccessException.ErrorType.READ_ERROR, e);
-            } catch (IllegalArgumentException e) { // Should not happen with valid query inputs
+            } catch (IllegalArgumentException e) {
                  logger.error("IllegalArgumentException while getting ID for term '{}' in executeSpecificEntityFilterSearch", normalizedTargetTerm, e);
                  throw new QueryExecutionException("Invalid term for synonym lookup: " + normalizedTargetTerm, e, "NerExecutor", QueryExecutionException.ErrorType.INTERNAL_ERROR);
             }
@@ -249,8 +247,9 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 // Get the original target value for this synonym ID from our pre-computed mapping
                 String targetValueToStore = synonymIdToOriginalTarget.get(currentSynonymId);
                 if (targetValueToStore == null) {
-                    // Fallback to first target if somehow not found
-                    targetValueToStore = targetValuesFromQuery.get(0);
+                    logger.warn("executeSpecificEntityFilterSearch: No original target mapping for synonymId {} under Type '{}'. Skipping to avoid binding the wrong synonym.",
+                                currentSynonymId, normalizedEntityType);
+                    continue; // Avoid incorrect fallback
                 }
 
                 resultSoA.add(

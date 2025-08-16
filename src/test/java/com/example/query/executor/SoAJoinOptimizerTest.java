@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 
+
 class SoAJoinOptimizerTest {
 
     record TestDataEntry(Object value, ValueType type, String varName, int docId, int sentId, int begin, int end, int synId, int conceptualRowId) {}
@@ -210,5 +211,134 @@ class SoAJoinOptimizerTest {
             leftNoMatchSoA, rightNoMatchSoA, "DOCUMENT_ID", "DOCUMENT_ID");
 
         assertTrue(result.isEmpty(), "Join with no matching document IDs should return empty result");
+    }
+
+    @Test
+    void testOptimizedStructuralDateJoin() {
+        LocalDate date1 = LocalDate.of(2024, 2, 1);
+        LocalDate date2 = LocalDate.of(2024, 2, 2);
+
+        List<TestDataEntry> leftDateEntries = new ArrayList<>();
+        leftDateEntries.add(new TestDataEntry(date1, ValueType.DATE, "left.date", 10, 1, 0,0,0, 0));
+        leftDateEntries.add(new TestDataEntry(date2, ValueType.DATE, "left.date", 11, 1, 0,0,0, 1));
+        QueryResultSoA leftDateSoA = createSoAForTest(leftDateEntries, defaultRequirements);
+
+        List<TestDataEntry> rightDateEntries = new ArrayList<>();
+        rightDateEntries.add(new TestDataEntry(date1, ValueType.DATE, "right.date", 20, 1, 0,0,0, 0));
+        rightDateEntries.add(new TestDataEntry(date2, ValueType.DATE, "right.date", 21, 1, 0,0,0, 1));
+        QueryResultSoA rightDateSoA = createSoAForTest(rightDateEntries, defaultRequirements);
+
+        List<SoAJoinOptimizer.SoAJoinKeyMatch> result = SoAJoinOptimizer.performOptimizedHashJoin(
+            leftDateSoA, rightDateSoA, "DATE", "DATE");
+
+        assertEquals(2, result.size(), "Structural DATE join should produce 2 matches");
+    }
+
+    @Test
+    void testTemporalJoinEqualsPredicate() throws QueryExecutionException {
+        LocalDate d1 = LocalDate.of(2023, 5, 1);
+        LocalDate d2 = LocalDate.of(2023, 5, 2);
+        LocalDate d3 = LocalDate.of(2023, 5, 3);
+
+        List<TestDataEntry> left = new ArrayList<>();
+        left.add(new TestDataEntry(d1, ValueType.DATE, "left.date", 1, 1, 0,0,0, 100));
+        left.add(new TestDataEntry(d2, ValueType.DATE, "left.date", 1, 1, 0,0,0, 101));
+        QueryResultSoA leftSoA = createSoAForTest(left, defaultRequirements);
+
+        List<TestDataEntry> right = new ArrayList<>();
+        right.add(new TestDataEntry(d1, ValueType.DATE, "right.date", 2, 1, 0,0,0, 200));
+        right.add(new TestDataEntry(d2, ValueType.DATE, "right.date", 2, 1, 0,0,0, 201));
+        right.add(new TestDataEntry(d3, ValueType.DATE, "right.date", 2, 1, 0,0,0, 202));
+        QueryResultSoA rightSoA = createSoAForTest(right, defaultRequirements);
+
+        List<SoAJoinOptimizer.SoAJoinKeyMatch> result = SoAJoinOptimizer.performOptimizedTemporalJoin(
+            leftSoA, rightSoA, "DATE", "DATE", "EQUALS");
+
+        assertEquals(2, result.size(), "EQUALS should join entries with identical dates only");
+    }
+
+    @Test
+    void testTemporalJoinBeforePredicate() throws QueryExecutionException {
+        LocalDate d1 = LocalDate.of(2023, 6, 1);
+        LocalDate d2 = LocalDate.of(2023, 6, 2);
+        LocalDate d3 = LocalDate.of(2023, 6, 3);
+
+        List<TestDataEntry> left = new ArrayList<>();
+        left.add(new TestDataEntry(d1, ValueType.DATE, "left.date", 1, 1, 0,0,0, 10));
+        left.add(new TestDataEntry(d2, ValueType.DATE, "left.date", 1, 1, 0,0,0, 11));
+        left.add(new TestDataEntry(d3, ValueType.DATE, "left.date", 1, 1, 0,0,0, 12));
+        QueryResultSoA leftSoA = createSoAForTest(left, defaultRequirements);
+
+        List<TestDataEntry> right = new ArrayList<>();
+        right.add(new TestDataEntry(d2, ValueType.DATE, "right.date", 2, 1, 0,0,0, 20));
+        right.add(new TestDataEntry(d3, ValueType.DATE, "right.date", 2, 1, 0,0,0, 21));
+        QueryResultSoA rightSoA = createSoAForTest(right, defaultRequirements);
+
+        List<SoAJoinOptimizer.SoAJoinKeyMatch> result = SoAJoinOptimizer.performOptimizedTemporalJoin(
+            leftSoA, rightSoA, "DATE", "DATE", "BEFORE");
+
+        assertEquals(3, result.size(), "BEFORE should produce 3 matches (d1<d2, d1<d3, d2<d3)");
+    }
+
+    @Test
+    void testTemporalJoinAfterPredicate() throws QueryExecutionException {
+        LocalDate d1 = LocalDate.of(2023, 7, 1);
+        LocalDate d2 = LocalDate.of(2023, 7, 2);
+        LocalDate d3 = LocalDate.of(2023, 7, 3);
+
+        List<TestDataEntry> left = new ArrayList<>();
+        left.add(new TestDataEntry(d2, ValueType.DATE, "left.date", 1, 1, 0,0,0, 30));
+        left.add(new TestDataEntry(d3, ValueType.DATE, "left.date", 1, 1, 0,0,0, 31));
+        QueryResultSoA leftSoA = createSoAForTest(left, defaultRequirements);
+
+        List<TestDataEntry> right = new ArrayList<>();
+        right.add(new TestDataEntry(d1, ValueType.DATE, "right.date", 2, 1, 0,0,0, 40));
+        right.add(new TestDataEntry(d2, ValueType.DATE, "right.date", 2, 1, 0,0,0, 41));
+        QueryResultSoA rightSoA = createSoAForTest(right, defaultRequirements);
+
+        List<SoAJoinOptimizer.SoAJoinKeyMatch> result = SoAJoinOptimizer.performOptimizedTemporalJoin(
+            leftSoA, rightSoA, "DATE", "DATE", "AFTER");
+
+        assertEquals(3, result.size(), "AFTER should produce 3 matches (d2>d1, d3>d1, d3>d2)");
+    }
+
+    @Test
+    void testTemporalJoinDeduplicatesDuplicateBindings() throws QueryExecutionException {
+        LocalDate d1 = LocalDate.of(2023, 8, 1);
+
+        List<TestDataEntry> left = new ArrayList<>();
+        // Two rows with the same conceptualRowId and same date
+        left.add(new TestDataEntry(d1, ValueType.DATE, "left.date", 1, 1, 0,0,0, 77));
+        left.add(new TestDataEntry(d1, ValueType.DATE, "left.date", 1, 1, 0,0,0, 77));
+        QueryResultSoA leftSoA = createSoAForTest(left, defaultRequirements);
+
+        List<TestDataEntry> right = new ArrayList<>();
+        right.add(new TestDataEntry(d1, ValueType.DATE, "right.date", 2, 1, 0,0,0, 88));
+        QueryResultSoA rightSoA = createSoAForTest(right, defaultRequirements);
+
+        List<SoAJoinOptimizer.SoAJoinKeyMatch> result = SoAJoinOptimizer.performOptimizedTemporalJoin(
+            leftSoA, rightSoA, "DATE", "DATE", "EQUALS");
+
+        assertEquals(1, result.size(), "Duplicate bindings for the same conceptual ID and date should be deduplicated");
+    }
+
+    @Test
+    void testTemporalJoinUnsupportedPredicateThrows() {
+        LocalDate d1 = LocalDate.of(2023, 9, 1);
+
+        List<TestDataEntry> left = new ArrayList<>();
+        left.add(new TestDataEntry(d1, ValueType.DATE, "left.date", 1, 1, 0,0,0, 1));
+        QueryResultSoA leftSoA = createSoAForTest(left, defaultRequirements);
+
+        List<TestDataEntry> right = new ArrayList<>();
+        right.add(new TestDataEntry(d1, ValueType.DATE, "right.date", 2, 1, 0,0,0, 2));
+        QueryResultSoA rightSoA = createSoAForTest(right, defaultRequirements);
+
+        try {
+            SoAJoinOptimizer.performOptimizedTemporalJoin(leftSoA, rightSoA, "DATE", "DATE", "OVERLAPS");
+            assertTrue(false, "Expected QueryExecutionException to be thrown for unsupported predicate");
+        } catch (QueryExecutionException ex) {
+            assertTrue(true);
+        }
     }
 }

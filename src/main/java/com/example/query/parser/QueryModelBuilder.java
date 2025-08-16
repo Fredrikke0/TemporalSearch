@@ -1055,8 +1055,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             String plainVarName = (String) visit(ctx.var);
             qualifiedVariableName = currentScopeAlias + "." + plainVarName; // Qualify BIND variable
             isVariable = true; // Set flag
-            logger.debug("Registering producer: {} type: POS_TAG for POS", qualifiedVariableName);
-            variableRegistry.registerProducer(qualifiedVariableName, VariableType.POS_TAG, "POS");
+            logger.debug("Registering producer: {} type: TEXT_SPAN for POS", qualifiedVariableName);
+            variableRegistry.registerProducer(qualifiedVariableName, VariableType.TEXT_SPAN, "POS");
         }
 
         // Model updated to store qualified BIND variable name

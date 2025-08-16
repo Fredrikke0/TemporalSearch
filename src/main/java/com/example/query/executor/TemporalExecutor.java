@@ -47,7 +47,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     // Formatter for creating interval strings for Nash.invert ([YYYY-MM-DD , YYYY-MM-DD])
     private static final DateTimeFormatter NASH_INTERVAL_FORMATTER = DateTimeFormatter.ISO_DATE;
 
-    // --- Strategy Management ---
     private final Map<String, TemporalExecutionStrategy> strategies = new HashMap<>();
     private String activeStrategyName = "naive"; // Default to naive strategy
 
@@ -127,7 +126,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
         }
         return strategy;
     }
-    // --- End Strategy Management ---
 
     @Override
     public QueryResultSoA execute(Temporal condition, Map<String, IndexAccessInterface> indexes,
@@ -232,10 +230,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             }
             strategyLogger.debug("NashTemporalStrategy: Nash prefixes to search: {}", Arrays.toString(searchPrefixes));
 
-            // Use a Set to store unique matches before adding to resultSoA to handle cases where
-            // multiple Nash prefixes might resolve to the same underlying (Position, LocalDate) pair.
             Set<UniqueTemporalMatch> uniqueMatches = new HashSet<>();
-            int conceptualRowIdCounter = 0; // This will be managed by QueryResultSoA now
 
             try {
                 for (String prefix : searchPrefixes) {
@@ -259,8 +254,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
                             if (dateId >= 0 && dateId < idToDateLookup.size()) {
                                 LocalDate entryDate = idToDateLookup.get(dateId);
-                                // Use the existing evaluateTemporalCondition method logic by passing appropriate parameters
-                                // The original evaluateTemporalCondition took LocalDateTime, so convert entryDate to start/end of day.
                                 boolean match = evaluateTemporalCondition(
                                     condition.temporalType(),
                                     entryDate.atStartOfDay(),
@@ -291,24 +284,19 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 }
 
                 strategyLogger.debug("NashTemporalStrategy: Found {} unique temporal matches after processing all prefixes.", uniqueMatches.size());
-
-                // Populate QueryResultSoA from uniqueMatches
-                // Group by conceptual row ID implicitly by how resultSoA.add handles it
-                // The `variableToBind` might need to be more robustly determined (e.g., if always @temporal)
                 String effectiveVarName = (variableToBind != null && !variableToBind.isEmpty()) ? variableToBind : null;
 
                 for (UniqueTemporalMatch match : uniqueMatches) {
                     resultSoA.add(
-                        match.date(), // Value to bind (LocalDate)
+                        match.date(),
                         ValueType.DATE,
                         effectiveVarName,
                         match.position().getDocumentId(),
                         requirements.needsSentenceId ? match.position().getSentenceId() : -1,
                         requirements.needsPositions ? match.position().getBeginPosition() : -1,
                         requirements.needsPositions ? match.position().getEndPosition() : -1,
-                        requirements.needsSynonymIds ? -1 : -1, // NashDateEntry does not store synonymId directly applicable here; this is for NER synonyms, not date part synonyms.
-                                                                 // If date parts (year, month) were bound, this would change.
-                        resultSoA.getNextConceptualRowId() // Manage conceptual rows correctly
+                        -1,
+                        resultSoA.getNextConceptualRowId()
                     );
                 }
 
@@ -345,7 +333,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             // For Nash, most queries are range-based. A single date X becomes "[X , X]".
             // AFTER X becomes "[X+1, GLOBAL_UPPER_BOUND]"
             // BEFORE X becomes "[GLOBAL_LOWER_BOUND, X-1]"
-            // This logic might need refinement based on how Nash.generateTimeHash interprets single points for such predicates.
 
             LocalDate effectiveStart = null;
             LocalDate effectiveEnd = null;
@@ -711,15 +698,11 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
     // =========================================================================
 
     /**
-     * Parses a date string potentially from the index key.
-     * Expects format like 'YYYY-MM-DD'. Returns null if parsing fails.
-     * Made public static for potential reuse, kept INDEX_DATE_FORMATTER private.
+     * Parses a date key using yyyyMMdd; returns null on failure.
      */
     public static LocalDate parseDateKey(String dateStr) {
         if (dateStr == null) return null;
         try {
-            // Trim potential whitespace before parsing
-            // Assume yyyyMMdd format directly
             return LocalDate.parse(dateStr.trim(), INDEX_DATE_FORMATTER);
         } catch (DateTimeParseException e) {
             logger.trace("Failed to parse date key '{}' using format yyyyMMdd: {}", dateStr, e.getMessage());

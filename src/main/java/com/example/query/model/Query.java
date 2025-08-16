@@ -210,7 +210,7 @@ public record Query(
         } else {
             // Handle case with no select columns explicitly, maybe SELECT * or COUNT(*)?
             // For now, let's assume valid queries always have select columns based on validator
-            sb.append("SELECT [Missing Columns]");
+            sb.append("SELECT DOCUMENT_ID");
         }
 
         // Add FROM clause

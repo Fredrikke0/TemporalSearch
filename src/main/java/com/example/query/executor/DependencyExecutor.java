@@ -81,11 +81,6 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                 // This is the only case for the direct specific search.
                 conceptualRowIdCounter = executeSpecificSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
             } else {
-                // Any part is a variable ('?'), a literal wildcard ('*'), or this is a BIND operation.
-                // This path should use iterative scanning.
-                // Note: isVariableBinding check is not strictly needed here for routing if the above specific literal check fails,
-                // but executeVariableSearchOptimized relies on condition.isVariable() and condition.variableName().
-                // The main point is that if it's not a fully specific, non-binding query, we iterate.
                  conceptualRowIdCounter = executeVariableSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
             }
 

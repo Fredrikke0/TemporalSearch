@@ -27,14 +27,12 @@ import com.example.query.model.condition.Temporal;
 public class ConditionExecutorFactory {
     private static final Logger logger = LoggerFactory.getLogger(ConditionExecutorFactory.class);
 
-    // Cache for singleton executors like TemporalExecutor
     private final Map<Class<? extends Condition>, ConditionExecutor<?>> executorCache = new ConcurrentHashMap<>();
     private final SynonymManager synonymManager;
     private final String stitchStrategy;
     private final Query.Granularity queryGranularity;
 
-    // Configuration for TemporalExecutor strategy
-    private String desiredTemporalStrategy = "naive"; // Default strategy
+    private String desiredTemporalStrategy = "naive";
 
     public ConditionExecutorFactory(SynonymManager synonymManager, String stitchStrategy, Query.Granularity queryGranularity) {
         this.synonymManager = synonymManager;
@@ -53,7 +51,6 @@ public class ConditionExecutorFactory {
         if ("nash".equalsIgnoreCase(strategyName) || "naive".equalsIgnoreCase(strategyName)) {
             this.desiredTemporalStrategy = strategyName.toLowerCase();
             logger.info("Temporal execution strategy set to: {}", this.desiredTemporalStrategy);
-            // If TemporalExecutor already exists in cache, update its strategy
             TemporalExecutor existingExecutor = (TemporalExecutor) executorCache.get(Temporal.class);
             if (existingExecutor != null) {
                  try {
@@ -102,7 +99,6 @@ public class ConditionExecutorFactory {
         }
 
         if (condition instanceof Logical) {
-            // Pass factory, stitchStrategy, and queryGranularity for recursion and fusion logic
             return (ConditionExecutor<T>) new LogicalExecutor(this, this.stitchStrategy, this.queryGranularity);
         }
         if (condition instanceof Contains) {
@@ -130,8 +126,6 @@ public class ConditionExecutorFactory {
                });
           }
           if (condition instanceof Not) {
-              // Use computeIfAbsent to cache NotExecutor as well, passing the factory
-              // Explicitly cast the lambda parameter type
               Function<Class<? extends Condition>, NotExecutor> factoryFunction = k -> {
                    logger.debug("Creating and caching NotExecutor instance.");
                    return new NotExecutor(this);
@@ -152,8 +146,6 @@ public class ConditionExecutorFactory {
       * @return The singleton TemporalExecutor instance.
       */
      public TemporalExecutor getTemporalExecutorInstance() {
-         // Ensure the instance is created and configured if it wasn't already
-         // Create a dummy Temporal condition just to trigger the getExecutor logic for Temporal.class
          Temporal dummyTemporal = new Temporal(TemporalPredicate.EQUAL, java.time.LocalDateTime.now());
          return (TemporalExecutor) getExecutor(dummyTemporal);
      }
