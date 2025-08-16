@@ -1,4 +1,4 @@
-# Temporal Search
+# ChronoReason
 
 A high-performance temporal reasoning system. It annotates documents, builds multiple RocksDB-backed indexes, and provides a query engine (ANTLR-based) for temporal-aware search over an large corpus.
 
