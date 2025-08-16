@@ -1,6 +1,5 @@
 package com.example.query.model;
 
-// import java.util.Optional; // No longer needed
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -10,9 +9,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
-// import com.example.query.binding.MatchDetail; // No longer needed
+
 import com.example.query.executor.QueryResultSoA;
-import com.example.query.sqlite.SqliteAccessor; // Needed for title fetching
+import com.example.query.sqlite.SqliteAccessor;
 
 import tech.tablesaw.api.DateColumn;
 import tech.tablesaw.api.IntColumn;
@@ -132,8 +131,7 @@ public class StructuralColumn implements SelectColumn {
             return;
         }
 
-        // Use docIdForAlias which is now specific to 'this.alias'
-        final int effectiveDocId = docIdForAlias; // docIdForAlias must be non-null if foundRelevantEntry is true
+        final int effectiveDocId = docIdForAlias;
 
         logger.trace("Populating StructuralColumn {}.{} at row {} using effectiveDocId {}", this.alias, this.fieldName, rowIndex, effectiveDocId);
 
@@ -143,10 +141,10 @@ public class StructuralColumn implements SelectColumn {
             switch (fieldName.toUpperCase()) {
                 case "TITLE":
                     if (column instanceof StringColumn strCol) {
-                        String cacheKey = "title_" + effectiveDocId; // Use effectiveDocId
+                        String cacheKey = "title_" + effectiveDocId;
                         String title = (String) contextCache.get(cacheKey);
                         if (title == null) {
-                            title = SqliteAccessor.getInstance().getMetadata(source, effectiveDocId, "title"); // Use effectiveDocId
+                            title = SqliteAccessor.getInstance().getMetadata(source, effectiveDocId, "title");
                             title = (title != null) ? title : "";
                             contextCache.put(cacheKey, title);
                             logger.trace("Fetched and cached TITLE '{}' for docId {}", title, effectiveDocId);
@@ -162,10 +160,10 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "TIMESTAMP":
                      if (column instanceof DateColumn dateCol) {
-                         String cacheKey = "timestamp_" + effectiveDocId; // Use effectiveDocId
+                         String cacheKey = "timestamp_" + effectiveDocId;
                          LocalDate docTimestamp = (LocalDate) contextCache.get(cacheKey);
                          if (docTimestamp == null) {
-                             String timestampStr = SqliteAccessor.getInstance().getMetadata(source, effectiveDocId, "timestamp"); // Use effectiveDocId
+                             String timestampStr = SqliteAccessor.getInstance().getMetadata(source, effectiveDocId, "timestamp");
                              if (timestampStr != null && !timestampStr.isEmpty()) {
                                  try {
                                      docTimestamp = java.time.LocalDateTime.parse(timestampStr).toLocalDate();
@@ -198,7 +196,7 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "DOCUMENT_ID":
                      if (column instanceof IntColumn intCol) {
-                         intCol.set(rowIndex, effectiveDocId); // Use effectiveDocId
+                         intCol.set(rowIndex, effectiveDocId);
                           logger.trace("Set DOCUMENT_ID '{}' for {}.{} at row {}", effectiveDocId, this.alias, this.fieldName, rowIndex);
                      } else {
                          logger.error("Expected IntColumn for DOCUMENT_ID but got {} for column {}", column.type(), getColumnName());
@@ -207,15 +205,10 @@ public class StructuralColumn implements SelectColumn {
                     break;
                 case "SENTENCE_ID":
                     if (column instanceof IntColumn intCol) {
-                         // Use sentenceIdForAlias, which was fetched based on this.alias
                          if (sentenceIdForAlias != null) {
                             intCol.set(rowIndex, sentenceIdForAlias);
                             logger.trace("Set SENTENCE_ID '{}' for {}.{} at row {}", sentenceIdForAlias, this.alias, this.fieldName, rowIndex);
                          } else {
-                            // This case means either sentence IDs were not required by SoA,
-                            // or no entry matching this.alias was found that had a sentenceId.
-                            // The foundRelevantEntry check should have caught the latter.
-                            // If sentenceIds were not required by SoA at all, sentenceIdForAlias would be null.
                             logger.trace("Sentence ID for {}.{} at row {} is not available or not applicable (sentenceIdForAlias is null). Setting missing.", this.alias, this.fieldName, rowIndex);
                             intCol.setMissing(rowIndex);
                          }
@@ -259,7 +252,7 @@ public class StructuralColumn implements SelectColumn {
             }
         } catch (Exception e) {
              logger.error("Error populating StructuralColumn {}.{} at row {}: {}", alias, fieldName, rowIndex, e.getMessage(), e);
-             if (column != null) column.setMissing(rowIndex); // Ensure missing on error
+             if (column != null) column.setMissing(rowIndex);
         }
     }
 

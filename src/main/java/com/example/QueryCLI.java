@@ -40,10 +40,9 @@ import tech.tablesaw.api.Table;
  */
 public class QueryCLI implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(QueryCLI.class);
-    private String dbFilePath; // may be null until resolved from manifest
+    private String dbFilePath;
     private final Path indexRootDir;
 
-    // Core components
     private final QueryParser parser;
     private final QuerySemanticValidator validator;
 
@@ -94,18 +93,6 @@ public class QueryCLI implements AutoCloseable {
         initialExportFormat.ifPresent(format -> logger.info("Initial Export: {} to {}", format, initialExportFilename.orElse("N/A")));
     }
 
-    private String deriveProjectNameFromIndexPath(Path indexPath) {
-        if (indexPath == null || indexPath.getFileName() == null) {
-            logger.warn("Could not derive project name from index path: {}. Defaulting to 'unknown_project'.", indexPath);
-            return "unknown_project";
-        }
-        String fileName = indexPath.getFileName().toString();
-        // Remove common suffixes like "_indexes" or "_indices"
-        fileName = fileName.replaceAll("(?i)_indexes$", "").replaceAll("(?i)_indices$", "");
-        return fileName;
-    }
-
-    // initializeSharedComponents removed in new design (no persistent shared objects).
 
     /**
      * Executes a query string using current strategy and output settings.
@@ -301,10 +288,6 @@ public class QueryCLI implements AutoCloseable {
         }
     }
 
-    private boolean sharedComponentsReady() {
-        return true; // No persistent shared components to check
-    }
-
     /**
      * Main entry point for the CLI.
      *
@@ -332,7 +315,7 @@ public class QueryCLI implements AutoCloseable {
                 .help("Specify the initial temporal execution strategy (nash or naive).");
 
         cliArgParser.addArgument("--pushdown-strategy")
-                .choices("none", "optimized").setDefault("optimized") // Default changed to optimized as per typical usage
+                .choices("none", "optimized").setDefault("optimized")
                 .type(String.class)
                 .help("Specify the initial predicate pushdown strategy (none or optimized). Default: optimized.");
 
@@ -347,7 +330,7 @@ public class QueryCLI implements AutoCloseable {
         try {
             Namespace ns = cliArgParser.parseArgs(args);
             String dbFile = ns.getString("db_file");
-            Path indexDir = Path.of(ns.getString("index_root_dir")); // Use Path directly
+            Path indexDir = Path.of(ns.getString("index_root_dir"));
             String exportArg = ns.getString("export");
             String initialTemporalStrategy = ns.getString("temporal_strategy");
             PushdownStrategy initialPushdownStrategy = PushdownStrategy.fromString(ns.getString("pushdown_strategy"));
@@ -398,12 +381,12 @@ public class QueryCLI implements AutoCloseable {
                     }
 
                     if (inputLine.matches("(?i)^SET\\s+STRATEGY.*")) {
-                        Pattern pattern = Pattern.compile("(\\w+)=(\\S+)"); // Value can be non-alphanum now
+                        Pattern pattern = Pattern.compile("(\\w+)=(\\S+)");
                         Matcher matcher = pattern.matcher(inputLine);
                         boolean strategyUpdated = false;
                         while (matcher.find()) {
                             String key = matcher.group(1).toLowerCase();
-                            String value = matcher.group(2); // Keep case for filenames, strategy names are case-insensitive handled by enum/logic
+                            String value = matcher.group(2);
                             try {
                                 switch (key) {
                                     case "temporal":
@@ -415,7 +398,7 @@ public class QueryCLI implements AutoCloseable {
                                         }
                                         break;
                                     case "pushdown":
-                                        cli.setCurrentPushdownStrategy(PushdownStrategy.fromString(value)); // fromString handles invalid
+                                        cli.setCurrentPushdownStrategy(PushdownStrategy.fromString(value));
                                         strategyUpdated = true;
                                         break;
                                     case "stitch":
@@ -434,8 +417,7 @@ public class QueryCLI implements AutoCloseable {
                             }
                         }
                         if (strategyUpdated) {
-                            // Strategy is set, QueryCLI will print prompt at end of loop iteration.
-                        } else if (!inputLine.trim().equalsIgnoreCase("SET STRATEGY")) { // Avoid error if just "SET STRATEGY"
+                        } else if (!inputLine.trim().equalsIgnoreCase("SET STRATEGY")) {
                             System.err.println("No valid strategy key-value pairs found in SET STRATEGY command. Format: key=value ...");
                         }
 
@@ -467,20 +449,18 @@ public class QueryCLI implements AutoCloseable {
                 System.out.println("Exiting QueryCLI interactive mode.");
 
             } else { // Single query mode
-                // Initial export settings from CLI args are already set in currentExportFormat/Filename by constructor
-                // No need to set them again here.
                 cli.executeQuery(queryStr);
             }
-        } // QueryCLI.close() called here by try-with-resources
+        }
 
         } catch (ArgumentParserException e) {
             cliArgParser.handleError(e);
             System.exit(1);
-        } catch (IndexAccessException e) { // Catch from QueryCLI.close()
+        } catch (IndexAccessException e) {
             logger.error("Error during QueryCLI close: {}", e.getMessage(), e);
             System.err.println("Error closing QueryCLI resources: " + e.getMessage());
-            System.exit(1); // Exit if closing fails, as resources might be unstable
-        } catch (Exception e) { // Catch any other unexpected top-level errors
+            System.exit(1);
+        } catch (Exception e) {
             logger.error("An unexpected error occurred in main: {}", e.getMessage(), e);
             System.err.println("An unexpected error occurred: " + e.getMessage());
             System.exit(1);

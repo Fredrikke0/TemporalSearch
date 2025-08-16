@@ -151,7 +151,6 @@ public class TableResultService {
 
             Map<String, Object> contextCache = new HashMap<>();
 
-            // --- START OPTIMIZATION ---
             // Pre-group raw indices by their conceptualRowId
             Map<Integer, List<Integer>> conceptualIdToRawIndicesMap = new HashMap<>();
             if (result != null && !result.isEmpty()) { // Only process if there's data
@@ -171,23 +170,20 @@ public class TableResultService {
             } else if (result != null) { // result is not null but empty
                  logger.info("QueryResultSoA is empty. No conceptual rows to process.");
             }
-            // --- END OPTIMIZATION ---
 
             String source = query.source();
 
             for (int conceptualRowId : uniqueConceptualRowIds) {
-                table.appendRow(); // Add a new row to the Tablesaw table
-                int currentRowIndex = table.rowCount() - 1; // Get the index of the row just added
-                contextCache.clear(); // Clear context for each new conceptual row
+                table.appendRow();
+                int currentRowIndex = table.rowCount() - 1;
+                contextCache.clear();
 
-                // Retrieve pre-computed list of raw indices for the current conceptualRowId
                 List<Integer> indicesInSoA = conceptualIdToRawIndicesMap.getOrDefault(conceptualRowId, Collections.emptyList());
 
                 if (indicesInSoA.isEmpty() && result.getRequirements().needsConceptualRowIds) {
                     // This could happen if a conceptualRowId was in uniqueConceptualRowIds but no raw rows actually match it.
                     // Should be rare if uniqueConceptualRowIds is derived from result.getConceptualRowIdAt(i).
                     logger.warn("No raw SoA entries found for conceptualRowId {}. Row {} will be empty or partially populated.", conceptualRowId, currentRowIndex);
-                    // Continue to allow population of columns that don't depend on SoA indices (e.g. constants, if any)
                 }
 
                 for (SelectColumn selectColumn : (selectColumns != null ? selectColumns : Collections.<SelectColumn>emptyList())) {
@@ -197,14 +193,12 @@ public class TableResultService {
                                      selectColumn.getColumnName(), conceptualRowId, indicesInSoA, currentRowIndex);
                         selectColumn.populateColumn(table, currentRowIndex, result, indicesInSoA, source, indexes, query, contextCache);
                     } else {
-                        // This should not happen if columns were created correctly from selectColumns
                         logger.warn("Column '{}' defined in select clause not found in created table structure. This is unexpected.",
                                     selectColumn.getColumnName());
                     }
                 }
             }
 
-            // GROUP BY, ORDER BY, LIMIT are applied to the materialized Tablesaw table
             if (!query.groupByColumns().isEmpty()) {
                 logger.info("Applying GROUP BY clause with columns: {}", query.groupByColumns());
                 table = applyGroupBy(table, query);
@@ -279,7 +273,6 @@ public class TableResultService {
             return table.sortOn(sortOnArgs);
         } catch (Exception e) {
             logger.error("Failed to sort table on {}. Error: {}", Arrays.toString(sortOnArgs), e.getMessage(), e);
-            // Consider rethrowing as ResultGenerationException for consistency
             throw new RuntimeException("Table sorting failed: " + e.getMessage(), e);
         }
     }
@@ -295,9 +288,7 @@ public class TableResultService {
             return orderByColumnName;
         }
 
-        // Handle COUNT(*) mapping to generated count column names
         if ("COUNT(*)".equals(orderByColumnName)) {
-            // Look for any column that starts with "Count [" - this will be the COUNT(*) result
             for (String colName : table.columnNames()) {
                 if (colName.startsWith("Count [") && colName.endsWith("]")) {
                     logger.debug("Mapping ORDER BY column 'COUNT(*)' to actual column '{}'", colName);
@@ -306,7 +297,6 @@ public class TableResultService {
             }
         }
 
-        // Handle COUNT(UNIQUE variable) - would generate similar pattern
         if (orderByColumnName.startsWith("COUNT(") && orderByColumnName.endsWith(")")) {
             for (String colName : table.columnNames()) {
                 if (colName.startsWith("Count [") && colName.endsWith("]")) {
@@ -316,7 +306,6 @@ public class TableResultService {
             }
         }
 
-        // Handle COUNT(DOCUMENTS)
         if ("COUNT(DOCUMENTS)".equals(orderByColumnName)) {
             for (String colName : table.columnNames()) {
                 if (colName.startsWith("Count [") && colName.endsWith("]")) {
@@ -326,8 +315,6 @@ public class TableResultService {
             }
         }
 
-        // Handle internal count column names like 'count_unique_q2_president'
-        // These are generated by CountColumn.getColumnName() and used in ORDER BY
         if (orderByColumnName.startsWith("count_")) {
             for (String colName : table.columnNames()) {
                 if (colName.startsWith("Count [") && colName.endsWith("]")) {
@@ -337,7 +324,6 @@ public class TableResultService {
             }
         }
 
-        // If no mapping found, return the original name (will likely cause an error)
         logger.warn("Could not map ORDER BY column '{}' to any actual table column. Available: {}",
                    orderByColumnName, table.columnNames());
         return orderByColumnName;
@@ -378,12 +364,11 @@ public class TableResultService {
      */
     public String formatTable(Table table) {
         int totalRows = table.rowCount();
-        int displayedRows = Math.min(totalRows, 20); // Tablesaw typically shows ~20 rows by default
+        int displayedRows = Math.min(totalRows, 20);
 
         StringBuilder sb = new StringBuilder();
         sb.append(table.print());
 
-        // Add a note about the preview if there are more rows than displayed
         if (totalRows > displayedRows) {
             sb.append("\n\nThis is a preview showing ").append(displayedRows)
               .append(" of ").append(totalRows).append(" total rows. To export all results, use: --export=csv:results.csv");
@@ -397,7 +382,6 @@ public class TableResultService {
          List<SelectColumn> defaultColumns = new ArrayList<>();
         Set<String> addedColumns = new HashSet<>();
 
-        // If the result QueryResultSoA has specific requirements, use them.
         AttributeRequirements requirements = result.getRequirements();
 
         if (requirements.needsDocumentId) {
@@ -409,8 +393,6 @@ public class TableResultService {
              addedColumns.add(DEFAULT_SENT_ID_COL);
         }
 
-        // Add columns for all unique variable names present in the QueryResultSoA
-        // Assumes QueryResultSoA.getUniqueVariableNames() is implemented as per QueryResultSoA.md
         List<String> variableNames = result.getUniqueVariableNames();
         if(variableNames != null){
             for (String varName : variableNames) {
@@ -424,7 +406,6 @@ public class TableResultService {
 
         if (defaultColumns.isEmpty() && !result.isEmpty()) {
             logger.warn("Result is not empty, but no default columns could be determined (no doc/sent id required, no variables found). Consider query select clause.");
-            // Fallback: if there's data, at least show document ID if available, even if not strictly "required" by an empty select.
             if (result.getRequirements().needsDocumentId) {
                  if (!addedColumns.contains(DEFAULT_DOC_ID_COL)) {
                     defaultColumns.add(new StructuralColumn(DEFAULT_DOC_ID_COL, "DOCUMENT_ID"));
@@ -444,40 +425,33 @@ public class TableResultService {
 
         List<SelectColumn> selectColumns = query.selectColumns();
 
-        // Check if we have any COUNT columns (explicit aggregation)
         List<SelectColumn> countColumns = selectColumns.stream()
             .filter(sc -> sc instanceof CountColumn)
             .collect(Collectors.toList());
 
-        // Check if we have any non-grouping columns that need implicit aggregation
         List<SelectColumn> nonGroupingColumns = selectColumns.stream()
             .filter(sc -> !(sc instanceof CountColumn) && !groupByColumns.contains(sc.getColumnName()))
             .collect(Collectors.toList());
 
         if (countColumns.isEmpty() && nonGroupingColumns.isEmpty()) {
-            // Only grouping columns selected - return distinct group keys
             logger.info("GROUP BY with only grouping columns selected. Returning distinct group keys.");
             return table.selectColumns(groupByColumns.toArray(new String[0])).dropDuplicateRows();
         }
 
-        // Build list of columns to summarize and functions to apply
         List<String> columnsToSummarize = new ArrayList<>();
         List<AggregateFunction<?, ?>> functionsToApply = new ArrayList<>();
 
-        // Handle COUNT columns - these summarize the entire table/groups
         for (SelectColumn sc : countColumns) {
             CountColumn cc = (CountColumn) sc;
             String targetCol = cc.getVariableNameForValidation();
 
             if (targetCol == null) {
-                // COUNT(*) - count all rows in each group
-                columnsToSummarize.add(table.columnNames().get(0)); // Use any column for counting rows
-                functionsToApply.add(count); // Static import from AggregateFunctions
+                columnsToSummarize.add(table.columnNames().get(0));
+                functionsToApply.add(count);
             } else {
-                // COUNT(variable) - count non-missing values in target column
                 if (table.columnNames().contains(targetCol)) {
                     columnsToSummarize.add(targetCol);
-                    functionsToApply.add(countNonMissing); // Static import from AggregateFunctions
+                    functionsToApply.add(countNonMissing);
                 } else {
                     logger.warn("COUNT target column '{}' not found in table. Falling back to COUNT(*).", targetCol);
                     columnsToSummarize.add(table.columnNames().get(0));
@@ -486,12 +460,11 @@ public class TableResultService {
             }
         }
 
-        // Handle non-grouping columns - apply FIRST() aggregation
         for (SelectColumn sc : nonGroupingColumns) {
             String colName = sc.getColumnName();
             if (table.columnNames().contains(colName)) {
                 columnsToSummarize.add(colName);
-                functionsToApply.add(first); // Static import from AggregateFunctions
+                functionsToApply.add(first);
             } else {
                 logger.warn("Selected column '{}' not found in table for FIRST() aggregation.", colName);
             }

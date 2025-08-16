@@ -58,11 +58,9 @@ import net.sourceforge.argparse4j.inf.Namespace;
  */
 public class NytXmlToSqlite {
     private static final Logger logger = LoggerFactory.getLogger(NytXmlToSqlite.class);
-    // ISO 8601 format for timestamps
     private static final SimpleDateFormat ISO_8601_FORMAT = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
 
     static {
-        // Ensure UTC timezone for date formatting
         ISO_8601_FORMAT.setTimeZone(TimeZone.getTimeZone("UTC"));
     }
 
@@ -270,24 +268,16 @@ public class NytXmlToSqlite {
                                 } catch (Exception e) { // Catch parsing errors for a specific entry
                                     logger.error("Error parsing XML entry {} in archive {}: {}",
                                             entry.getName(), archivePath.getFileName(), e.getMessage(), e);
-                                    // Decide if this error should stop all processing or just skip the entry
-                                    // For now, it logs and continues with the next entry/archive.
-                                    // If a severe error, globalLimitReachedSignal.set(true) could be used.
                                 }
                             } // end while entries
                         } catch (IOException e) {
                             logger.error("Error reading archive {}: {}", archivePath.getFileName(), e.getMessage(), e);
-                            // This might indicate a corrupted archive; consider if all processing should stop.
-                            // For now, it will continue to the next archive if possible.
-                            // globalLimitReachedSignal.set(true); // Optionally, stop all on archive read error.
                         }
                     } catch (Exception e) { // Catch any other exception during archive processing
                         logger.error("Unhandled exception processing archive {}: {}", archivePath.getFileName(), e.getMessage(), e);
-                        // globalLimitReachedSignal.set(true); // Optionally, stop all
                     }
                 } // end for each archivePath
 
-                // Final batch commit
                 pstmt.executeBatch();
                 conn.commit();
 
@@ -306,18 +296,17 @@ public class NytXmlToSqlite {
 
                 return new ExtractionResult(outputDbPath, totalEntriesAddedToDb.get(), actualFilesProcessedCounter.get());
 
-            } // end try-with-resources for PreparedStatement
+            }
 
-        } // end try-with-resources for Connection
+        }
     }
 
     private static void setupDatabase(Connection conn, boolean recreate) throws SQLException {
-        // Enable WAL mode and other optimizations for better performance
         try (Statement pragma = conn.createStatement()) {
             pragma.execute("PRAGMA journal_mode=WAL");
             pragma.execute("PRAGMA synchronous=NORMAL");
             pragma.execute("PRAGMA temp_store=MEMORY");
-            pragma.execute("PRAGMA cache_size=-200000"); // Use 200MB cache (adjust as needed)
+            pragma.execute("PRAGMA cache_size=-200000");
             logger.debug("Enabled SQLite PRAGMAs (WAL, NORMAL, MEMORY temp, 200MB cache).");
         }
 
@@ -338,7 +327,6 @@ public class NytXmlToSqlite {
         }
     }
 
-    // Helper to estimate total XML files for the progress bar
     private static long countXmlFilesInArchives(Path inputDir) {
         AtomicLong count = new AtomicLong(0);
         try (Stream<Path> archiveFiles = Files.list(inputDir).filter(p -> p.toString().toLowerCase().endsWith(".tar.gz"))) {

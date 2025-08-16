@@ -421,7 +421,6 @@ public class QuerySemanticValidator {
         Map<String, VariableRegistry> subqueryAliasToRegistryMap = query.joinSteps().stream()
             .collect(Collectors.toMap(JoinStep::rightSourceAlias, step -> step.subquery().variableRegistry()));
 
-        // Build the set of all known aliases in scope for structural column checks
         Set<String> allKnownAliasesInScope = new HashSet<>(subqueryAliasToRegistryMap.keySet());
         allKnownAliasesInScope.add(currentQueryEffectiveAlias);
 
@@ -429,7 +428,6 @@ public class QuerySemanticValidator {
 
         for (String groupByColumnOriginalName : query.groupByColumns()) {
             String columnToCheckInRegistry;
-            // String aliasOfColumnInGroupBy = null; // Not strictly needed with this logic structure
             VariableRegistry registryToUse;
             String validationContextDescription;
 
@@ -505,13 +503,10 @@ public class QuerySemanticValidator {
         for (String orderSpecifier : query.orderBy()) {
             String rawColumnName = orderSpecifier.startsWith("-") ? orderSpecifier.substring(1) : orderSpecifier;
 
-            // Check if this is a COUNT expression (original format like "COUNT(*)" or "COUNT(q2.president)")
             if (rawColumnName.startsWith("COUNT(")) {
-                // Validate that this COUNT expression exists in the SELECT clause
                 boolean foundMatchingCountColumn = false;
                 for (SelectColumn selectColumn : query.selectColumns()) {
                     if (selectColumn instanceof CountColumn countColumn) {
-                        // Check if this CountColumn matches the ORDER BY expression
                         String countColumnRepresentation = countColumn.toString();
                         if (rawColumnName.equals(countColumnRepresentation)) {
                             foundMatchingCountColumn = true;

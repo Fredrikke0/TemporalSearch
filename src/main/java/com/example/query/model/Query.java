@@ -229,8 +229,9 @@ public record Query(
         // Add WHERE clause
         if (!conditions.isEmpty()) {
             sb.append(" WHERE ");
-            // This simple loop assumes conditions are implicitly ANDed.
-            // A more robust implementation would handle Logical conditions (AND/OR/NOT).
+            // Note: If multiple top-level conditions are present in this list, they will be rendered as ANDed.
+            // In normal parsing, the WHERE clause is represented as a single Condition tree (Logical with AND/OR/NOT),
+            // and that single root's toString() expresses the intended logical structure.
             for (int i = 0; i < conditions.size(); i++) {
                 if (i > 0) sb.append(" AND ");
                 sb.append(conditions.get(i)); // Relies on Condition.toString()

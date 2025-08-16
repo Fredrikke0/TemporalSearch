@@ -126,14 +126,6 @@ public record Pos(
         return isVariable;
     }
 
-    /**
-     * Returns the variable name if this is a variable binding condition.
-     */
-    public String getVariableName() {
-        // Method kept for potential backward compatibility? Or remove?
-        // Returning the qualified name here.
-        return qualifiedVariableName;
-    }
 
     /**
      * Returns the variable name if this is a variable binding condition.
@@ -164,8 +156,7 @@ public record Pos(
     @Override
     public void registerVariables(VariableRegistry registry) {
         if (isVariable) {
-            // Registration now happens in QueryModelBuilder with qualified name
-            // registry.registerProducer(qualifiedVariableName, getProducedVariableType(), getType());
+            registry.registerProducer(qualifiedVariableName, getProducedVariableType(), getType());
         }
         // Consumption of 'term' if it were a variable would also be handled in builder
     }

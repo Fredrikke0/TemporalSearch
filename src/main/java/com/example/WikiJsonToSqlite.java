@@ -88,13 +88,10 @@ public class WikiJsonToSqlite {
             Files.createDirectories(outputDb.getParent());
         }
 
-        // Removed the initial line counting block for performance with large files.
-        // Progress will be based on processed entries or the specified limit.
         logger.info("Starting conversion for input file {}{}", inputFile,
             limit != null ? String.format(" (will process up to %d entries)", limit) : " (processing all entries)");
 
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + outputDb.toString())) {
-            // Enable WAL mode and other optimizations for better performance
             try (Statement pragma = conn.createStatement()) {
                 pragma.execute("PRAGMA journal_mode=WAL");
                 pragma.execute("PRAGMA synchronous=NORMAL");
@@ -127,7 +124,7 @@ public class WikiJsonToSqlite {
                      new InputStreamReader(new FileInputStream(inputFile.toFile()), StandardCharsets.UTF_8));
                  ProgressBar pb = new ProgressBarBuilder()
                          .setTaskName("Converting Wiki Dump")
-                         .setInitialMax(limit != null ? (long)limit : -1) // Use limit or indeterminate progress
+                         .setInitialMax(limit != null ? (long)limit : -1)
                          .build())
             {
                 String line;
@@ -135,7 +132,6 @@ public class WikiJsonToSqlite {
                     try {
                         JsonNode item = objectMapper.readTree(line);
 
-                        // Skip the index information object
                         if (item.has("_type") && item.get("_type").asText().equals("_doc")) {
                             continue;
                         }
@@ -148,9 +144,7 @@ public class WikiJsonToSqlite {
                             totalEntries++;
                             pb.step();
 
-                            // Check if we've hit the limit
                             if (limit != null && totalEntries >= limit) {
-                                // Execute final batch and break
                                 pstmt.executeBatch();
                                 conn.commit();
                                 logger.info("Reached limit of {} entries", limit);
@@ -158,7 +152,7 @@ public class WikiJsonToSqlite {
                             }
                         }
 
-                        if (++lineCount % 100_000 == 0) {  // Reduced batch size for more frequent updates
+                        if (++lineCount % 100_000 == 0) {
                             pstmt.executeBatch();
                             conn.commit();
                             logger.debug("Processed {} lines, {} entries added", lineCount, totalEntries);
@@ -169,7 +163,6 @@ public class WikiJsonToSqlite {
                     }
                 }
 
-                // Insert any remaining batch
                 pstmt.executeBatch();
                 conn.commit();
                 logger.info("Completed processing {} lines, total {} entries added", lineCount, totalEntries);
@@ -208,7 +201,7 @@ public class WikiJsonToSqlite {
         try {
             Namespace ns = parser.parseArgs(args);
             Path inputFile = Path.of(ns.getString("file"));
-            Path outputDb = Path.of(ns.getString("db")); // Now required
+            Path outputDb = Path.of(ns.getString("db"));
             boolean recreate = ns.getBoolean("recreate");
             Integer limit = ns.getInt("limit");
 

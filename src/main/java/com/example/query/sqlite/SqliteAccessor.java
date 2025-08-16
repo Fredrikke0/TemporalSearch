@@ -19,13 +19,10 @@ import org.slf4j.LoggerFactory;
 public class SqliteAccessor {
     private static final Logger logger = LoggerFactory.getLogger(SqliteAccessor.class);
 
-    // Singleton instance
     private static SqliteAccessor instance;
 
-    // Path to the currently configured SQLite database file. Set by initialize().
     private String currentDbFilePath;
 
-    // Cache of database paths (key: source name, value: currentDbFilePath). Cleared on re-initialization.
     private final Map<String, String> dbPathCache = new HashMap<>();
 
     /**
@@ -51,7 +48,7 @@ public class SqliteAccessor {
         } else {
             logger.info("Re-initializing SqliteAccessor. Old DB path: '{}', New DB path: '{}'", instance.currentDbFilePath, dbFilePath);
             instance.currentDbFilePath = dbFilePath;
-            instance.dbPathCache.clear(); // Clear cache as the DB context has changed
+            instance.dbPathCache.clear();
             logger.info("SqliteAccessor re-initialized and cache cleared. Current DB path: {}", instance.currentDbFilePath);
         }
     }
@@ -78,13 +75,11 @@ public class SqliteAccessor {
      * @throws SQLException If a database access error occurs
      */
     public Connection getConnection(String source) throws SQLException {
-        String dbPath = getDatabasePath(source); // 'source' is used as cache key
-        // logger.debug("Opening connection to database: {} for source: {}", dbPath, source);
+        String dbPath = getDatabasePath(source);
 
         try {
             Class.forName("org.sqlite.JDBC");
             Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
-            // Set PRAGMAs for performance
             try (var stmt = conn.createStatement()) {
                 stmt.execute("PRAGMA journal_mode=WAL;");
                 stmt.execute("PRAGMA synchronous=NORMAL;");
@@ -110,13 +105,10 @@ public class SqliteAccessor {
         String value = null;
 
         try (Connection conn = getConnection(source)) {
-            // Query to get metadata from the database
             String sql;
             if (fieldName == null) {
-                // Get all metadata fields (excluding the text field to avoid large data)
                 sql = "SELECT document_id, title, timestamp FROM documents WHERE document_id = ?";
             } else {
-                // Get specific metadata field
                 sql = "SELECT " + fieldName + " FROM documents WHERE document_id = ?";
             }
 
@@ -125,7 +117,6 @@ public class SqliteAccessor {
                 try (ResultSet rs = stmt.executeQuery()) {
                     if (rs.next()) {
                         if (fieldName == null) {
-                            // Build a JSON-like string with all metadata
                             StringBuilder sb = new StringBuilder("{");
                             for (int i = 1; i <= rs.getMetaData().getColumnCount(); i++) {
                                 String colName = rs.getMetaData().getColumnName(i);
@@ -137,16 +128,13 @@ public class SqliteAccessor {
                             sb.append("}");
                             value = sb.toString();
                         } else {
-                            // Get specific field value
                             value = rs.getString(1);
                         }
                     }
                 }
             }
 
-            //logger.debug("Retrieved metadata for document {} from {}: {}", documentId, source, value);
         } catch (Exception e) {
-            // Log error and continue
             logger.error("Error getting metadata for document {} from {}: {}",
                         documentId, source, e.getMessage(), e);
             value = null;
@@ -180,7 +168,6 @@ public class SqliteAccessor {
             logger.debug("Retrieved text for document {} from {}, length: {}",
                         documentId, source, text != null ? text.length() : 0);
         } catch (Exception e) {
-            // Log error and continue
             logger.error("Error getting text for document {} from {}: {}",
                         documentId, source, e.getMessage(), e);
             text = null;
@@ -197,7 +184,7 @@ public class SqliteAccessor {
      * @return The path to the database
      */
     private String getDatabasePath(String source) {
-        // Check cache first. Key is 'source', value is 'this.currentDbFilePath'.
+        // Check cache first.
         if (dbPathCache.containsKey(source)) {
             return dbPathCache.get(source);
         }

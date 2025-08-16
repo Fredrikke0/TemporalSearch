@@ -149,7 +149,7 @@ public class IndexRunner {
                 if (requestedType.equals("stitches")) {
                     typesBeingBuilt.addAll(ALL_STITCH_INDEX_TYPES);
                 } else {
-                    typesBeingBuilt.add(requestedType); // Add other specific types
+                    typesBeingBuilt.add(requestedType);
                 }
             }
         }

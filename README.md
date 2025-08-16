@@ -1,117 +1,140 @@
 # Temporal Search
 
-A high-performance natural language processing pipeline specializing in temporal reasoning. The system performs text annotation and indexing with a focus on temporal information extraction, enabling advanced temporal-aware search capabilities.
+A high-performance NLP system specializing in temporal reasoning. It annotates documents, builds multiple RocksDB-backed indexes, and provides a query engine (ANTLR-based) for temporal-aware search over an large corpus.
 
-## Features
+## Overview and Main Components
 
-- **Text Annotation**:
-  - Uses Stanford CoreNLP for text analysis
-- **Advanced Indexing**:
-  - Multiple index types (unigram, bigram, trigram, dependency, NER date)
-  - Temporal-aware index structures
-  - Flexible storage using SQLite for documents and RocksDB for indexes
-- **Temporal Query Interface**:
-  - TBD
+- Data conversion (pre-requisite before anything else)
 
-## Installation
+  - `src/main/java/com/example/WikiJsonToSqlite.java`: Converts Wikipedia CirrusSearch JSON dumps into an SQLite database with a `documents` table.
+  - `src/main/java/com/example/NytXmlToSqlite.java`: Converts NYT Corpus `.tar.gz` archives (XML) into the same SQLite schema.
 
-1. Clone the repository:
+- Pipeline and indexing
 
-   ```bash
-   git clone https://github.com/yourusername/java-nlp.git
-   cd java-nlp
-   ```
+  - `src/main/java/com/example/Pipeline.java`: Orchestrates annotation (Stanford CoreNLP) and index generation (unigram, bigram, trigram, dependency, NER, NER date, POS, nash, and stitch variants). Manages project directories and `--force` cleanup.
 
-2. Build nash and the project:
-   ```bash
-   mvn install:install-file -Dfile=sandbox/lib/nash.jar -DgroupId=no.ntnu -DartifactId=nash -Dversion=1.0 -Dpackaging=jar
-   mvn clean package
-   ```
+- Query engine (ANTLR-based)
 
-This will create an executable JAR file in the `target` directory.
+  - `src/main/java/com/example/QueryCLI.java`: Entry point for executing queries, supporting interactive mode and single queries. Uses the ANTLR grammar in `src/main/antlr4/com/example/query/parser/QueryLang.g4`.
 
-## Usage
+- Index browsing / debugging
 
-The pipeline consists of three main components:
+  - `src/main/java/com/example/RocksDBBrowser.java`: Tool for inspecting RocksDB index contents (keys/values, prefixes, stats). Useful for debugging.
 
-1. **Annotation**: Processes text using Stanford CoreNLP, with special focus on temporal information
-2. **Indexing**: Generates multiple types of indexes including temporal-specific indexes
-3. **Query Interface**: ...
+- Benchmarking and verification
+  - `benchmark.py`: Benchmarks the query engine and indexes across strategy combinations (cold/warm cache modes).
+  - `analyze_benchmarks.py`: Aggregates benchmark CSVs and renders a compact console and LaTeX table.
+  - `verify_correctness.py`: Ensures different strategy combinations (temporal/pushdown/stitch) produce identical results.
 
-### Basic Usage
+## Install & Build
 
-Run all processing stages (annotation and indexing):
+1. Ensure Java 21+ and Maven are installed.
+
+2. Install the Nash dependency and build the project:
 
 ```bash
-java -jar target/java-nlp-1.0-SNAPSHOT-jar-with-dependencies.jar \
-    --stage all \
-    --db data.db \
-    --index-dir indexes
+mvn install:install-file -Dfile=sandbox/lib/nash.jar -DgroupId=no.ntnu -DartifactId=nash -Dversion=1.0 -Dpackaging=jar
+mvn clean package
 ```
 
-### Stage-Specific Usage
+This produces JARs in `target/`.
 
-Run only the annotation stage:
+## Workflow
+
+1. Convert data to SQLite
+
+- Wikipedia JSON (CirrusSearch) → SQLite
 
 ```bash
-java -jar target/java-nlp-1.0-SNAPSHOT-jar-with-dependencies.jar \
-    --stage annotate \
-    --db data.db \
-    --batch_size 1000 \
-    --threads 8
+mvn -q exec:java -Dexec.mainClass=com.example.WikiJsonToSqlite -- \
+  -f /path/to/wiki.json \
+  -d /path/to/data/wiki.db \
+  -l 200000   # optional limit
 ```
 
-Run only the indexing stage:
+- NYT Corpus `.tar.gz` → SQLite
 
 ```bash
-java -jar target/java-nlp-1.0-SNAPSHOT-jar-with-dependencies.jar \
-    --stage index \
-    --db data.db \
-    --index-dir indexes \
-    --index-type all
+mvn -q exec:java -Dexec.mainClass=com.example.NytXmlToSqlite -- \
+  -i /path/to/nyt_archives_dir \
+  -o /path/to/data/nyt.db \
+  -l 100000   # optional global limit
 ```
 
-### Command-Line Arguments
+2. Annotate and index
 
-Common Arguments:
+```bash
+mvn -q exec:java -Dexec.mainClass=com.example.Pipeline -- \
+  -s all \
+  --db-file /path/to/data/nyt.db \
+  --index-dir /path/to/projects_root \
+  --force   # optional cleanup
+```
 
-- `--stage`: Pipeline stage to run (`all`, `annotate`, `index`, or `analyze`)
-- `--db`: SQLite database file path (required for annotation and indexing)
-- `--batch_size`: Batch size for processing (default: 1000)
+Key options (subset):
 
-Annotation-Specific:
+- Stages: `-s`/`--stage` ∈ {`all`, `annotate`, `index`}
+- Annotation: `-b`/`--batch-size`, `-t`/`--threads`, `-l`/`--limit`, `--fix-document-ids`, `--start-doc-id`
+- Indexing: `--stopwords`, `--idx-batch-size`, `-y`/`--index-type` (`unigram`, `bigram`, `trigram`, `dependency`, `ner`, `ner_date`, `pos`, `nash`, stitch types like `stitch_unigram_ner`, or meta `stitches`/`all`), `--custom-temp-dir`, `--force`
 
-- `--threads`: Number of CoreNLP threads (default: 8)
-- `--limit`: Limit the number of documents to process
+The pipeline writes a project manifest; `QueryCLI` can auto-resolve the DB path from it.
 
-Indexing-Specific:
+3. Query the project
 
-- `--index-dir`: Directory for storing indexes (default: 'indexes')
-- `--stopwords`: Path to stopwords file (default: stopwords.txt)
-- `--index-type`: Type of index to generate (`unigram`, `bigram`, `trigram`, `dependency`, `ner_date`, or `all`)
+- Interactive mode:
 
-## Project Status
+```bash
+mvn -q exec:java -Dexec.mainClass=com.example.QueryCLI -- \
+  --index-root-dir /path/to/projects_root
 
-- ✅ Document annotation pipeline
-- ✅ Multi-strategy indexing
-- 🚧 Temporal query interface (in design phase)
-- 🚧 Advanced temporal reasoning capabilities
+# At the Query> prompt:
+SET STRATEGY temporal=nash pushdown=optimized stitch=optimized
+SET OUTPUT NONE
+SELECT DOCUMENT_ID, SNIPPET FROM my_project
+  WHERE CONTAINS('economy') AND DATE(= 2008)
+  LIMIT 20;
+```
+
+- Single query:
+
+```bash
+mvn -q exec:java -Dexec.mainClass=com.example.QueryCLI -- \
+  --index-root-dir /path/to/projects_root \
+  --temporal-strategy nash \
+  --pushdown-strategy optimized \
+  --stitch-strategy optimized \
+  "SELECT COUNT(*) FROM my_project WHERE POS(NN) AND NER(PERSON);"
+```
+
+Notes:
+
+- Strategies: temporal ∈ {`naive`, `nash`}, pushdown ∈ {`none`, `optimized`}, stitch ∈ {`none`, `optimized`}.
+- Grammar file: `src/main/antlr4/com/example/query/parser/QueryLang.g4`.
+- `FROM` uses the project name (derived from DB filename) under `--index-root-dir`.
+
+## Tools for Debugging & Evaluation
+
+- RocksDB browser
+
+```bash
+mvn -q exec:java -Dexec.mainClass=com.example.RocksDBBrowser -- \
+  --index-type summary \
+  --db-path /path/to/projects_root/my_project
+```
+
+- Benchmarks and analysis
+
+```bash
+python3 benchmark.py --query-dir queries --index-root-dir /path/to/projects_root --output-dir bench_out
+python3 analyze_benchmarks.py --file bench_out/1HOP/somefile_1hop_results.csv --table-title "1-hop Benchmark Performance"
+python3 verify_correctness.py --query-dir queries --index-root-dir /path/to/projects_root --output-dir verify_out
+```
 
 ## Troubleshooting
 
-1. Out of Memory Errors:
-
-   - Reduce batch size
-   - Reduce number of threads
-   - Ensure sufficient heap space with `-Xmx` JVM argument
-
-2. Slow Processing:
-
-   - Increase batch size if memory allows
-   - Increase number of threads if CPU allows
-   - Check disk I/O performance
-
-3. Index Errors:
-   - Check log files for specific error messages
-   - Run analysis stage to identify error patterns
-   - Verify input data quality
+- Memory pressure during annotation/indexing:
+  - Lower `--batch-size`, reduce `--threads`, or increase JVM heap (e.g., `-Xmx`)
+- Slow indexing:
+  - Increase batch sizes if memory allows; ensure fast storage; consider a custom temp dir on a fast disk
+- Index inspection:
+  - Use `RocksDBBrowser` with `--stats` or `--prefix`/`--key` to inspect specific entries

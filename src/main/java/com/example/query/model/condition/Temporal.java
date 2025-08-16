@@ -438,8 +438,7 @@ public record Temporal(
     @Override
     public void registerVariables(VariableRegistry registry) {
         if (qualifiedVariableName.isPresent()) {
-            // Registration now happens in QueryModelBuilder with qualified name
-            // registry.registerProducer(qualifiedVariableName.get(), getProducedVariableType(), getType());
+            registry.registerProducer(qualifiedVariableName.get(), getProducedVariableType(), getType());
         }
     }
 

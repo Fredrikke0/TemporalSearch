@@ -71,12 +71,6 @@ public record Dependency(
         return isVariable;
     }
 
-    /**
-     * Returns the variable name if this is a variable binding condition.
-     */
-    public String getVariableName() {
-        return qualifiedVariableName;
-    }
 
     /**
      * Returns the variable name if this is a variable binding condition.
@@ -107,12 +101,22 @@ public record Dependency(
     @Override
     public Set<String> getConsumedVariables() {
         Set<String> consumed = new HashSet<>();
-        if (isVariableReference(governor)) {
-            consumed.add(governor);
+        // Governor/dependent are stored as plain names when variables were used in the query model.
+        // For execution ordering, we need qualified names. Assume default main alias when unqualified.
+        if (governor != null && !governor.isBlank() && !governor.equals("*") && !governor.startsWith("\"")) {
+            if (!governor.contains(".")) {
+                consumed.add(com.example.query.parser.QueryModelBuilder.DEFAULT_MAIN_ALIAS + "." + governor);
+            } else {
+                consumed.add(governor);
+            }
             logger.debug("Marking {} as consumed variable (governor)", governor);
         }
-        if (isVariableReference(dependent)) {
-            consumed.add(dependent);
+        if (dependent != null && !dependent.isBlank() && !dependent.equals("*") && !dependent.startsWith("\"")) {
+            if (!dependent.contains(".")) {
+                consumed.add(com.example.query.parser.QueryModelBuilder.DEFAULT_MAIN_ALIAS + "." + dependent);
+            } else {
+                consumed.add(dependent);
+            }
             logger.debug("Marking {} as consumed variable (dependent)", dependent);
         }
         logger.debug("Reporting consumed variables: {}", consumed);

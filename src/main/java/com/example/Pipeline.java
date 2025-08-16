@@ -20,7 +20,6 @@ import net.sourceforge.argparse4j.inf.Namespace;
 public class Pipeline {
     private static final Logger logger = LoggerFactory.getLogger(Pipeline.class);
 
-    // Consistent lists of index types, mirroring IndexRunner
     private static final java.util.List<String> ALL_STITCH_OUTPUT_TYPES = java.util.List.of(
         "stitch_unigram_date", "stitch_unigram_ner", //"stitch_unigram_pos",
         "stitch_bigram_date", "stitch_bigram_ner", //"stitch_bigram_pos",
@@ -168,11 +167,9 @@ public class Pipeline {
         Path indexBasePath = projectDirPath;
 
         boolean force = ns.getBoolean("force");
-        Integer limit = ns.getInt("limit");
-        Integer cliStartDocId = ns.get("cli_start_doc_id");
-        boolean fixIds = ns.getBoolean("fix_ids");
 
-        java.util.List<String> cliRequestedIndexTypes = ns.getList("index_type"); // Renamed for clarity
+
+        java.util.List<String> cliRequestedIndexTypes = ns.getList("index_type");
 
         logger.info("Starting Pipeline (DB: '{}', Index Dir: '{}', Stage: {}, CLI Requested Index Types: {})",
                     dbFilePath, indexRootDirPath, stage, cliRequestedIndexTypes);
@@ -224,8 +221,6 @@ public class Pipeline {
         if (stage.equals("all") || stage.equals("index")) {
             logger.info("--- Indexing Stage ---");
 
-            // This set is for understanding potential underlying dependencies for stitch generation if needed by other logic.
-            // It is NOT directly used for --force cleanup decisions for individual types anymore.
             java.util.Set<String> baseIndexesPotentiallyNeeded = new java.util.LinkedHashSet<>();
             if (cliRequestedIndexTypes.contains("all") || cliRequestedIndexTypes.contains("stitches")) {
                 baseIndexesPotentiallyNeeded.addAll(java.util.List.of(
@@ -263,7 +258,6 @@ public class Pipeline {
                      logger.warn("Deleting all contents of index base directory due to --force and 'all' type: {}", indexBasePath.toAbsolutePath());
                      deleteDirectoryRecursively(indexBasePath);
                      Files.createDirectories(indexBasePath); // Recreate base directory
-                     // also recreate the default temp dir if it was under indexBasePath and got deleted
                      if (customTempDirArg == null || customTempDirArg.isBlank()) {
                         Path defaultTempDirForForceAll = indexBasePath.resolve("temp");
                         if (!Files.exists(defaultTempDirForForceAll)) {
@@ -286,7 +280,6 @@ public class Pipeline {
                              directoriesToClean.add(typeLower);
                          } else if (!typeLower.equals("all")) { // "all" is handled above
                              logger.warn("Requested type '{}' for --force is not a known primary or stitch output type. It will be ignored for pipeline cleanup unless it's a custom index directory name.", requestedType);
-                             // Allow custom names to be cleaned if they exist
                              directoriesToClean.add(typeLower);
                          }
                      }
@@ -322,7 +315,7 @@ public class Pipeline {
                 indexBasePath.toString(),
                 stopwordsPath,
                 indexBatchSize,
-                cliRequestedIndexTypes, // Pass the original CLI requested types
+                cliRequestedIndexTypes,
                 effectiveCustomTempDirStr,
                 force
             );
@@ -340,9 +333,8 @@ public class Pipeline {
         logger.info("Pipeline completed successfully!");
     }
 
-    // Helper method to delete directories recursively
     private static void deleteDirectoryRecursively(Path path) throws IOException {
-        if (Files.exists(path)) { // Check if path exists before attempting to delete
+        if (Files.exists(path)) {
             if (Files.isDirectory(path)) {
                 try (Stream<Path> walk = Files.walk(path)) {
                     walk.sorted((a, b) -> b.compareTo(a))

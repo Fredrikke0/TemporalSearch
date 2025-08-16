@@ -10,15 +10,15 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessInterface;
 import com.example.query.executor.QueryResultSoA;
 
-import tech.tablesaw.api.ColumnType;
 import tech.tablesaw.api.StringColumn;
 import tech.tablesaw.api.Table;
 import tech.tablesaw.columns.Column;
 
 /**
  * Represents a variable column in the SELECT clause of a query.
- * This column selects the value of a variable binding from matching documents,
- * handling both simple variables (var) and qualified variables (alias.var).
+ * This column selects the value of a variable binding from matching documents.
+ * It always stores a qualified variable name (e.g., "$main.var" or "alias.var").
+ * Simple variable references (e.g., "var") are qualified by the parser/builder upstream.
  */
 public class VariableColumn implements SelectColumn {
     private static final Logger logger = LoggerFactory.getLogger(VariableColumn.class);
@@ -26,8 +26,7 @@ public class VariableColumn implements SelectColumn {
     // Stores the fully qualified name (e.g., "var" qualified to "$main.var" or "alias.var")
     private final String qualifiedVariableName;
 
-    // TODO: Infer ColumnType based on VariableRegistry? Currently defaults to String.
-    private final ColumnType columnType = ColumnType.STRING;
+    // TODO: Consider inferring a concrete column type from VariableRegistry. For now we always use StringColumn.
 
     /**
      * Creates a new variable column, storing the fully qualified name.

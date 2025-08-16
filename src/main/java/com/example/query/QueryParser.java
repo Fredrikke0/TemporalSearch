@@ -39,7 +39,6 @@ public class QueryParser {
     public Query parse(String queryString) throws QueryParseException {
         try {
 
-            // Create the lexer and parser
             QueryLangLexer lexer = new QueryLangLexer(CharStreams.fromString(queryString));
             lexer.removeErrorListeners();
             lexer.addErrorListener(new ThrowingErrorListener());
@@ -49,22 +48,18 @@ public class QueryParser {
             parser.removeErrorListeners();
             parser.addErrorListener(new ThrowingErrorListener());
 
-            // Parse the query
             ParseTree tree = parser.query();
 
-            // Check for syntax errors
             if (parser.getNumberOfSyntaxErrors() > 0) {
                 throw new QueryParseException("Invalid query syntax");
             }
 
-            // Convert the parse tree to our model objects
             QueryModelBuilder visitor = new QueryModelBuilder();
             Query query = visitor.buildQuery(tree);
 
             logger.debug("Successfully parsed query: {}", query);
             return query;
         } catch (UnsupportedOperationException e) {
-            // Pass through UnsupportedOperationException
             throw e;
         } catch (RuntimeException e) {
             logger.debug("Error parsing query: {}", queryString, e);
@@ -85,7 +80,6 @@ public class QueryParser {
      */
     public Query parseSubquery(ParseTree subqueryTree) throws QueryParseException {
         try {
-            // Convert the subquery parse tree to our model objects
             QueryModelBuilder visitor = new QueryModelBuilder();
             Query subquery = visitor.buildSubquery(subqueryTree);
 

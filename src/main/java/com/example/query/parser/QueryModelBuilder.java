@@ -27,9 +27,11 @@ import com.example.query.parser.util.ValidationUtils;
 import com.example.query.parser.util.VariableQualifier;
 
 /**
- * Visitor implementation that builds a Query model from the parse tree.
- * Handles conversion from parse tree nodes to model objects.
- * Uses VariableRegistry to manage variable scopes and types.
+ * Visitor implementation that builds a {@link Query} model from the parse tree.
+ * - Converts grammar nodes to model objects (conditions, columns, joins, etc.)
+ * - Qualifies variables to an alias (defaulting to {@link #DEFAULT_MAIN_ALIAS} unless explicitly bound)
+ * - Produces a Query whose WHERE clause is typically a single Logical tree (AND/OR/NOT)
+ * - Populates a {@link VariableRegistry} with producers and consumers for validation and typing
  */
 public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     private static final Logger logger = LoggerFactory.getLogger(QueryModelBuilder.class);
@@ -358,7 +360,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
                  throw new IllegalStateException(
                     String.format("Unqualified variable '%s' used in SNIPPET where qualification is required (due to ALIAS or JOIN). Use 'alias.%s'.",
                                   variableName, variableName)
-                     // TODO: Add line/pos info
                  );
             }
             // If not required, implicitly qualify
@@ -380,7 +381,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
              throw new IllegalStateException("Snippet expression target must be a variable or qualified identifier.");
         }
 
-        int windowSizeForNode = -1; // Default to -1, to let SnippetColumn use its default
+        int windowSizeForNode = -1;
         if (ctx.windowSize != null) { // ctx.windowSize is the INTEGER_LITERAL token from the new grammar
             try {
                 windowSizeForNode = Integer.parseInt(ctx.windowSize.getText());
@@ -550,7 +551,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
          if (tree instanceof QueryLangParser.ConditionContext c) return visitCondition(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.AtomicConditionContext c) return visitAtomicCondition(c, currentScopeAlias);
          if (tree instanceof QueryLangParser.NotConditionContext c) return visitNotCondition(c, currentScopeAlias);
-         // For other node types, call the original visit method
+         // For other node types, delegate to the base visitor (no alias context needed)
          return visit(tree);
     }
 
@@ -676,27 +677,28 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         switch (temporalType) {
             case EQUAL:
-                // DATE(= 2020) means the whole year 2020.
+                // Whole-year window for the given year
                 startDate = Optional.of(LocalDateTime.of(year, 1, 1, 0, 0));
                 endDate = Optional.of(LocalDateTime.of(year, 12, 31, 23, 59, 59));
                 break;
             case AFTER:
-                // DATE(> 2020) should mean after Dec 31, 2020.
+                // Strictly after end of the given year
                 startDate = Optional.of(LocalDateTime.of(year, 12, 31, 23, 59, 59));
                 break;
             case AFTER_EQUAL:
-                // DATE(>= 2020) should mean on or after Jan 1, 2020.
+                // On or after start of the given year
                 startDate = Optional.of(LocalDateTime.of(year, 1, 1, 0, 0));
                 break;
             case BEFORE:
-                // DATE(< 2020) means before Jan 1, 2020.
+                // Strictly before start of the given year (bound handling is applied by executors)
                 startDate = Optional.of(LocalDateTime.of(year, 1, 1, 0, 0));
                 break;
             case BEFORE_EQUAL:
-                // DATE(<= 2020) means on or before Dec 31, 2020.
-                // The executor's `evaluateTemporalCondition` uses the endDate for BEFORE_EQUAL.
+                // On or before end of the given year
                 endDate = Optional.of(LocalDateTime.of(year, 12, 31, 23, 59, 59));
                 break;
+            default:
+                throw new IllegalArgumentException("Unsupported TemporalPredicate for year comparison: " + temporalType);
         }
 
         String qualifiedVariableName = null;
@@ -804,12 +806,10 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
     public Object visitDependsExpression(QueryLangParser.DependsExpressionContext ctx, String currentScopeAlias) {
         String governor;
-        boolean governorIsVariable = false;
         // Visit governor, passing alias for potential variable consumption registration
         Object govResult = visitGovernor(ctx.gov, currentScopeAlias);
         if (govResult instanceof VariableReference govVarRef) {
             governor = govVarRef.plainName(); // Use plain name for the Dependency model
-            governorIsVariable = true;
             // Consumption registered within visitGovernor
         } else {
             governor = (String) govResult;
@@ -826,12 +826,10 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         String relation = (String) visitRelation(ctx.rel); // Revert back to direct call
 
         String dependent;
-        boolean dependentIsVariable = false;
          // Visit dependent, passing alias
         Object depResult = visitDependent(ctx.dep, currentScopeAlias);
          if (depResult instanceof VariableReference depVarRef) {
             dependent = depVarRef.plainName(); // Use plain name for the Dependency model
-            dependentIsVariable = true;
              // Consumption registered within visitDependent
         } else {
             dependent = (String) depResult;
@@ -855,7 +853,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     // Overload visitGovernor to accept alias and return VariableReference if it's a variable
     public Object visitGovernor(QueryLangParser.GovernorContext ctx, String currentScopeAlias) {
         if (ctx.qualifiedIdentifier() != null) {
-            // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn
+            // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn.
+            // For DEPENDS, the role must be a variable, not a structural field.
             Object qualifiedResult = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
 
             if (qualifiedResult instanceof VariableColumn vc) {
@@ -888,7 +887,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
     // Overload visitDependent to accept alias and return VariableReference
     public Object visitDependent(QueryLangParser.DependentContext ctx, String currentScopeAlias) {
         if (ctx.qualifiedIdentifier() != null) {
-            // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn
+            // Visit the qualifiedIdentifier, which returns StructuralColumn or VariableColumn.
+            // For DEPENDS, the role must be a variable, not a structural field.
             Object qualifiedResult = visitQualifiedIdentifier(ctx.qualifiedIdentifier());
 
             if (qualifiedResult instanceof VariableColumn vc) {
@@ -1108,9 +1108,9 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         logger.debug("Creating subquery with alias: {}", subqueryAlias);
 
-        // Determine if qualification is required WITHIN the subquery
-        // A subquery, as per the current grammar rule, cannot have its own JOIN clauses.
-        // Therefore, internal qualification driven by joins is not applicable here.
+        // Determine if qualification is required WITHIN the subquery.
+        // Current grammar does not allow JOINs inside a subquery clause, so we do not force
+        // internal qualification there. Variables inside the subquery are qualified to its alias later.
         boolean subqueryInternalQualificationRequired = false;
 
         // Visit the subquery's select list
@@ -1176,7 +1176,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             .map(col -> requalifyColumnName(col, DEFAULT_MAIN_ALIAS + ".", subqueryAlias + "."))
             .collect(java.util.stream.Collectors.toList());
 
-        // Also update select columns to use the new qualified names
+        // Also update select columns to use the new qualified names.
+        // Structural columns that referenced $main within the subquery are re-bound to the subquery alias for clarity.
         List<SelectColumn> requalifiedSelectColumns = selectColumns.stream()
             .map(col -> {
                 if (col instanceof VariableColumn varCol) {
@@ -1258,7 +1259,8 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         // Visit the subquery first (its internal builder handles its scope)
         SubquerySpec subquery = (SubquerySpec) visit(ctx.subquery());
 
-        // Visit the join condition, passing the flag
+        // Visit the join condition, passing the flag.
+        // This ensures ON columns are properly qualified according to the outer query's aliasing rules.
         JoinCondition joinCondition = visitJoinCondition(ctx.joinCondition(), qualificationRequired);
 
         // Get the join type - defaults to INNER if not specified
@@ -1428,41 +1430,32 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         LocalDateTime endDate;
 
         if (ctx.end != null) {
-            // If end date is provided, use it
             endDate = parseDateLiteral(ctx.end.getText());
-            // Adjust end date to end of day/month/year
             String endDateText = ctx.end.getText();
             if (isYearOnly(endDateText)) {
-                // Year only: "2000" means up to Dec 31, 2000 23:59:59
                 LocalDate yearEnd = LocalDate.of(Integer.parseInt(endDateText), 12, 31);
                 endDate = LocalDateTime.of(yearEnd, java.time.LocalTime.MAX);
             } else if (isYearMonth(endDateText)) {
-                // Year-month: "2000-01" means up to Jan 31, 2000 23:59:59
                 String[] parts = endDateText.split("-");
                 int year = Integer.parseInt(parts[0]);
                 int month = Integer.parseInt(parts[1]);
                 LocalDate monthEnd = getLastDayOfMonth(year, month);
                 endDate = LocalDateTime.of(monthEnd, java.time.LocalTime.MAX);
             } else {
-                // Full date: "2000-01-01" means up to 2000-01-01 23:59:59
                 endDate = LocalDateTime.of(endDate.toLocalDate(), java.time.LocalTime.MAX);
             }
         } else {
-            // If no end date, adjust start date based on its format
             String startDateText = ctx.start.getText();
             if (isYearOnly(startDateText)) {
-                // Year only: "2000" means from Jan 1, 2000 00:00:00 to Dec 31, 2000 23:59:59
                 LocalDate yearEnd = LocalDate.of(Integer.parseInt(startDateText), 12, 31);
                 endDate = LocalDateTime.of(yearEnd, java.time.LocalTime.MAX);
             } else if (isYearMonth(startDateText)) {
-                // Year-month: "2000-01" means from Jan 1, 2000 00:00:00 to Jan 31, 2000 23:59:59
                 String[] parts = startDateText.split("-");
                 int year = Integer.parseInt(parts[0]);
                 int month = Integer.parseInt(parts[1]);
                 LocalDate monthEnd = getLastDayOfMonth(year, month);
                 endDate = LocalDateTime.of(monthEnd, java.time.LocalTime.MAX);
             } else {
-                // Full date: "2000-01-01" means the full day
                 endDate = LocalDateTime.of(startDate.toLocalDate(), java.time.LocalTime.MAX);
             }
         }
@@ -1479,8 +1472,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             String endDateText = ctx.end.getText();
             LocalDateTime endDateResult = parseDateLiteral(endDateText);
 
-            // Adjust endDateResult to the end of its period (day, month, year)
-            // similar to logic in visitDateLiteralRange
             if (isYearOnly(endDateText)) {
                 endDateResult = LocalDateTime.of(endDateResult.getYear(), 12, 31, 23, 59, 59);
             } else if (isYearMonth(endDateText)) {
@@ -1497,8 +1488,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             return startDateResult;
         }
     }
-
-    // Helper methods for date literal handling
 
     /**
      * Parse a date literal in the format YYYY, YYYY-MM, or YYYY-MM-DD
