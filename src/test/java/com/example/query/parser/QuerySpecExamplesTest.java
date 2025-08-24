@@ -151,7 +151,6 @@ public class QuerySpecExamplesTest {
     @Test
     void testCombinedFeaturesExamples() { combinedFeaturesExamples.forEach(this::assertSpecExampleValid); }
 
-    // Duplicate tests based on old names - consolidate if needed
     @Test
     void basicVariableBindingExamplesShouldBeValid() {
         assertSpecExampleValid("SELECT person FROM corpus WHERE NER(PERSON) BIND person");

@@ -93,7 +93,7 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
         }
 
         List<AnnotationData> groupedAnnotations = new ArrayList<>();
-        if (rawAnnotationsFromDb.isEmpty()) { // Check rawAnnotationsFromDb directly
+        if (rawAnnotationsFromDb.isEmpty()) {
             logger.trace("No raw NER annotations found for document ID {} for {} (Trigram) index.", documentId, MY_INDEX_NAME);
             return groupedAnnotations;
         }
@@ -105,7 +105,7 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
         int previousTokenEndChar = -1;
 
         for (int i = 0; i < rawAnnotationsFromDb.size(); i++) {
-            RawAnnotation currentAnnotation = rawAnnotationsFromDb.get(i); // Use rawAnnotationsFromDb
+            RawAnnotation currentAnnotation = rawAnnotationsFromDb.get(i);
             boolean entityBreak = false;
 
             if (currentEntityType != null) {

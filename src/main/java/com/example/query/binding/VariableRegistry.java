@@ -19,10 +19,8 @@ import org.slf4j.LoggerFactory;
 public class VariableRegistry {
     private static final Logger logger = LoggerFactory.getLogger(VariableRegistry.class);
 
-    // Map of variable name (qualified) to producers
     private final Map<String, Set<ProducerVariable>> producers = new ConcurrentHashMap<>();
 
-    // Map of variable name (qualified) to consumers
     private final Map<String, Set<ConsumerVariable>> consumers = new ConcurrentHashMap<>();
 
     /**

@@ -23,6 +23,15 @@ import com.example.query.binding.VariableType;
  * - ORDINAL: Ordinal numbers
  * - PERCENT: Percentage values
  * - SET: Set expressions (e.g., "weekly", "monthly")
+ * - CITY
+ * - STATE_OR_PROVINCE
+ * - COUNTRY
+ * - NATIONALITY
+ * - RELIGION
+ * - TITLE
+ * - IDEOLOGY
+ * - CRIMINAL_CHARGE
+ * - CAUSE_OF_DEATH
  *
  */
 public record Ner(

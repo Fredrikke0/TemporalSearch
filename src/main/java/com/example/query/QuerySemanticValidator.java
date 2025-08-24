@@ -51,7 +51,9 @@ public class QuerySemanticValidator {
     // Define the set of valid NER entity types (uppercase)
     private static final Set<String> VALID_NER_TYPES = Set.of(
         "PERSON", "ORGANIZATION", "LOCATION", "DATE", "TIME",
-        "DURATION", "MONEY", "NUMBER", "ORDINAL", "PERCENT", "SET"
+        "DURATION", "MONEY", "NUMBER", "ORDINAL", "PERCENT", "SET",
+        "CITY", "STATE_OR_PROVINCE", "COUNTRY", "NATIONALITY",
+        "RELIGION", "TITLE", "IDEOLOGY", "CRIMINAL_CHARGE", "CAUSE_OF_DEATH"
     );
 
     // Helper method to validate individual terms for disallowed wildcard usage

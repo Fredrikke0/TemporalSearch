@@ -6,7 +6,7 @@ import java.util.Objects;
  * Represents a dependency relation entry for indexing.
  */
 public final class DependencyEntry implements IndexEntry {
-    private final long dependencyId; // Added for keyset pagination
+    private final long dependencyId;
     private final int documentId;
     private final int sentenceId;
     private final int beginChar;
@@ -27,7 +27,6 @@ public final class DependencyEntry implements IndexEntry {
         this.relation = relation;
     }
 
-    // Getter for dependencyId
     public long getDependencyId() {
         return dependencyId;
     }

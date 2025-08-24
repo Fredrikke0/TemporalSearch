@@ -640,6 +640,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         if (ctx.PERSON() != null) return "PERSON";
         if (ctx.LOCATION() != null) return "LOCATION";
         if (ctx.ORGANIZATION() != null) return "ORGANIZATION";
+        if (ctx.DATE() != null) return "DATE";
         if (ctx.TIME() != null) return "TIME";
         if (ctx.DURATION() != null) return "DURATION";
         if (ctx.MONEY() != null) return "MONEY";
@@ -647,6 +648,15 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         if (ctx.ORDINAL() != null) return "ORDINAL";
         if (ctx.PERCENT() != null) return "PERCENT";
         if (ctx.SET() != null) return "SET";
+        if (ctx.CITY() != null) return "CITY";
+        if (ctx.STATE_OR_PROVINCE() != null) return "STATE_OR_PROVINCE";
+        if (ctx.COUNTRY() != null) return "COUNTRY";
+        if (ctx.NATIONALITY() != null) return "NATIONALITY";
+        if (ctx.RELIGION() != null) return "RELIGION";
+        if (ctx.TITLE() != null) return "TITLE";
+        if (ctx.IDEOLOGY() != null) return "IDEOLOGY";
+        if (ctx.CRIMINAL_CHARGE() != null) return "CRIMINAL_CHARGE";
+        if (ctx.CAUSE_OF_DEATH() != null) return "CAUSE_OF_DEATH";
 
         throw new IllegalArgumentException("Invalid entity type: " + ctx.getText());
     }
