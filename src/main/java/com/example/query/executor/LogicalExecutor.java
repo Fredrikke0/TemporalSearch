@@ -233,6 +233,10 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         int leftIdx = 0;
         int rightIdx = 0;
 
+        // Determine if inputs contain variable bindings; used to avoid artificial multiplication
+        boolean leftHasVariables = hasAnyVariables(left);
+        boolean rightHasVariables = hasAnyVariables(right);
+
         if (granularity == Query.Granularity.DOCUMENT) {
             while (leftIdx < left.size() && rightIdx < right.size()) {
                 int leftDocId = left.getDocumentIdAt(leftIdx);
@@ -282,7 +286,8 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                          nextConceptualRowId = processMatchingGranule(
                             resultSoA, left, right,
                             leftIndicesForGranule, rightIndicesForGranule,
-                            combinedReqs, nextConceptualRowId);
+                            combinedReqs, nextConceptualRowId,
+                            leftHasVariables, rightHasVariables);
                     } else {
                         logger.warn("Skipping processMatchingGranule for docId={} as one side has zero entries in the determined granule lists (left list size: {}, right list size: {}). Actual counts: left {}, right {}.",
                             granuleMatchDocId, leftIndicesForGranule.size(), rightIndicesForGranule.size(), countLeftInGranule, countRightInGranule);
@@ -348,7 +353,8 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                         nextConceptualRowId = processMatchingGranule(
                            resultSoA, left, right,
                            leftIndicesForGranule, rightIndicesForGranule,
-                           combinedReqs, nextConceptualRowId);
+                           combinedReqs, nextConceptualRowId,
+                           leftHasVariables, rightHasVariables);
                     } else {
                        logger.warn("Skipping processMatchingGranule for docId={}, sentId={} as one side has zero entries in the determined granule lists (left list size: {}, right list size: {}). Actual counts: left {}, right {}.",
                            granuleMatchDocId, granuleMatchSentId, leftIndicesForGranule.size(), rightIndicesForGranule.size(), countLeftInGranule, countRightInGranule);
@@ -374,7 +380,9 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         List<Integer> leftGranuleRowIndices,
         List<Integer> rightGranuleRowIndices,
         AttributeRequirements combinedReqs,
-        int currentNextConceptualRowId) throws QueryExecutionException {
+        int currentNextConceptualRowId,
+        boolean leftHasVariables,
+        boolean rightHasVariables) throws QueryExecutionException {
 
         if (!leftSoa.getRequirements().needsConceptualRowIds || !rightSoa.getRequirements().needsConceptualRowIds) {
             String errorMsg = "Input QueryResultSoA to performAndSoA's granule processing is missing conceptualRowIds attribute. Left needs: " +
@@ -407,46 +415,80 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
 
         for (List<Integer> leftConceptGroupIndices : leftConceptualMap.values()) {
             for (List<Integer> rightConceptGroupIndices : rightConceptualMap.values()) {
-                int conceptualIdForThisProduct = currentNextConceptualRowId++;
-                logger.trace("  New conceptual product ID: {}", conceptualIdForThisProduct);
-
-                for (int lIdx : leftConceptGroupIndices) {
-                    logger.trace("    Adding left entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
-                                 lIdx, leftSoa.getConceptualRowIdAt(lIdx), leftSoa.getDocumentIdAt(lIdx),
-                                 (combinedReqs.needsSentenceId && leftSoa.getRequirements().needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : "N/A"),
-                                 leftSoa.getVariableNameAt(lIdx), leftSoa.getValueAt(lIdx));
-                    resultSoA.add(
-                        leftSoa.getValueAt(lIdx),
-                        leftSoa.getValueTypeAt(lIdx),
-                        leftSoa.getVariableNameAt(lIdx),
-                        leftSoa.getDocumentIdAt(lIdx),
-                        combinedReqs.needsSentenceId && leftSoa.getRequirements().needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : -1,
-                        combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getBeginCharAt(lIdx) : -1,
-                        combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getEndCharAt(lIdx) : -1,
-                        combinedReqs.needsSynonymIds && leftSoa.getRequirements().needsSynonymIds ? leftSoa.getSynonymIdAt(lIdx) : -1,
-                        conceptualIdForThisProduct
-                    );
-                }
-                for (int rIdx : rightConceptGroupIndices) {
-                     logger.trace("Adding right entry (orig_idx:{}, orig_concept_id:{}) doc:{} sent:{} var:{} val:{}",
-                                 rIdx, rightSoa.getConceptualRowIdAt(rIdx), rightSoa.getDocumentIdAt(rIdx),
-                                 (combinedReqs.needsSentenceId && rightSoa.getRequirements().needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : "N/A"),
-                                 rightSoa.getVariableNameAt(rIdx), rightSoa.getValueAt(rIdx));
-                    resultSoA.add(
-                        rightSoa.getValueAt(rIdx),
-                        rightSoa.getValueTypeAt(rIdx),
-                        rightSoa.getVariableNameAt(rIdx),
-                        rightSoa.getDocumentIdAt(rIdx),
-                        combinedReqs.needsSentenceId && rightSoa.getRequirements().needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : -1,
-                        combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getBeginCharAt(rIdx) : -1,
-                        combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getEndCharAt(rIdx) : -1,
-                        combinedReqs.needsSynonymIds && rightSoa.getRequirements().needsSynonymIds ? rightSoa.getSynonymIdAt(rIdx) : -1,
-                        conceptualIdForThisProduct
-                    );
+                // If only one side has variables, treat the other side as a pure filter: no cross-product
+                if (leftHasVariables && !rightHasVariables) {
+                    int conceptualIdForThisProduct = currentNextConceptualRowId++;
+                    for (int lIdx : leftConceptGroupIndices) {
+                        resultSoA.add(
+                            leftSoa.getValueAt(lIdx),
+                            leftSoa.getValueTypeAt(lIdx),
+                            leftSoa.getVariableNameAt(lIdx),
+                            leftSoa.getDocumentIdAt(lIdx),
+                            combinedReqs.needsSentenceId && leftSoa.getRequirements().needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : -1,
+                            combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getBeginCharAt(lIdx) : -1,
+                            combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getEndCharAt(lIdx) : -1,
+                            combinedReqs.needsSynonymIds && leftSoa.getRequirements().needsSynonymIds ? leftSoa.getSynonymIdAt(lIdx) : -1,
+                            conceptualIdForThisProduct
+                        );
+                    }
+                } else if (!leftHasVariables && rightHasVariables) {
+                    int conceptualIdForThisProduct = currentNextConceptualRowId++;
+                    for (int rIdx : rightConceptGroupIndices) {
+                        resultSoA.add(
+                            rightSoa.getValueAt(rIdx),
+                            rightSoa.getValueTypeAt(rIdx),
+                            rightSoa.getVariableNameAt(rIdx),
+                            rightSoa.getDocumentIdAt(rIdx),
+                            combinedReqs.needsSentenceId && rightSoa.getRequirements().needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : -1,
+                            combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getBeginCharAt(rIdx) : -1,
+                            combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getEndCharAt(rIdx) : -1,
+                            combinedReqs.needsSynonymIds && rightSoa.getRequirements().needsSynonymIds ? rightSoa.getSynonymIdAt(rIdx) : -1,
+                            conceptualIdForThisProduct
+                        );
+                    }
+                } else {
+                    // Both sides have variables (or both sides don't) -> perform cross product as before
+                    int conceptualIdForThisProduct = currentNextConceptualRowId++;
+                    for (int lIdx : leftConceptGroupIndices) {
+                        resultSoA.add(
+                            leftSoa.getValueAt(lIdx),
+                            leftSoa.getValueTypeAt(lIdx),
+                            leftSoa.getVariableNameAt(lIdx),
+                            leftSoa.getDocumentIdAt(lIdx),
+                            combinedReqs.needsSentenceId && leftSoa.getRequirements().needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : -1,
+                            combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getBeginCharAt(lIdx) : -1,
+                            combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getEndCharAt(lIdx) : -1,
+                            combinedReqs.needsSynonymIds && leftSoa.getRequirements().needsSynonymIds ? leftSoa.getSynonymIdAt(lIdx) : -1,
+                            conceptualIdForThisProduct
+                        );
+                    }
+                    for (int rIdx : rightConceptGroupIndices) {
+                        resultSoA.add(
+                            rightSoa.getValueAt(rIdx),
+                            rightSoa.getValueTypeAt(rIdx),
+                            rightSoa.getVariableNameAt(rIdx),
+                            rightSoa.getDocumentIdAt(rIdx),
+                            combinedReqs.needsSentenceId && rightSoa.getRequirements().needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : -1,
+                            combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getBeginCharAt(rIdx) : -1,
+                            combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getEndCharAt(rIdx) : -1,
+                            combinedReqs.needsSynonymIds && rightSoa.getRequirements().needsSynonymIds ? rightSoa.getSynonymIdAt(rIdx) : -1,
+                            conceptualIdForThisProduct
+                        );
+                    }
                 }
             }
         }
         return currentNextConceptualRowId;
+    }
+
+    private boolean hasAnyVariables(QueryResultSoA soa) {
+        if (soa == null || soa.size() == 0) return false;
+        for (int i = 0; i < soa.size(); i++) {
+            if (soa.getVariableNameAt(i) != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private QueryResultSoA performOrSoA(QueryResultSoA left, QueryResultSoA right,
@@ -543,59 +585,73 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
             Condition c1 = originalConditions.get(i);
             boolean foundPairForC1 = false;
 
+            // Select best candidate by longest n-gram CONTAINS among all stitchable partners with c1
+            Contains bestContains = null;
+            Condition bestAnnotation = null;
+            String bestStitchType = null;
+            int bestContainsNgram = -1;
+            int bestJ = -1;
+
             for (int j = i + 1; j < originalConditions.size(); j++) {
                 if (consumed[j]) {
                     continue;
                 }
                 Condition c2 = originalConditions.get(j);
 
-                Contains containsPart = null;
-                Condition annotationPart = null;
-                String stitchType = null;
-
-                // Check c1 as Contains and c2 as Annotation
+                // Permutation A: c1 is CONTAINS, c2 is annotation
                 if (c1 instanceof Contains c && (c.terms().size() >= 1 && c.terms().size() <= 3)) {
+                    Condition annotationPart = null;
+                    String stitchType = null;
                     if (c2 instanceof Ner ner && !"DATE".equalsIgnoreCase(ner.entityType())) {
-                        containsPart = c;
                         annotationPart = ner;
                         stitchType = "CONTAINS_NER_STITCH";
-                    } else if (c2 instanceof Pos) {
-                        containsPart = c;
-                        annotationPart = (Pos) c2;
+                    } else if (c2 instanceof Pos pos) {
+                        annotationPart = pos;
                         stitchType = "CONTAINS_POS_STITCH";
-                    } else if (c2 instanceof Temporal) {
-                        containsPart = c;
-                        annotationPart = (Temporal) c2;
+                    } else if (c2 instanceof Temporal temporal) {
+                        annotationPart = temporal;
                         stitchType = "CONTAINS_TEMPORAL_STITCH"; // Or CONTAINS_DATE_STITCH
                     }
-                }
-
-                // Check c2 as Contains and c1 as Annotation (if not already found)
-                if (containsPart == null && c2 instanceof Contains c && (c.terms().size() >= 1 && c.terms().size() <= 3)) {
-                    if (c1 instanceof Ner ner && !"DATE".equalsIgnoreCase(ner.entityType())) {
-                        containsPart = c;
-                        annotationPart = ner;
-                        stitchType = "CONTAINS_NER_STITCH";
-                    } else if (c1 instanceof Pos) {
-                        containsPart = c;
-                        annotationPart = (Pos) c1;
-                        stitchType = "CONTAINS_POS_STITCH";
-                    } else if (c1 instanceof Temporal) {
-                        containsPart = c;
-                        annotationPart = (Temporal) c1;
-                        stitchType = "CONTAINS_TEMPORAL_STITCH";
+                    if (annotationPart != null && c.terms().size() > bestContainsNgram) {
+                        bestContains = c;
+                        bestAnnotation = annotationPart;
+                        bestStitchType = stitchType;
+                        bestContainsNgram = c.terms().size();
+                        bestJ = j;
                     }
                 }
 
-                if (containsPart != null && annotationPart != null) {
-                    StitchedCondition fused = new StitchedCondition(containsPart, annotationPart, stitchType);
-                    resultingConditions.add(fused);
-                    consumed[i] = true;
-                    consumed[j] = true;
-                    foundPairForC1 = true;
-                    logger.debug("Fused condition: {} with {}. New fused condition: {}", c1, c2, fused);
-                    break; // Found a partner for c1, move to next i
+                // Permutation B: c2 is CONTAINS, c1 is annotation
+                if (c2 instanceof Contains c && (c.terms().size() >= 1 && c.terms().size() <= 3)) {
+                    Condition annotationPart = null;
+                    String stitchType = null;
+                    if (c1 instanceof Ner ner && !"DATE".equalsIgnoreCase(ner.entityType())) {
+                        annotationPart = ner;
+                        stitchType = "CONTAINS_NER_STITCH";
+                    } else if (c1 instanceof Pos pos) {
+                        annotationPart = pos;
+                        stitchType = "CONTAINS_POS_STITCH";
+                    } else if (c1 instanceof Temporal temporal) {
+                        annotationPart = temporal;
+                        stitchType = "CONTAINS_TEMPORAL_STITCH";
+                    }
+                    if (annotationPart != null && c.terms().size() > bestContainsNgram) {
+                        bestContains = c;
+                        bestAnnotation = annotationPart;
+                        bestStitchType = stitchType;
+                        bestContainsNgram = c.terms().size();
+                        bestJ = j;
+                    }
                 }
+            }
+
+            if (bestContains != null && bestAnnotation != null && bestJ >= 0) {
+                StitchedCondition fused = new StitchedCondition(bestContains, bestAnnotation, bestStitchType);
+                resultingConditions.add(fused);
+                consumed[i] = true;
+                consumed[bestJ] = true;
+                foundPairForC1 = true;
+                logger.debug("Fused condition (selected by longest n-gram: {}): {} with {}. New fused condition: {}", bestContainsNgram, c1, originalConditions.get(bestJ), fused);
             }
 
             if (!foundPairForC1) {
