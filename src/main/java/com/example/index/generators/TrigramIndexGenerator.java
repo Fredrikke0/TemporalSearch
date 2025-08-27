@@ -26,6 +26,9 @@ import com.google.common.collect.ListMultimap;
  *
  */
 public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
+    // Carry over the last two tokens of the previous batch to avoid missing
+    // cross-batch trigrams (boundary-spanning n-grams)
+    private final List<AnnotationEntry> tailFromPreviousBatch = new ArrayList<>(2);
 
     public TrigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
@@ -86,17 +89,23 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
 
     @Override
     protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
-        batch.sort(Comparator.comparingInt(AnnotationEntry::getDocumentId)
+        // Augment current batch with up to two tail tokens from the previous batch
+        // so that trigrams spanning the boundary are generated in this call.
+        List<AnnotationEntry> augmented = new ArrayList<>(tailFromPreviousBatch.size() + batch.size());
+        augmented.addAll(tailFromPreviousBatch);
+        augmented.addAll(batch);
+
+        augmented.sort(Comparator.comparingInt(AnnotationEntry::getDocumentId)
             .thenComparingInt(AnnotationEntry::getSentenceId)
             .thenComparingInt(AnnotationEntry::getBeginChar));
 
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> positionLists = new HashMap<>();
 
-        for (int i = 0; i < batch.size() - 2; i++) { // Need 3 tokens for a trigram
-            AnnotationEntry firstEntry = batch.get(i);
-            AnnotationEntry secondEntry = batch.get(i + 1);
-            AnnotationEntry thirdEntry = batch.get(i + 2);
+        for (int i = 0; i < augmented.size() - 2; i++) { // Need 3 tokens for a trigram
+            AnnotationEntry firstEntry = augmented.get(i);
+            AnnotationEntry secondEntry = augmented.get(i + 1);
+            AnnotationEntry thirdEntry = augmented.get(i + 2);
 
             if (firstEntry.getDocumentId() != secondEntry.getDocumentId() || firstEntry.getSentenceId() != secondEntry.getSentenceId() ||
                 secondEntry.getDocumentId() != thirdEntry.getDocumentId() || secondEntry.getSentenceId() != thirdEntry.getSentenceId()) {
@@ -142,6 +151,16 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
 
         for (Map.Entry<String, PositionListSoA> entry : positionLists.entrySet()) {
             index.put(entry.getKey(), entry.getValue());
+        }
+
+        // Update tail: keep the last two tokens to bridge with the next batch
+        tailFromPreviousBatch.clear();
+        int size = augmented.size();
+        if (size >= 2) {
+            tailFromPreviousBatch.add(augmented.get(size - 2));
+            tailFromPreviousBatch.add(augmented.get(size - 1));
+        } else if (size == 1) {
+            tailFromPreviousBatch.add(augmented.get(0));
         }
         return index;
     }

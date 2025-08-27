@@ -240,11 +240,10 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     String token = rs.getString("token");
-                    String normalizedToken = token.toLowerCase();
-
-                    if (isStopword(normalizedToken)) {
+                    if (token == null || token.isEmpty()) {
                         continue;
                     }
+                    String normalizedToken = token.toLowerCase();
                     tokensBySentence.computeIfAbsent(rs.getInt("sentence_id"), k -> new ArrayList<>())
                                     .add(new ProcessedTokenInfo(normalizedToken, rs.getInt("begin_char"), rs.getInt("end_char")));
                 }
@@ -263,10 +262,24 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             List<NgramData> sentenceNgrams = new ArrayList<>();
             if (N == 1) { // Handle Unigrams
                 for (ProcessedTokenInfo tokenInfo : sentenceTokens) {
+                    if (isStopword(tokenInfo.token())) {
+                        continue;
+                    }
                     sentenceNgrams.add(new NgramData(tokenInfo.beginChar(), tokenInfo.endChar(), tokenInfo.token()));
                 }
             } else { // Handle N-grams (N > 1)
                 for (int i = 0; i <= sentenceTokens.size() - N; i++) {
+                    // Skip any window that contains a stopword (align with base N-gram indexes)
+                    boolean containsStopword = false;
+                    for (int j = 0; j < N; j++) {
+                        if (isStopword(sentenceTokens.get(i + j).token())) {
+                            containsStopword = true;
+                            break;
+                        }
+                    }
+                    if (containsStopword) {
+                        continue;
+                    }
                     // Adjacency Check: Ensure all tokens in the N-gram were truly consecutive.
                     boolean isAdjacent = true;
                     for (int j = 0; j < N - 1; j++) {

@@ -11,7 +11,6 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
@@ -93,6 +92,39 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 }
             }
         }
+        // Ensure we don't split inside a sentence: extend batch to include the rest of the trailing sentence
+        if (!batch.isEmpty()) {
+            AnnotationEntry last = batch.get(batch.size() - 1);
+            int lastDocId = last.getDocumentId();
+            int lastSentId = last.getSentenceId();
+            long lastAnnoId = last.getAnnotationId();
+
+            String extendSql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner " +
+                               "FROM annotations " +
+                               "WHERE ner != 'O' AND ner != 'DATE' AND document_id = ? AND sentence_id = ? AND annotation_id > ? " +
+                               "ORDER BY annotation_id";
+            try (PreparedStatement extendStmt = sqliteConn.prepareStatement(extendSql)) {
+                extendStmt.setInt(1, lastDocId);
+                extendStmt.setInt(2, lastSentId);
+                extendStmt.setLong(3, lastAnnoId);
+                try (ResultSet rs2 = extendStmt.executeQuery()) {
+                    while (rs2.next()) {
+                        batch.add(new AnnotationEntry(
+                            rs2.getLong("annotation_id"),
+                            rs2.getInt("document_id"),
+                            rs2.getInt("sentence_id"),
+                            rs2.getInt("begin_char"),
+                            rs2.getInt("end_char"),
+                            rs2.getString("token"),
+                            rs2.getString("pos"),
+                            rs2.getString("ner"),
+                            rs2.getString("normalized_ner")
+                        ));
+                    }
+                }
+            }
+        }
+
         return batch;
     }
 
@@ -128,7 +160,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
                     !nerTag.equals(currentEntityType) ||
                     entry.getDocumentId() != currentEntityDocId ||
                     entry.getSentenceId() != currentEntitySentId ||
-                    (prevEntry != null && entry.getBeginChar() > prevEntry.getEndChar() + 1)
+                    (prevEntry != null && entry.getBeginChar() > prevEntry.getEndChar() + 2)
                    ) {
                     entityBreak = true;
                 }

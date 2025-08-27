@@ -33,6 +33,10 @@ import com.google.common.collect.ListMultimap;
 public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
     private static final Logger logger = LoggerFactory.getLogger(BigramIndexGenerator.class);
 
+    // Carry over the last token of the previous batch to avoid missing
+    // cross-batch bigrams (boundary-spanning n-grams)
+    private AnnotationEntry lastEntryFromPreviousBatch = null;
+
     public BigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
             Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
         this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
@@ -90,16 +94,24 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
 
     @Override
     protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
-        batch.sort(Comparator.comparingInt(AnnotationEntry::getDocumentId)
+        // Augment the current batch with the tail of the previous batch so that
+        // bigrams that span the boundary are generated in this call.
+        List<AnnotationEntry> augmented = new ArrayList<>(batch.size() + 1);
+        if (lastEntryFromPreviousBatch != null) {
+            augmented.add(lastEntryFromPreviousBatch);
+        }
+        augmented.addAll(batch);
+
+        augmented.sort(Comparator.comparingInt(AnnotationEntry::getDocumentId)
             .thenComparingInt(AnnotationEntry::getSentenceId)
             .thenComparingInt(AnnotationEntry::getBeginChar));
 
         ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
         Map<String, PositionListSoA> positionLists = new HashMap<>();
 
-        for (int i = 0; i < batch.size() - 1; i++) {
-            AnnotationEntry firstEntry = batch.get(i);
-            AnnotationEntry secondEntry = batch.get(i + 1);
+        for (int i = 0; i < augmented.size() - 1; i++) {
+            AnnotationEntry firstEntry = augmented.get(i);
+            AnnotationEntry secondEntry = augmented.get(i + 1);
 
             if (firstEntry.getDocumentId() != secondEntry.getDocumentId() ||
                 firstEntry.getSentenceId() != secondEntry.getSentenceId()) {
@@ -138,6 +150,9 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
         for (Map.Entry<String, PositionListSoA> entry : positionLists.entrySet()) {
             index.put(entry.getKey(), entry.getValue());
         }
+
+        // Keep only the last token to bridge with the next batch.
+        lastEntryFromPreviousBatch = augmented.isEmpty() ? null : augmented.get(augmented.size() - 1);
         return index;
     }
 

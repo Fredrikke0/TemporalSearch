@@ -111,7 +111,7 @@ public final class TrigramNerStitchGenerator extends AbstractNgramStitchGenerato
             if (currentEntityType != null) {
                 if (!currentAnnotation.nerTag().equals(currentEntityType) ||
                     currentAnnotation.sentenceId() != currentEntitySentId ||
-                    currentAnnotation.beginChar() > previousTokenEndChar + 1) {
+                    currentAnnotation.beginChar() > previousTokenEndChar + 2) {
                     entityBreak = true;
                 }
             }

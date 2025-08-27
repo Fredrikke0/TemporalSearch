@@ -109,7 +109,7 @@ public final class UnigramNerStitchGenerator extends AbstractNgramStitchGenerato
             if (currentEntityType != null) {
                 if (!currentAnnotation.nerTag().equals(currentEntityType) ||
                     currentAnnotation.sentenceId() != currentEntitySentId ||
-                    currentAnnotation.beginChar() > previousTokenEndChar + 1) {
+                    currentAnnotation.beginChar() > previousTokenEndChar + 2) { // Allow up to one separator char (space/punct)
                     entityBreak = true;
                 }
             }

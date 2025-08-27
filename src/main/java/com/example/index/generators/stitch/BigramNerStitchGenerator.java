@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
 import com.example.index.AnnotationType;
-import com.example.index.generators.NerIndexGenerator; // Import for NER_TAGS_TO_EXCLUDE_SQL
+import com.example.index.generators.NerIndexGenerator;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 
@@ -110,7 +110,7 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
             if (currentEntityType != null) {
                 if (!currentAnnotation.nerTag().equals(currentEntityType) ||
                     currentAnnotation.sentenceId() != currentEntitySentId ||
-                    currentAnnotation.beginChar() > previousTokenEndChar + 1) { // Check for adjacency (allow 0 or 1 char gap, e.g. space)
+                    currentAnnotation.beginChar() > previousTokenEndChar + 2) { // Allow up to one separator char (space/punct)
                     entityBreak = true;
                 }
             }
