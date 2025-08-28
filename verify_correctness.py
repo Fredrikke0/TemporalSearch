@@ -147,7 +147,7 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
         source_file = query_info['source_file']
 
         # Print header without ending newline; subsequent status will follow on same line
-        print(f"\n--- Verifying Query {original_query_id_str} (File: {source_file}, Type: {benchmark_type}) --- ", end='', flush=True)
+        print(f"--- Verifying Query {original_query_id_str} (File: {source_file}, Type: {benchmark_type}) --- ", end='', flush=True)
         if args.verbose: print(f"    Query Text: {query_text}", flush=True)
 
 

@@ -9,9 +9,11 @@ import java.time.LocalDate;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.regex.Pattern;
 
 import org.rocksdb.Options;
@@ -38,7 +40,7 @@ import net.sourceforge.argparse4j.inf.Namespace;
  */
 public class RocksDBBrowser {
     private static final char ACTUAL_DELIMITER_CHAR = IndexAccessInterface.DELIMITER;
-    private static final String DELIMITER_REGEX = "\\0";
+    private static final String DELIMITER_REGEX = Pattern.quote(String.valueOf(ACTUAL_DELIMITER_CHAR));
     private static final Logger logger = LoggerFactory.getLogger(RocksDBBrowser.class);
     private static SynonymManager globalSynonymManager;
     private static final List<String> ALL_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
@@ -75,16 +77,17 @@ public class RocksDBBrowser {
                 .required(true)
                 .help("Base path to the directory containing the various index subdirectories (e.g., projects/nyt/indexes/)");
 
-        parser.addArgument("-k", "--key")
-                .help("Look up a specific key within the selected index. The exact format of the key depends on the index type.");
-
-        parser.addArgument("-p", "--prefix")
-                .help("List entries where the key starts with the given prefix. Useful for exploring keys in a hierarchical structure.");
+        parser.addArgument("-m", "--match")
+                .help("List entries where the key starts with the given string (prefix match). This also includes exact key matches.");
 
         parser.addArgument("-l", "--limit")
                 .type(Integer.class)
                 .setDefault(100)
                 .help("Maximum number of entries or positions to display (default: 100). Use 0 for no limit. Applies to listing operations.");
+
+        parser.addArgument("--top")
+                .type(Integer.class)
+                .help("Show top N terms by position count for the selected index (non-Nash, non-synonym). Overrides regular listing when no --key/--prefix is provided.");
 
         parser.addArgument("-s", "--stats")
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
@@ -94,17 +97,16 @@ public class RocksDBBrowser {
             Namespace ns = parser.parseArgs(args);
             String indexType = ns.getString("index_type");
             String basePath = ns.getString("db_path");
-            String key = ns.getString("key");
-            String prefix = ns.getString("prefix");
+            String match = ns.getString("match");
             int limit = ns.getInt("limit");
+            Integer topN = (Integer) ns.get("top");
             boolean showStats = ns.getBoolean("stats");
 
             Path synonymManagerDbPath = Paths.get(basePath, "global_values_lookup.db");
             try {
                 if (Files.exists(synonymManagerDbPath)) {
-                    logger.info("Attempting to initialize SynonymManager from: {}", synonymManagerDbPath);
                     globalSynonymManager = new SynonymManager(synonymManagerDbPath);
-                    logger.info("SynonymManager initialized successfully.");
+                    logger.debug("SynonymManager initialized successfully.");
                 } else {
                     logger.warn("SynonymManager database not found at: {}. Synonym lookups will not be available.", synonymManagerDbPath);
                 }
@@ -119,14 +121,14 @@ public class RocksDBBrowser {
                 for (String singleIndexType : ALL_INDEX_TYPES) {
                     System.out.printf("\n--- Processing Index: %s ---\n", singleIndexType);
                     try {
-                        processSingleIndex(singleIndexType, basePath, key, prefix, limit, showStats, parser);
+                        processSingleIndex(singleIndexType, basePath, match, limit, topN, showStats, parser);
                     } catch (Exception e) {
                         System.err.printf("Error processing index %s: %s%n", singleIndexType, e.getMessage());
                         // Optionally print stack trace for more detail: e.printStackTrace();
                     }
                 }
             } else {
-                processSingleIndex(indexType, basePath, key, prefix, limit, showStats, parser);
+                processSingleIndex(indexType, basePath, match, limit, topN, showStats, parser);
             }
 
         } catch (ArgumentParserException e) {
@@ -144,7 +146,7 @@ public class RocksDBBrowser {
         }
     }
 
-    private static void processSingleIndex(String indexType, String basePath, String key, String prefix, int limit, boolean showStats, ArgumentParser parser) throws IOException {
+    private static void processSingleIndex(String indexType, String basePath, String match, int limit, Integer topN, boolean showStats, ArgumentParser parser) throws IOException {
         Path dbPathActual;
         if ("synonym_manager_db".equalsIgnoreCase(indexType)) {
             dbPathActual = Paths.get(basePath, "global_values_lookup.db");
@@ -158,7 +160,6 @@ public class RocksDBBrowser {
             System.err.printf("Database path for index '%s' not found or not a directory: %s%n", indexType, dbPathActual.toString());
             return;
         }
-        System.out.printf("Accessing database at: %s%n", dbPathActual.toString());
 
         Options options = new Options();
         options.setCreateIfMissing(false);
@@ -166,18 +167,16 @@ public class RocksDBBrowser {
         try (RocksDB db = RocksDB.openReadOnly(options, dbFile.getAbsolutePath())) {
             if (showStats) {
                 displayStats(db, indexType);
-                if (key == null && prefix == null && !"synonym_manager_db".equalsIgnoreCase(indexType)) {
-                    options.close();
-                    return;
-                } else if (key == null && prefix == null && "synonym_manager_db".equalsIgnoreCase(indexType)) {
+                // If no further action requested (no match, no topN), return after stats
+                if (match == null && topN == null) {
                     options.close();
                     return;
                 }
             }
-            if (key != null) {
-                displayEntry(db, key, indexType);
-            } else if (prefix != null) {
-                listEntriesByPrefix(db, prefix, limit, indexType);
+            if (match != null) {
+                listEntriesByPrefix(db, match, limit, indexType);
+            } else if (topN != null) {
+                listTopTermsByPositions(db, topN, indexType);
             } else {
                 listAllEntries(db, limit, indexType);
             }
@@ -189,6 +188,99 @@ public class RocksDBBrowser {
                 options.close();
             }
         }
+    }
+
+    private static void listTopTermsByPositions(RocksDB db, int topN, String indexType) throws IOException {
+        if (topN <= 0) {
+            System.out.println("--top requires a positive integer.");
+            return;
+        }
+
+        boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
+        boolean isNash = "nash".equals(indexType);
+        if (isSynonymDb) {
+            return; // Silently skip for synonym manager DB
+        }
+
+        PriorityQueue<Map.Entry<String, Long>> minHeap = new PriorityQueue<>(Comparator.comparingLong(Map.Entry::getValue));
+
+        String currentBaseKey = null;
+        long currentBaseSum = 0L;
+
+        try (RocksIterator iterator = db.newIterator()) {
+            for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
+                byte[] keyBytes = iterator.key();
+                if (isNash && Arrays.equals(keyBytes, NashSerializationUtils.DATE_LOOKUP_KEY)) {
+                    continue; // Skip the date lookup table entry
+                }
+
+                String keyStr = asString(keyBytes);
+                String baseKey = baseKeyWithoutSegmentSuffix(keyStr);
+
+                long positionsCountForThisEntry;
+                try {
+                    positionsCountForThisEntry = PositionListSoA.getNumPositionsFromBlob(iterator.value());
+                } catch (Exception e) {
+                    logger.warn("Could not deserialize entry value in index '{}' for key '{}' while computing top terms: {}. Skipping.", indexType, keyStr, e.getMessage());
+                    continue;
+                }
+
+                if (currentBaseKey == null) {
+                    currentBaseKey = baseKey;
+                    currentBaseSum = positionsCountForThisEntry;
+                } else if (baseKey.equals(currentBaseKey)) {
+                    currentBaseSum += positionsCountForThisEntry;
+                } else {
+                    // Finalize previous base key
+                    offerIntoTopHeap(minHeap, currentBaseKey, currentBaseSum, topN);
+                    // Start new aggregation
+                    currentBaseKey = baseKey;
+                    currentBaseSum = positionsCountForThisEntry;
+                }
+            }
+        }
+
+        // Finalize the last base key aggregation
+        if (currentBaseKey != null) {
+            offerIntoTopHeap(minHeap, currentBaseKey, currentBaseSum, topN);
+        }
+
+        List<Map.Entry<String, Long>> topList = new ArrayList<>(minHeap);
+        topList.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
+
+        int rank = 1;
+        for (Map.Entry<String, Long> entry : topList) {
+            String displayKey = formatKey(entry.getKey(), indexType);
+            System.out.printf("%2d. %s -> %,d positions%n", rank, displayKey, entry.getValue());
+            rank++;
+        }
+        if (topList.isEmpty()) {
+            System.out.println("No entries found.");
+        }
+    }
+
+    private static void offerIntoTopHeap(PriorityQueue<Map.Entry<String, Long>> minHeap, String key, long sum, int topN) {
+        Map.Entry<String, Long> newEntry = new AbstractMap.SimpleEntry<>(key, sum);
+        if (minHeap.size() < topN) {
+            minHeap.offer(newEntry);
+        } else if (minHeap.peek() != null && minHeap.peek().getValue() < sum) {
+            minHeap.poll();
+            minHeap.offer(newEntry);
+        }
+    }
+
+    private static String baseKeyWithoutSegmentSuffix(String key) {
+        int hashPos = key.lastIndexOf('#');
+        if (hashPos == -1) return key;
+        if (hashPos == key.length() - 1) return key; // Trailing '#', unlikely, keep as-is
+        // Check if the suffix after '#' is all digits
+        for (int i = hashPos + 1; i < key.length(); i++) {
+            char c = key.charAt(i);
+            if (c < '0' || c > '9') {
+                return key; // Not a numeric suffix, treat whole as key
+            }
+        }
+        return key.substring(0, hashPos);
     }
 
     private static void displayStats(RocksDB db, String indexType) throws IOException {
@@ -254,30 +346,6 @@ public class RocksDBBrowser {
             System.out.printf("Average positions per entry: %.2f%n", totalEntries > 0 ? (double) totalPositions / totalEntries : 0);
         }
         System.out.println();
-    }
-
-    private static void displayEntry(RocksDB db, String key, String indexType) throws IOException {
-        byte[] data = null;
-        try {
-            data = db.get(bytes(key));
-        } catch (RocksDBException e) {
-            System.err.printf("Error getting key '%s' from RocksDB: %s%n", key, e.getMessage());
-            return;
-        }
-
-        if (data == null) {
-            System.out.printf("Key not found: %s%n", key);
-            return;
-        }
-
-        if (indexType.equals("nash")) {
-            displayNashEntry(bytes(key), data);
-        } else if ("synonym_manager_db".equalsIgnoreCase(indexType)) {
-            displaySynonymDbEntry(bytes(key), data);
-        } else {
-            PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(data);
-            displayPositionsSoA(key, positionsSoA, indexType);
-        }
     }
 
     private static void listEntriesByPrefix(RocksDB db, String prefix, int limit, String indexType) throws IOException {
