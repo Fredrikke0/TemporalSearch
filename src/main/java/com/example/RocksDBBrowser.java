@@ -202,10 +202,11 @@ public class RocksDBBrowser {
             return; // Silently skip for synonym manager DB
         }
 
-        PriorityQueue<Map.Entry<String, Long>> minHeap = new PriorityQueue<>(Comparator.comparingLong(Map.Entry::getValue));
+        PriorityQueue<TopEntry> minHeap = new PriorityQueue<>(Comparator.comparingLong(TopEntry::sum));
 
         String currentBaseKey = null;
         long currentBaseSum = 0L;
+        int currentBaseSegments = 0;
 
         try (RocksIterator iterator = db.newIterator()) {
             for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
@@ -228,30 +229,34 @@ public class RocksDBBrowser {
                 if (currentBaseKey == null) {
                     currentBaseKey = baseKey;
                     currentBaseSum = positionsCountForThisEntry;
+                    currentBaseSegments = 1;
                 } else if (baseKey.equals(currentBaseKey)) {
                     currentBaseSum += positionsCountForThisEntry;
+                    currentBaseSegments++;
                 } else {
                     // Finalize previous base key
-                    offerIntoTopHeap(minHeap, currentBaseKey, currentBaseSum, topN);
+                    offerIntoTopHeap(minHeap, currentBaseKey, currentBaseSum, currentBaseSegments, topN);
                     // Start new aggregation
                     currentBaseKey = baseKey;
                     currentBaseSum = positionsCountForThisEntry;
+                    currentBaseSegments = 1;
                 }
             }
         }
 
         // Finalize the last base key aggregation
         if (currentBaseKey != null) {
-            offerIntoTopHeap(minHeap, currentBaseKey, currentBaseSum, topN);
+            offerIntoTopHeap(minHeap, currentBaseKey, currentBaseSum, currentBaseSegments, topN);
         }
 
-        List<Map.Entry<String, Long>> topList = new ArrayList<>(minHeap);
-        topList.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
+        List<TopEntry> topList = new ArrayList<>(minHeap);
+        topList.sort((a, b) -> Long.compare(b.sum(), a.sum()));
 
         int rank = 1;
-        for (Map.Entry<String, Long> entry : topList) {
-            String displayKey = formatKey(entry.getKey(), indexType);
-            System.out.printf("%2d. %s -> %,d positions%n", rank, displayKey, entry.getValue());
+        for (TopEntry entry : topList) {
+            String displayKey = formatKey(entry.key(), indexType);
+            String segmentsInfo = entry.segments() > 1 ? String.format(" (segments: %d)", entry.segments()) : "";
+            System.out.printf("%2d. %s -> %,d positions%s%n", rank, displayKey, entry.sum(), segmentsInfo);
             rank++;
         }
         if (topList.isEmpty()) {
@@ -259,14 +264,30 @@ public class RocksDBBrowser {
         }
     }
 
-    private static void offerIntoTopHeap(PriorityQueue<Map.Entry<String, Long>> minHeap, String key, long sum, int topN) {
-        Map.Entry<String, Long> newEntry = new AbstractMap.SimpleEntry<>(key, sum);
+    private static void offerIntoTopHeap(PriorityQueue<TopEntry> minHeap, String key, long sum, int segments, int topN) {
+        TopEntry newEntry = new TopEntry(key, sum, segments);
         if (minHeap.size() < topN) {
             minHeap.offer(newEntry);
-        } else if (minHeap.peek() != null && minHeap.peek().getValue() < sum) {
+        } else if (minHeap.peek() != null && minHeap.peek().sum() < sum) {
             minHeap.poll();
             minHeap.offer(newEntry);
         }
+    }
+
+    private static final class TopEntry {
+        private final String key;
+        private final long sum;
+        private final int segments;
+
+        TopEntry(String key, long sum, int segments) {
+            this.key = key;
+            this.sum = sum;
+            this.segments = segments;
+        }
+
+        String key() { return key; }
+        long sum() { return sum; }
+        int segments() { return segments; }
     }
 
     private static String baseKeyWithoutSegmentSuffix(String key) {
