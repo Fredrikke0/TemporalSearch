@@ -19,6 +19,71 @@ PROCESS_TERMINATION_TIMEOUT_SECONDS = 15 # Timeout for QueryCLI to exit after QU
 
 PROMPT = "Query>" # Define the new prompt
 
+# Operator/token analysis configuration
+_EXCLUDED_ALWAYS_TOKENS = { 'SELECT', 'FROM', 'WHERE' }
+_OPERATOR_TOKENS = {
+    # Condition/operators
+    'CONTAINS', 'NER', 'POS', 'DEPENDS', 'DATE', 'PROXIMITY',
+    'CONTAINED_BY', 'INTERSECT', 'BEFORE', 'AFTER',
+    # Clauses/features often relevant to behavior
+    'GRANULARITY', 'DOCUMENT', 'SENTENCE', 'TITLE', 'TIMESTAMP',
+    'ORDER', 'BY', 'LIMIT', 'COUNT', 'UNIQUE', 'DOCUMENTS',
+    'JOIN', 'ON', 'INNER', 'LEFT', 'RIGHT', 'ALIAS', 'GROUP',
+    'DOCUMENT_ID', 'SENTENCE_ID', 'BEGIN', 'END',
+    # Logical ops
+    'AND', 'OR', 'NOT'
+}
+
+def _strip_string_literals(sql):
+    """Remove content within single/double quotes to avoid counting tokens inside strings."""
+    try:
+        # Replace quoted segments with spaces
+        no_single = re.sub(r"'([^'\\]|\\.)*'", ' ', sql)
+        no_quotes = re.sub(r'"([^"\\]|\\.)*"', ' ', no_single)
+        return no_quotes
+    except Exception:
+        return sql
+
+def _count_operator_tokens(query_text):
+    """Return dict of operator token->count for a query text, excluding common boilerplate keywords."""
+    if not query_text:
+        return {}
+    upper = _strip_string_literals(query_text).upper()
+    # Split on non-letter/underscore to get upper tokens
+    tokens = re.split(r"[^A-Z_]+", upper)
+    counts = {}
+    for tok in tokens:
+        if not tok:
+            continue
+        if tok in _EXCLUDED_ALWAYS_TOKENS:
+            continue
+        if tok in _OPERATOR_TOKENS:
+            counts[tok] = counts.get(tok, 0) + 1
+    return counts
+
+# Parse and normalize selected strategy dimensions
+def _parse_selected_dims(strategies_args):
+    if not strategies_args:
+        return None
+
+    alias_map = {
+        't': 'temporal', 'temporal': 'temporal',
+        'p': 'pushdown', 'pushdown': 'pushdown',
+        's': 'stitch',   'stitch': 'stitch'
+    }
+
+    selected = set()
+    for arg in strategies_args:
+        if not arg:
+            continue
+        parts = [p.strip().lower() for p in arg.split(',') if p.strip()]
+        for p in parts:
+            if p not in alias_map:
+                raise ValueError(f"Invalid strategy dimension '{p}'. Allowed: t/temporal, p/pushdown, s/stitch")
+            selected.add(alias_map[p])
+
+    return selected if selected else None
+
 # Helper function for reading a stream in a separate thread
 def _enqueue_output(stream, q, stream_name, is_verbose):
     try:
@@ -34,11 +99,23 @@ def _enqueue_output(stream, q, stream_name, is_verbose):
     finally:
         q.put(None) # Sentinel to indicate EOF or error, ensuring consumers can terminate.
 
-def _determine_strategies_for_query(query_info, is_verbose):
+def _determine_strategies_for_query(query_info, is_verbose, selected_dims=None):
     benchmark_type = query_info['benchmark_type']
     original_query_id_str = f"q{query_info['id']+1}"
 
     strategies_to_run = []
+    # If user provided selected dimensions, only vary those individually vs base
+    if selected_dims:
+        if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - Using user-selected dimensions: {sorted(list(selected_dims))})", flush=True)
+        base = ('naive', 'none', 'none')
+        strategies_to_run = [base]
+        if 'temporal' in selected_dims:
+            strategies_to_run.append(('nash', 'none', 'none'))
+        if 'pushdown' in selected_dims:
+            strategies_to_run.append(('naive', 'optimized', 'none'))
+        if 'stitch' in selected_dims:
+            strategies_to_run.append(('naive', 'none', 'optimized'))
+        return strategies_to_run
     if benchmark_type == "1HOP":
         if is_verbose: print(f"    (StrategyDeterminer Q:{original_query_id_str} - Type {benchmark_type}: Using specific strategies for 1-hop.)", flush=True)
         strategies_to_run = [
@@ -132,6 +209,48 @@ def compare_csv_files_deep(file1, file2):
         return False, f"Error during deep comparison: {e}\n{traceback.format_exc()}"
 
 
+def _parse_strategy_str_to_tuple(strategy_str):
+    """Parses a strategy string like 'T:nash,P:optimized,S:optimized' into a tuple (t, p, s)."""
+    if strategy_str == "BASE":
+        return ('naive', 'none', 'none')
+    try:
+        parts = [p.strip() for p in strategy_str.split(',') if p.strip()]
+        mapping = {}
+        for part in parts:
+            k, v = part.split(':', 1)
+            mapping[k.strip().upper()] = v.strip()
+        return (mapping.get('T'), mapping.get('P'), mapping.get('S'))
+    except Exception:
+        return (None, None, None)
+
+
+def _dimensions_changed(strategy_tuple, base_tuple=('naive', 'none', 'none')):
+    """Returns a list of dimension names that differ from base."""
+    dim_names = ['temporal', 'pushdown', 'stitch']
+    changed = []
+    for idx, name in enumerate(dim_names):
+        if idx < len(strategy_tuple) and strategy_tuple[idx] is not None and strategy_tuple[idx] != base_tuple[idx]:
+            changed.append(name)
+    return changed
+
+def _count_rows_in_output_file(file_path):
+    """Counts number of data rows in an output file. If CSV, excludes header; else counts non-empty lines."""
+    try:
+        if not file_path or not os.path.exists(file_path):
+            return None
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = [l.strip() for l in f if l.strip() and not l.startswith("BENCHMARK_EXECUTION_TIME_MS:")]
+        if not lines:
+            return 0
+        # CSV heuristic
+        if ',' in lines[0]:
+            # header + rows
+            return max(0, len(lines) - 1)
+        # Plain text lines
+        return len(lines)
+    except Exception:
+        return None
+
 def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir):
     """
     Runs each query with a base strategy and then with other strategies,
@@ -151,7 +270,7 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
         if args.verbose: print(f"    Query Text: {query_text}", flush=True)
 
 
-        strategies_to_run = _determine_strategies_for_query(query_info, args.verbose)
+        strategies_to_run = _determine_strategies_for_query(query_info, args.verbose, getattr(args, 'selected_dims', None))
         if not strategies_to_run:
             print(f"    (Q:{original_query_id_str} - No strategies to run. Skipping.)", flush=True)
             continue
@@ -190,7 +309,10 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
                     "query_id": original_query_id_str,
                     "strategy": "BASE",
                     "status": "BASE_FAILED_EXEC",
-                    "details": err_q.strip()
+                    "details": err_q.strip(),
+                    "benchmark_type": benchmark_type,
+                    "source_file": source_file,
+                    "query_text": query_text,
                 })
             else:
                 base_run_ok = True
@@ -203,7 +325,10 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
                 "query_id": original_query_id_str,
                 "strategy": "BASE",
                 "status": "BASE_ERROR",
-                "details": str(e)
+                "details": str(e),
+                "benchmark_type": benchmark_type,
+                "source_file": source_file,
+                "query_text": query_text,
             })
             continue  # Skip to next query
 
@@ -251,7 +376,10 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
                         os.remove(other_output_filepath)  # Clean up if it matches
                     else:
                         status = "FAILED"
-                        details = f"Output differs from base. Reason: {reason}. Files saved: {base_output_filename}, {os.path.basename(other_output_filepath)}"
+                        # Compute row counts to include in details
+                        base_rows = _count_rows_in_output_file(base_output_filepath)
+                        cmp_rows = _count_rows_in_output_file(other_output_filepath)
+                        details = f"Output differs from base. Reason: {reason}. Base rows: {base_rows}, Other rows: {cmp_rows}. Files saved: {base_output_filename}, {os.path.basename(other_output_filepath)}"
                         print(f"{progress_prefix_other}  -> FAILED. {details}", flush=True)
                         any_failure = True
 
@@ -265,7 +393,12 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
                 "query_id": original_query_id_str,
                 "strategy": strategy_str,
                 "status": status,
-                "details": details
+                "details": details,
+                "benchmark_type": benchmark_type,
+                "source_file": source_file,
+                "query_text": query_text,
+                "base_output_file": base_output_filepath,
+                "other_output_file": other_output_filepath,
             })
 
         # After all strategy comparisons, output a concise summary if nothing failed and not in verbose mode
@@ -526,7 +659,14 @@ if __name__ == "__main__":
     parser.add_argument("--index-root-dir", required=True, help="Root directory that contains project index folders.")
     parser.add_argument("--verbose", action="store_true", help="Verbose output from verification script and QueryCLI.")
     parser.add_argument("--output-dir", required=True, help="Directory to store outputs for failed verifications.")
+    parser.add_argument("-s", "--strategies", action="append", metavar="DIMENSIONS",
+                        help="Select which strategy dimensions to vary vs base. Accepts comma-separated list and can be repeated. Allowed: t/temporal, p/pushdown, s/stitch. Example: -s s or -s t,p")
     args = parser.parse_args()
+
+    try:
+        args.selected_dims = _parse_selected_dims(args.strategies)
+    except ValueError as e:
+        exit(str(e))
 
     if not args.query_dir or not os.path.isdir(args.query_dir):
         exit(f"Error: Query directory not found or not specified: {args.query_dir}")
@@ -542,6 +682,10 @@ if __name__ == "__main__":
     print(f"Using Index Root Dir: {args.index_root_dir}", flush=True)
     print(f"Initial CLI strategies (hardcoded): T:nash, P:optimized, S:optimized", flush=True)
     print(f"Verification output for failures will be saved in subdirectories under: {args.output_dir}", flush=True)
+    if args.selected_dims:
+        print(f"Varying only these strategy dimensions vs base: {', '.join(sorted(args.selected_dims))}", flush=True)
+    else:
+        print("Varying all strategy dimensions (full matrix per benchmark type).", flush=True)
 
     overall_results = []
     total_files_processed = 0
@@ -635,6 +779,24 @@ if __name__ == "__main__":
         if base_errors > 0:
             print(f"  Base execution errors (queries skipped): {base_errors}")
 
+        # Print concise list of all failing queries
+        failing_records = [r for r in overall_results if r['status'] != 'PASSED' and r.get('strategy') != 'BASE']
+        unique_failing_queries = {}
+        for r in failing_records:
+            qid = r['query_id']
+            if qid not in unique_failing_queries:
+                unique_failing_queries[qid] = {
+                    'query_id': qid,
+                    'source_file': r.get('source_file'),
+                    'benchmark_type': r.get('benchmark_type'),
+                    'query_text': r.get('query_text'),
+                }
+
+        if unique_failing_queries:
+            print("\n--- FAILING QUERIES ---", flush=True)
+            for q in sorted(unique_failing_queries.values(), key=lambda x: x['query_id']):
+                print(f"  {q['query_id']} (File: {q.get('source_file')}, Type: {q.get('benchmark_type')})", flush=True)
+
         if failed_count > 0 or base_errors > 0:
             print("\n--- FAILURE & ERROR DETAILS ---", flush=True)
             for r in sorted(overall_results, key=lambda x: x['query_id']):
@@ -643,5 +805,55 @@ if __name__ == "__main__":
                     if r.get('details'):
                         indented_details = "\n".join([f"    Details: {line}" for line in r['details'].strip().split('\n')])
                         print(indented_details, flush=True)
+
+        # Basic analysis of failures
+        if failing_records:
+            print("\n--- BASIC ANALYSIS OF FAILURES ---", flush=True)
+
+            # By benchmark type
+            by_type = {}
+            for r in failing_records:
+                bt = r.get('benchmark_type') or 'UNKNOWN'
+                by_type[bt] = by_type.get(bt, 0) + 1
+            print("  By benchmark type:", flush=True)
+            for bt, cnt in sorted(by_type.items(), key=lambda x: x[0]):
+                print(f"    {bt}: {cnt}", flush=True)
+
+            # By dimension changed vs base
+            by_dimension = {'temporal': 0, 'pushdown': 0, 'stitch': 0}
+            by_combo = {}
+            for r in failing_records:
+                st = _parse_strategy_str_to_tuple(r.get('strategy'))
+                changed = _dimensions_changed(st)
+                for d in changed:
+                    by_dimension[d] = by_dimension.get(d, 0) + 1
+                combo_key = ','.join(changed) if changed else 'none'
+                by_combo[combo_key] = by_combo.get(combo_key, 0) + 1
+
+            print("  By dimension changed:", flush=True)
+            for d in ['temporal', 'pushdown', 'stitch']:
+                print(f"    {d}: {by_dimension.get(d, 0)}", flush=True)
+
+            print("  By change combination (vs base):", flush=True)
+            for combo, cnt in sorted(by_combo.items(), key=lambda x: (-x[1], x[0])):
+                print(f"    {combo}: {cnt}", flush=True)
+
+            # Operator frequency across failing queries
+            op_freq = {}
+            for r in unique_failing_queries.values():
+                counts = _count_operator_tokens(r.get('query_text'))
+                for k, v in counts.items():
+                    op_freq[k] = op_freq.get(k, 0) + v
+            if op_freq:
+                print("  Operator/token frequency (excluding SELECT, FROM, WHERE):", flush=True)
+                for op, cnt in sorted(op_freq.items(), key=lambda x: (-x[1], x[0])):
+                    print(f"    {op}: {cnt}", flush=True)
+
+            # Row count summary for failing comparisons
+            print("  Row count deltas (failing comparisons):", flush=True)
+            for r in failing_records:
+                base_rows = _count_rows_in_output_file(r.get('base_output_file'))
+                other_rows = _count_rows_in_output_file(r.get('other_output_file'))
+                print(f"    {r['query_id']} [{r['strategy']}]: base={base_rows}, other={other_rows}", flush=True)
 
     print("\nVerification script execution complete.", flush=True)

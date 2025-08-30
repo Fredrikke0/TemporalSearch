@@ -7,7 +7,6 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -19,8 +18,9 @@ import org.rocksdb.RocksIterator;
 import org.rocksdb.Slice;
 
 import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
 import com.example.core.PositionListSoA;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 
 /**
  * Verifies that stitch indexes are consistent with their base indexes.
@@ -48,14 +48,7 @@ public final class IndexConsistencyChecker {
     // Reserved for potential future formatting helpers
     // private static final String DELIM_REGEX = "\\0";
 
-    // Small LRU cache to avoid re-reading identical annotation components across many n-grams
-    private static final int ANNOTATION_CACHE_CAPACITY = 256;
-    private static final Map<String, Map<Long, Integer>> ANN_COUNTS_CACHE = new LinkedHashMap<>(16, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, Map<Long, Integer>> eldest) {
-            return size() > ANNOTATION_CACHE_CAPACITY;
-        }
-    };
+    // Removed annotation counts cache; fast-path streaming minimizes repeated heavy reads
 
     public static void main(String[] args) {
         if (args.length != 1) {
@@ -133,16 +126,15 @@ public final class IndexConsistencyChecker {
         try (RocksIterator it = stitchDb.newIterator()) {
             it.seekToFirst();
 
-            Map<Long, Integer> actualCounts = new HashMap<>();
-            Map<Long, Integer> ngramCounts = new HashMap<>();
-            Map<Long, Integer> expectedCounts = new HashMap<>();
+            Long2IntOpenHashMap smallBaseCounts = new Long2IntOpenHashMap();
+            Long2IntOpenHashMap expectedCounts = new Long2IntOpenHashMap();
             while (it.isValid()) {
                 String rawKey = asString(it.key());
                 String logicalKey = stripSegmentSuffix(rawKey);
                 summary.keysChecked++;
 
-                // Aggregate actual counts from all segments for this logical stitch key
-                long actualTotal = readCountsByDocSentAcrossSegments(stitchDb, logicalKey, actualCounts);
+                // Fast total for actual using blob header only
+                long actualTotal = readTotalPositionsAcrossSegmentsFast(stitchDb, logicalKey);
 
                 // Parse logical key into ngramKey and annotation component (split on last delimiter)
                 int lastDelimIdx = logicalKey.lastIndexOf(DELIM);
@@ -155,90 +147,73 @@ public final class IndexConsistencyChecker {
                 String ngramKey = logicalKey.substring(0, lastDelimIdx);
                 String annotationComponent = logicalKey.substring(lastDelimIdx + 1);
 
-                // Base counts
-                readCountsByDocSentAcrossSegments(ngramDb, ngramKey, ngramCounts);
-
                 String annLookupKey = type.annotationLookupKey(annotationComponent);
-                String annCacheKey = type.annotationIndexName() + "|" + annLookupKey;
-                Map<Long, Integer> annCounts = ANN_COUNTS_CACHE.get(annCacheKey);
-                if (annCounts == null) {
-                    Map<Long, Integer> tmpAnn = new HashMap<>();
-                    readCountsByDocSentAcrossSegments(annDb, annLookupKey, tmpAnn);
-                    annCounts = Map.copyOf(tmpAnn); // store an unmodifiable snapshot in cache
-                    ANN_COUNTS_CACHE.put(annCacheKey, annCounts);
-                }
+
+                // Fast totals for bases (header only)
+                long ngramTotal = readTotalPositionsAcrossSegmentsFast(ngramDb, ngramKey);
+                long annTotal = readTotalPositionsAcrossSegmentsFast(annDb, annLookupKey);
 
                 // Expected counts per (doc,sent) = product
                 expectedCounts.clear();
-                long expectedTotal = 0L;
-
-                // Iterate over smaller of the two base maps to compute products
-                Map<Long, Integer> smaller = (ngramCounts.size() <= annCounts.size()) ? ngramCounts : annCounts;
-                Map<Long, Integer> larger = (smaller == ngramCounts) ? annCounts : ngramCounts;
-                for (Map.Entry<Long, Integer> e : smaller.entrySet()) {
-                    long docSent = e.getKey();
-                    int c1 = e.getValue();
-                    int c2 = larger.getOrDefault(docSent, 0);
-                    if (c1 > 0 && c2 > 0) {
-                        int prod = c1 * c2;
-                        expectedCounts.put(docSent, prod);
-                        expectedTotal += prod;
-                    }
+                smallBaseCounts.clear();
+                boolean ngramIsSmaller = ngramTotal <= annTotal;
+                // Build counts for smaller base via selective decompression of doc/sent
+                if (ngramIsSmaller) {
+                    buildDocSentCountsMapFast(ngramDb, ngramKey, smallBaseCounts);
+                } else {
+                    buildDocSentCountsMapFast(annDb, annLookupKey, smallBaseCounts);
                 }
+                long expectedTotal = ngramIsSmaller
+                        ? accumulateExpectedFromOtherBaseFast(annDb, annLookupKey, smallBaseCounts, expectedCounts)
+                        : accumulateExpectedFromOtherBaseFast(ngramDb, ngramKey, smallBaseCounts, expectedCounts);
 
                 boolean failed = false;
                 if (expectedTotal != actualTotal) {
                     failed = true;
                 } else {
-                    // Compare per (doc,sent): actual must equal expected; also ensure no ghosts
-                    // actual docSent set must be subset of expected docSent set
-                    for (Map.Entry<Long, Integer> a : actualCounts.entrySet()) {
-                        int exp = expectedCounts.getOrDefault(a.getKey(), 0);
-                        if (a.getValue() != exp) {
-                            failed = true;
-                            break;
-                        }
-                    }
-                    // Also ensure no missing actual where product > 0
-                    if (!failed) {
-                        for (Map.Entry<Long, Integer> e : expectedCounts.entrySet()) {
-                            int act = actualCounts.getOrDefault(e.getKey(), 0);
-                            if (act != e.getValue()) {
-                                failed = true;
-                                break;
-                            }
-                        }
-                    }
+                    // Stream actual and decrement expectedCounts; detect mismatches without building an actual map
+                    failed = !verifyActualAgainstExpectedFast(stitchDb, logicalKey, expectedCounts);
                 }
 
                 if (failed) {
                     summary.keysFailed++;
+                    // Build precise examples using existing heavy path for this failing key
+                    Map<Long, Integer> actualCountsHeavy = readCountsByDocSentAcrossSegments(stitchDb, logicalKey);
+                    Map<Long, Integer> ngramCountsHeavy = readCountsByDocSentAcrossSegments(ngramDb, ngramKey);
+                    Map<Long, Integer> annCountsHeavy = readCountsByDocSentAcrossSegments(annDb, annLookupKey);
+
                     List<String> examples = new ArrayList<>();
                     int shown = 0;
-                    // Gather up to 3 example mismatches
-                    for (Map.Entry<Long, Integer> e : expectedCounts.entrySet()) {
-                        int act = actualCounts.getOrDefault(e.getKey(), 0);
-                        if (act != e.getValue()) {
-                            int doc = (int) (e.getKey() >>> 20);
-                            int sent = (int) (e.getKey() & ((1L << 20) - 1));
-                            int cn = ngramCounts.getOrDefault(e.getKey(), 0);
-                            int ca = annCounts.getOrDefault(e.getKey(), 0);
+                    // Compute expected with products from heavy maps for example clarity
+                    Map<Long, Integer> expectedHeavy = new HashMap<>();
+                    for (Map.Entry<Long, Integer> e2 : ngramCountsHeavy.entrySet()) {
+                        int c2 = annCountsHeavy.getOrDefault(e2.getKey(), 0);
+                        if (e2.getValue() > 0 && c2 > 0) {
+                            expectedHeavy.put(e2.getKey(), e2.getValue() * c2);
+                        }
+                    }
+                    for (Map.Entry<Long, Integer> e2 : expectedHeavy.entrySet()) {
+                        int act = actualCountsHeavy.getOrDefault(e2.getKey(), 0);
+                        if (act != e2.getValue()) {
+                            int doc = (int) (e2.getKey() >>> 20);
+                            int sent = (int) (e2.getKey() & ((1L << 20) - 1));
+                            int cn = ngramCountsHeavy.getOrDefault(e2.getKey(), 0);
+                            int ca = annCountsHeavy.getOrDefault(e2.getKey(), 0);
                             examples.add(String.format("(doc:%d,sent:%d) ngram=%d ann=%d expected=%d actual=%d",
-                                    doc, sent, cn, ca, e.getValue(), act));
+                                    doc, sent, cn, ca, e2.getValue(), act));
                             shown++;
                             if (shown >= 3) break;
                         }
                     }
-                    if (examples.isEmpty()) {
-                        // Maybe ghost entries in actual only
-                        for (Map.Entry<Long, Integer> a : actualCounts.entrySet()) {
-                            if (!expectedCounts.containsKey(a.getKey())) {
-                                int doc = (int) (a.getKey() >>> 20);
-                                int sent = (int) (a.getKey() & ((1L << 20) - 1));
-                                int cn = ngramCounts.getOrDefault(a.getKey(), 0);
-                                int ca = annCounts.getOrDefault(a.getKey(), 0);
+                    if (shown < 3) {
+                        for (Map.Entry<Long, Integer> a2 : actualCountsHeavy.entrySet()) {
+                            if (!expectedHeavy.containsKey(a2.getKey())) {
+                                int doc = (int) (a2.getKey() >>> 20);
+                                int sent = (int) (a2.getKey() & ((1L << 20) - 1));
+                                int cn = ngramCountsHeavy.getOrDefault(a2.getKey(), 0);
+                                int ca = annCountsHeavy.getOrDefault(a2.getKey(), 0);
                                 examples.add(String.format("(doc:%d,sent:%d) ngram=%d ann=%d expected=%d actual=%d",
-                                        doc, sent, cn, ca, 0, a.getValue()));
+                                        doc, sent, cn, ca, 0, a2.getValue()));
                                 shown++;
                                 if (shown >= 3) break;
                             }
@@ -278,7 +253,12 @@ public final class IndexConsistencyChecker {
         }
     }
 
-    // Removed unused overload returning a new map to reduce API surface
+    // Convenience overload used in heavy fallback path
+    private static Map<Long, Integer> readCountsByDocSentAcrossSegments(RocksDB db, String logicalKey) throws IOException {
+        Map<Long, Integer> counts = new HashMap<>();
+        readCountsByDocSentAcrossSegments(db, logicalKey, counts);
+        return counts;
+    }
 
     private static long readCountsByDocSentAcrossSegments(RocksDB db, String logicalKey, Map<Long, Integer> outCounts) throws IOException {
         outCounts.clear();
@@ -295,19 +275,154 @@ public final class IndexConsistencyChecker {
                     }
                     byte[] value = it.value();
                     if (value != null && value.length > 0) {
-                        PositionListSoA soa = PositionListSoA.deserializeFromCompositeBlob(value);
-                        for (int i = 0; i < soa.getNumPositions(); i++) {
-                            Position p = soa.getPositionAt(i);
-                            long docSent = packDocSent(p.getDocumentId(), p.getSentenceId());
+                        // Use selective decompression to avoid Position object churn
+                        int numPositions = PositionListSoA.getNumPositionsFromBlob(value);
+                        IntArrayList docIds = PositionListSoA.decompressDocIds(value);
+                        IntArrayList sentIds = PositionListSoA.decompressSentenceIds(value);
+                        for (int i = 0; i < numPositions; i++) {
+                            long docSent = packDocSent(docIds.getInt(i), sentIds.getInt(i));
                             outCounts.merge(docSent, 1, Integer::sum);
-                            total++;
                         }
+                        total += numPositions;
                     }
                     it.next();
                 }
             }
         }
         return total;
+    }
+
+    // Fast path helpers: header-only totals and selective doc/sent aggregation
+    private static long readTotalPositionsAcrossSegmentsFast(RocksDB db, String logicalKey) throws IOException {
+        long total = 0L;
+        String prefixWithHash = logicalKey + "#";
+        try (ReadOptions ro = new ReadOptions(); Slice ub = new Slice(bytes(logicalKey + "$"))) {
+            ro.setIterateUpperBound(ub);
+            try (RocksIterator it = db.newIterator(ro)) {
+                it.seek(bytes(logicalKey));
+                while (it.isValid()) {
+                    String k = asString(it.key());
+                    if (!(k.equals(logicalKey) || k.startsWith(prefixWithHash))) {
+                        break;
+                    }
+                    byte[] value = it.value();
+                    if (value != null && value.length > 0) {
+                        total += PositionListSoA.getNumPositionsFromBlob(value);
+                    }
+                    it.next();
+                }
+            }
+        }
+        return total;
+    }
+
+    private static void buildDocSentCountsMapFast(RocksDB db, String logicalKey, Long2IntOpenHashMap out) throws IOException {
+        out.clear();
+        String prefixWithHash = logicalKey + "#";
+        try (ReadOptions ro = new ReadOptions(); Slice ub = new Slice(bytes(logicalKey + "$"))) {
+            ro.setIterateUpperBound(ub);
+            try (RocksIterator it = db.newIterator(ro)) {
+                it.seek(bytes(logicalKey));
+                while (it.isValid()) {
+                    String k = asString(it.key());
+                    if (!(k.equals(logicalKey) || k.startsWith(prefixWithHash))) {
+                        break;
+                    }
+                    byte[] value = it.value();
+                    if (value != null && value.length > 0) {
+                        int num = PositionListSoA.getNumPositionsFromBlob(value);
+                        if (num > 0) {
+                            IntArrayList docIds = PositionListSoA.decompressDocIds(value);
+                            IntArrayList sentIds = PositionListSoA.decompressSentenceIds(value);
+                            for (int i = 0; i < num; i++) {
+                                long docSent = packDocSent(docIds.getInt(i), sentIds.getInt(i));
+                                out.addTo(docSent, 1);
+                            }
+                        }
+                    }
+                    it.next();
+                }
+            }
+        }
+    }
+
+    private static long accumulateExpectedFromOtherBaseFast(RocksDB db, String logicalKey, Long2IntOpenHashMap smallBase, Long2IntOpenHashMap outExpected) throws IOException {
+        outExpected.clear();
+        long expectedTotal = 0L;
+        String prefixWithHash = logicalKey + "#";
+        try (ReadOptions ro = new ReadOptions(); Slice ub = new Slice(bytes(logicalKey + "$"))) {
+            ro.setIterateUpperBound(ub);
+            try (RocksIterator it = db.newIterator(ro)) {
+                it.seek(bytes(logicalKey));
+                while (it.isValid()) {
+                    String k = asString(it.key());
+                    if (!(k.equals(logicalKey) || k.startsWith(prefixWithHash))) {
+                        break;
+                    }
+                    byte[] value = it.value();
+                    if (value != null && value.length > 0) {
+                        int num = PositionListSoA.getNumPositionsFromBlob(value);
+                        if (num > 0) {
+                            IntArrayList docIds = PositionListSoA.decompressDocIds(value);
+                            IntArrayList sentIds = PositionListSoA.decompressSentenceIds(value);
+                            for (int i = 0; i < num; i++) {
+                                long docSent = packDocSent(docIds.getInt(i), sentIds.getInt(i));
+                                int c1 = smallBase.getOrDefault(docSent, 0);
+                                if (c1 > 0) {
+                                    outExpected.addTo(docSent, c1);
+                                    expectedTotal += c1;
+                                }
+                            }
+                        }
+                    }
+                    it.next();
+                }
+            }
+        }
+        return expectedTotal;
+    }
+
+    private static boolean verifyActualAgainstExpectedFast(RocksDB stitchDb, String logicalKey, Long2IntOpenHashMap expected) throws IOException {
+        String prefixWithHash = logicalKey + "#";
+        try (ReadOptions ro = new ReadOptions(); Slice ub = new Slice(bytes(logicalKey + "$"))) {
+            ro.setIterateUpperBound(ub);
+            try (RocksIterator it = stitchDb.newIterator(ro)) {
+                it.seek(bytes(logicalKey));
+                while (it.isValid()) {
+                    String k = asString(it.key());
+                    if (!(k.equals(logicalKey) || k.startsWith(prefixWithHash))) {
+                        break;
+                    }
+                    byte[] value = it.value();
+                    if (value != null && value.length > 0) {
+                        int num = PositionListSoA.getNumPositionsFromBlob(value);
+                        if (num > 0) {
+                            IntArrayList docIds = PositionListSoA.decompressDocIds(value);
+                            IntArrayList sentIds = PositionListSoA.decompressSentenceIds(value);
+                            for (int i = 0; i < num; i++) {
+                                long docSent = packDocSent(docIds.getInt(i), sentIds.getInt(i));
+                                int remaining = expected.addTo(docSent, -1);
+                                // addTo returns the old value; after decrement, value becomes old-1
+                                if (remaining <= 0) {
+                                    // if old value was 0, now -1 -> mismatch; if old was 1, now 0 ok; if >1, still >0
+                                    if (remaining == 0) {
+                                        // exactly consumed
+                                    } else if (remaining < 0) {
+                                        return false; // actual has extra occurrence
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    it.next();
+                }
+            }
+        }
+        // Ensure no leftovers in expected
+        for (Long2IntOpenHashMap.Entry e : expected.long2IntEntrySet()) {
+            if (e.getIntValue() != 0) return false;
+        }
+        return true;
     }
 
     private static String stripSegmentSuffix(String key) {

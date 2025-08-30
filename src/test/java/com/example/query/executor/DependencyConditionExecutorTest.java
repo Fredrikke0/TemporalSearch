@@ -53,7 +53,7 @@ public class DependencyConditionExecutorTest {
         PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1, 1, 10, 18)); // docId, sentId, begin, end
         positions.add(new Position(1, 2, 5, 12));
-        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+        when(mockIndex.getMergedPositions(eq(expectedKey.toLowerCase()), eq(Optional.empty()))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -88,7 +88,7 @@ public class DependencyConditionExecutorTest {
         positions.add(new Position(10, 1, 0, 7));
         positions.add(new Position(10, 1, 15, 20)); // Same sentence, different position
         positions.add(new Position(10, 2, 3, 9));   // Different sentence
-        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(positions.serializeToCompositeBlob()));
+        when(mockIndex.getMergedPositions(eq(expectedKey.toLowerCase()), eq(Optional.empty()))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -141,7 +141,7 @@ public class DependencyConditionExecutorTest {
     void testExecuteSpecificSearch_noMatchFound() throws QueryExecutionException, IndexAccessException, java.io.IOException {
         Dependency condition = new Dependency("unknown", "rel", "target");
         String expectedKey = "unknown" + DELIMITER_STR + "rel" + DELIMITER_STR + "target";
-        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.empty());
+        when(mockIndex.getMergedPositions(eq(expectedKey.toLowerCase()), eq(Optional.empty()))).thenReturn(Optional.empty());
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -162,10 +162,10 @@ public class DependencyConditionExecutorTest {
     }
 
     @Test
-    void testExecute_indexAccessError() throws IndexAccessException {
+    void testExecute_indexAccessError() throws IndexAccessException, java.io.IOException {
         Dependency condition = new Dependency("governor", "relation", "dependent");
         String expectedKey = "governor" + DELIMITER_STR + "relation" + DELIMITER_STR + "dependent";
-        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenThrow(new IndexAccessException("Test error accessing index", "dependency", IndexAccessException.ErrorType.READ_ERROR));
+        when(mockIndex.getMergedPositions(eq(expectedKey.toLowerCase()), eq(Optional.empty()))).thenThrow(new IndexAccessException("Test error accessing index", "dependency", IndexAccessException.ErrorType.READ_ERROR));
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
             executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());

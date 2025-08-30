@@ -9,7 +9,6 @@ import static org.mockito.Mockito.lenient;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -69,24 +68,13 @@ public class SentenceGranularityTest {
         System.out.println("Sentence Granularity Test Teardown Complete.");
     }
 
-    private IndexAccess setupMockIndexBehavior(Map<String, PositionListSoA> mockData) throws IndexAccessException {
+    private IndexAccess setupMockIndexBehavior(Map<String, PositionListSoA> mockData) throws IOException, IndexAccessException {
         for (Map.Entry<String, PositionListSoA> entry : mockData.entrySet()) {
-            lenient().when(unigramIndex.get(eq(entry.getKey().getBytes()))).thenReturn(Optional.ofNullable(entry.getValue()));
-            if (entry.getValue() != null) {
-                try {
-                    byte[] serializedData = entry.getValue().serializeToCompositeBlob();
-                    lenient().when(unigramIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.of(serializedData));
-                } catch (Exception e) {
-                    lenient().when(unigramIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.empty());
-                }
-            } else {
-                lenient().when(unigramIndex.getRaw(eq(entry.getKey().getBytes()))).thenReturn(Optional.empty());
-            }
+            lenient().when(unigramIndex.getMergedPositions(eq(entry.getKey()), eq(Optional.empty())))
+                   .thenReturn(Optional.ofNullable(entry.getValue()));
         }
-        lenient().when(unigramIndex.get(argThat(k -> mockData.keySet().stream().noneMatch(key -> Arrays.equals(k, key.getBytes())))))
-            .thenReturn(Optional.empty());
-        lenient().when(unigramIndex.getRaw(argThat(k -> mockData.keySet().stream().noneMatch(key -> Arrays.equals(k, key.getBytes())))))
-            .thenReturn(Optional.empty());
+        lenient().when(unigramIndex.getMergedPositions(argThat(k -> mockData.keySet().stream().noneMatch(key -> key.equals(k))), eq(Optional.empty())))
+               .thenReturn(Optional.empty());
         return unigramIndex;
     }
 
