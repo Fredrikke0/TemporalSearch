@@ -218,41 +218,54 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
         try (RocksIterator iterator = index.seek(prefixBytes)) {
+            String lastProcessedBaseKey = null;
             while (iterator.isValid()) {
                 byte[] keyBytes = iterator.key();
-                byte[] valueBytes = iterator.value();
                 String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
 
                 if (!key.startsWith(prefix)) {
                     break;
                 }
 
-                PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context, requirements);
+                String baseKey = stripSegmentSuffix(key);
+                if (baseKey.equals(lastProcessedBaseKey)) {
+                    iterator.next();
+                    continue;
+                }
 
-                String actualValue = reconstructValue(key, DELIMITER);
-
-                for (int i = 0; i < positions.getNumPositions(); i++) {
-                    resultSoA.add(
-                        actualValue,
-                        ValueType.TERM,
-                        isVariable ? variableName : null,
-                        positions.getDocIdAt(i),
-                        requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                        requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                        requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                        requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                        conceptualRowIdCounter++
+                Optional<PositionListSoA> mergedOpt;
+                try {
+                    mergedOpt = index.getMergedPositions(baseKey, context);
+                } catch (java.io.IOException ioe) {
+                    throw new QueryExecutionException(
+                        "Error during prefix merged lookup: " + ioe.getMessage(),
+                        ioe,
+                        condition.toString(),
+                        QueryExecutionException.ErrorType.INTERNAL_ERROR
                     );
                 }
+
+                if (mergedOpt.isPresent() && !mergedOpt.get().isEmpty()) {
+                    PositionListSoA positions = mergedOpt.get();
+                    String actualValue = reconstructValue(baseKey, DELIMITER);
+
+                    for (int i = 0; i < positions.getNumPositions(); i++) {
+                        resultSoA.add(
+                            actualValue,
+                            ValueType.TERM,
+                            isVariable ? variableName : null,
+                            positions.getDocIdAt(i),
+                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                            requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
+                            conceptualRowIdCounter++
+                        );
+                    }
+                }
+                lastProcessedBaseKey = baseKey;
                 iterator.next();
             }
-        } catch (IOException e) {
-            throw new QueryExecutionException(
-                "Error during prefix search deserialization: " + e.getMessage(),
-                e,
-                condition.toString(),
-                QueryExecutionException.ErrorType.INTERNAL_ERROR
-            );
         } catch (IndexAccessException iae) {
             throw iae;
         } catch (Exception e) {
@@ -313,18 +326,16 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             logger.debug("Pattern '{}' ends with '*', performing prefix search for '{}'", pattern, prefix);
             return executePrefixSearch(prefix, isVariable, variableName, index, condition, resultSoA, conceptualRowIdCounter, requirements, context);
         } else {
-            byte[] keyBytes = pattern.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            Optional<byte[]> rawBlobOptional = index.getRaw(keyBytes);
+            Optional<PositionListSoA> positionsOpt;
+            try {
+                positionsOpt = index.getMergedPositions(pattern, context);
+            } catch (IOException ioe) {
+                throw new QueryExecutionException("Index access error during CONTAINS merged lookup", ioe, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+            }
 
-            if (rawBlobOptional.isPresent()) {
+            if (positionsOpt.isPresent() && !positionsOpt.get().isEmpty()) {
                 try {
-                    byte[] rawBlob = rawBlobOptional.get();
-                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
-
-                    if (positions.isEmpty()) {
-                        logger.debug("No positions for pattern '{}' after context filtering.", pattern);
-                        return conceptualRowIdCounter;
-                    }
+                    PositionListSoA positions = positionsOpt.get();
 
                     int numPositions = positions.getNumPositions();
 
@@ -345,13 +356,23 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                     }
 
                 } catch (Exception e) {
-                    logger.error("Error during direct lookup and deserialization for pattern '{}': {}", pattern, e.getMessage(), e);
-                    throw new QueryExecutionException("Error during direct lookup for pattern " + pattern, e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+                    logger.error("Error during merged lookup processing for pattern '{}': {}", pattern, e.getMessage(), e);
+                    throw new QueryExecutionException("Error during merged lookup for pattern " + pattern, e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
                 }
             } else {
-                logger.debug("No positions found for pattern: '{}' (direct lookup)", pattern);
+                logger.debug("No positions found for pattern: '{}' (merged lookup)", pattern);
             }
             return conceptualRowIdCounter;
         }
+    }
+
+    private String stripSegmentSuffix(String key) {
+        int hashPos = key.lastIndexOf('#');
+        if (hashPos <= 0 || hashPos == key.length() - 1) return key;
+        for (int i = hashPos + 1; i < key.length(); i++) {
+            char c = key.charAt(i);
+            if (c < '0' || c > '9') return key;
+        }
+        return key.substring(0, hashPos);
     }
 }

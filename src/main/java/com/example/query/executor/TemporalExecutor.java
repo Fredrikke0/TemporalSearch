@@ -491,15 +491,10 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     }
 
                     keysProcessed++;
-                    byte[] valueBytes = iterator.value();
-                    if (valueBytes == null || valueBytes.length == 0) {
-                        iterator.next();
-                        continue;
-                    }
-
                     LocalDate entryDate;
                     try {
-                        entryDate = TemporalExecutor.parseDateKey(currentKey);
+                        String baseDateKey = stripSegmentSuffix(currentKey);
+                        entryDate = TemporalExecutor.parseDateKey(baseDateKey);
                     } catch (DateTimeParseException e) {
                         strategyLogger.warn("Could not parse date from key '{}' in {} index. Skipping. Error: {}", currentKey, DATE_INDEX, e.getMessage());
                         iterator.next();
@@ -521,9 +516,21 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     );
 
                     if (match) {
-                        PositionListSoA positionList = PositionListSoA.deserializeWithFilters(valueBytes, context, requirements);
+                        java.util.Optional<com.example.core.PositionListSoA> mergedOpt;
+                        try {
+                            mergedOpt = dateIndex.getMergedPositions(stripSegmentSuffix(currentKey), context);
+                        } catch (IndexAccessException iae) {
+                            throw iae;
+                        } catch (Exception e) {
+                            throw new QueryExecutionException("Error accessing date index during merged read: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+                        }
+                        if (mergedOpt.isEmpty() || mergedOpt.get().isEmpty()) {
+                            iterator.next();
+                            continue;
+                        }
+                        PositionListSoA positionList = mergedOpt.get();
                         strategyLogger.trace("NaiveTemporalStrategy: Original blob for key '{}' indicated {} positions. Filtered size: {}.",
-                                             currentKey, PositionListSoA.getNumPositionsFromBlob(valueBytes), positionList.getNumPositions());
+                                             currentKey, positionList.getNumPositions(), positionList.getNumPositions());
                         if (positionList.isEmpty()){
                             iterator.next();
                             continue;
@@ -547,7 +554,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
                 strategyLogger.debug("NaiveTemporalStrategy: Processed {} keys, skipped {} non-matching keys within range", keysProcessed, keysSkipped);
 
-            } catch (IOException | IndexAccessException e) {
+            } catch (IndexAccessException e) {
                 strategyLogger.error("Error during NaiveTemporalStrategy execution: {}", e.getMessage(), e);
                 throw new QueryExecutionException("Error accessing date index or deserializing data.", e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
             }
@@ -651,6 +658,16 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
          */
         private String formatDateKey(LocalDate date) {
             return date.format(INDEX_DATE_FORMATTER);
+        }
+
+        private String stripSegmentSuffix(String key) {
+            int hashPos = key.lastIndexOf('#');
+            if (hashPos <= 0 || hashPos == key.length() - 1) return key;
+            for (int i = hashPos + 1; i < key.length(); i++) {
+                char c = key.charAt(i);
+                if (c < '0' || c > '9') return key;
+            }
+            return key.substring(0, hashPos);
         }
 
 

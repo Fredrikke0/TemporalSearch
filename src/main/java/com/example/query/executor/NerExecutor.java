@@ -143,16 +143,14 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         throws IOException, IndexAccessException {
         logger.debug("executeEntityTypeOnlySearch: Seeking for Type='{}', ContextIsPresent={}", normalizedEntityType, context.isPresent());
 
-        byte[] keyForIndexLookup = normalizedEntityType.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(normalizedEntityType, context);
 
-        if (!rawBlobOptional.isPresent() || rawBlobOptional.get().length == 0) {
+        if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeEntityTypeOnlySearch: No data found for entity type '{}'", normalizedEntityType);
             return 0;
         }
 
-        byte[] rawBlob = rawBlobOptional.get();
-        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
+        PositionListSoA positions = positionsOptional.get();
 
         if (positions.isEmpty()) {
             logger.debug("executeEntityTypeOnlySearch: No positions for type '{}' after context filtering.", normalizedEntityType);
@@ -222,16 +220,14 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         logger.debug("executeSpecificEntityFilterSearch: Type='{}', TargetValues={}, TargetSynonymIDs={}",
             normalizedEntityType, targetValuesFromQuery, targetSynonymIds);
 
-        byte[] keyForIndexLookup = normalizedEntityType.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(normalizedEntityType, context);
 
-        if (!rawBlobOptional.isPresent() || rawBlobOptional.get().length == 0) {
+        if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeSpecificEntityFilterSearch: No data found for entity type '{}'", normalizedEntityType);
                 return 0;
             }
 
-        byte[] rawBlob = rawBlobOptional.get();
-        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
+        PositionListSoA positions = positionsOptional.get();
 
         if (positions.isEmpty()) {
             logger.debug("executeSpecificEntityFilterSearch: No positions for type '{}' after initial context filtering.", normalizedEntityType);
@@ -313,17 +309,15 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
         }
 
-        byte[] keyForIndexLookup = normalizedEntityType.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        Optional<byte[]> rawBlobOptional = index.getRaw(keyForIndexLookup);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(normalizedEntityType, context);
 
-        if (!rawBlobOptional.isPresent() || rawBlobOptional.get().length == 0) {
+        if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeVariableBindingSearch: No data found in index for entity type '{}' (key: [{}])",
-                         normalizedEntityType, new String(keyForIndexLookup, java.nio.charset.StandardCharsets.UTF_8));
+                         normalizedEntityType, normalizedEntityType);
                 return 0;
             }
 
-        byte[] rawBlob = rawBlobOptional.get();
-        PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
+        PositionListSoA positions = positionsOptional.get();
 
         logger.trace("executeVariableBindingSearch: Decompressed raw arrays. DocIds size: {}, SynonymIds size: {}", positions.getNumPositions(), positions.getSynonymIds().size());
 

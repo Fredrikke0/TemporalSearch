@@ -121,15 +121,14 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
         String searchKey = normalizedGovernor + String.valueOf(IndexAccessInterface.DELIMITER) +
                            normalizedRelation + String.valueOf(IndexAccessInterface.DELIMITER) +
                            normalizedDependent;
-        byte[] keyBytes = searchKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        // Using merged lookup below; direct raw key bytes not required
 
         logger.debug("Searching for specific dependency relation: {} (into QueryResultSoA)", searchKey);
-        Optional<byte[]> rawBlobOptional = index.getRaw(keyBytes);
+        Optional<PositionListSoA> mergedPositionsOpt = index.getMergedPositions(searchKey, context);
         int conceptualRowsAdded = 0;
 
-        if (rawBlobOptional.isPresent()) {
-            byte[] rawBlob = rawBlobOptional.get();
-            PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
+        if (mergedPositionsOpt.isPresent() && !mergedPositionsOpt.get().isEmpty()) {
+            PositionListSoA positions = mergedPositionsOpt.get();
 
             if (positions.isEmpty()) {
                 logger.debug("No positions for dependency relation '{}' after applying context filters.", searchKey);
@@ -157,7 +156,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
             }
             logger.debug("Added {} bindings for dependency '{}', creating {} conceptual rows.", numPositions, searchKey, conceptualRowsAdded);
         } else {
-            logger.debug("No positions found for dependency relation: '{}'", searchKey);
+            logger.debug("No positions found for dependency relation: '{}' (including segments)", searchKey);
         }
         return currentConceptualRowId + conceptualRowsAdded;
     }

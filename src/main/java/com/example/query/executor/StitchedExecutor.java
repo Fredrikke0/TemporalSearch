@@ -260,12 +260,11 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                     }
                 }
 
-                Optional<byte[]> rawBlobOpt = stitchIndex.getRaw(stitchLookupKey.getBytes(StandardCharsets.UTF_8));
+                Optional<PositionListSoA> mergedPositionsOpt = stitchIndex.getMergedPositions(stitchLookupKey, context);
 
-                if (rawBlobOpt.isPresent() && rawBlobOpt.get().length > 0) {
-                    byte[] rawBlob = rawBlobOpt.get();
-                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(rawBlob, context, requirements);
-                    logger.debug("Found {} potential co-occurrences for key '{}' in stitch index '{}' after context filtering.",
+                if (mergedPositionsOpt.isPresent() && !mergedPositionsOpt.get().isEmpty()) {
+                    PositionListSoA positions = mergedPositionsOpt.get();
+                    logger.debug("Found {} potential co-occurrences for key '{}' in stitch index '{}' after context filtering (merged segments).",
                                  positions.getNumPositions(), stitchLookupKey, stitchIndexName);
 
                     for (int i = 0; i < positions.getNumPositions(); i++) {
@@ -336,7 +335,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         }
                     }
                 } else {
-                     logger.debug("No entry found for key '{}' in stitch index '{}' or blob was empty.", stitchLookupKey, stitchIndexName);
+                     logger.debug("No entry found for key '{}' in stitch index '{}' (including segments) or positions were empty after filtering.", stitchLookupKey, stitchIndexName);
                 }
             }
         } catch (IndexAccessException e) {
