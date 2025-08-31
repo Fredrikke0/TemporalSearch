@@ -133,9 +133,6 @@ public final class IndexConsistencyChecker {
                 String logicalKey = stripSegmentSuffix(rawKey);
                 summary.keysChecked++;
 
-                // Fast total for actual using blob header only
-                long actualTotal = readTotalPositionsAcrossSegmentsFast(stitchDb, logicalKey);
-
                 // Parse logical key into ngramKey and annotation component (split on last delimiter)
                 int lastDelimIdx = logicalKey.lastIndexOf(DELIM);
                 if (lastDelimIdx <= 0 || lastDelimIdx >= logicalKey.length() - 1) {
@@ -149,14 +146,10 @@ public final class IndexConsistencyChecker {
 
                 String annLookupKey = type.annotationLookupKey(annotationComponent);
 
-                // Fast totals for bases (header only)
-                long ngramTotal = readTotalPositionsAcrossSegmentsFast(ngramDb, ngramKey);
-                long annTotal = readTotalPositionsAcrossSegmentsFast(annDb, annLookupKey);
-
                 // Expected counts per (doc,sent) = product
                 expectedCounts.clear();
                 smallBaseCounts.clear();
-                boolean ngramIsSmaller = ngramTotal <= annTotal;
+                boolean ngramIsSmaller = estimateNgramIsSmaller(ngramDb, ngramKey, annDb, annLookupKey);
                 // Build counts for smaller base via selective decompression of doc/sent
                 if (ngramIsSmaller) {
                     buildDocSentCountsMapFast(ngramDb, ngramKey, smallBaseCounts);
@@ -168,12 +161,8 @@ public final class IndexConsistencyChecker {
                         : accumulateExpectedFromOtherBaseFast(ngramDb, ngramKey, smallBaseCounts, expectedCounts);
 
                 boolean failed = false;
-                if (expectedTotal != actualTotal) {
-                    failed = true;
-                } else {
-                    // Stream actual and decrement expectedCounts; detect mismatches without building an actual map
-                    failed = !verifyActualAgainstExpectedFast(stitchDb, logicalKey, expectedCounts);
-                }
+                VerifyResult verify = verifyActualAgainstExpectedFast(stitchDb, logicalKey, expectedCounts);
+                failed = !verify.ok;
 
                 if (failed) {
                     summary.keysFailed++;
@@ -222,7 +211,7 @@ public final class IndexConsistencyChecker {
 
                     summary.failDetails.add(String.format(
                         "Key '%s' FAILED: expected_total=%d actual_total=%d; examples: %s",
-                        logicalKey, expectedTotal, actualTotal, examples));
+                        logicalKey, expectedTotal, verify.actualTotal, examples));
                 }
 
                 // advance iterator to next logical key (skip segments for this key)
@@ -316,6 +305,42 @@ public final class IndexConsistencyChecker {
         return total;
     }
 
+    // Estimate smaller base with a capped sample to avoid full scans on huge keys
+    private static boolean estimateNgramIsSmaller(RocksDB ngramDb, String ngramKey, RocksDB annDb, String annKey) throws IOException {
+        long ngramEstimate = estimateTotalPositionsWithCap(ngramDb, ngramKey, 1_000_000);
+        long annEstimate = estimateTotalPositionsWithCap(annDb, annKey, 1_000_000);
+        return ngramEstimate <= annEstimate;
+    }
+
+    private static long estimateTotalPositionsWithCap(RocksDB db, String logicalKey, int cap) throws IOException {
+        long total = 0L;
+        int remaining = cap;
+        String prefixWithHash = logicalKey + "#";
+        try (ReadOptions ro = new ReadOptions(); Slice ub = new Slice(bytes(logicalKey + "$"))) {
+            ro.setIterateUpperBound(ub);
+            try (RocksIterator it = db.newIterator(ro)) {
+                it.seek(bytes(logicalKey));
+                while (it.isValid() && remaining > 0) {
+                    String k = asString(it.key());
+                    if (!(k.equals(logicalKey) || k.startsWith(prefixWithHash))) break;
+                    byte[] value = it.value();
+                    if (value != null && value.length > 0) {
+                        int num = PositionListSoA.getNumPositionsFromBlob(value);
+                        if (num <= remaining) {
+                            total += num;
+                            remaining -= num;
+                        } else {
+                            total += remaining;
+                            remaining = 0;
+                        }
+                    }
+                    it.next();
+                }
+            }
+        }
+        return total;
+    }
+
     private static void buildDocSentCountsMapFast(RocksDB db, String logicalKey, Long2IntOpenHashMap out) throws IOException {
         out.clear();
         String prefixWithHash = logicalKey + "#";
@@ -382,8 +407,9 @@ public final class IndexConsistencyChecker {
         return expectedTotal;
     }
 
-    private static boolean verifyActualAgainstExpectedFast(RocksDB stitchDb, String logicalKey, Long2IntOpenHashMap expected) throws IOException {
+    private static VerifyResult verifyActualAgainstExpectedFast(RocksDB stitchDb, String logicalKey, Long2IntOpenHashMap expected) throws IOException {
         String prefixWithHash = logicalKey + "#";
+        long actualTotal = 0L;
         try (ReadOptions ro = new ReadOptions(); Slice ub = new Slice(bytes(logicalKey + "$"))) {
             ro.setIterateUpperBound(ub);
             try (RocksIterator it = stitchDb.newIterator(ro)) {
@@ -396,6 +422,7 @@ public final class IndexConsistencyChecker {
                     byte[] value = it.value();
                     if (value != null && value.length > 0) {
                         int num = PositionListSoA.getNumPositionsFromBlob(value);
+                        actualTotal += num;
                         if (num > 0) {
                             IntArrayList docIds = PositionListSoA.decompressDocIds(value);
                             IntArrayList sentIds = PositionListSoA.decompressSentenceIds(value);
@@ -408,7 +435,7 @@ public final class IndexConsistencyChecker {
                                     if (remaining == 0) {
                                         // exactly consumed
                                     } else if (remaining < 0) {
-                                        return false; // actual has extra occurrence
+                                        return new VerifyResult(false, actualTotal); // actual has extra occurrence
                                     }
                                 }
                             }
@@ -420,9 +447,15 @@ public final class IndexConsistencyChecker {
         }
         // Ensure no leftovers in expected
         for (Long2IntOpenHashMap.Entry e : expected.long2IntEntrySet()) {
-            if (e.getIntValue() != 0) return false;
+            if (e.getIntValue() != 0) return new VerifyResult(false, actualTotal);
         }
-        return true;
+        return new VerifyResult(true, actualTotal);
+    }
+
+    private static final class VerifyResult {
+        final boolean ok;
+        final long actualTotal;
+        VerifyResult(boolean ok, long actualTotal) { this.ok = ok; this.actualTotal = actualTotal; }
     }
 
     private static String stripSegmentSuffix(String key) {
