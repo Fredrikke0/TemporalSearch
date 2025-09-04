@@ -256,12 +256,31 @@ public class IndexAccess implements IndexAccessInterface {
         byte[] baseTermBytes = bytes(baseTerm);
         Optional<byte[]> rawBaseData = getRaw(baseTermBytes);
 
+        // If base term exists, merge base + #1, #2, ...
         if (rawBaseData.isPresent()) {
-            PositionListSoA soa = PositionListSoA.deserializeWithFilters(rawBaseData.get(), context);
-            return soa.isEmpty() ? Optional.empty() : Optional.of(soa);
+            PositionListSoA merged = PositionListSoA.deserializeWithFilters(rawBaseData.get(), context);
+            int seg = 1;
+            while (true) {
+                String segKey = baseTerm + "#" + seg;
+                Optional<byte[]> rawSeg = getRaw(bytes(segKey));
+                if (rawSeg.isPresent()) {
+                    PositionListSoA segSoA = PositionListSoA.deserializeWithFilters(rawSeg.get(), context);
+                    if (!segSoA.isEmpty()) {
+                        if (merged == null || merged.isEmpty()) {
+                            merged = segSoA;
+                        } else {
+                            merged.addAll(segSoA);
+                        }
+                    }
+                    seg++;
+                } else {
+                    break;
+                }
+            }
+            return (merged != null && !merged.isEmpty()) ? Optional.of(merged) : Optional.empty();
         }
 
-        // If base term not found, look for segments term#0, term#1, ...
+        // Base term missing: merge segments #0, #1, ...
         PositionListSoA mergedSoA = null;
         int segmentNum = 0;
         boolean segmentFoundInLoop = false;
@@ -273,36 +292,24 @@ public class IndexAccess implements IndexAccessInterface {
 
             if (rawSegmentData.isPresent()) {
                 segmentFoundInLoop = true;
-                // Apply context filtering directly during deserialization of the segment
                 PositionListSoA segmentSoA = PositionListSoA.deserializeWithFilters(rawSegmentData.get(), context);
 
-                if (!segmentSoA.isEmpty()) { // Only merge if the filtered segment is not empty
+                if (!segmentSoA.isEmpty()) {
                     if (mergedSoA == null) {
                         mergedSoA = segmentSoA;
                     } else {
-                        mergedSoA.addAll(segmentSoA); // Ensure PositionListSoA.addAll is robust
+                        mergedSoA.addAll(segmentSoA);
                     }
                 }
             } else {
-                // No data for current segmentKeyBytes
                 if (segmentNum == 0 && !segmentFoundInLoop) {
-                    // Neither baseTerm nor term#0 found, so term doesn't exist in segmented form either.
                     return Optional.empty();
                 }
-                // If segmentNum > 0 and this segment is not found, means we have found all previous segments.
-                // Or, if segmentNum == 0 but segmentFoundInLoop was false (from baseTerm check earlier),
-                // and now term#0 also not found, then the term doesn't exist at all.
-                break; // Exit loop, all available segments have been processed or none were found after base check.
+                break;
             }
             segmentNum++;
         }
-        // If mergedSoA is not null and not empty, return it.
-        // If mergedSoA is null (no segments found or all filtered out), or became empty after filtering, return Optional.empty().
-        if (mergedSoA != null && !mergedSoA.isEmpty()) {
-            return Optional.of(mergedSoA);
-        } else {
-            return Optional.empty();
-        }
+        return (mergedSoA != null && !mergedSoA.isEmpty()) ? Optional.of(mergedSoA) : Optional.empty();
     }
 
     private void checkOpen() throws IndexAccessException {
