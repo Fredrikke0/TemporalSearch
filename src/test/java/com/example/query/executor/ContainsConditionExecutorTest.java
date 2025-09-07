@@ -80,11 +80,11 @@ public class ContainsConditionExecutorTest {
         positionList.add(new Position(2, 1, 5, 9));
         String keyStr = "test".toLowerCase();
 
-        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positionList));
+        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positionList));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
-        verify(mockUnigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()));
+        verify(mockUnigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements));
         assertEquals(2, result.size());
 
         Set<Integer> docIds = new HashSet<>();
@@ -103,11 +103,11 @@ public class ContainsConditionExecutorTest {
         positionList.add(new Position(2, 1, 5, 17));
         String keyStr = ("test" + IndexAccessInterface.DELIMITER + "example").toLowerCase();
 
-        when(mockBigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positionList));
+        when(mockBigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positionList));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
-        verify(mockBigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()));
+        verify(mockBigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements));
         assertEquals(2, result.size());
 
         Set<Integer> docIds = new HashSet<>();
@@ -126,11 +126,11 @@ public class ContainsConditionExecutorTest {
         positionList.add(new Position(2, 1, 5, 17));
         String keyStr = ("another" + IndexAccessInterface.DELIMITER + "test").toLowerCase();
 
-        when(mockBigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positionList));
+        when(mockBigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positionList));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
-        verify(mockBigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()));
+        verify(mockBigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements));
         assertEquals(2, result.size());
 
         Set<Integer> docIds = new HashSet<>();
@@ -149,11 +149,11 @@ public class ContainsConditionExecutorTest {
         positionList.add(new Position(2, 1, 5, 24));
         String keyStr = ("test" + IndexAccessInterface.DELIMITER + "example" + IndexAccessInterface.DELIMITER + "phrase").toLowerCase();
 
-        when(mockTrigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positionList));
+        when(mockTrigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positionList));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
-        verify(mockTrigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()));
+        verify(mockTrigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements));
         assertEquals(2, result.size());
 
         Set<Integer> docIds = new HashSet<>();
@@ -186,10 +186,10 @@ public class ContainsConditionExecutorTest {
     void testExecuteTermNotFound() throws Exception {
         Contains condition = new Contains("nonexistent");
         String keyStr = "nonexistent".toLowerCase();
-        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.empty());
+        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.empty());
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
-        verify(mockUnigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()));
+        verify(mockUnigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements));
         assertTrue(result.isEmpty());
     }
 
@@ -212,7 +212,7 @@ public class ContainsConditionExecutorTest {
         positionList.add(new Position(1, 1, 0, 4));
         String keyStr = "test".toLowerCase();
 
-        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positionList));
+        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positionList));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -232,7 +232,7 @@ public class ContainsConditionExecutorTest {
         positionList.add(new Position(1, 1, 10, 20));
         String keyStr = ("hello" + IndexAccessInterface.DELIMITER + "world").toLowerCase();
 
-        when(mockBigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positionList));
+        when(mockBigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positionList));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -252,7 +252,7 @@ public class ContainsConditionExecutorTest {
         positionList.add(new Position(1, 3, 10, 14)); // sentence 3, outside window of s=1, w=1
         String keyStr = "test".toLowerCase();
 
-        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positionList));
+        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positionList));
 
         // Granularity SENTENCE, window size 1.
         // This test focuses on the ContainsExecutor returning all sentence matches;
@@ -279,7 +279,7 @@ public class ContainsConditionExecutorTest {
         PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(1,1,0,5));
         positions.add(new Position(2,1,10,15));
-        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -298,7 +298,7 @@ public class ContainsConditionExecutorTest {
 
         PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(3,1,0,8));
-        when(mockBigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(mockBigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -316,7 +316,7 @@ public class ContainsConditionExecutorTest {
 
         PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(4,1,0,15));
-        when(mockTrigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(mockTrigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -330,11 +330,11 @@ public class ContainsConditionExecutorTest {
     void testNoMatch() throws QueryExecutionException, IndexAccessException, IOException {
         Contains condition = new Contains("nonexistent");
         String keyStr = "nonexistent".toLowerCase();
-        lenient().when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.empty());
+        lenient().when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.empty());
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         assertTrue(result.isEmpty());
-        verify(mockUnigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()));
+        verify(mockUnigramIndex).getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements));
     }
 
     @Test
@@ -353,7 +353,7 @@ public class ContainsConditionExecutorTest {
 
         PositionListSoA positions = new PositionListSoA();
         positions.add(new Position(5,1,2,7));
-        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(mockUnigramIndex.getMergedPositions(eq(keyStr), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 

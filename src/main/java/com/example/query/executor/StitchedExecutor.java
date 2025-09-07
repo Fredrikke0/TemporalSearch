@@ -260,7 +260,7 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                     }
                 }
 
-                Optional<PositionListSoA> mergedPositionsOpt = stitchIndex.getMergedPositions(stitchLookupKey, context);
+                Optional<PositionListSoA> mergedPositionsOpt = stitchIndex.getMergedPositions(stitchLookupKey, context, requirements);
 
                 if (mergedPositionsOpt.isPresent() && !mergedPositionsOpt.get().isEmpty()) {
                     PositionListSoA positions = mergedPositionsOpt.get();

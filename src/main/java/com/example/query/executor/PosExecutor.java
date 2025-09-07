@@ -125,7 +125,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         logger.debug("executeSpecificTermSearch: Tag='{}', TermValue='{}' (original), NormalizedTerm='{}', TargetSynonymID={}",
             tagFromQuery, termFromQuery, normalizedTargetTerm, targetSynonymId);
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context, requirements);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeSpecificTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);
@@ -169,7 +169,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                                                     Optional<FilteringContext> context)
             throws IOException, IndexAccessException, org.rocksdb.RocksDBException, QueryExecutionException {
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context, requirements);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeTagOnlyOrVariableTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);

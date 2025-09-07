@@ -518,7 +518,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     if (match) {
                         java.util.Optional<com.example.core.PositionListSoA> mergedOpt;
                         try {
-                            mergedOpt = dateIndex.getMergedPositions(stripSegmentSuffix(currentKey), context);
+                            mergedOpt = dateIndex.getMergedPositions(stripSegmentSuffix(currentKey), context, requirements);
                         } catch (IndexAccessException iae) {
                             throw iae;
                         } catch (Exception e) {

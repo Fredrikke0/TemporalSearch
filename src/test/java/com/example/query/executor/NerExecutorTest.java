@@ -179,7 +179,7 @@ class NerExecutorTest {
         posList.add(3, 1, 10, 15, 102); // Doc 3, Sent 1, (e.g. "Bob")
 
         // Mock merged positions for key "PERSON"
-        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()))).thenReturn(Optional.of(posList));
+        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(posList));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -200,7 +200,7 @@ class NerExecutorTest {
         }
         assertTrue(docIds.containsAll(Set.of(1, 3)), "Result should contain document IDs 1 and 3. Found: " + docIds);
 
-        verify(nerIndex).getMergedPositions(eq("PERSON"), eq(Optional.empty()));
+        verify(nerIndex).getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements));
     }
 
     @Test
@@ -209,7 +209,7 @@ class NerExecutorTest {
         Ner conditionPerson = new Ner("PERSON");
         PositionListSoA personSoa = new PositionListSoA();
         personSoa.add(1, 1, 0, 5, 201); // Doc 1, "Alice" (synId 201)
-        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()))).thenReturn(Optional.of(personSoa));
+        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(personSoa));
 
         QueryResultSoA resultPerson = executor.execute(conditionPerson, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         assertNotNull(resultPerson);
@@ -224,7 +224,7 @@ class NerExecutorTest {
         PositionListSoA locSoa = new PositionListSoA();
         locSoa.add(2, 1, 10, 15, 301); // Doc 2, "Paris" (synId 301)
         locSoa.add(2, 2, 20, 25, 302); // Doc 2, "London" (synId 302)
-        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()))).thenReturn(Optional.of(locSoa));
+        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(locSoa));
 
         QueryResultSoA resultLocation = executor.execute(conditionLocation, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         assertNotNull(resultLocation);
@@ -239,8 +239,8 @@ class NerExecutorTest {
         assertTrue(locDocIds.stream().allMatch(id -> id == 2), "All LOCATION occurrences should be in Doc 2");
 
 
-        verify(nerIndex).getMergedPositions(eq("PERSON"), eq(Optional.empty()));
-        verify(nerIndex).getMergedPositions(eq("LOCATION"), eq(Optional.empty()));
+        verify(nerIndex).getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements));
+        verify(nerIndex).getMergedPositions(eq("LOCATION"), eq(Optional.empty()), eq(defaultTestRequirements));
     }
 
     @Test
@@ -264,7 +264,7 @@ class NerExecutorTest {
         // Add another instance of AcmeInc to test conceptual grouping
         positions.add(4, 3, 30, 40, acmeId);   // Doc 4, "AcmeInc" again
 
-        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -296,7 +296,7 @@ class NerExecutorTest {
         assertEquals(2, valueCounts.get("acmeinc").intValue(), "Count for 'acmeinc'");
         assertEquals(1, valueCounts.get("globexcorp").intValue(), "Count for 'globexcorp'");
 
-        verify(nerIndex).getMergedPositions(eq("PERSON"), eq(Optional.empty()));
+        verify(nerIndex).getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements));
         verify(synonymManager).getTerms(eq(new HashSet<>(Arrays.asList(acmeId, globexId))));
     }
 
@@ -313,7 +313,7 @@ class NerExecutorTest {
         PositionListSoA personPositions = new PositionListSoA();
         personPositions.add(1, 1, 0, 8, johnDoeId);
 
-        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()))).thenReturn(Optional.of(personPositions));
+        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(personPositions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -342,7 +342,7 @@ class NerExecutorTest {
         positions.add(1, 2, 5, 12, 99);
 
         // Mock merged positions for specific type LOCATION
-        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -358,7 +358,7 @@ class NerExecutorTest {
 
         verify(synonymManager).getId("new york"); // Verify with lowercase
         // Verify for specific type LOCATION
-        verify(nerIndex).getMergedPositions(eq("LOCATION"), eq(Optional.empty()));
+        verify(nerIndex).getMergedPositions(eq("LOCATION"), eq(Optional.empty()), eq(defaultTestRequirements));
     }
 
     @Test
@@ -369,7 +369,7 @@ class NerExecutorTest {
         positions.add(1, 1, 0, 10, 123);
         positions.add(2, 1, 5, 15, 456);
 
-        when(nerIndex.getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(nerIndex.getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -386,7 +386,7 @@ class NerExecutorTest {
         for(int i=0; i<result.size(); i++) docIds.add(result.getDocumentIdAt(i));
         assertTrue(docIds.containsAll(Set.of(1,2)), "Doc IDs 1 and 2 should be present");
 
-        verify(nerIndex).getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()));
+        verify(nerIndex).getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()), eq(defaultTestRequirements));
     }
 
     @Test
@@ -413,7 +413,7 @@ class NerExecutorTest {
         positions.add(1, 2, 10, 16, londonId);
         positions.add(2, 1, 0, 6, parisId);
 
-        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -433,7 +433,7 @@ class NerExecutorTest {
         // verify(synonymManager).getTerm(parisId); // OLD VERIFICATION
         // verify(synonymManager).getTerm(londonId); // OLD VERIFICATION
         verify(synonymManager).getTerms(eq(new HashSet<>(Arrays.asList(parisId, londonId)))); // NEW VERIFICATION
-        verify(nerIndex).getMergedPositions(eq("LOCATION"), eq(Optional.empty()));
+        verify(nerIndex).getMergedPositions(eq("LOCATION"), eq(Optional.empty()), eq(defaultTestRequirements));
     }
 
     @Test
@@ -465,19 +465,19 @@ class NerExecutorTest {
         assertNotNull(result);
         assertTrue(result.isEmpty());
 
-        verify(nerIndex).getMergedPositions(eq("PERSON"), eq(Optional.empty()));
+        verify(nerIndex).getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements));
     }
 
     @Test
     void testExecute_noMatchFound_get() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
         Ner condition = new Ner("ORGANIZATION");
-        when(nerIndex.getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()))).thenReturn(Optional.empty());
+        when(nerIndex.getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.empty());
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "corpus", defaultTestRequirements, Optional.empty());
         assertNotNull(result);
         assertTrue(result.isEmpty());
 
-        verify(nerIndex).getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()));
+        verify(nerIndex).getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()), eq(defaultTestRequirements));
     }
 
     @Test
@@ -541,7 +541,7 @@ class NerExecutorTest {
         positions.add(1, 2, 10, 13, bobId);    // Doc 1, "bob" - should match
         positions.add(2, 1, 0, 7, charlieId);  // Doc 2, "charlie" - should be filtered out
 
-        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -592,7 +592,7 @@ class NerExecutorTest {
         positions.add(2, 1, 0, 5, parisId);    // Doc 2, "paris" again - should match
         positions.add(3, 1, 0, 5, tokyoId);    // Doc 3, "tokyo" - should be filtered out
 
-        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -629,7 +629,7 @@ class NerExecutorTest {
         positions.add(1, 1, 0, 6, 101);  // Doc 1, any org
         positions.add(2, 1, 5, 14, 102); // Doc 2, any org
 
-        when(nerIndex.getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(nerIndex.getMergedPositions(eq("ORGANIZATION"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -664,7 +664,7 @@ class NerExecutorTest {
         positions.add(1, 1, 0, 8, newYorkId);      // Doc 1, "New York"
         positions.add(2, 1, 10, 21, losAngelesId); // Doc 2, "Los Angeles"
 
-        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(nerIndex.getMergedPositions(eq("LOCATION"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -701,7 +701,7 @@ class NerExecutorTest {
         positions.add(1, 1, 0, 5, 123);  // Doc 1, different entity (ID 123, not 999)
         positions.add(2, 1, 0, 5, 456);  // Doc 2, different entity (ID 456, not 999)
 
-        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()))).thenReturn(Optional.of(positions));
+        when(nerIndex.getMergedPositions(eq("PERSON"), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 

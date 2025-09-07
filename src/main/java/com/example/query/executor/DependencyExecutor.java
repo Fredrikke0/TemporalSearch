@@ -124,7 +124,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
         // Using merged lookup below; direct raw key bytes not required
 
         logger.debug("Searching for specific dependency relation: {} (into QueryResultSoA)", searchKey);
-        Optional<PositionListSoA> mergedPositionsOpt = index.getMergedPositions(searchKey, context);
+        Optional<PositionListSoA> mergedPositionsOpt = index.getMergedPositions(searchKey, context, requirements);
         int conceptualRowsAdded = 0;
 
         if (mergedPositionsOpt.isPresent() && !mergedPositionsOpt.get().isEmpty()) {

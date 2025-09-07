@@ -143,7 +143,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         throws IOException, IndexAccessException {
         logger.debug("executeEntityTypeOnlySearch: Seeking for Type='{}', ContextIsPresent={}", normalizedEntityType, context.isPresent());
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(normalizedEntityType, context);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(normalizedEntityType, context, requirements);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeEntityTypeOnlySearch: No data found for entity type '{}'", normalizedEntityType);
@@ -220,7 +220,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         logger.debug("executeSpecificEntityFilterSearch: Type='{}', TargetValues={}, TargetSynonymIDs={}",
             normalizedEntityType, targetValuesFromQuery, targetSynonymIds);
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(normalizedEntityType, context);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(normalizedEntityType, context, requirements);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeSpecificEntityFilterSearch: No data found for entity type '{}'", normalizedEntityType);
@@ -309,7 +309,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
         }
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(normalizedEntityType, context);
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(normalizedEntityType, context, requirements);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
             logger.debug("executeVariableBindingSearch: No data found in index for entity type '{}' (key: [{}])",

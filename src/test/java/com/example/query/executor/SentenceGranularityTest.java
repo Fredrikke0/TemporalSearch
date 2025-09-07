@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 
 import java.io.IOException;
@@ -70,10 +71,10 @@ public class SentenceGranularityTest {
 
     private IndexAccess setupMockIndexBehavior(Map<String, PositionListSoA> mockData) throws IOException, IndexAccessException {
         for (Map.Entry<String, PositionListSoA> entry : mockData.entrySet()) {
-            lenient().when(unigramIndex.getMergedPositions(eq(entry.getKey()), eq(Optional.empty())))
+            lenient().when(unigramIndex.getMergedPositions(eq(entry.getKey()), eq(Optional.empty()), any()))
                    .thenReturn(Optional.ofNullable(entry.getValue()));
         }
-        lenient().when(unigramIndex.getMergedPositions(argThat(k -> mockData.keySet().stream().noneMatch(key -> key.equals(k))), eq(Optional.empty())))
+        lenient().when(unigramIndex.getMergedPositions(argThat(k -> mockData.keySet().stream().noneMatch(key -> key.equals(k))), eq(Optional.empty()), any()))
                .thenReturn(Optional.empty());
         return unigramIndex;
     }

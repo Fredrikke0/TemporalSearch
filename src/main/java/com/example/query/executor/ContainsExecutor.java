@@ -218,37 +218,12 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
         try (RocksIterator iterator = index.seek(prefixBytes)) {
-            String lastProcessedBaseKey = null;
-            while (iterator.isValid()) {
-                byte[] keyBytes = iterator.key();
-                String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
-
-                if (!key.startsWith(prefix)) {
-                    break;
-                }
-
-                String baseKey = stripSegmentSuffix(key);
-                if (baseKey.equals(lastProcessedBaseKey)) {
-                    iterator.next();
-                    continue;
-                }
-
-                Optional<PositionListSoA> mergedOpt;
-                try {
-                    mergedOpt = index.getMergedPositions(baseKey, context);
-                } catch (java.io.IOException ioe) {
-                    throw new QueryExecutionException(
-                        "Error during prefix merged lookup: " + ioe.getMessage(),
-                        ioe,
-                        condition.toString(),
-                        QueryExecutionException.ErrorType.INTERNAL_ERROR
-                    );
-                }
-
+            final java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger(conceptualRowIdCounter);
+            ExecutorIndexUtils.iterateGroupedByBase(iterator, prefix, (baseKey, blobs) -> {
+                Optional<PositionListSoA> mergedOpt = ExecutorIndexUtils.mergeAndFilter(blobs, context, requirements);
                 if (mergedOpt.isPresent() && !mergedOpt.get().isEmpty()) {
                     PositionListSoA positions = mergedOpt.get();
                     String actualValue = reconstructValue(baseKey, DELIMITER);
-
                     for (int i = 0; i < positions.getNumPositions(); i++) {
                         resultSoA.add(
                             actualValue,
@@ -259,13 +234,12 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                             requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
                             requirements.needsPositions ? positions.getEndCharAt(i) : -1,
                             requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                            conceptualRowIdCounter++
+                            counter.getAndIncrement()
                         );
                     }
                 }
-                lastProcessedBaseKey = baseKey;
-                iterator.next();
-            }
+            });
+            conceptualRowIdCounter = counter.get();
         } catch (IndexAccessException iae) {
             throw iae;
         } catch (Exception e) {
@@ -328,7 +302,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         } else {
             Optional<PositionListSoA> positionsOpt;
             try {
-                positionsOpt = index.getMergedPositions(pattern, context);
+                positionsOpt = index.getMergedPositions(pattern, context, requirements);
             } catch (IOException ioe) {
                 throw new QueryExecutionException("Index access error during CONTAINS merged lookup", ioe, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
             }

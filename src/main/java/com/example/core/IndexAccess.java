@@ -250,7 +250,9 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     @Override
-    public Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<com.example.query.executor.FilteringContext> context)
+    public Optional<PositionListSoA> getMergedPositions(String baseTerm,
+                                                        Optional<com.example.query.executor.FilteringContext> context,
+                                                        com.example.query.executor.AttributeRequirements requirements)
             throws IOException, IndexAccessException {
         checkOpen();
         byte[] baseTermBytes = bytes(baseTerm);
@@ -258,13 +260,13 @@ public class IndexAccess implements IndexAccessInterface {
 
         // If base term exists, merge base + #1, #2, ...
         if (rawBaseData.isPresent()) {
-            PositionListSoA merged = PositionListSoA.deserializeWithFilters(rawBaseData.get(), context);
+            PositionListSoA merged = PositionListSoA.deserializeWithFilters(rawBaseData.get(), context, requirements);
             int seg = 1;
             while (true) {
                 String segKey = baseTerm + "#" + seg;
                 Optional<byte[]> rawSeg = getRaw(bytes(segKey));
                 if (rawSeg.isPresent()) {
-                    PositionListSoA segSoA = PositionListSoA.deserializeWithFilters(rawSeg.get(), context);
+                    PositionListSoA segSoA = PositionListSoA.deserializeWithFilters(rawSeg.get(), context, requirements);
                     if (!segSoA.isEmpty()) {
                         if (merged == null || merged.isEmpty()) {
                             merged = segSoA;
