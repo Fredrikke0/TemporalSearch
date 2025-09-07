@@ -280,36 +280,7 @@ public class IndexAccess implements IndexAccessInterface {
             return (merged != null && !merged.isEmpty()) ? Optional.of(merged) : Optional.empty();
         }
 
-        // Base term missing: merge segments #0, #1, ...
-        PositionListSoA mergedSoA = null;
-        int segmentNum = 0;
-        boolean segmentFoundInLoop = false;
-
-        while (true) {
-            String segmentKeyString = baseTerm + "#" + segmentNum;
-            byte[] segmentKeyBytes = bytes(segmentKeyString);
-            Optional<byte[]> rawSegmentData = getRaw(segmentKeyBytes);
-
-            if (rawSegmentData.isPresent()) {
-                segmentFoundInLoop = true;
-                PositionListSoA segmentSoA = PositionListSoA.deserializeWithFilters(rawSegmentData.get(), context);
-
-                if (!segmentSoA.isEmpty()) {
-                    if (mergedSoA == null) {
-                        mergedSoA = segmentSoA;
-                    } else {
-                        mergedSoA.addAll(segmentSoA);
-                    }
-                }
-            } else {
-                if (segmentNum == 0 && !segmentFoundInLoop) {
-                    return Optional.empty();
-                }
-                break;
-            }
-            segmentNum++;
-        }
-        return (mergedSoA != null && !mergedSoA.isEmpty()) ? Optional.of(mergedSoA) : Optional.empty();
+        return Optional.empty();
     }
 
     private void checkOpen() throws IndexAccessException {
