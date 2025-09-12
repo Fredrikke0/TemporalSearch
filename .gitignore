@@ -21,3 +21,4 @@ dump/
 projects/
 benchmark/
 *.csv
+__pycache__

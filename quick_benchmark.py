@@ -196,6 +196,7 @@ def main():
         for fname, bt, queries in selections:
             subdir = os.path.join(temp_root, bt, os.path.splitext(fname)[0])
             os.makedirs(subdir, exist_ok=True)
+            print(f"Running {len(queries)} queries from {fname}", flush=True)
 
             for q in queries:
                 # Build strategies to test (base plus selected variants)
@@ -206,7 +207,6 @@ def main():
 
                 safe_q_part = re.sub(r'[^a-zA-Z0-9_-]', '_', q['text'])[:30]
                 base_fp = os.path.join(subdir, f"{q['id']+1:04d}_{safe_q_part}_BASE.csv")
-
                 # Base run
                 try:
                     # Ensure base strategy
