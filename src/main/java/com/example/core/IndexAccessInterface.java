@@ -41,6 +41,14 @@ public interface IndexAccessInterface extends AutoCloseable {
     RocksIterator seek(byte[] key) throws IndexAccessException;
 
     /**
+     * Creates a new iterator positioned at or after the specified prefix, stopping at upperBoundExclusive.
+     * Implementations may ignore bounds and readahead by default.
+     */
+    default RocksIterator seekWithBounds(byte[] prefix, byte[] upperBoundExclusive, long readaheadBytes) throws IndexAccessException {
+        return seek(prefix);
+    }
+
+    /**
      * Creates a new iterator positioned at the first key in the database.
      * The caller is responsible for closing the iterator.
      *

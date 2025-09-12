@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 
 import java.util.Collections;
@@ -114,7 +116,7 @@ public class DependencyConditionExecutorTest {
 
         // Mock for the iterative path (executeVariableSearchOptimized)
         org.rocksdb.RocksIterator mockRocksIterator = org.mockito.Mockito.mock(org.rocksdb.RocksIterator.class);
-        when(mockIndex.seek(eq(govRelPrefixKey.toLowerCase().getBytes()))).thenReturn(mockRocksIterator);
+        when(mockIndex.seekWithBounds(any(), any(), anyLong())).thenReturn(mockRocksIterator);
         when(mockRocksIterator.isValid()).thenReturn(true, false); // First call true, then false
         when(mockRocksIterator.key()).thenReturn(fullKey.toLowerCase().getBytes());
         when(mockRocksIterator.value()).thenReturn(serializedPositions);
@@ -130,7 +132,7 @@ public class DependencyConditionExecutorTest {
         assertEquals(5, result.getDocumentIdAt(0));
 
         // Verify iterator was used
-        org.mockito.Mockito.verify(mockIndex).seek(eq(govRelPrefixKey.toLowerCase().getBytes()));
+        org.mockito.Mockito.verify(mockIndex).seekWithBounds(any(), any(), anyLong());
         org.mockito.Mockito.verify(mockRocksIterator, org.mockito.Mockito.atLeastOnce()).isValid();
         org.mockito.Mockito.verify(mockRocksIterator).key();
         org.mockito.Mockito.verify(mockRocksIterator).value();

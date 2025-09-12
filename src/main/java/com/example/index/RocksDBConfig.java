@@ -54,9 +54,15 @@ public class RocksDBConfig {
         LRUCache cache = new LRUCache(BLOCK_CACHE_SIZE);
         tableOptions.setBlockCache(cache);
 
-        // Bloom Filter Configuration
+        // Bloom Filter Configuration (+ partitioned index/filters)
         org.rocksdb.Filter bloomFilter = new org.rocksdb.BloomFilter(BLOOM_FILTER_BITS_PER_KEY, BLOOM_FILTER_USE_BLOCK_BASED_BUILDER);
         tableOptions.setFilterPolicy(bloomFilter);
+        tableOptions.setPartitionFilters(true);
+        tableOptions.setIndexType(org.rocksdb.IndexType.kTwoLevelIndexSearch);
+        tableOptions.setPinL0FilterAndIndexBlocksInCache(true);
+        tableOptions.setCacheIndexAndFilterBlocks(true);
+        tableOptions.setCacheIndexAndFilterBlocksWithHighPriority(true);
+        tableOptions.setPinTopLevelIndexAndFilter(true);
 
         options.setTableFormatConfig(tableOptions);
 

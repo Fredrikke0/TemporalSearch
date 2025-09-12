@@ -145,12 +145,31 @@ public class IndexAccess implements IndexAccessInterface {
     @Override
     public RocksIterator seek(byte[] key) throws IndexAccessException {
         checkOpen();
-        RocksIterator iterator = db.newIterator();
+        org.rocksdb.ReadOptions ro = new org.rocksdb.ReadOptions();
+        RocksIterator iterator = db.newIterator(ro);
         if (key != null) {
             iterator.seek(key);
         } else {
             iterator.seekToFirst();
         }
+        return iterator;
+    }
+
+    /**
+     * Creates a new iterator positioned at or after the specified prefix and bounded by an upper bound.
+     * Optionally sets a readahead size for sequential scans.
+     */
+    public RocksIterator seekWithBounds(byte[] prefix, byte[] upperBoundExclusive, long readaheadBytes) throws IndexAccessException {
+        checkOpen();
+        org.rocksdb.ReadOptions ro = new org.rocksdb.ReadOptions();
+        if (upperBoundExclusive != null) {
+            ro.setIterateUpperBound(new org.rocksdb.Slice(upperBoundExclusive));
+        }
+        if (readaheadBytes > 0) {
+            ro.setReadaheadSize(readaheadBytes);
+        }
+        RocksIterator iterator = db.newIterator(ro);
+        iterator.seek(prefix);
         return iterator;
     }
 
@@ -261,23 +280,48 @@ public class IndexAccess implements IndexAccessInterface {
         // If base term exists, merge base + #1, #2, ...
         if (rawBaseData.isPresent()) {
             PositionListSoA merged = PositionListSoA.deserializeWithFilters(rawBaseData.get(), context, requirements);
-            int seg = 1;
-            while (true) {
-                String segKey = baseTerm + "#" + seg;
-                Optional<byte[]> rawSeg = getRaw(bytes(segKey));
-                if (rawSeg.isPresent()) {
-                    PositionListSoA segSoA = PositionListSoA.deserializeWithFilters(rawSeg.get(), context, requirements);
-                    if (!segSoA.isEmpty()) {
-                        if (merged == null || merged.isEmpty()) {
-                            merged = segSoA;
-                        } else {
-                            merged.addAll(segSoA);
+
+            // Batch segment fetch using MultiGet (segments are contiguous: #1, #2, ...)
+            final int batchSize = 16;
+            int nextSeg = 1;
+            try {
+                while (true) {
+                    java.util.ArrayList<byte[]> keys = new java.util.ArrayList<>(batchSize);
+                    for (int i = 0; i < batchSize; i++) {
+                        String segKey = baseTerm + "#" + (nextSeg + i);
+                        keys.add(bytes(segKey));
+                    }
+                    java.util.List<byte[]> values = db.multiGetAsList(keys);
+
+                    boolean anyFoundInBatch = false;
+                    for (int i = 0; i < values.size(); i++) {
+                        byte[] v = values.get(i);
+                        if (v == null) {
+                            // First miss implies no further segments (contiguous numbering)
+                            return (merged != null && !merged.isEmpty()) ? Optional.of(merged) : Optional.empty();
+                        }
+                        anyFoundInBatch = true;
+                        PositionListSoA segSoA = PositionListSoA.deserializeWithFilters(v, context, requirements);
+                        if (!segSoA.isEmpty()) {
+                            if (merged == null || merged.isEmpty()) {
+                                merged = segSoA;
+                            } else {
+                                merged.addAll(segSoA);
+                            }
                         }
                     }
-                    seg++;
-                } else {
-                    break;
+                    if (!anyFoundInBatch) {
+                        break;
+                    }
+                    nextSeg += batchSize;
                 }
+            } catch (org.rocksdb.RocksDBException e) {
+                throw new IndexAccessException(
+                    "MultiGet failed during merged segment fetch: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.READ_ERROR,
+                    e
+                );
             }
             return (merged != null && !merged.isEmpty()) ? Optional.of(merged) : Optional.empty();
         }

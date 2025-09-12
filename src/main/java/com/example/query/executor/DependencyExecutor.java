@@ -286,8 +286,12 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
         if (prefixBuilder.length() > 0) {
             String prefix = prefixBuilder.toString();
-            logger.debug("Using prefix seek for RocksIterator: {}", prefix);
-            return index.seek(prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            logger.debug("Using bounded prefix seek for RocksIterator: {}", prefix);
+            byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
+            upperBound[upperBound.length - 1] = (byte)0xFF; // exclusive upper bound beyond all keys with the prefix
+            // Modest readahead for sequential scan of a prefix range
+            return index.seekWithBounds(prefixBytes, upperBound, 256 * 1024);
         } else {
             logger.debug("No specific prefix possible (due to wildcards or missing governor), creating RocksIterator from first.");
             return index.iterateFromFirst();

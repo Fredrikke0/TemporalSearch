@@ -216,8 +216,11 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         logger.debug("Executing prefix search for: {} (populating QueryResultSoA), FilteringContext isPresent: {}", prefix, context.isPresent());
         int originalConceptualRowIdCounter = conceptualRowIdCounter;
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length);
+        // naive upper bound increment: assumes last byte can be incremented; safe since keys are UTF-8 of lowercase + delimiter
+        upperBound[upperBound.length - 1]++;
 
-        try (RocksIterator iterator = index.seek(prefixBytes)) {
+        try (RocksIterator iterator = index.seekWithBounds(prefixBytes, upperBound, 256 * 1024)) {
             final java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger(conceptualRowIdCounter);
             ExecutorIndexUtils.iterateGroupedByBase(iterator, prefix, (baseKey, blobs) -> {
                 Optional<PositionListSoA> mergedOpt = ExecutorIndexUtils.mergeAndFilter(blobs, context, requirements);
@@ -338,15 +341,5 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             }
             return conceptualRowIdCounter;
         }
-    }
-
-    private String stripSegmentSuffix(String key) {
-        int hashPos = key.lastIndexOf('#');
-        if (hashPos <= 0 || hashPos == key.length() - 1) return key;
-        for (int i = hashPos + 1; i < key.length(); i++) {
-            char c = key.charAt(i);
-            if (c < '0' || c > '9') return key;
-        }
-        return key.substring(0, hashPos);
     }
 }
