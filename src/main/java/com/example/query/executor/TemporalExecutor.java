@@ -468,14 +468,16 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
             // Calculate iteration range based on the temporal condition
             IterationRange range = calculateIterationRange(condition, type, queryStartDateTime, queryEndDateTime);
 
-            try (RocksIterator iterator = dateIndex.iterateFromFirst()) {
-                // Position iterator at the start of our range
+            try (RocksIterator iterator = (range.startKey() != null || range.endKey() != null)
+                    ? dateIndex.seekWithBounds(
+                        (range.startKey() != null ? range.startKey() : "").getBytes(StandardCharsets.UTF_8),
+                        (range.endKey() != null ? range.endKey() : null) != null ? range.endKey().getBytes(StandardCharsets.UTF_8) : null,
+                        256 * 1024)
+                    : dateIndex.iterateFromFirst()) {
                 if (range.startKey() != null) {
-                    iterator.seek(range.startKey().getBytes(StandardCharsets.UTF_8));
-                    strategyLogger.debug("NaiveTemporalStrategy: Seeking to start key: {}", range.startKey());
+                    strategyLogger.debug("NaiveTemporalStrategy: Bounded seek from: {} to < {}", range.startKey(), range.endKey());
                 } else {
-                    iterator.seekToFirst();
-                    strategyLogger.debug("NaiveTemporalStrategy: No start key, seeking to first entry");
+                    strategyLogger.debug("NaiveTemporalStrategy: Unbounded full scan (no start/end)");
                 }
 
                 int keysProcessed = 0;
@@ -485,10 +487,8 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     String currentKey = new String(iterator.key(), StandardCharsets.UTF_8);
 
                     // Check if we've exceeded our range (endKey is exclusive)
-                    if (range.endKey() != null && currentKey.compareTo(range.endKey()) >= 0) {
-                        strategyLogger.debug("NaiveTemporalStrategy: Stopping scan. Key '{}' is at or beyond the exclusive end of range '{}'", currentKey, range.endKey());
-                        break;
-                    }
+                    // iterateUpperBound will bound the iterator; keep check as safety when using unbounded iterator
+                    if (range.endKey() != null && currentKey.compareTo(range.endKey()) >= 0) break;
 
                     keysProcessed++;
                     LocalDate entryDate;

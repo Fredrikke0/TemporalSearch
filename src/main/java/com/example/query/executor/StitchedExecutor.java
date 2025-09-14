@@ -138,8 +138,10 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                 logger.debug("Performing prefix search in stitch index '{}' with prefix: '{}', context isPresent: {}",
                            stitchIndexName, searchPrefix, context.isPresent());
                 byte[] prefixBytes = searchPrefix.getBytes(StandardCharsets.UTF_8);
+                byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
+                upperBound[upperBound.length - 1] = (byte)0xFF;
 
-                try (RocksIterator iterator = stitchIndex.seek(prefixBytes)) {
+                try (RocksIterator iterator = stitchIndex.seekWithBounds(prefixBytes, upperBound, 256 * 1024)) {
                     int keysExamined = 0;
                     while (iterator.isValid()) {
                         keysExamined++;

@@ -216,9 +216,8 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         logger.debug("Executing prefix search for: {} (populating QueryResultSoA), FilteringContext isPresent: {}", prefix, context.isPresent());
         int originalConceptualRowIdCounter = conceptualRowIdCounter;
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length);
-        // naive upper bound increment: assumes last byte can be incremented; safe since keys are UTF-8 of lowercase + delimiter
-        upperBound[upperBound.length - 1]++;
+        byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
+        upperBound[upperBound.length - 1] = (byte) 0xFF; // exclusive bound covering the prefix range
 
         try (RocksIterator iterator = index.seekWithBounds(prefixBytes, upperBound, 256 * 1024)) {
             final java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger(conceptualRowIdCounter);
