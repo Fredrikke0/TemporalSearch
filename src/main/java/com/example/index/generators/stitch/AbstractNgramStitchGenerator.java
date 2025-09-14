@@ -71,6 +71,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             String ngramKey,
             String annotationKeyComponent,
             int specificValueSynonymId,
+            String specificValueKeyComponent,
             int annotationBeginChar,
             int annotationEndChar
     ) implements IndexEntry {
@@ -85,7 +86,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         public int getEndChar() { return this.ngramEndChar; }
 
         public String value() {
-            return ngramKey + IndexAccessInterface.DELIMITER + annotationKeyComponent;
+            return ngramKey + IndexAccessInterface.DELIMITER + annotationKeyComponent + IndexAccessInterface.DELIMITER + specificValueKeyComponent;
         }
 
         public long getAnnotationId() {
@@ -194,6 +195,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
 
         for (AnnotationData annotation : annotations) {
             int specificValueId = -1;
+            String specificValueKeyComponent;
             if (requiresSynonymIdForAnnotationValue()) {
                 try {
                     specificValueId = synonymManager.getId(annotation.specificValueForSynonym());
@@ -205,11 +207,19 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
                     logger.error("RocksDB error getting ID for specific value synonym '{}' (index {}): {}", annotation.specificValueForSynonym(), getIndexName(), e.getMessage(), e);
                     continue;
                 }
+                specificValueKeyComponent = Integer.toString(specificValueId);
             } else {
                  logger.trace("Synonym ID lookup skipped for specific value from AnnotationData ('{}') as per requiresSynonymIdForAnnotationValue() for index type {}. NgramStitchEntry will use specificValueId: {}", annotation.specificValueForSynonym(), getIndexName(), specificValueId);
+                // For DATE stitches, store the date string as the key's third segment
+                specificValueKeyComponent = annotation.specificValueForSynonym();
             }
 
             List<NgramData> ngramsInSentence = ngramsBySentence.getOrDefault(annotation.sentenceId(), Collections.emptyList());
+            // Decide middle segment of key: for value-keyed stitches that do not use synonym IDs (e.g., DATE),
+            // force the annotation type name as the second segment for uniformity.
+            final String middleKeyComponent = requiresSynonymIdForAnnotationValue()
+                    ? annotation.annotationKeyComponent()
+                    : getManagedAnnotationType().name();
             for (NgramData ngram : ngramsInSentence) {
                 entries.add(new NgramStitchEntry(
                         documentId,
@@ -217,8 +227,9 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
                         ngram.beginChar(),
                         ngram.endChar(),
                         ngram.ngramKey(),
-                        annotation.annotationKeyComponent(),
+                        middleKeyComponent,
                         specificValueId,
+                        specificValueKeyComponent,
                         annotation.beginChar(),
                         annotation.endChar()
                 ));
@@ -327,12 +338,12 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             }
 
             PositionListSoA pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionListSoA());
+            // Value-keyed postings: do not populate synonymIds for stitches
             pl.add(
                 entry.documentId(),
                 entry.sentenceId(),
                 entry.ngramBeginChar(),
-                entry.ngramEndChar(),
-                entry.specificValueSynonymId()
+                entry.ngramEndChar()
             );
         }
 

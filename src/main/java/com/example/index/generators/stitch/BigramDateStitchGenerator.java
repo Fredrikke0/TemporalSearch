@@ -81,8 +81,8 @@ public final class BigramDateStitchGenerator extends AbstractNgramStitchGenerato
                         rs.getInt("sentence_id"),
                         rs.getInt("begin_char"),
                         rs.getInt("end_char"),
-                        dateKeyYYYYMMDD, // annotationKeyComponent
-                        dateKeyYYYYMMDD  // specificValueForSynonym (consistent, though not used for synonym lookup)
+                        AnnotationType.DATE.name(), // annotationKeyComponent now fixed to DATE
+                        dateKeyYYYYMMDD              // specificValueForSynonym
                     ));
                 }
             }

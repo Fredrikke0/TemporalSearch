@@ -134,7 +134,8 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
 
         try {
             if (temporalConditionDetails != null) {
-                String searchPrefix = ngramTerm + DELIMITER_CHAR;
+                // DATE stitches are value-keyed: ngram#DATE#yyyyMMdd
+                String searchPrefix = ngramTerm + DELIMITER_CHAR + "DATE" + DELIMITER_CHAR;
                 logger.debug("Performing prefix search in stitch index '{}' with prefix: '{}', context isPresent: {}",
                            stitchIndexName, searchPrefix, context.isPresent());
                 byte[] prefixBytes = searchPrefix.getBytes(StandardCharsets.UTF_8);
@@ -222,122 +223,108 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                     logger.debug("Prefix search completed for temporal stitch. Examined {} keys for prefix '{}'", keysExamined, searchPrefix);
                 }
             } else {
-                String stitchLookupKey = ngramTerm + DELIMITER_CHAR + specificAnnotationTypeForLookup;
-                logger.debug("Looking up in stitch index '{}' with key: '{}', context isPresent: {}, annotationValueTypeToStore: {}",
-                             stitchIndexName, stitchLookupKey, context.isPresent(), annotationValueTypeToStore);
+                // Value-keyed stitches: keys are ngram#TYPE#VALUE_COMPONENT
+                String basePrefix = ngramTerm + DELIMITER_CHAR + specificAnnotationTypeForLookup + DELIMITER_CHAR;
+                logger.debug("Stitch value-keyed search in '{}' with base prefix: '{}'", stitchIndexName, basePrefix);
 
+                // Specific targets → direct exact-key fetches
                 Set<Integer> targetAnnotationValueIds = new HashSet<>();
-                List<String> specificAnnotationValuesFromCondition = new ArrayList<>();
+                List<String> originalTargets = new ArrayList<>();
+                boolean hasSpecificTargets = false;
 
                 if (annotationCondition instanceof Ner nerValCond && !nerValCond.targets().isEmpty()) {
-                    for (String target : nerValCond.targets()) {
-                        if (target != null && !target.isBlank()) {
-                            specificAnnotationValuesFromCondition.add(target);
-                            try {
-                                int targetId = synonymManager.getId(target.toLowerCase());
-                                targetAnnotationValueIds.add(targetId);
-                                logger.trace("Stitch with specific NER entity: '{}', targetId: {}", target, targetId);
-                            } catch (Exception e) {
-                                logger.warn("Failed to get synonym ID for specific NER entity value '{}' in StitchedExecutor. This entity is unknown or DB error. Skipping this target.", target, e);
-                            }
-                        }
-                    }
-
-                    if (targetAnnotationValueIds.isEmpty()) {
-                        logger.warn("No valid synonym IDs found for NER targets {} in StitchedExecutor. Returning empty for this stitch.", nerValCond.targets());
-                        return new QueryResultSoA(granularity, granularitySize, requirements);
+                    hasSpecificTargets = true;
+                    for (String t : nerValCond.targets()) {
+                        if (t == null || t.isBlank()) continue;
+                        originalTargets.add(t);
+                        try { targetAnnotationValueIds.add(synonymManager.getId(t.toLowerCase())); } catch (Exception ignore) {}
                     }
                 } else if (annotationCondition instanceof Pos posCond && posCond.term() != null && !posCond.term().isBlank()) {
-                    String specificPosValue = posCond.term();
-                    specificAnnotationValuesFromCondition.add(specificPosValue);
-                    try {
-                        int targetId = synonymManager.getId(specificPosValue.toLowerCase());
-                        targetAnnotationValueIds.add(targetId);
-                        logger.trace("Stitch with specific POS term: '{}' (for POS tag {}), targetId: {}",
-                                     specificPosValue, posCond.posTag().toUpperCase(), targetId);
-                    } catch (Exception e) {
-                        logger.warn("Failed to get synonym ID for specific POS term value '{}' (for POS tag {}) in StitchedExecutor. This term is unknown or DB error. Returning empty for this stitch.",
-                                    specificPosValue, posCond.posTag().toUpperCase(), e);
-                        return new QueryResultSoA(granularity, granularitySize, requirements);
-                    }
+                    hasSpecificTargets = true;
+                    originalTargets.add(posCond.term());
+                    try { targetAnnotationValueIds.add(synonymManager.getId(posCond.term().toLowerCase())); } catch (Exception ignore) {}
                 }
 
-                Optional<PositionListSoA> mergedPositionsOpt = stitchIndex.getMergedPositions(stitchLookupKey, context, requirements);
+                if (hasSpecificTargets) {
+                    for (Integer id : targetAnnotationValueIds) {
+                        String exactKey = basePrefix + id;
+                        Optional<PositionListSoA> mergedPositionsOpt = stitchIndex.getMergedPositions(exactKey, context, requirements);
+                        if (mergedPositionsOpt.isEmpty() || mergedPositionsOpt.get().isEmpty()) continue;
+                        PositionListSoA positions = mergedPositionsOpt.get();
+                        for (int i = 0; i < positions.getNumPositions(); i++) {
+                            int docId = positions.getDocIdAt(i);
+                            int sentenceId = positions.getSentenceIdAt(i);
+                            int termBeginChar = positions.getBeginCharAt(i);
+                            int termEndChar = positions.getEndCharAt(i);
+                            int conceptualRowId = resultSoA.getNextConceptualRowId();
+                            resultSoA.add(humanReadableNgramTerm, ValueType.TERM, containsCondition.variableName(), docId,
+                                          requirements.needsSentenceId ? sentenceId : -1,
+                                          requirements.needsPositions ? termBeginChar : -1,
+                                          requirements.needsPositions ? termEndChar : -1,
+                                          -1, conceptualRowId);
 
-                if (mergedPositionsOpt.isPresent() && !mergedPositionsOpt.get().isEmpty()) {
-                    PositionListSoA positions = mergedPositionsOpt.get();
-                    logger.debug("Found {} potential co-occurrences for key '{}' in stitch index '{}' after context filtering (merged segments).",
-                                 positions.getNumPositions(), stitchLookupKey, stitchIndexName);
-
-                    for (int i = 0; i < positions.getNumPositions(); i++) {
-                        int docId = positions.getDocIdAt(i);
-                        int sentenceId = positions.getSentenceIdAt(i);
-                        int termBeginChar = positions.getBeginCharAt(i);
-                        int termEndChar = positions.getEndCharAt(i);
-                        int currentAnnotationSynonymId = positions.getSynonymIdAt(i);
-                        Object annotationValueForSoA;
-
-                        if (!targetAnnotationValueIds.isEmpty()) {
-                            if (targetAnnotationValueIds.contains(currentAnnotationSynonymId)) {
-                                // Find the original annotation value that matches this synonym ID
-                                annotationValueForSoA = null;
-                                for (String originalValue : specificAnnotationValuesFromCondition) {
-                                    try {
-                                        int originalId = synonymManager.getId(originalValue.toLowerCase());
-                                        if (originalId == currentAnnotationSynonymId) {
-                                            annotationValueForSoA = originalValue;
-                                            break;
-                                        }
-                                    } catch (Exception e) {
-                                        // Continue looking
-                                    }
-                                }
-                                if (annotationValueForSoA == null) {
-                                    annotationValueForSoA = specificAnnotationValuesFromCondition.get(0); // Fallback
-                                }
-                            } else {
-                                logger.trace("Skipping co-occurrence: current annotation ID {} not in target IDs {} (for specific values {}) for stitch key '{}'",
-                                             currentAnnotationSynonymId, targetAnnotationValueIds, specificAnnotationValuesFromCondition, stitchLookupKey);
-                                continue;
-                            }
-                        } else {
-                            annotationValueForSoA = currentAnnotationSynonymId;
-                        }
-
-                        int conceptualRowId = resultSoA.getNextConceptualRowId();
-
-                        resultSoA.add(
-                            humanReadableNgramTerm,
-                            ValueType.TERM,
-                            containsCondition.variableName(),
-                            docId,
-                            requirements.needsSentenceId ? sentenceId : -1,
-                            requirements.needsPositions ? termBeginChar : -1,
-                            requirements.needsPositions ? termEndChar : -1,
-                            -1,
-                            conceptualRowId
-                        );
-
-                        if (!annotationVarName.isBlank()) {
-                            if (annotationValueForSoA != null) {
-                                resultSoA.add(
-                                    annotationValueForSoA,
-                                    annotationValueTypeToStore,
-                                    annotationVarName,
-                                    docId,
-                                    requirements.needsSentenceId ? sentenceId : -1,
-                                    -1, -1,
-                                    requirements.needsSynonymIds ? currentAnnotationSynonymId : -1,
-                                    conceptualRowId
-                                );
-                            } else {
-                                logger.warn("annotationValueForSoA is null but annotationVarName ('{}') is set for stitch key '{}'. Skipping annotation binding for conceptualRowId {}.",
-                                            annotationVarName, stitchLookupKey, conceptualRowId);
+                            if (!annotationVarName.isBlank()) {
+                                Object boundVal = originalTargets.stream().filter(v -> {
+                                    try { return synonymManager.getId(v.toLowerCase()) == id; } catch (Exception e) { return false; }
+                                }).findFirst().orElse(originalTargets.get(0));
+                                resultSoA.add(boundVal, annotationValueTypeToStore, annotationVarName, docId,
+                                              requirements.needsSentenceId ? sentenceId : -1,
+                                              -1, -1, id, conceptualRowId);
                             }
                         }
                     }
                 } else {
-                     logger.debug("No entry found for key '{}' in stitch index '{}' (including segments) or positions were empty after filtering.", stitchLookupKey, stitchIndexName);
+                    // Any-value → prefix scan and group by base key (without segment suffix)
+                    byte[] prefixBytes = basePrefix.getBytes(StandardCharsets.UTF_8);
+                    byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
+                    upperBound[upperBound.length - 1] = (byte)0xFF;
+
+                    final String annotationVarNameFinal = annotationVarName;
+                    try (RocksIterator iterator = stitchIndex.seekWithBounds(prefixBytes, upperBound, 256 * 1024)) {
+                        int groups = ExecutorIndexUtils.iterateGroupedByBase(iterator, basePrefix, (baseKey, blobs) -> {
+                            Optional<PositionListSoA> mergedOpt = ExecutorIndexUtils.mergeAndFilter(blobs, context, requirements);
+                            if (mergedOpt.isEmpty()) return;
+                            PositionListSoA positions = mergedOpt.get();
+
+                            int lastHash = baseKey.lastIndexOf(DELIMITER_CHAR);
+                            String valueComponent = (lastHash >= 0 && lastHash < baseKey.length() - 1) ? baseKey.substring(lastHash + 1) : "";
+
+                            for (int i = 0; i < positions.getNumPositions(); i++) {
+                                int docId = positions.getDocIdAt(i);
+                                int sentenceId = positions.getSentenceIdAt(i);
+                                int termBeginChar = positions.getBeginCharAt(i);
+                                int termEndChar = positions.getEndCharAt(i);
+                                int conceptualRowId = resultSoA.getNextConceptualRowId();
+
+                                resultSoA.add(humanReadableNgramTerm, ValueType.TERM, containsCondition.variableName(), docId,
+                                              requirements.needsSentenceId ? sentenceId : -1,
+                                              requirements.needsPositions ? termBeginChar : -1,
+                                              requirements.needsPositions ? termEndChar : -1,
+                                              -1, conceptualRowId);
+
+                                if (!annotationVarNameFinal.isBlank()) {
+                                    Object annotationVal;
+                                    try {
+                                        int synId = Integer.parseInt(valueComponent);
+                                        annotationVal = synonymManager.getTerm(synId).orElse(valueComponent);
+                                        resultSoA.add(annotationVal, annotationValueTypeToStore, annotationVarNameFinal, docId,
+                                                      requirements.needsSentenceId ? sentenceId : -1,
+                                                      -1, -1, synId, conceptualRowId);
+                                    } catch (NumberFormatException e) {
+                                        // Should not happen for NER/POS; if it does, store raw
+                                        resultSoA.add(valueComponent, annotationValueTypeToStore, annotationVarNameFinal, docId,
+                                                      requirements.needsSentenceId ? sentenceId : -1,
+                                                      -1, -1, -1, conceptualRowId);
+                                    } catch (Exception e) {
+                                        resultSoA.add(valueComponent, annotationValueTypeToStore, annotationVarNameFinal, docId,
+                                                      requirements.needsSentenceId ? sentenceId : -1,
+                                                      -1, -1, -1, conceptualRowId);
+                                    }
+                                }
+                            }
+                        });
+                        logger.debug("Grouped prefix scan completed for stitch any-value. Groups processed {} for prefix '{}'", groups, basePrefix);
+                    }
                 }
             }
         } catch (IndexAccessException e) {
