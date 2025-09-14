@@ -136,41 +136,25 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
 
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
 
-        assertTrue(result.containsKey("PERSON"), "Should contain PERSON entity type key");
-        assertEquals(1, result.get("PERSON").size(), "Should be one PositionListSoA for PERSON type");
-        PositionListSoA personPositions = result.get("PERSON").get(0);
-        assertEquals(1, personPositions.getNumPositions(), "Should have one position in total for PERSON type");
         int johnSmithId = SynonymManager.getId("john smith");
-        assertEquals(johnSmithId, personPositions.getSynonymIdAt(0), "SynonymId should match ID for 'john smith'");
-
-        assertTrue(result.containsKey("ORGANIZATION"), "Should contain ORGANIZATION entity type key");
-        assertEquals(1, result.get("ORGANIZATION").size(), "Should be one PositionListSoA for ORGANIZATION type");
-        PositionListSoA orgPositions = result.get("ORGANIZATION").get(0);
-        assertEquals(2, orgPositions.getNumPositions(), "Should have two positions in total for ORGANIZATION type (Google, Microsoft)");
+        String personKey = "PERSON" + IndexGenerator.DELIMITER + johnSmithId;
+        assertTrue(result.containsKey(personKey), "Should contain PERSON\\0synId key for 'john smith'");
+        PositionListSoA personPositions = result.get(personKey).get(0);
+        assertEquals(1, personPositions.getNumPositions(), "Should have one position for PERSON 'john smith'");
 
         int googleId = SynonymManager.getId("google");
         int microsoftId = SynonymManager.getId("microsoft");
+        String orgKeyGoogle = "ORGANIZATION" + IndexGenerator.DELIMITER + googleId;
+        String orgKeyMicrosoft = "ORGANIZATION" + IndexGenerator.DELIMITER + microsoftId;
+        assertTrue(result.containsKey(orgKeyGoogle), "Should contain ORGANIZATION\\0synId for 'google'");
+        assertTrue(result.containsKey(orgKeyMicrosoft), "Should contain ORGANIZATION\\0synId for 'microsoft'");
+        assertEquals(1, result.get(orgKeyGoogle).get(0).getNumPositions(), "Google should have one position");
+        assertEquals(1, result.get(orgKeyMicrosoft).get(0).getNumPositions(), "Microsoft should have one position");
 
-        List<Integer> orgSynonymIds = orgPositions.getSynonymIds().intStream().boxed().collect(Collectors.toList());
-        assertTrue(orgSynonymIds.contains(googleId), "Synonym ID for 'google' should be present in ORGANIZATION positions");
-        assertTrue(orgSynonymIds.contains(microsoftId), "Synonym ID for 'microsoft' should be present in ORGANIZATION positions");
-
-        long googleCount = IntStream.range(0, orgPositions.getNumPositions())
-                                  .filter(i -> orgPositions.getSynonymIdAt(i) == googleId)
-                                  .count();
-        assertEquals(1, googleCount, "Should be one position entry for Google");
-
-        long microsoftCount = IntStream.range(0, orgPositions.getNumPositions())
-                                   .filter(i -> orgPositions.getSynonymIdAt(i) == microsoftId)
-                                   .count();
-        assertEquals(1, microsoftCount, "Should be one position entry for Microsoft");
-
-        assertTrue(result.containsKey("LOCATION"), "Should contain LOCATION entity type key");
-        assertEquals(1, result.get("LOCATION").size(), "Should be one PositionListSoA for LOCATION type");
-        PositionListSoA locPositions = result.get("LOCATION").get(0);
-        assertEquals(1, locPositions.getNumPositions(), "Should have one position in total for LOCATION type");
         int mountainViewId = SynonymManager.getId("mountain view");
-        assertEquals(mountainViewId, locPositions.getSynonymIdAt(0), "SynonymId should match ID for 'mountain view'");
+        String locKey = "LOCATION" + IndexGenerator.DELIMITER + mountainViewId;
+        assertTrue(result.containsKey(locKey), "Should contain LOCATION\\0synId for 'mountain view'");
+        assertEquals(1, result.get(locKey).get(0).getNumPositions(), "Should have one position for LOCATION 'mountain view'");
     }
 
     @Test
@@ -207,7 +191,8 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         assertEquals(4, entries.size(), "Should still have 4 non-DATE entities fetched by fetchBatch (original test data)");
 
         ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
-        assertFalse(result.containsKey("DATE"), "Should not contain DATE entity type key from NerIndexGenerator");
+        boolean hasDateKey = result.keySet().stream().anyMatch(k -> k.startsWith("DATE" + IndexGenerator.DELIMITER));
+        assertFalse(hasDateKey, "Should not contain DATE-prefixed keys from NerIndexGenerator");
     }
 
     @Test
@@ -249,16 +234,11 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
 
         var result = generator.processBatch(entries);
 
-        assertTrue(result.containsKey("ORGANIZATION"), "Should contain ORGANIZATION entity type key for apple/APPLE");
-        assertEquals(1, result.get("ORGANIZATION").size(), "Should be one PositionListSoA for ORGANIZATION type");
-        PositionListSoA applePl = result.get("ORGANIZATION").get(0);
-
-        assertEquals(2, applePl.getNumPositions(), "Should have two positions for normalized ORGANIZATION entity (apple)");
-
         int appleId = SynonymManager.getId("apple");
-        boolean allMatchAppleId = IntStream.range(0, applePl.getNumPositions())
-                                           .allMatch(i -> applePl.getSynonymIdAt(i) == appleId);
-        assertTrue(allMatchAppleId, "All positions in the list should have synonymId for 'apple'");
+        String appleKey = "ORGANIZATION" + IndexGenerator.DELIMITER + appleId;
+        assertTrue(result.containsKey(appleKey), "Should contain ORGANIZATION\\0appleId key");
+        PositionListSoA applePl = result.get(appleKey).get(0);
+        assertEquals(2, applePl.getNumPositions(), "Should have two positions for ORGANIZATION apple");
     }
 
     @Test
@@ -305,18 +285,13 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
 
         var result = generator.processBatch(entries);
 
-        String nzArmyKey = "ORGANIZATION";
-        assertTrue(result.containsKey(nzArmyKey), "Should contain ORGANIZATION key for multi-token");
-        assertEquals(1, result.get(nzArmyKey).size(), "Should be one PositionListSoA for ORGANIZATION type");
-
-        PositionListSoA nzArmyPositions = result.get(nzArmyKey).get(0);
-
-        assertEquals(1, nzArmyPositions.getNumPositions(), "Should have one position entry for the combined 'New Zealand Army Corps'");
-
         int nzArmyId = SynonymManager.getId("new zealand army corps");
-        Position pos = nzArmyPositions.getPositionAt(0);
+        String nzKey = "ORGANIZATION" + IndexGenerator.DELIMITER + nzArmyId;
+        assertTrue(result.containsKey(nzKey), "Should contain ORGANIZATION key for multi-token");
+        assertEquals(1, result.get(nzKey).get(0).getNumPositions(), "Should have one position entry for the combined 'New Zealand Army Corps'");
 
-        assertEquals(nzArmyId, nzArmyPositions.getSynonymIdAt(0), "SynonymId should match ID for 'new zealand army corps'");
+        PositionListSoA nzArmyPositions = result.get(nzKey).get(0);
+        Position pos = nzArmyPositions.getPositionAt(0);
         assertEquals(0, pos.getBeginPosition(), "Begin char for 'New Zealand Army Corps' should be 0");
         assertEquals(22, pos.getEndPosition(), "End char for 'New Zealand Army Corps' should be 22");
     }

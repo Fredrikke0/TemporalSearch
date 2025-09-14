@@ -177,18 +177,19 @@ public class QueryEndToEndTest {
 
         mockNerIndex = new MockIndexAccess();
 
-        // --- New NER Mock Data Population ---
+        // --- NER Mock Data Population (value-keyed) ---
         Map<String, PositionListSoA> nerDataMap = new HashMap<>();
 
-        // Helper to add NER test data to the map
-        NerDataAdder addNerData =
-            (type, term, docId, sentId, begin, end) -> {
-            int synId = getOrAssignNerSynId(term); // Uses helper, mocks staticMockSynonymManager
-            PositionListSoA soa = nerDataMap.computeIfAbsent(type, k -> new PositionListSoA());
-            soa.add(docId, sentId, begin, end, synId);
+        // Helper to add NER test data to the map with value-keyed keys TYPE<DELIM>synId
+        NerDataAdder addNerData = (type, term, docId, sentId, begin, end) -> {
+            int synId = getOrAssignNerSynId(term);
+            String key = type + IndexAccessInterface.DELIMITER + synId;
+            PositionListSoA soa = nerDataMap.computeIfAbsent(key, k -> new PositionListSoA());
+            // Value-keyed postings: store only positions, not synonymIds
+            soa.add(docId, sentId, begin, end);
         };
 
-        // Old mockNerIndex.addTestData calls, converted:
+        // Populate NER entries
         addNerData.add("PERSON", "albert einstein", 6, 1, 0, 15);
         addNerData.add("PERSON", "marie curie", 6, 2, 20, 30);
         addNerData.add("PERSON", "isaac newton", 7, 1, 5, 17);
@@ -204,7 +205,7 @@ public class QueryEndToEndTest {
         for (Map.Entry<String, PositionListSoA> entry : nerDataMap.entrySet()) {
             mockNerIndex.put(entry.getKey().getBytes(StandardCharsets.UTF_8), entry.getValue().serializeToCompositeBlob());
         }
-        // --- End New NER Mock Data Population ---
+        // --- End NER Mock Data Population ---
 
         mockNerDateIndex = new MockIndexAccess("ner_date");
         // Add test data sorted by document ID (just like real indexes would be)

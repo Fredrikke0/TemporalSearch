@@ -1,14 +1,12 @@
 package com.example.query.executor;
 
 import java.io.IOException;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.rocksdb.RocksIterator;
 
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
@@ -122,46 +120,42 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         String normalizedTargetTerm = termFromQuery.toLowerCase();
         int targetSynonymId = synonymManager.getId(normalizedTargetTerm);
 
-        logger.debug("executeSpecificTermSearch: Tag='{}', TermValue='{}' (original), NormalizedTerm='{}', TargetSynonymID={}",
-            tagFromQuery, termFromQuery, normalizedTargetTerm, targetSynonymId);
+        logger.debug("executeSpecificTermSearch (value-keyed): Tag='{}', Term='{}' -> synId={}",
+            tagFromQuery, termFromQuery, targetSynonymId);
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context, requirements);
+        String key = tagFromQuery + IndexAccessInterface.DELIMITER + targetSynonymId;
+        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(key, context, requirements);
 
         if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
-            logger.debug("executeSpecificTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);
+            logger.debug("executeSpecificTermSearch: No data found for POS key '{}' after getMergedPositions (with context filtering)", key);
             return;
         }
 
         PositionListSoA positions = positionsOptional.get();
 
         if (positions.isEmpty()) {
-            logger.debug("executeSpecificTermSearch: No positions for tag '{}' after context filtering (positions.isEmpty() check).", tagFromQuery);
+            logger.debug("executeSpecificTermSearch: No positions for POS key '{}' after context filtering.", key);
             return;
         }
 
         int numPositionsTotal = positions.getNumPositions();
-        if (numPositionsTotal == 0) return; // Should be caught by positions.isEmpty() but defensive check.
-
-        int conceptualRowsAdded = 0;
+        if (numPositionsTotal == 0) return;
 
         for (int i = 0; i < numPositionsTotal; i++) {
-            if (positions.getSynonymIdAt(i) == targetSynonymId) {
-                resultSoA.add(
-                    termFromQuery,
-                    ValueType.POS_TERM,
-                    variableName,
-                    positions.getDocIdAt(i),
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    targetSynonymId,
-                    resultSoA.getNextConceptualRowId() // Each match gets a new conceptual row
-                );
-                conceptualRowsAdded++;
-            }
+            resultSoA.add(
+                termFromQuery,
+                ValueType.POS_TERM,
+                variableName,
+                positions.getDocIdAt(i),
+                requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                targetSynonymId,
+                resultSoA.getNextConceptualRowId()
+            );
         }
-        logger.debug("executeSpecificTermSearch for Tag '{}', Term '{}' added {} positions to QueryResultSoA, creating {} conceptual rows.",
-            tagFromQuery, termFromQuery, conceptualRowsAdded, conceptualRowsAdded);
+        logger.debug("executeSpecificTermSearch (value-keyed) for Tag '{}', synId '{}' added {} positions.",
+            tagFromQuery, targetSynonymId, numPositionsTotal);
     }
 
     private void executeTagOnlyOrVariableTermSearch(String tagFromQuery, String variableName, IndexAccessInterface index,
@@ -169,99 +163,63 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                                                     Optional<FilteringContext> context)
             throws IOException, IndexAccessException, org.rocksdb.RocksDBException, QueryExecutionException {
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context, requirements);
+        String prefix = tagFromQuery + IndexAccessInterface.DELIMITER;
+        byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
+        upperBound[upperBound.length - 1] = (byte) 0xFF;
 
-        if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
-            logger.debug("executeTagOnlyOrVariableTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);
-            return;
-        }
+        try (RocksIterator iterator = index.seekWithBounds(prefixBytes, upperBound, 256 * 1024)) {
+            ExecutorIndexUtils.iterateGroupedByBase(iterator, prefix, (baseKey, blobs) -> {
+                // baseKey is TAG\0<synId>
+                int delimIdx = baseKey.lastIndexOf(IndexAccessInterface.DELIMITER);
+                if (delimIdx <= 0 || delimIdx == baseKey.length() - 1) return;
+                String synIdStr = baseKey.substring(delimIdx + 1);
+                int synId;
+                try { synId = Integer.parseInt(synIdStr); } catch (NumberFormatException nfe) { return; }
 
-        PositionListSoA positions = positionsOptional.get();
-        // The positions object is already filtered by the context.
+                Optional<PositionListSoA> mergedOpt = ExecutorIndexUtils.mergeAndFilter(blobs, context, requirements);
+                if (!mergedOpt.isPresent() || mergedOpt.get().isEmpty()) return;
+                PositionListSoA positions = mergedOpt.get();
 
-        if (positions.isEmpty()) { // Defensive check
-            logger.debug("executeTagOnlyOrVariableTermSearch: No positions for tag '{}' after context filtering (positions.isEmpty() check).", tagFromQuery);
-            return;
-        }
+                if (variableName != null) {
+                    String termToBind = null;
+                    try {
+                        termToBind = synonymManager.getTerm(synId).orElse(null);
+                    } catch (org.rocksdb.RocksDBException e) {
+                        termToBind = null;
+                    }
+                    if (termToBind == null) termToBind = "";
 
-        int numPositions = positions.getNumPositions();
-        logger.debug("executeTagOnlyOrVariableTermSearch: Positions found for '{}'. numPositions: {}", tagFromQuery, numPositions);
-
-        if (numPositions == 0) return;
-
-        if (variableName != null) {
-            // Collect unique synonym IDs
-            Set<Integer> uniqueSynonymIds = new HashSet<>();
-            for (int i = 0; i < numPositions; i++) {
-                uniqueSynonymIds.add(positions.getSynonymIdAt(i));
-            }
-
-            // Fetch terms in a batch
-            Map<Integer, String> resolvedTermsCache = Collections.emptyMap(); // Default to empty
-            if (!uniqueSynonymIds.isEmpty()) {
-                try {
-                    resolvedTermsCache = synonymManager.getTerms(uniqueSynonymIds);
-                    logger.debug("executeTagOnlyOrVariableTermSearch: Batch fetched {} terms for {} unique synonym IDs for POS tag '{}'.",
-                                 resolvedTermsCache.size(), uniqueSynonymIds.size(), tagFromQuery);
-                } catch (org.rocksdb.RocksDBException e) {
-                    logger.error("RocksDBException while batch fetching terms in POS variable binding for Tag '{}'", tagFromQuery, e);
-                    // Propagate as a QueryExecutionException or a more specific custom exception if desired
-                    throw new QueryExecutionException("Failed to batch fetch terms from SynonymManager for POS BIND",
-                                                    e, "POS(" + tagFromQuery + ") BIND " + variableName,
-                                                    QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+                    for (int i = 0; i < positions.getNumPositions(); i++) {
+                        resultSoA.add(
+                            termToBind,
+                            ValueType.POS_TERM,
+                            variableName,
+                            positions.getDocIdAt(i),
+                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                            synId,
+                            resultSoA.getNextConceptualRowId()
+                        );
+                    }
+                } else {
+                    // Tag-only: value is the tag itself
+                    for (int i = 0; i < positions.getNumPositions(); i++) {
+                        resultSoA.add(
+                            tagFromQuery,
+                            ValueType.POS_TAG_TYPE,
+                            null,
+                            positions.getDocIdAt(i),
+                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
+                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
+                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
+                            -1,
+                            resultSoA.getNextConceptualRowId()
+                        );
+                    }
                 }
-            }
-
-            Map<String, Integer> resolvedTermToConceptualRowId = new java.util.HashMap<>();
-            int conceptualRowsAdded = 0;
-
-            for (int i = 0; i < numPositions; i++) {
-                int currentSynonymId = positions.getSynonymIdAt(i);
-                String termToBind = resolvedTermsCache.get(currentSynonymId);
-
-                if (termToBind == null) {
-                    // This can happen if a synonym ID was in positions but not resolvable by getTerms (e.g. not in DB, cache issue)
-                    logger.warn("executeTagOnlyOrVariableTermSearch: No term found in pre-fetched cache for synonymId {} (tag: {}). Skipping.",
-                                currentSynonymId, tagFromQuery);
-                    continue;
-                }
-
-                int conceptualRowId = resultSoA.getNextConceptualRowId(); // Each match gets a new conceptual row
-
-                resultSoA.add(
-                    termToBind,
-                    ValueType.POS_TERM,
-                    variableName,
-                    positions.getDocIdAt(i),
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    currentSynonymId,
-                    conceptualRowId
-                );
-                conceptualRowsAdded++;
-            }
-            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' BIND '{}' created {} conceptual rows from {} total bindings.",
-                tagFromQuery, variableName, conceptualRowsAdded, resultSoA.size());
-
-        } else { // Tag-only search, no variable binding for the term itself
-            int conceptualRowsAdded = 0;
-            for (int i = 0; i < numPositions; i++) {
-                resultSoA.add(
-                    tagFromQuery, // Value is the tag itself
-                    ValueType.POS_TAG_TYPE,
-                    null, // No variable name for the tag value
-                    positions.getDocIdAt(i),
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    -1, // No specific synonym ID is relevant when just matching the tag
-                    resultSoA.getNextConceptualRowId() // Each match gets a new conceptual row
-                );
-                conceptualRowsAdded++;
-            }
-            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' (no BIND) added {} positions to QueryResultSoA, creating {} conceptual rows.",
-                tagFromQuery, conceptualRowsAdded, conceptualRowsAdded);
+            });
         }
     }
 }

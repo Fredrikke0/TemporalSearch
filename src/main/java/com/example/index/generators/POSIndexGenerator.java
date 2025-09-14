@@ -117,13 +117,13 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
             }
             String lowerCaseToken = token.toLowerCase();
 
-            String indexKey = posTag;
-
             try {
                 int tokenId = synonymManager.getId(lowerCaseToken);
 
+                String indexKey = posTag + IndexGenerator.DELIMITER + tokenId;
                 PositionListSoA pl = tempAggregator.computeIfAbsent(indexKey, k -> new PositionListSoA());
-                pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar(), tokenId);
+                // Value-keyed postings: do not populate synonymIds
+                pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
             } catch (RocksDBException e) {
                 logger.error("RocksDBException while getting ID for token '{}' with POS tag '{}'. Error: {}", token, posTag, e.getMessage(), e);
             }

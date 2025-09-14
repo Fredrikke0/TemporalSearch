@@ -221,12 +221,14 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         }
 
         String entityValue = String.join(" ", rawTokens).toLowerCase();
-        String indexKey = entityType.toUpperCase();
+        String normalizedType = entityType.toUpperCase();
+        int synId = synonymManager.getId(entityValue);
 
-        int entityValueId = synonymManager.getId(entityValue);
+        String indexKey = normalizedType + IndexGenerator.DELIMITER + synId;
 
         PositionListSoA pl = map.computeIfAbsent(indexKey, k -> new PositionListSoA());
-        pl.add(docId, sentId, beginChar, endChar, entityValueId);
+        // Value-keyed postings: do not populate synonymIds
+        pl.add(docId, sentId, beginChar, endChar);
     }
 
     @Override

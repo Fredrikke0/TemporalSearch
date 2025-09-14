@@ -138,27 +138,31 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
 
         String[] expectedTags = {"NOUN", "VERB", "ADJ", "DET", "ADP", "PRON", "AUX"};
         for (String tag : expectedTags) {
-            assertTrue(result.containsKey(tag), "Should contain POS tag as key: " + tag);
-            assertEquals(1, result.get(tag).size(), "Should be one PositionListSoA for tag: " + tag);
+            // Expect at least one value-keyed key for this tag
+            boolean hasAny = result.keySet().stream().anyMatch(k -> k.startsWith(tag + IndexGenerator.DELIMITER));
+            assertTrue(hasAny, "Should contain at least one value-keyed key for tag: " + tag);
         }
-
-        PositionListSoA nounPositions = result.get("NOUN").get(0);
-        assertEquals(3, nounPositions.getNumPositions(), "Should have 3 positions in total for NOUN type (fox, dog, night)");
 
         int foxId = SynonymManager.getId("fox");
         int dogId = SynonymManager.getId("dog");
         int nightId = SynonymManager.getId("night");
 
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == foxId).count(), "Count for 'fox' should be 1");
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == dogId).count(), "Count for 'dog' should be 1");
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == nightId).count(), "Count for 'night' should be 1");
+        String nounFoxKey = "NOUN" + IndexGenerator.DELIMITER + foxId;
+        String nounDogKey = "NOUN" + IndexGenerator.DELIMITER + dogId;
+        String nounNightKey = "NOUN" + IndexGenerator.DELIMITER + nightId;
 
-        PositionListSoA detPositions = result.get("DET").get(0);
-        assertEquals(2, detPositions.getNumPositions(), "Should have 2 positions in total for DET type (the, the)");
+        assertTrue(result.containsKey(nounFoxKey));
+        assertTrue(result.containsKey(nounDogKey));
+        assertTrue(result.containsKey(nounNightKey));
+
+        assertEquals(1, result.get(nounFoxKey).get(0).getNumPositions());
+        assertEquals(1, result.get(nounDogKey).get(0).getNumPositions());
+        assertEquals(1, result.get(nounNightKey).get(0).getNumPositions());
 
         int theId = SynonymManager.getId("the");
-
-        assertEquals(2, IntStream.range(0, detPositions.getNumPositions()).filter(i -> detPositions.getSynonymIdAt(i) == theId).count(), "Term 'the' (DET) should have 2 positions");
+        String detTheKey = "DET" + IndexGenerator.DELIMITER + theId;
+        assertTrue(result.containsKey(detTheKey));
+        assertEquals(2, result.get(detTheKey).get(0).getNumPositions(), "Term 'the' (DET) should have 2 positions");
     }
 
     @Test
@@ -200,26 +204,24 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
 
         var result = generator.processBatch(entries);
 
-        assertTrue(result.containsKey("NOUN"), "Result should contain key NOUN");
-        assertEquals(1, result.get("NOUN").size(), "Should be one PositionListSoA for NOUN type");
-        PositionListSoA nounPositions = result.get("NOUN").get(0);
-        assertEquals(2, nounPositions.getNumPositions(), "Should have 2 positions in total for NOUN type (test, word)");
-
         int testId = SynonymManager.getId("test");
         int wordId = SynonymManager.getId("word");
 
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == testId).count(), "Count for 'test' (NOUN) should be 1");
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == wordId).count(), "Count for 'word' (NOUN) should be 1");
+        String nounTestKey = "NOUN" + IndexGenerator.DELIMITER + testId;
+        String nounWordKey = "NOUN" + IndexGenerator.DELIMITER + wordId;
 
-        assertTrue(result.containsKey("VERB"), "Result should contain key VERB");
-        assertEquals(1, result.get("VERB").size(), "Should be one PositionListSoA for VERB type");
-        PositionListSoA verbPositions = result.get("VERB").get(0);
-        assertEquals(2, verbPositions.getNumPositions(), "Should have 2 positions in total for VERB type (run, fast)");
+        assertTrue(result.containsKey(nounTestKey));
+        assertTrue(result.containsKey(nounWordKey));
+
+        assertEquals(1, result.get(nounTestKey).get(0).getNumPositions());
+        assertEquals(1, result.get(nounWordKey).get(0).getNumPositions());
 
         int runId = SynonymManager.getId("run");
         int fastId = SynonymManager.getId("fast");
-
-        assertEquals(1, IntStream.range(0, verbPositions.getNumPositions()).filter(i -> verbPositions.getSynonymIdAt(i) == runId).count(), "Count for 'run' (VERB) should be 1");
-        assertEquals(1, IntStream.range(0, verbPositions.getNumPositions()).filter(i -> verbPositions.getSynonymIdAt(i) == fastId).count(), "Count for 'fast' (VERB) should be 1");
+        String verbRunKey = "VERB" + IndexGenerator.DELIMITER + runId;
+        String verbFastKey = "VERB" + IndexGenerator.DELIMITER + fastId;
+        assertTrue(result.containsKey(verbRunKey));
+        assertTrue(result.containsKey(verbFastKey));
+        assertEquals(1, result.get(verbRunKey).get(0).getNumPositions());
     }
 }

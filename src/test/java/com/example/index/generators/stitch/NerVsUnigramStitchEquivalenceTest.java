@@ -26,6 +26,7 @@ import com.example.core.PositionListSoA;
 import com.example.index.AnnotationEntry;
 import com.example.index.generators.BaseIndexTest; // Assuming this class exists and provides setup
 import com.example.index.generators.NerIndexGenerator;
+import com.example.index.generators.IndexGenerator;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
@@ -44,7 +45,7 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
     @Mock
     private ProgressTracker mockProgressTracker;
 
-    @TempDir // JUnit Jupiter creates and cleans this temp directory, BaseIndexTest might also have one.
+    @TempDir
     Path classLevelTempDir;
 
     private Path synonymDbPath;
@@ -53,26 +54,21 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
     @BeforeEach
     @Override
     protected void setUp() throws Exception {
-        super.setUp(); // Sets up sqliteConn from BaseIndexTest
+        super.setUp();
         MockitoAnnotations.openMocks(this);
 
-        // Setup SynonymManager with a temporary RocksDB path within the class-level temp dir
         synonymDbPath = classLevelTempDir.resolve("synonyms_equivalence_test");
         Files.createDirectories(synonymDbPath.getParent());
         synonymManager = new SynonymManager(synonymDbPath);
 
-        // Create a dummy stopwords file
         dummyStopwordsFile = classLevelTempDir.resolve("stopwords-equiv-test.txt");
         Files.createFile(dummyStopwordsFile);
 
-        // Initialize generators (they are final, so no subclassing)
         nerIndexGenerator = new NerIndexGenerator(mockIndexAccess, dummyStopwordsFile.toString(), sqliteConn, mockProgressTracker, 10, synonymManager);
         unigramStitchGenerator = new UnigramNerStitchGenerator(mockIndexAccess, dummyStopwordsFile.toString(), sqliteConn, mockProgressTracker, 10, classLevelTempDir.resolve("stitchtemp_equiv"), synonymManager);
 
-        // Create annotations table (if not handled by BaseIndexTest setUp)
-        // Assuming BaseIndexTest only provides connection, not schema.
         try (Statement stmt = sqliteConn.createStatement()) {
-            stmt.execute("DROP TABLE IF EXISTS annotations"); // Clear if exists
+            stmt.execute("DROP TABLE IF EXISTS annotations");
             stmt.execute("CREATE TABLE annotations (" +
                          "annotation_id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                          "document_id INTEGER, " +
@@ -110,15 +106,10 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
     protected void tearDown() throws Exception {
         if (synonymManager != null) {
             synonymManager.close();
-            // Attempt to delete if needed, though @TempDir should handle its contents.
-            // For robust cleanup of RocksDB specifically if it lives outside @TempDir controlled area.
-            // If synonymDbPath is inside classLevelTempDir, JUnit manages it.
         }
-        // sqliteConn is managed by BaseIndexTest.tearDown()
         super.tearDown();
     }
 
-    // Helper method for reflection to call protected NerIndexGenerator.fetchBatch
     @SuppressWarnings("unchecked")
     private List<AnnotationEntry> invokeNerFetchBatch(AnnotationEntry lastProcessed) throws Exception {
         Method method = NerIndexGenerator.class.getDeclaredMethod("fetchBatch", AnnotationEntry.class);
@@ -126,22 +117,13 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
         return (List<AnnotationEntry>) method.invoke(nerIndexGenerator, lastProcessed);
     }
 
-    // Helper method for reflection to call protected NerIndexGenerator.processBatch
     @SuppressWarnings("unchecked")
     private ListMultimap<String, PositionListSoA> invokeNerProcessBatch(List<AnnotationEntry> batch) throws Exception {
         Method method = NerIndexGenerator.class.getDeclaredMethod("processBatch", List.class);
         method.setAccessible(true);
-        try {
-            return (ListMultimap<String, PositionListSoA>) method.invoke(nerIndexGenerator, batch);
-        } catch (java.lang.reflect.InvocationTargetException e) {
-            // Unwrap the actual exception if it\'s a RocksDBException or other relevant exception
-            if (e.getCause() instanceof RocksDBException) throw (RocksDBException) e.getCause();
-            if (e.getCause() instanceof RuntimeException) throw (RuntimeException) e.getCause();
-            throw e; // Re-throw if it is not one of the expected wrapped exceptions
-        }
+        return (ListMultimap<String, PositionListSoA>) method.invoke(nerIndexGenerator, batch);
     }
 
-    // Helper method for reflection to call protected UnigramNerStitchIndexGenerator.fetchAnnotationsForDocument
     @SuppressWarnings("unchecked")
     private List<AbstractNgramStitchGenerator.AnnotationData> invokeUnigramFetchAnnotations(int docId) throws Exception {
         Method method = UnigramNerStitchGenerator.class.getDeclaredMethod("fetchAnnotationsForDocument", int.class);
@@ -150,39 +132,27 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
     }
 
     @Test
-    void testEntityEquivalence() throws Exception { // Allow general Exception due to reflection
-        // --- Populate Test Data ---
-        // Doc 1: Basic cases and multi-token for NerIndexGenerator
+    void testEntityEquivalence() throws Exception {
         insertAnnotation(1, 1, 0, 5, "Alice", "PERSON", "alice");
         insertAnnotation(1, 1, 6, 9, "met", "O", "meet");
         insertAnnotation(1, 1, 10, 13, "Bob", "PERSON", "bob");
         insertAnnotation(1, 2, 0, 6, "Google", "ORGANIZATION", "google");
-        insertAnnotation(1, 2, 7, 10, "Inc.", "ORGANIZATION", "inc.");  // Forms "Google Inc."
-        insertAnnotation(1, 2, 11, 12, ".", "O", "."); // Adjacency check needs correct end_char for "Inc."
+        insertAnnotation(1, 2, 7, 10, "Inc.", "ORGANIZATION", "inc.");
+        insertAnnotation(1, 2, 11, 12, ".", "O", ".");
         insertAnnotation(1, 3, 0, 3, "NYC", "LOCATION", "nyc");
-
-        // Date and O should be ignored by both
         insertAnnotation(1, 4, 0, 9, "2023-01-01", "DATE", "2023-01-01");
         insertAnnotation(1, 4, 13, 16, "fun", "O", "fun");
-
-        // Doc 2: Multi-token entities handled by the grouping logic in both generators
         insertAnnotation(2, 1, 0, 6, "George", "PERSON", "g. washington");
-        insertAnnotation(2, 1, 7, 17, "Washington", "PERSON", "g. washington"); // Forms "George Washington"
+        insertAnnotation(2, 1, 7, 17, "Washington", "PERSON", "g. washington");
         insertAnnotation(2, 1, 18, 21, "and", "O", "and");
         insertAnnotation(2, 1, 22, 26, "John", "PERSON", "j. adams");
-        insertAnnotation(2, 1, 27, 32, "Adams", "PERSON", "j. adams");       // Forms "John Adams"
-
-        // Doc 3: Single token entities and gaps which should result in separate entities
+        insertAnnotation(2, 1, 27, 32, "Adams", "PERSON", "j. adams");
         insertAnnotation(3, 1, 0, 5, "Paris", "LOCATION", "paris");
-        // Deliberate gap, should not merge "Paris" and "France"
-        insertAnnotation(3, 1, 20, 26, "France", "LOCATION", "france"); // Note: begin_char 20 implies a gap from Paris (ends 5)
-
-        // Doc 4: Entity break due to different NER tag
+        insertAnnotation(3, 1, 20, 26, "France", "LOCATION", "france");
         insertAnnotation(4,1,0,5, "Apple", "ORGANIZATION", "apple_org");
-        insertAnnotation(4,1,6,10, "Inc.", "ORGANIZATION", "apple_org"); // Forms Apple Inc.
-        insertAnnotation(4,1,11,16, "Swift", "LANGUAGE", "swift_lang"); // Different NER type, breaks entity
+        insertAnnotation(4,1,6,10, "Inc.", "ORGANIZATION", "apple_org");
+        insertAnnotation(4,1,11,16, "Swift", "LANGUAGE", "swift_lang");
 
-        // --- Process with NerIndexGenerator ---
         Set<IdentifiedEntity> nerGeneratorEntities = new HashSet<>();
         AnnotationEntry lastProcessed = null;
         List<AnnotationEntry> batch;
@@ -190,37 +160,37 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
             batch = invokeNerFetchBatch(lastProcessed);
             if (!batch.isEmpty()) {
                 ListMultimap<String, PositionListSoA> processedBatch = invokeNerProcessBatch(batch);
-                assertNotNull(processedBatch, "Processed batch from NerIndexGenerator should not be null");
+                assertNotNull(processedBatch);
 
-                for (String entityType : processedBatch.keySet()) {
-                    List<PositionListSoA> plsList = processedBatch.get(entityType);
-                    for (PositionListSoA pls : plsList) {
-                        for (int i = 0; i < pls.getNumPositions(); i++) {
+                for (String key : processedBatch.keySet()) {
+                    List<PositionListSoA> lists = processedBatch.get(key);
+                    String[] parts = key.split(java.util.regex.Pattern.quote(String.valueOf(IndexAccessInterface.DELIMITER)));
+                    String type = parts[0];
+                    int synId = Integer.parseInt(parts[1]);
+                    for (PositionListSoA pl : lists) {
+                        for (int i = 0; i < pl.getNumPositions(); i++) {
                             nerGeneratorEntities.add(new IdentifiedEntity(
-                                entityType,
-                                pls.getSynonymIdAt(i),
-                                pls.getDocIdAt(i),
-                                pls.getSentenceIdAt(i),
-                                pls.getBeginCharAt(i),
-                                pls.getEndCharAt(i)
+                                type,
+                                synId,
+                                pl.getDocIdAt(i),
+                                pl.getSentenceIdAt(i),
+                                pl.getBeginCharAt(i),
+                                pl.getEndCharAt(i)
                             ));
                         }
                     }
                 }
-                if (!batch.isEmpty()) { // Ensure batch is not empty before getting last element
+                if (!batch.isEmpty()) {
                     lastProcessed = batch.get(batch.size() - 1);
                 }
             }
         } while (!batch.isEmpty());
 
-        // --- Process with UnigramNerStitchGenerator ---
         Set<IdentifiedEntity> unigramStitchEntities = new HashSet<>();
         int[] docIdsToTest = {1, 2, 3, 4};
-
         for (int docId : docIdsToTest) {
             List<AbstractNgramStitchGenerator.AnnotationData> annotationDataList = invokeUnigramFetchAnnotations(docId);
-            assertNotNull(annotationDataList, "AnnotationData list from UnigramNerStitchGenerator should not be null for doc " + docId);
-
+            assertNotNull(annotationDataList);
             for (AbstractNgramStitchGenerator.AnnotationData ad : annotationDataList) {
                 int entityValueSynonymId = synonymManager.getId(ad.specificValueForSynonym());
                 unigramStitchEntities.add(new IdentifiedEntity(
@@ -233,13 +203,6 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
                 ));
             }
         }
-
-        // --- Assertions ---
-        System.out.println("NerIndexGenerator Entities (" + nerGeneratorEntities.size() + "):");
-        nerGeneratorEntities.stream().sorted(java.util.Comparator.comparing(IdentifiedEntity::docId).thenComparing(IdentifiedEntity::sentId).thenComparing(IdentifiedEntity::beginChar)).forEach(System.out::println);
-
-        System.out.println("\\nUnigramNerStitchGenerator Entities (" + unigramStitchEntities.size() + "):");
-        unigramStitchEntities.stream().sorted(java.util.Comparator.comparing(IdentifiedEntity::docId).thenComparing(IdentifiedEntity::sentId).thenComparing(IdentifiedEntity::beginChar)).forEach(System.out::println);
 
         assertEquals(nerGeneratorEntities.size(), unigramStitchEntities.size(), "Number of identified entities should be the same.");
         assertEquals(nerGeneratorEntities, unigramStitchEntities, "The set of identified entities should be identical.");

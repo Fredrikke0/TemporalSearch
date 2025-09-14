@@ -557,7 +557,27 @@ public class RocksDBBrowser {
                 } else { // globalSynonymManager is null (e.g., DB not found)
                     synonymOutput = String.format("[id:%d(SM_unavailable)]", currentSynonymId);
                 }
-            } // If currentSynonymId is -1, synonymOutput remains empty, which is correct.
+            } else {
+                // For value-keyed NER/POS, synonymId is -1 in values. Try to resolve from key suffix.
+                if (("ner".equals(indexType) || "pos".equals(indexType)) && globalSynonymManager != null) {
+                    try {
+                        String baseKey = baseKeyWithoutSegmentSuffix(key);
+                        String[] parts = baseKey.split(DELIMITER_REGEX);
+                        if (parts.length >= 2) {
+                            String synIdStr = parts[parts.length - 1];
+                            int parsedSynId = Integer.parseInt(synIdStr);
+                            String lookedUpValue = globalSynonymManager.getTerm(parsedSynId).orElse("id:" + parsedSynId + "(not_found_in_SM)");
+                            if ("pos".equals(indexType)) {
+                                synonymOutput = String.format("[token_value:%s]", lookedUpValue);
+                            } else { // ner
+                                synonymOutput = String.format("[entity_value:%s]", lookedUpValue);
+                            }
+                        }
+                    } catch (Exception e) {
+                        // Ignore parsing/lookup errors silently; keep synonymOutput empty
+                    }
+                }
+            }
 
             System.out.printf("  [doc:%d][sent:%d][chars:%d-%d]%s%n",
                 pos.getDocumentId(),
@@ -576,6 +596,30 @@ public class RocksDBBrowser {
         if (indexType.equals("dependency")) {
             String[] parts = key.split(DELIMITER_REGEX);
             return parts.length == 3 ? String.format("%s-%s->%s", parts[0], parts[1], parts[2]) : key;
+        } else if (indexType.equals("ner") || indexType.equals("pos")) {
+            // Attempt to resolve synId to term for readability
+            try {
+                String baseKey = baseKeyWithoutSegmentSuffix(key);
+                String[] parts = baseKey.split(DELIMITER_REGEX);
+                if (parts.length >= 2) {
+                    String prefix = String.join(" ", java.util.Arrays.copyOf(parts, parts.length - 1)).replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " ").trim();
+                    String idStr = parts[parts.length - 1];
+                    int synId = Integer.parseInt(idStr);
+                    String resolved = null;
+                    if (globalSynonymManager != null) {
+                        try {
+                            resolved = globalSynonymManager.getTerm(synId).orElse(null);
+                        } catch (org.rocksdb.RocksDBException e) {
+                            resolved = null;
+                        }
+                    }
+                    String valuePart = (resolved != null ? resolved : idStr);
+                    return prefix + " <DELIM> " + valuePart;
+                }
+            } catch (Exception ignore) {
+                // Fall through to basic formatting
+            }
+            return key.replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " <DELIM> ");
         } else if (indexType.startsWith("stitch_") || indexType.equals("bigram") || indexType.equals("trigram")) {
             return key.replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " <DELIM> ");
         }
