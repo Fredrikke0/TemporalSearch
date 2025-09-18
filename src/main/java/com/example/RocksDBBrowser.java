@@ -307,6 +307,7 @@ public class RocksDBBrowser {
     private static void displayStats(RocksDB db, String indexType) throws IOException {
         long totalEntries = 0;
         long totalPositions = 0;
+        long totalKeyBytes = 0;
         long nashDateLookupCount = 0;
         boolean isNashIndex = "nash".equals(indexType);
         boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
@@ -314,6 +315,7 @@ public class RocksDBBrowser {
         try (RocksIterator iterator = db.newIterator()) {
             for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
                 totalEntries++;
+                totalKeyBytes += iterator.key() != null ? iterator.key().length : 0;
                 if (isNashIndex) {
                     if (Arrays.equals(iterator.key(), NashSerializationUtils.DATE_LOOKUP_KEY)) {
                         try {
@@ -337,6 +339,8 @@ public class RocksDBBrowser {
         System.out.println("Index Statistics");
         System.out.println("================");
         System.out.printf("Total entries: %,d%n", totalEntries);
+        System.out.printf("Total key bytes: %,d%n", totalKeyBytes);
+        System.out.printf("Average key size (bytes): %.2f%n", totalEntries > 0 ? (double) totalKeyBytes / totalEntries : 0.0);
 
         if (isSynonymDb) {
             long termToIdCount = 0;
