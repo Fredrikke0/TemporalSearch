@@ -31,7 +31,9 @@ import com.example.index.generators.HypernymIndexGenerator;
 import com.example.index.generators.NashIndexGenerator;
 import com.example.index.generators.NerDateIndexGenerator;
 import com.example.index.generators.NerIndexGenerator;
+import com.example.index.generators.NerPresenceGenerator;
 import com.example.index.generators.POSIndexGenerator;
+import com.example.index.generators.PosPresenceGenerator;
 import com.example.index.generators.TrigramIndexGenerator;
 import com.example.index.generators.UnigramIndexGenerator;
 import com.example.index.generators.stitch.BigramDateStitchGenerator;
@@ -72,7 +74,8 @@ public class IndexRunner {
 
     private static final List<String> ALL_NON_STITCH_INDEX_TYPES = List.of(
         "unigram", "bigram", "trigram", "dependency",
-        "ner_date", "pos", "ner", "nash"
+        "ner_date", "pos", "ner", "nash",
+        "ner_presence", "pos_presence"
     );
 
     public static void main(String[] args) {
@@ -314,6 +317,26 @@ public class IndexRunner {
                             }
                         }
 
+                        if (type.equals("ner_presence")) {
+                            metrics.startIndexProcessing(type);
+                            NerPresenceGenerator gen = null;
+                            long itemsWritten = -1;
+                            try {
+                                gen = new NerPresenceGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
+                                gen.generateIndex();
+                                itemsWritten = gen.getTotalTermsWrittenToIndex();
+                            } catch (Exception e) {
+                                logger.error("Error generating NER presence index: {}", e.getMessage(), e);
+                            } finally {
+                                metrics.endIndexProcessing(type, itemsWritten);
+                                progress.completeIndex();
+                                if (gen != null) gen.close();
+                            }
+                        }
+
                         if (type.equals("pos")) {
                             metrics.startIndexProcessing(type);
                             POSIndexGenerator gen = null;
@@ -327,6 +350,26 @@ public class IndexRunner {
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {
                                 logger.error("Error generating POS index: {}", e.getMessage(), e);
+                            } finally {
+                                metrics.endIndexProcessing(type, itemsWritten);
+                                progress.completeIndex();
+                                if (gen != null) gen.close();
+                            }
+                        }
+
+                        if (type.equals("pos_presence")) {
+                            metrics.startIndexProcessing(type);
+                            PosPresenceGenerator gen = null;
+                            long itemsWritten = -1;
+                            try {
+                                gen = new PosPresenceGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
+                                progress.startIndex(type, gen.getDocumentCountForIndex());
+                                gen.generateIndex();
+                                itemsWritten = gen.getTotalTermsWrittenToIndex();
+                            } catch (Exception e) {
+                                logger.error("Error generating POS presence index: {}", e.getMessage(), e);
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();

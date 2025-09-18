@@ -28,7 +28,8 @@ public class Pipeline {
 
     private static final java.util.List<String> ALL_NON_STITCH_INDEX_TYPES = java.util.List.of(
         "unigram", "bigram", "trigram", "dependency",
-        "ner_date", "pos", "ner", "nash"
+        "ner_date", "pos", "ner", "nash",
+        "ner_presence", "pos_presence"
     );
     private static final String TEMP_STITCH_GEN_DIR_NAME = "temp_stitch_gen";
 
@@ -134,7 +135,7 @@ public class Pipeline {
                 .setDefault(java.util.List.of("all"))
                 .nargs("+")
                 .help("Type of index to generate (can specify multiple, space-separated): " +
-                      "unigram, bigram, trigram, dependency, ner_date, ner, pos, nash, " +
+                      "unigram, bigram, trigram, dependency, ner_date, ner, pos, nash, ner_presence, pos_presence, " +
                       "various stitch_* types (e.g., stitch_unigram_date), " +
                       "'stitches' (for all stitch combinations), 'all' (for all available types).");
 
@@ -224,7 +225,8 @@ public class Pipeline {
             java.util.Set<String> baseIndexesPotentiallyNeeded = new java.util.LinkedHashSet<>();
             if (cliRequestedIndexTypes.contains("all") || cliRequestedIndexTypes.contains("stitches")) {
                 baseIndexesPotentiallyNeeded.addAll(java.util.List.of(
-                    "unigram", "bigram", "trigram", "ner", "ner_date", "pos"
+                    "unigram", "bigram", "trigram", "ner", "ner_date", "pos",
+                    "ner_presence", "pos_presence"
                 ));
             }
             cliRequestedIndexTypes.stream()
@@ -308,14 +310,27 @@ public class Pipeline {
                 logger.info("Pipeline called without --force. IndexRunner will check individual index directories for existence and decide whether to generate/skip.");
             }
 
-            logger.info("Calling IndexRunner (CLI requested types={}, stopwords='{}', batchSize={}, customTempDir='{}', force={})",
-                        cliRequestedIndexTypes, stopwordsPath, indexBatchSize, effectiveCustomTempDirStr, force);
+            // Augment requested types to include presence indexes when applicable in existing folders
+            java.util.LinkedHashSet<String> effectiveTypes = new java.util.LinkedHashSet<>(cliRequestedIndexTypes);
+            boolean hasAll = effectiveTypes.contains("all");
+            boolean nerDirExists = java.nio.file.Files.exists(indexBasePath.resolve("ner"));
+            boolean posDirExists = java.nio.file.Files.exists(indexBasePath.resolve("pos"));
+            if (hasAll || effectiveTypes.contains("ner") || nerDirExists) {
+                effectiveTypes.add("ner_presence");
+            }
+            if (hasAll || effectiveTypes.contains("pos") || posDirExists) {
+                effectiveTypes.add("pos_presence");
+            }
+
+            java.util.List<String> effectiveTypesList = new java.util.ArrayList<>(effectiveTypes);
+            logger.info("Calling IndexRunner (effective types={}, stopwords='{}', batchSize={}, customTempDir='{}', force={})",
+                        effectiveTypesList, stopwordsPath, indexBatchSize, effectiveCustomTempDirStr, force);
             IndexRunner.runIndexing(
                 dbFilePath.toString(),
                 indexBasePath.toString(),
                 stopwordsPath,
                 indexBatchSize,
-                cliRequestedIndexTypes,
+                effectiveTypesList,
                 effectiveCustomTempDirStr,
                 force
             );

@@ -302,6 +302,7 @@
                         -XX:+UseStringDeduplication
                         -Xmx8g
                         -Xms2g
+                        -Dnet.bytebuddy.experimental=true
                         --add-opens java.base/java.lang=ALL-UNNAMED
                         --add-opens java.base/java.util=ALL-UNNAMED
                         --add-opens java.base/java.io=ALL-UNNAMED

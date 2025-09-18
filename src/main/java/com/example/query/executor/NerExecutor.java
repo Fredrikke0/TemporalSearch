@@ -33,6 +33,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
     private static final Logger logger = LoggerFactory.getLogger(NerExecutor.class);
 
     private static final String NER_INDEX_NAME = "ner";
+    private static final String NER_PRESENCE_INDEX_NAME = "ner_presence";
     private final SynonymManager synonymManager;
 
     /**
@@ -105,7 +106,13 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             if (isVariable) {
                 logger.debug("NER path: Explicit Variable Binding. Type='{}', FilterTargets={}, VarName='{}'",
                              normalizedEntityType, targetValues, variableName);
-                conceptualRowsAdded = executeVariableBindingSearch(normalizedEntityType, targetValues, variableName, index, requirements, resultSoA, context);
+                // Prefer presence-with-bindings path when no target filter and presence index is available
+                IndexAccessInterface presenceIndex = indexes.get(NER_PRESENCE_INDEX_NAME);
+                if (presenceIndex != null && (targetValues == null || targetValues.isEmpty())) {
+                    conceptualRowsAdded = executeVariableBindingViaPresence(normalizedEntityType, variableName, presenceIndex, resultSoA, context);
+                } else {
+                    conceptualRowsAdded = executeVariableBindingSearch(normalizedEntityType, targetValues, variableName, index, requirements, resultSoA, context);
+                }
             } else {
                 if (!targetValues.isEmpty()) {
                     logger.debug("NER path: Specific Entity Filter (no BIND). Type='{}', TargetValues={}",
@@ -131,6 +138,61 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
             throw new QueryExecutionException("Unexpected error executing NER condition: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
+    }
+
+    private int executeVariableBindingViaPresence(String normalizedEntityType,
+                                                  String variableName,
+                                                  IndexAccessInterface presenceIndex,
+                                                  QueryResultSoA resultSoA,
+                                                  Optional<FilteringContext> context)
+        throws IndexAccessException, IOException {
+        logger.debug("executeVariableBindingViaPresence: Type='{}', Var='{}'", normalizedEntityType, variableName);
+
+        String prefix = normalizedEntityType + IndexAccessInterface.DELIMITER;
+        byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
+        upperBound[upperBound.length - 1] = (byte) 0xFF;
+
+        AttributeRequirements req = new AttributeRequirements();
+        req.needsSentenceId = true;
+        req.needsPositions = false;
+        req.needsSynonymIds = true;
+
+        try (RocksIterator iterator = presenceIndex.seekWithBounds(prefixBytes, upperBound, 256 * 1024)) {
+            ExecutorIndexUtils.iterateGroupedByBase(iterator, prefix, (baseKey, blobs) -> {
+                Optional<PositionListSoA> mergedOpt = ExecutorIndexUtils.mergeAndFilter(blobs, context, req);
+                if (!mergedOpt.isPresent() || mergedOpt.get().isEmpty()) return;
+                PositionListSoA pl = mergedOpt.get();
+                // baseKey is TYPE\0docId
+                int delimIdx = baseKey.lastIndexOf(IndexAccessInterface.DELIMITER);
+                if (delimIdx <= 0 || delimIdx == baseKey.length() - 1) return;
+                int docId;
+                try { docId = Integer.parseInt(baseKey.substring(delimIdx + 1)); } catch (NumberFormatException nfe) { return; }
+
+                for (int i = 0; i < pl.getNumPositions(); i++) {
+                    int sentId = pl.getSentenceIdAt(i);
+                    int synId = pl.getSynonymIdAt(i);
+                    String valueToBind;
+                    try {
+                        valueToBind = synonymManager.getTerm(synId).orElse("");
+                    } catch (RocksDBException e) {
+                        valueToBind = "";
+                    }
+                    resultSoA.add(
+                        valueToBind,
+                        ValueType.ENTITY,
+                        variableName,
+                        docId,
+                        sentId,
+                        -1,
+                        -1,
+                        synId,
+                        resultSoA.getNextConceptualRowId()
+                    );
+                }
+            });
+        }
+        return resultSoA.getConceptualRowCount();
     }
 
     /**

@@ -29,6 +29,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
     private static final Logger logger = LoggerFactory.getLogger(PosExecutor.class);
     private static final String ALL_POS_TAGS_WILDCARD = "*";
     private static final String POS_INDEX_NAME = "pos";
+    private static final String POS_PRESENCE_INDEX_NAME = "pos_presence";
     private final SynonymManager synonymManager;
 
     /**
@@ -82,7 +83,12 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                 executeSpecificTermSearch(tagFromQuery, termFromQuery, variableName, posIndex, requirements, resultSoA, context);
             } else {
                 logger.debug("POS path: Tag-Only or Variable Binding to Term. Tag='{}', VarName='{}'", tagFromQuery, variableName);
-                executeTagOnlyOrVariableTermSearch(tagFromQuery, variableName, posIndex, requirements, resultSoA, context);
+                IndexAccessInterface presenceIndex = indexes.get(POS_PRESENCE_INDEX_NAME);
+                if (presenceIndex != null && variableName != null) {
+                    executeVariableBindingViaPresence(tagFromQuery, variableName, presenceIndex, resultSoA, context);
+                } else {
+                    executeTagOnlyOrVariableTermSearch(tagFromQuery, variableName, posIndex, requirements, resultSoA, context);
+                }
             }
         } catch (IOException e) {
             logger.error("IOException during POS condition execution: {}", e.getMessage(), e);
@@ -105,6 +111,57 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         resultSoA.sort();
 
         return resultSoA;
+    }
+
+    private void executeVariableBindingViaPresence(String tagFromQuery,
+                                                   String variableName,
+                                                   IndexAccessInterface presenceIndex,
+                                                   QueryResultSoA resultSoA,
+                                                   Optional<FilteringContext> context)
+            throws IndexAccessException, IOException, org.rocksdb.RocksDBException {
+        String prefix = tagFromQuery + IndexAccessInterface.DELIMITER;
+        byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
+        upperBound[upperBound.length - 1] = (byte) 0xFF;
+
+        AttributeRequirements req = new AttributeRequirements();
+        req.needsSentenceId = true;
+        req.needsPositions = false;
+        req.needsSynonymIds = true;
+
+        try (RocksIterator iterator = presenceIndex.seekWithBounds(prefixBytes, upperBound, 256 * 1024)) {
+            ExecutorIndexUtils.iterateGroupedByBase(iterator, prefix, (baseKey, blobs) -> {
+                Optional<PositionListSoA> mergedOpt = ExecutorIndexUtils.mergeAndFilter(blobs, context, req);
+                if (!mergedOpt.isPresent() || mergedOpt.get().isEmpty()) return;
+                PositionListSoA pl = mergedOpt.get();
+                int delimIdx = baseKey.lastIndexOf(IndexAccessInterface.DELIMITER);
+                if (delimIdx <= 0 || delimIdx == baseKey.length() - 1) return;
+                int docId;
+                try { docId = Integer.parseInt(baseKey.substring(delimIdx + 1)); } catch (NumberFormatException nfe) { return; }
+
+                for (int i = 0; i < pl.getNumPositions(); i++) {
+                    int sentId = pl.getSentenceIdAt(i);
+                    int synId = pl.getSynonymIdAt(i);
+                    String termToBind;
+                    try {
+                        termToBind = synonymManager.getTerm(synId).orElse("");
+                    } catch (org.rocksdb.RocksDBException e) {
+                        termToBind = "";
+                    }
+                    resultSoA.add(
+                        termToBind,
+                        ValueType.POS_TERM,
+                        variableName,
+                        docId,
+                        sentId,
+                        -1,
+                        -1,
+                        synId,
+                        resultSoA.getNextConceptualRowId()
+                    );
+                }
+            });
+        }
     }
 
     private void executeSpecificTermSearch(String tagFromQuery, String termFromQuery, String variableName, IndexAccessInterface index,
