@@ -249,6 +249,9 @@ public class IndexManager implements AutoCloseable {
         knownTypes.add("ner_date");
         knownTypes.add("pos");
         knownTypes.add("dependency");
+        // Presence indexes
+        knownTypes.add("ner_presence");
+        knownTypes.add("pos_presence");
         // Special temporal index
         knownTypes.add("nash");
         // Stitch variants (add all common ones)
