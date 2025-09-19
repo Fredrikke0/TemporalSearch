@@ -52,6 +52,10 @@ public class PositionListSoA {
     private static final IntegerCODEC CODEC = new FastPFOR128();
     public static final int UNCOMPRESSED_THRESHOLD = 20; // Small arrays do not benefit from compression.
     public static final int RLE_ENCODED_MARKER = Integer.MIN_VALUE + 2024; // Marker for Run-Length Encoded constant arrays
+    // New markers for adaptive non-delta encodings
+    public static final int RLE_RUNS_MARKER = Integer.MIN_VALUE + 2025; // (value,int)(count,int) pairs payload
+    public static final int VARINT_ENCODED_MARKER = Integer.MIN_VALUE + 2026; // base-128 varints payload size then bytes
+    public static final int RAW_BYTE_ARRAY_MARKER = Integer.MIN_VALUE + 2027; // raw unsigned bytes payload size then bytes
 
     /**
      * Convenience constructor, defaults to a non-stitch list (isStitchList = false).
@@ -292,8 +296,18 @@ public class PositionListSoA {
             writeCompressedIntArrayList(dos, this.documentIds, true);     // applyDelta = true
             writeCompressedIntArrayList(dos, this.sentenceIds, true);     // applyDelta = true
             writeCompressedIntArrayList(dos, this.beginChars, true);      // applyDelta = true
-            writeCompressedIntArrayList(dos, this.endChars, true);        // applyDelta = true
-            writeCompressedIntArrayList(dos, this.synonymIds, false);     // applyDelta = false
+            // Write lengths instead of endChars for storage efficiency
+            int n = this.numPositions;
+            int[] lengths = new int[n];
+            for (int i = 0; i < n; i++) {
+                int len = this.endChars.getInt(i) - this.beginChars.getInt(i);
+                if (len < 0) {
+                    throw new IOException("serializeToCompositeBlob: negative length (end<begin) at index " + i);
+                }
+                lengths[i] = len;
+            }
+            writeCompressedIntArray(dos, lengths, n, false);             // adaptive non-delta
+            writeCompressedIntArrayList(dos, this.synonymIds, false);     // adaptive non-delta
             dos.flush();
         }
 
@@ -345,21 +359,16 @@ public class PositionListSoA {
         }
 
         // Determine if we should write uncompressed based on default policy.
-        boolean writeUncompressed;
-        if (!applyDelta) {
-            // For non-delta arrays (e.g., synonymIds), always write uncompressed (except RLE handled above).
-            writeUncompressed = true;
-        } else {
-            // For delta-coded arrays, use threshold to decide.
-            writeUncompressed = numElementsInArray < UNCOMPRESSED_THRESHOLD;
-        }
+        boolean writeUncompressedDelta = applyDelta && (numElementsInArray < UNCOMPRESSED_THRESHOLD);
 
-        if (writeUncompressed) {
-            out.writeInt(numElementsInArray * 4); // Size of payload in BYTES (marker for uncompressed)
-            for (int i = 0; i < numElementsInArray; i++) {
-                out.writeInt(dataToWrite[i]); // dataToWrite is potentially delta-coded if applyDelta was true
+        if (applyDelta) {
+            if (writeUncompressedDelta) {
+                out.writeInt(numElementsInArray * 4);
+                for (int i = 0; i < numElementsInArray; i++) {
+                    out.writeInt(dataToWrite[i]);
+                }
+                return;
             }
-        } else {
             // COMPRESSED PATH (only for applyDelta = true, not RLE, and exceeded threshold)
             IntegerCODEC chosenCodec = PositionListSoA.CODEC; // Default FastPFOR128 for delta-coded arrays
 
@@ -386,7 +395,110 @@ public class PositionListSoA {
             for (int i = 0; i < compressedSizeInInts; i++) {
                 out.writeInt(compressedInts[i]);
             }
+            return;
         }
+
+        // Non-delta arrays: adaptive encodings (runs, bytes, varint), else raw ints
+        int i = 0;
+        int maxValue = Integer.MIN_VALUE;
+        int minValue = Integer.MAX_VALUE;
+        int totalRuns = 0;
+        int runPairs = 0;
+        int varIntEstimatedBytes = 0;
+        while (i < numElementsInArray) {
+            int v = data[i];
+            if (v < minValue) minValue = v;
+            if (v > maxValue) maxValue = v;
+            int count = 1;
+            int j = i + 1;
+            while (j < numElementsInArray && data[j] == v) { count++; j++; }
+            totalRuns++;
+            runPairs++;
+            // VarInt estimate per element
+            for (int k = 0; k < count; k++) {
+                varIntEstimatedBytes += ((v >>> 7) == 0 ? 1 : (v >>> 14) == 0 ? 2 : (v >>> 21) == 0 ? 3 : (v >>> 28) == 0 ? 4 : 5);
+            }
+            i = j;
+        }
+        double avgRunLen = (double) numElementsInArray / Math.max(1, totalRuns);
+        boolean chooseRuns = avgRunLen >= 2.0;
+        boolean chooseRawBytes = (minValue >= -128 && maxValue <= 127);
+        boolean chooseVarInt = !chooseRuns && !chooseRawBytes && (varIntEstimatedBytes + 8 < numElementsInArray * 4);
+
+        if (chooseRuns) {
+            ByteArrayOutputStream payload = new ByteArrayOutputStream(runPairs * 8);
+            DataOutputStream pdos = new DataOutputStream(payload);
+            i = 0;
+            while (i < numElementsInArray) {
+                int v = data[i];
+                int count = 1;
+                int j = i + 1;
+                while (j < numElementsInArray && data[j] == v) { count++; j++; }
+                pdos.writeInt(v);
+                pdos.writeInt(count);
+                i = j;
+            }
+            pdos.flush();
+            byte[] bytes = payload.toByteArray();
+            out.writeInt(RLE_RUNS_MARKER);
+            out.writeInt(bytes.length);
+            out.write(bytes);
+            return;
+        }
+
+        if (chooseRawBytes) {
+            out.writeInt(RAW_BYTE_ARRAY_MARKER);
+            out.writeInt(numElementsInArray);
+            for (int k = 0; k < numElementsInArray; k++) out.writeByte((byte) data[k]);
+            return;
+        }
+
+        if (chooseVarInt) {
+            ByteArrayOutputStream payload = new ByteArrayOutputStream(varIntEstimatedBytes + 16);
+            for (int k = 0; k < numElementsInArray; k++) {
+                writeUnsignedVarInt(payload, data[k]);
+            }
+            byte[] bytes = payload.toByteArray();
+            out.writeInt(VARINT_ENCODED_MARKER);
+            out.writeInt(bytes.length);
+            out.write(bytes);
+            return;
+        }
+
+        // Fallback raw ints
+        out.writeInt(numElementsInArray * 4);
+        for (int k = 0; k < numElementsInArray; k++) out.writeInt(data[k]);
+    }
+
+    // --- VarInt helpers for adaptive non-delta encoding ---
+    private static void writeUnsignedVarInt(ByteArrayOutputStream out, int value) {
+        // Encode as base-128 little-endian continuation; treat value as unsigned 32-bit
+        long v = value & 0xFFFFFFFFL;
+        while ((v & ~0x7FL) != 0) {
+            out.write((int)((v & 0x7F) | 0x80));
+            v >>>= 7;
+        }
+        out.write((int)(v & 0x7F));
+    }
+
+    // Returns [value, newOffset]
+    private static int[] readUnsignedVarInt(byte[] buf, int offset) throws IOException {
+        long result = 0;
+        int shift = 0;
+        int pos = offset;
+        while (pos < buf.length) {
+            int b = buf[pos++] & 0xFF;
+            result |= (long)(b & 0x7F) << shift;
+            if ((b & 0x80) == 0) {
+                if ((result & 0xFFFFFFFF00000000L) != 0) {
+                    throw new IOException("VarInt overflow");
+                }
+                return new int[] { (int)result, pos };
+            }
+            shift += 7;
+            if (shift > 35) throw new IOException("VarInt too long");
+        }
+        throw new IOException("Unexpected end of VarInt payload");
     }
 
     /**
@@ -424,9 +536,14 @@ public class PositionListSoA {
 
             instance.beginChars = readCompressedIntArray(dis, instance.numPositions, true);
 
-            instance.endChars = readCompressedIntArray(dis, instance.numPositions, true);
+            // Read lengths (non-delta) and reconstruct endChars
+            IntArrayList lengthsList = readCompressedIntArray(dis, instance.numPositions, false);
+            instance.endChars = new IntArrayList(instance.numPositions);
+            for (int i = 0; i < instance.numPositions; i++) {
+                instance.endChars.add(instance.beginChars.getInt(i) + lengthsList.getInt(i));
+            }
 
-            instance.synonymIds = readCompressedIntArray(dis, instance.numPositions, false); // No delta on synonym IDs.
+            instance.synonymIds = readCompressedIntArray(dis, instance.numPositions, false); // Adaptive non-delta
 
 
             // Post-deserialization validation
@@ -499,12 +616,48 @@ public class PositionListSoA {
         int[] dataPayload;
 
         if (!applyInverseDelta) {
-            // Data for arrays where inverse delta is not applied (e.g., synonymIds).
-            // These arrays were written raw/uncompressed (if not RLE, which is handled above).
-            // So, arraySizeOrMarker here should be the raw byte count (numExpectedPositions * 4).
+            // Handle adaptive markers for non-delta
+            if (arraySizeOrMarker == RLE_RUNS_MARKER) {
+                int payloadBytes = in.readInt();
+                byte[] buf = new byte[payloadBytes];
+                in.readFully(buf);
+                DataInputStream rin = new DataInputStream(new ByteArrayInputStream(buf));
+                IntArrayList list = new IntArrayList(numExpectedPositions);
+                int filled = 0;
+                while (rin.available() > 0) {
+                    int v = rin.readInt();
+                    int c = rin.readInt();
+                    for (int t = 0; t < c; t++) list.add(v);
+                    filled += c;
+                    if (filled > numExpectedPositions) throw new IOException("RLE_RUNS produced more than expected");
+                }
+                if (filled != numExpectedPositions) throw new IOException("RLE_RUNS produced fewer than expected");
+                return list;
+            } else if (arraySizeOrMarker == VARINT_ENCODED_MARKER) {
+                int payloadBytes = in.readInt();
+                byte[] buf = new byte[payloadBytes];
+                in.readFully(buf);
+                IntArrayList list = new IntArrayList(numExpectedPositions);
+                int offset = 0;
+                for (int i = 0; i < numExpectedPositions; i++) {
+                    int[] r = readUnsignedVarInt(buf, offset);
+                    list.add(r[0]);
+                    offset = r[1];
+                }
+                return list;
+            } else if (arraySizeOrMarker == RAW_BYTE_ARRAY_MARKER) {
+                int payloadBytes = in.readInt();
+                if (payloadBytes != numExpectedPositions) throw new IOException("RAW_BYTE_ARRAY size mismatch");
+                byte[] buf = new byte[payloadBytes];
+                in.readFully(buf);
+                IntArrayList list = new IntArrayList(numExpectedPositions);
+                for (int i = 0; i < numExpectedPositions; i++) list.add((int) buf[i]);
+                return list;
+            }
+            // Legacy raw ints fallback
             if (arraySizeOrMarker != numExpectedPositions * 4) {
                 throw new IOException(String.format(
-                    "Data format error for non-delta array (expected raw uncompressed): numExpectedPositions=%d, expected raw byte size %d, but stream marker is %d. Not RLE.",
+                    "Data format error for non-delta array (expected raw uncompressed): numExpectedPositions=%d, expected raw byte size %d, but stream marker is %d.",
                     numExpectedPositions, numExpectedPositions * 4, arraySizeOrMarker
                 ));
             }
@@ -670,6 +823,13 @@ public class PositionListSoA {
 
         if (arraySizeOrMarker == RLE_ENCODED_MARKER) {
             dis.readInt(); // Skip the RLE value
+        } else if (arraySizeOrMarker == RLE_RUNS_MARKER || arraySizeOrMarker == VARINT_ENCODED_MARKER || arraySizeOrMarker == RAW_BYTE_ARRAY_MARKER) {
+            int payloadBytes = dis.readInt();
+            long skipped = dis.skipBytes(payloadBytes);
+            if (skipped != payloadBytes) {
+                logger.warn("skipCompressedIntArray: Failed to skip payload for special marker. Expected: {}, Actual: {}.", payloadBytes, skipped);
+                throw new IOException("Failed to skip expected bytes for special-encoded array data. Expected: " + payloadBytes + ", Actual: " + skipped);
+            }
         } else if (arraySizeOrMarker > 0) {
             // arraySizeOrMarker is byte count for compressed or uncompressed data
             long skipped = dis.skipBytes(arraySizeOrMarker);
@@ -719,8 +879,11 @@ public class PositionListSoA {
             if (numPositions == 0) return new IntArrayList(0);
             skipCompressedIntArray(dis, numPositions); // DocIDs
             skipCompressedIntArray(dis, numPositions); // SentenceIDs
-            skipCompressedIntArray(dis, numPositions); // BeginChars
-            return readCompressedIntArray(dis, numPositions, true);
+            IntArrayList begins = readCompressedIntArray(dis, numPositions, true);
+            IntArrayList lengths = readCompressedIntArray(dis, numPositions, false);
+            IntArrayList ends = new IntArrayList(numPositions);
+            for (int i = 0; i < numPositions; i++) ends.add(begins.getInt(i) + lengths.getInt(i));
+            return ends;
         }
     }
 
@@ -966,8 +1129,15 @@ public class PositionListSoA {
 
             IntArrayList allEndChars = null;
             if (needPositions) {
-                allEndChars = readCompressedIntArray(dis, numPositionsInBlob, true);
+                // Read lengths (non-delta adaptive) and reconstruct end from begin + length
+                IntArrayList allLengths = readCompressedIntArray(dis, numPositionsInBlob, false);
+                allEndChars = new IntArrayList(numPositionsInBlob);
+                for (int i = 0; i < numPositionsInBlob; i++) {
+                    int b = (allBeginChars != null) ? allBeginChars.getInt(i) : 0;
+                    allEndChars.add(b + allLengths.getInt(i));
+                }
             } else {
+                // Skip lengths array when positions are not required
                 skipCompressedIntArray(dis, numPositionsInBlob);
             }
 
@@ -1098,9 +1268,16 @@ public class PositionListSoA {
             IntArrayList endChars1 = decompressEndChars(blob1);
             IntArrayList endChars2 = decompressEndChars(blob2);
             endChars1.addAll(endChars2);
-            writeCompressedIntArray(dos, endChars1.elements(), endChars1.size(), true);
-            endChars1 = null; // Help GC
-            endChars2 = null; // Help GC
+            // Recompute lengths from freshly decompressed begins and ends
+            IntArrayList beginAll = decompressBeginChars(blob1);
+            beginAll.addAll(decompressBeginChars(blob2));
+            if (beginAll.size() != endChars1.size()) {
+                throw new IOException("mergeCompressedBlobs: mismatch between merged begin and end sizes");
+            }
+            int total = beginAll.size();
+            int[] lengthsArray = new int[total];
+            for (int i = 0; i < total; i++) lengthsArray[i] = endChars1.getInt(i) - beginAll.getInt(i);
+            writeCompressedIntArray(dos, lengthsArray, total, false);
 
             IntArrayList synonymIds1 = decompressSynonymIds(blob1);
             IntArrayList synonymIds2 = decompressSynonymIds(blob2);
@@ -1204,14 +1381,15 @@ public class PositionListSoA {
                     mergedBeginChars.addAll(decompressBeginChars(blob));
                 }
                 writeCompressedIntArray(dos, mergedBeginChars.elements(), mergedBeginChars.size(), true);
-                mergedBeginChars = null;
 
                 IntArrayList mergedEndChars = new IntArrayList(totalFinalPositions);
                 for (byte[] blob : validBlobs) {
                     mergedEndChars.addAll(decompressEndChars(blob));
                 }
-                writeCompressedIntArray(dos, mergedEndChars.elements(), mergedEndChars.size(), true);
-                mergedEndChars = null;
+                // Compute and write lengths from merged begin and end arrays
+                int[] mergedLengths = new int[totalFinalPositions];
+                for (int i = 0; i < totalFinalPositions; i++) mergedLengths[i] = mergedEndChars.getInt(i) - mergedBeginChars.getInt(i);
+                writeCompressedIntArray(dos, mergedLengths, totalFinalPositions, false);
 
                 IntArrayList mergedSynonymIds = new IntArrayList(totalFinalPositions);
                 for (byte[] blob : validBlobs) {
