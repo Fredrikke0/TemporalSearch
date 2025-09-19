@@ -60,7 +60,7 @@ public class RocksDBBrowser {
         logger.debug("Starting RocksDBBrowser...");
         ArgumentParser parser = ArgumentParsers.newFor("RocksDBBrowser").build()
                 .defaultHelp(true)
-                .description("Browse contents of RocksDB index databases. Supports listing entries, looking up specific keys/prefixes, and displaying statistics.");
+                .description("Browse RocksDB index databases. Supports: listing entries (optionally filtered by --match prefix), showing top-N terms by position count (--top, optionally filtered by --match), and displaying stats (--stats).");
 
         List<String> availableIndexChoices = new ArrayList<>(ALL_INDEX_TYPES);
         availableIndexChoices.add("all");
@@ -78,7 +78,7 @@ public class RocksDBBrowser {
                 .help("Base path to the directory containing the various index subdirectories (e.g., projects/nyt/indexes/)");
 
         parser.addArgument("-m", "--match")
-                .help("List entries where the key starts with the given string (prefix match). This also includes exact key matches.");
+                .help("List entries where the key starts with the given string (prefix match). Also used to filter keys when computing --top.");
 
         parser.addArgument("-l", "--limit")
                 .type(Integer.class)
@@ -87,11 +87,13 @@ public class RocksDBBrowser {
 
         parser.addArgument("--top")
                 .type(Integer.class)
-                .help("Show top N terms by position count for the selected index (non-Nash, non-synonym). Overrides regular listing when no --key/--prefix is provided.");
+                .help("Show top N terms by position count for the selected index. Use --match to restrict aggregation to keys starting with the given prefix. Not supported for 'nash' or 'synonym_manager_db'. Overrides regular listing when no --match is provided.");
 
         parser.addArgument("-s", "--stats")
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
                 .help("Show basic statistics about the selected index (or all indexes if 'all' is chosen for index_type). If no key or prefix is specified, only stats are shown.");
+
+
 
         try {
             Namespace ns = parser.parseArgs(args);
@@ -101,6 +103,7 @@ public class RocksDBBrowser {
             int limit = ns.getInt("limit");
             Integer topN = (Integer) ns.get("top");
             boolean showStats = ns.getBoolean("stats");
+
 
             Path synonymManagerDbPath = Paths.get(basePath, "global_values_lookup.db");
             try {
@@ -173,10 +176,10 @@ public class RocksDBBrowser {
                     return;
                 }
             }
-            if (match != null) {
+            if (match != null && topN == null) {
                 listEntriesByPrefix(db, match, limit, indexType);
             } else if (topN != null) {
-                listTopTermsByPositions(db, topN, indexType);
+                listTopTermsByPositions(db, topN, indexType, match);
             } else {
                 listAllEntries(db, limit, indexType);
             }
@@ -190,7 +193,7 @@ public class RocksDBBrowser {
         }
     }
 
-    private static void listTopTermsByPositions(RocksDB db, int topN, String indexType) throws IOException {
+    private static void listTopTermsByPositions(RocksDB db, int topN, String indexType, String prefixFilter) throws IOException {
         if (topN <= 0) {
             System.out.println("--top requires a positive integer.");
             return;
@@ -201,6 +204,9 @@ public class RocksDBBrowser {
         if (isSynonymDb) {
             return; // Silently skip for synonym manager DB
         }
+
+        // Optional key prefix filter for aggregation (e.g., NER type prefix)
+        String effectivePrefix = (prefixFilter != null && !prefixFilter.isBlank()) ? prefixFilter : null;
 
         PriorityQueue<TopEntry> minHeap = new PriorityQueue<>(Comparator.comparingLong(TopEntry::sum));
 
@@ -217,6 +223,11 @@ public class RocksDBBrowser {
 
                 String keyStr = asString(keyBytes);
                 String baseKey = baseKeyWithoutSegmentSuffix(keyStr);
+
+                // If a prefix filter is provided, ensure key starts with it
+                if (effectivePrefix != null && !keyStr.startsWith(effectivePrefix)) {
+                    continue;
+                }
 
                 long positionsCountForThisEntry;
                 try {
@@ -307,6 +318,7 @@ public class RocksDBBrowser {
     private static void displayStats(RocksDB db, String indexType) throws IOException {
         long totalEntries = 0;
         long totalPositions = 0;
+        long totalKeyBytes = 0;
         long nashDateLookupCount = 0;
         boolean isNashIndex = "nash".equals(indexType);
         boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
@@ -314,6 +326,7 @@ public class RocksDBBrowser {
         try (RocksIterator iterator = db.newIterator()) {
             for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
                 totalEntries++;
+                totalKeyBytes += iterator.key() != null ? iterator.key().length : 0;
                 if (isNashIndex) {
                     if (Arrays.equals(iterator.key(), NashSerializationUtils.DATE_LOOKUP_KEY)) {
                         try {
@@ -337,6 +350,8 @@ public class RocksDBBrowser {
         System.out.println("Index Statistics");
         System.out.println("================");
         System.out.printf("Total entries: %,d%n", totalEntries);
+        System.out.printf("Total key bytes: %,d%n", totalKeyBytes);
+        System.out.printf("Average key size (bytes): %.2f%n", totalEntries > 0 ? (double) totalKeyBytes / totalEntries : 0.0);
 
         if (isSynonymDb) {
             long termToIdCount = 0;
@@ -557,7 +572,27 @@ public class RocksDBBrowser {
                 } else { // globalSynonymManager is null (e.g., DB not found)
                     synonymOutput = String.format("[id:%d(SM_unavailable)]", currentSynonymId);
                 }
-            } // If currentSynonymId is -1, synonymOutput remains empty, which is correct.
+            } else {
+                // For value-keyed NER/POS, synonymId is -1 in values. Try to resolve from key suffix.
+                if (("ner".equals(indexType) || "pos".equals(indexType)) && globalSynonymManager != null) {
+                    try {
+                        String baseKey = baseKeyWithoutSegmentSuffix(key);
+                        String[] parts = baseKey.split(DELIMITER_REGEX);
+                        if (parts.length >= 2) {
+                            String synIdStr = parts[parts.length - 1];
+                            int parsedSynId = Integer.parseInt(synIdStr);
+                            String lookedUpValue = globalSynonymManager.getTerm(parsedSynId).orElse("id:" + parsedSynId + "(not_found_in_SM)");
+                            if ("pos".equals(indexType)) {
+                                synonymOutput = String.format("[token_value:%s]", lookedUpValue);
+                            } else { // ner
+                                synonymOutput = String.format("[entity_value:%s]", lookedUpValue);
+                            }
+                        }
+                    } catch (Exception e) {
+                        // Ignore parsing/lookup errors silently; keep synonymOutput empty
+                    }
+                }
+            }
 
             System.out.printf("  [doc:%d][sent:%d][chars:%d-%d]%s%n",
                 pos.getDocumentId(),
@@ -576,6 +611,30 @@ public class RocksDBBrowser {
         if (indexType.equals("dependency")) {
             String[] parts = key.split(DELIMITER_REGEX);
             return parts.length == 3 ? String.format("%s-%s->%s", parts[0], parts[1], parts[2]) : key;
+        } else if (indexType.equals("ner") || indexType.equals("pos")) {
+            // Attempt to resolve synId to term for readability
+            try {
+                String baseKey = baseKeyWithoutSegmentSuffix(key);
+                String[] parts = baseKey.split(DELIMITER_REGEX);
+                if (parts.length >= 2) {
+                    String prefix = String.join(" ", java.util.Arrays.copyOf(parts, parts.length - 1)).replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " ").trim();
+                    String idStr = parts[parts.length - 1];
+                    int synId = Integer.parseInt(idStr);
+                    String resolved = null;
+                    if (globalSynonymManager != null) {
+                        try {
+                            resolved = globalSynonymManager.getTerm(synId).orElse(null);
+                        } catch (org.rocksdb.RocksDBException e) {
+                            resolved = null;
+                        }
+                    }
+                    String valuePart = (resolved != null ? resolved : idStr);
+                    return prefix + " <DELIM> " + valuePart;
+                }
+            } catch (Exception ignore) {
+                // Fall through to basic formatting
+            }
+            return key.replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " <DELIM> ");
         } else if (indexType.startsWith("stitch_") || indexType.equals("bigram") || indexType.equals("trigram")) {
             return key.replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " <DELIM> ");
         }
