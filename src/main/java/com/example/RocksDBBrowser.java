@@ -60,7 +60,7 @@ public class RocksDBBrowser {
         logger.debug("Starting RocksDBBrowser...");
         ArgumentParser parser = ArgumentParsers.newFor("RocksDBBrowser").build()
                 .defaultHelp(true)
-                .description("Browse contents of RocksDB index databases. Supports listing entries, looking up specific keys/prefixes, and displaying statistics.");
+                .description("Browse RocksDB index databases. Supports: listing entries (optionally filtered by --match prefix), showing top-N terms by position count (--top, optionally filtered by --match), and displaying stats (--stats).");
 
         List<String> availableIndexChoices = new ArrayList<>(ALL_INDEX_TYPES);
         availableIndexChoices.add("all");
@@ -78,7 +78,7 @@ public class RocksDBBrowser {
                 .help("Base path to the directory containing the various index subdirectories (e.g., projects/nyt/indexes/)");
 
         parser.addArgument("-m", "--match")
-                .help("List entries where the key starts with the given string (prefix match). This also includes exact key matches.");
+                .help("List entries where the key starts with the given string (prefix match). Also used to filter keys when computing --top.");
 
         parser.addArgument("-l", "--limit")
                 .type(Integer.class)
@@ -87,11 +87,13 @@ public class RocksDBBrowser {
 
         parser.addArgument("--top")
                 .type(Integer.class)
-                .help("Show top N terms by position count for the selected index (non-Nash, non-synonym). Overrides regular listing when no --key/--prefix is provided.");
+                .help("Show top N terms by position count for the selected index. Use --match to restrict aggregation to keys starting with the given prefix. Not supported for 'nash' or 'synonym_manager_db'. Overrides regular listing when no --match is provided.");
 
         parser.addArgument("-s", "--stats")
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
                 .help("Show basic statistics about the selected index (or all indexes if 'all' is chosen for index_type). If no key or prefix is specified, only stats are shown.");
+
+
 
         try {
             Namespace ns = parser.parseArgs(args);
@@ -101,6 +103,7 @@ public class RocksDBBrowser {
             int limit = ns.getInt("limit");
             Integer topN = (Integer) ns.get("top");
             boolean showStats = ns.getBoolean("stats");
+
 
             Path synonymManagerDbPath = Paths.get(basePath, "global_values_lookup.db");
             try {
@@ -173,10 +176,10 @@ public class RocksDBBrowser {
                     return;
                 }
             }
-            if (match != null) {
+            if (match != null && topN == null) {
                 listEntriesByPrefix(db, match, limit, indexType);
             } else if (topN != null) {
-                listTopTermsByPositions(db, topN, indexType);
+                listTopTermsByPositions(db, topN, indexType, match);
             } else {
                 listAllEntries(db, limit, indexType);
             }
@@ -190,7 +193,7 @@ public class RocksDBBrowser {
         }
     }
 
-    private static void listTopTermsByPositions(RocksDB db, int topN, String indexType) throws IOException {
+    private static void listTopTermsByPositions(RocksDB db, int topN, String indexType, String prefixFilter) throws IOException {
         if (topN <= 0) {
             System.out.println("--top requires a positive integer.");
             return;
@@ -201,6 +204,9 @@ public class RocksDBBrowser {
         if (isSynonymDb) {
             return; // Silently skip for synonym manager DB
         }
+
+        // Optional key prefix filter for aggregation (e.g., NER type prefix)
+        String effectivePrefix = (prefixFilter != null && !prefixFilter.isBlank()) ? prefixFilter : null;
 
         PriorityQueue<TopEntry> minHeap = new PriorityQueue<>(Comparator.comparingLong(TopEntry::sum));
 
@@ -217,6 +223,11 @@ public class RocksDBBrowser {
 
                 String keyStr = asString(keyBytes);
                 String baseKey = baseKeyWithoutSegmentSuffix(keyStr);
+
+                // If a prefix filter is provided, ensure key starts with it
+                if (effectivePrefix != null && !keyStr.startsWith(effectivePrefix)) {
+                    continue;
+                }
 
                 long positionsCountForThisEntry;
                 try {

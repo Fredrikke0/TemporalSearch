@@ -147,6 +147,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                                                   Optional<FilteringContext> context)
         throws IndexAccessException, IOException {
         logger.debug("executeVariableBindingViaPresence: Type='{}', Var='{}'", normalizedEntityType, variableName);
+        logger.info("NER presence: using ner_presence for ANY TYPE + BIND (type='{}', var='{}')", normalizedEntityType, variableName);
 
         String prefix = normalizedEntityType + IndexAccessInterface.DELIMITER;
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);

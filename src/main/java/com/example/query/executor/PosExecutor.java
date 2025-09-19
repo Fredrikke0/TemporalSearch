@@ -119,6 +119,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                                                    QueryResultSoA resultSoA,
                                                    Optional<FilteringContext> context)
             throws IndexAccessException, IOException, org.rocksdb.RocksDBException {
+        logger.info("POS presence: using pos_presence for ANY TAG + BIND (tag='{}', var='{}')", tagFromQuery, variableName);
         String prefix = tagFromQuery + IndexAccessInterface.DELIMITER;
         byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
