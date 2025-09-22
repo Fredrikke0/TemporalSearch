@@ -634,6 +634,14 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             writeToLevelDB(this.tempFilePathForSorting.toFile());
             progress.completeIndex();
 
+            // Ensure memtables are flushed and compaction reduces WAL footprint
+            try {
+                this.indexAccess.flushAndCompact();
+                logger.info("Flush and compact completed for index [{}].", getIndexName());
+            } catch (com.example.core.IndexAccessException e) {
+                logger.warn("Flush/compact failed for index [{}]: {}", getIndexName(), e.getMessage());
+            }
+
         } finally {
             logger.debug("Cleaning up {} temporary batch files for index [{}] from directory {}...", tempFiles.size(), getIndexName(), this.tempDir.toAbsolutePath());
             for (File file : tempFiles) {

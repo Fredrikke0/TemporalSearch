@@ -71,8 +71,8 @@ public class IndexRunner {
     );
 
     private static final List<String> ALL_NON_STITCH_INDEX_TYPES = List.of(
-        "unigram", "bigram", "trigram", "dependency",
-        "ner_date", "pos", "ner", "nash"
+        "rb_unigram", "rb_bigram", "rb_trigram", "rb_dependency",
+        "rb_ner_date", "rb_pos", "rb_ner"
     );
 
     public static void main(String[] args) {
@@ -200,133 +200,126 @@ public class IndexRunner {
                     try (Options options = RocksDBConfig.createOptimizedOptions();
                          IndexAccessInterface indexAccess = new IndexAccess(specificIndexDir, type, options, false)) {
 
-                        if (type.equals("unigram")) {
+                        if (type.equals("rb_unigram")) {
                             metrics.startIndexProcessing(type);
-                            UnigramIndexGenerator gen = null;
+                            com.example.index.generators.rb.RBUnigramIndexGenerator gen = null;
                             long itemsWritten = -1;
                             try {
-                                gen = new UnigramIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath);
+                                gen = new com.example.index.generators.rb.RBUnigramIndexGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {
-                                logger.error("Error generating unigram index: {}", e.getMessage(), e);
+                                logger.error("Error generating rb_unigram index: {}", e.getMessage(), e);
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
                                 if (gen != null) gen.close();
                             }
                         }
-                        if (type.equals("bigram")) {
+                        if (type.equals("rb_bigram")) {
                             metrics.startIndexProcessing(type);
-                            BigramIndexGenerator gen = null;
+                            com.example.index.generators.rb.RBBigramIndexGenerator gen = null;
                             long itemsWritten = -1;
                             try {
-                                gen = new BigramIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath);
+                                gen = new com.example.index.generators.rb.RBBigramIndexGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {
-                                logger.error("Error generating bigram index: {}", e.getMessage(), e);
+                                logger.error("Error generating rb_bigram index: {}", e.getMessage(), e);
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
                                 if (gen != null) gen.close();
                             }
                         }
-
-                        if (type.equals("trigram")) {
+                        if (type.equals("rb_trigram")) {
                             metrics.startIndexProcessing(type);
-                            TrigramIndexGenerator gen = null;
+                            com.example.index.generators.rb.RBTrigramIndexGenerator gen = null;
                             long itemsWritten = -1;
                             try {
-                                gen = new TrigramIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath);
+                                gen = new com.example.index.generators.rb.RBTrigramIndexGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {
-                                logger.error("Error generating trigram index: {}", e.getMessage(), e);
+                                logger.error("Error generating rb_trigram index: {}", e.getMessage(), e);
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
                                 if (gen != null) gen.close();
                             }
                         }
-
-                        if (type.equals("dependency")) {
+                        if (type.equals("rb_dependency")) {
                             metrics.startIndexProcessing(type);
-                            DependencyIndexGenerator gen = null;
+                            com.example.index.generators.rb.RBDependencyIndexGenerator gen = null;
                             long itemsWritten = -1;
                             try {
-                                gen = new DependencyIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath);
+                                gen = new com.example.index.generators.rb.RBDependencyIndexGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {
-                                logger.error("Error generating dependency index: {}", e.getMessage(), e);
+                                logger.error("Error generating rb_dependency index: {}", e.getMessage(), e);
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
                                 if (gen != null) gen.close();
                             }
                         }
-
-                        if (type.equals("ner_date")) {
+                        if (type.equals("rb_ner_date")) {
                             metrics.startIndexProcessing(type);
-                            NerDateIndexGenerator gen = null;
+                            com.example.index.generators.rb.RBNerDateIndexGenerator gen = null;
                             long itemsWritten = -1;
                             try {
-                                gen = new NerDateIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath);
+                                gen = new com.example.index.generators.rb.RBNerDateIndexGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {
-                                logger.error("Error generating NER date index: {}", e.getMessage(), e);
+                                logger.error("Error generating rb_ner_date index: {}", e.getMessage(), e);
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
                                 if (gen != null) gen.close();
                             }
                         }
-
-                        if (type.equals("ner")) {
+                        if (type.equals("rb_ner")) {
                             metrics.startIndexProcessing(type);
-                            NerIndexGenerator gen = null;
+                            com.example.index.generators.rb.RBNerIndexGenerator gen = null;
                             long itemsWritten = -1;
                             try {
-                                gen = new NerIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
-                                        sharedSynonymManager);
+                                gen = new com.example.index.generators.rb.RBNerIndexGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {
-                                logger.error("Error generating NER index: {}", e.getMessage(), e);
+                                logger.error("Error generating rb_ner index: {}", e.getMessage(), e);
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
                                 if (gen != null) gen.close();
                             }
                         }
-
-                        if (type.equals("pos")) {
+                        if (type.equals("rb_pos")) {
                             metrics.startIndexProcessing(type);
-                            POSIndexGenerator gen = null;
+                            com.example.index.generators.rb.RBPosIndexGenerator gen = null;
                             long itemsWritten = -1;
                             try {
-                                gen = new POSIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
-                                        sharedSynonymManager);
+                                gen = new com.example.index.generators.rb.RBPosIndexGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {
-                                logger.error("Error generating POS index: {}", e.getMessage(), e);
+                                logger.error("Error generating rb_pos index: {}", e.getMessage(), e);
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
@@ -334,52 +327,14 @@ public class IndexRunner {
                             }
                         }
 
-                        if (type.equals("hypernym")) {
+                        if (type.equals("rb_stitch_unigram_date")) {
                             metrics.startIndexProcessing(type);
-                            HypernymIndexGenerator gen = null;
+                            com.example.index.generators.rb.stitch.RBUnigramDateStitchGenerator gen = null;
                             long itemsWritten = -1;
                             try {
-                                gen = new HypernymIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath);
-                                progress.startIndex(type, gen.getDocumentCountForIndex());
-                                gen.generateIndex();
-                                itemsWritten = gen.getTotalTermsWrittenToIndex();
-                            } catch (Exception e) {
-                                logger.error("Error generating hypernym index: {}", e.getMessage(), e);
-                            } finally {
-                                metrics.endIndexProcessing(type, itemsWritten);
-                                progress.completeIndex();
-                                if (gen != null) gen.close();
-                            }
-                        }
-
-                        if (type.equals("nash")) {
-                            metrics.startIndexProcessing(type);
-                            NashIndexGenerator gen = null;
-                            long itemsWritten = -1;
-                            try {
-                                gen = new NashIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath);
-                                progress.startIndex(type, gen.getDocumentCountForIndex());
-                                gen.generateIndex();
-                                itemsWritten = gen.getTotalTermsWrittenToIndex();
-                            } catch (Exception e) {
-                                logger.error("Error generating nash index: {}", e.getMessage(), e);
-                            } finally {
-                                metrics.endIndexProcessing(type, itemsWritten);
-                                progress.completeIndex();
-                                if (gen != null) gen.close();
-                            }
-                        }
-
-                        if (type.equals(UnigramDateStitchGenerator.MY_INDEX_NAME)) {
-                            metrics.startIndexProcessing(type);
-                            UnigramDateStitchGenerator gen = null;
-                            long itemsWritten = -1;
-                            try {
-                                gen = new UnigramDateStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
-                                progress.startIndex(type, gen.getDocumentCountForIndex());
+                                gen = new com.example.index.generators.rb.stitch.RBUnigramDateStitchGenerator(
+                                        indexAccess, stopwordsPath, conn, progress, batchSize);
+                                progress.startIndex(type, 0);
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {

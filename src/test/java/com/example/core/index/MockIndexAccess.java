@@ -315,6 +315,12 @@ public class MockIndexAccess implements IndexAccessInterface {
     }
 
     @Override
+    public void flushAndCompact() throws IndexAccessException {
+        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        // No-op for mock
+    }
+
+    @Override
     public String getIndexType() {
         return indexType;
     }

@@ -82,6 +82,11 @@ public interface IndexAccessInterface extends AutoCloseable {
     void write(org.rocksdb.WriteBatch batch) throws IndexAccessException;
 
     /**
+     * Flushes memtables to SSTs and compacts the full key range to reduce WAL size and fragmention.
+     */
+    void flushAndCompact() throws IndexAccessException;
+
+    /**
      * Gets the type of this index (e.g., "unigram", "pos").
      */
     String getIndexType();

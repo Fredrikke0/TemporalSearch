@@ -27,8 +27,8 @@ public class Pipeline {
     );
 
     private static final java.util.List<String> ALL_NON_STITCH_INDEX_TYPES = java.util.List.of(
-        "unigram", "bigram", "trigram", "dependency",
-        "ner_date", "pos", "ner", "nash"
+        "rb_unigram", "rb_bigram", "rb_trigram", "rb_dependency",
+        "rb_ner_date", "rb_pos", "rb_ner"
     );
     private static final String TEMP_STITCH_GEN_DIR_NAME = "temp_stitch_gen";
 
@@ -134,7 +134,7 @@ public class Pipeline {
                 .setDefault(java.util.List.of("all"))
                 .nargs("+")
                 .help("Type of index to generate (can specify multiple, space-separated): " +
-                      "unigram, bigram, trigram, dependency, ner_date, ner, pos, nash, " +
+                      "rb_unigram, rb_bigram, rb_trigram, rb_dependency, rb_ner_date, rb_ner, rb_pos, " +
                       "various stitch_* types (e.g., stitch_unigram_date), " +
                       "'stitches' (for all stitch combinations), 'all' (for all available types).");
 
@@ -224,7 +224,7 @@ public class Pipeline {
             java.util.Set<String> baseIndexesPotentiallyNeeded = new java.util.LinkedHashSet<>();
             if (cliRequestedIndexTypes.contains("all") || cliRequestedIndexTypes.contains("stitches")) {
                 baseIndexesPotentiallyNeeded.addAll(java.util.List.of(
-                    "unigram", "bigram", "trigram", "ner", "ner_date", "pos"
+                    "rb_unigram", "rb_bigram", "rb_trigram", "rb_ner", "rb_ner_date", "rb_pos"
                 ));
             }
             cliRequestedIndexTypes.stream()

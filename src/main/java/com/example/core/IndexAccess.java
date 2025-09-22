@@ -106,6 +106,32 @@ public class IndexAccess implements IndexAccessInterface {
         }
     }
 
+    @Override
+    public void flushAndCompact() throws IndexAccessException {
+        checkOpen();
+        try (org.rocksdb.FlushOptions fo = new org.rocksdb.FlushOptions()) {
+            fo.setWaitForFlush(true);
+            db.flush(fo);
+        } catch (RocksDBException e) {
+            throw new IndexAccessException(
+                "Failed to flush memtables: " + e.getMessage(),
+                indexType,
+                IndexAccessException.ErrorType.WRITE_ERROR,
+                e
+            );
+        }
+        try {
+            db.compactRange();
+        } catch (RocksDBException e) {
+            throw new IndexAccessException(
+                "Failed to compact range: " + e.getMessage(),
+                indexType,
+                IndexAccessException.ErrorType.WRITE_ERROR,
+                e
+            );
+        }
+    }
+
     /**
      * Creates a new write batch.
      * Implements the interface method.
