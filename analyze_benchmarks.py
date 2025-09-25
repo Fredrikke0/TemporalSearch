@@ -110,7 +110,7 @@ def analyze_benchmarks(csv_filepath):
 
     return stats, strategy_tuples
 
-def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performance Summary"):
+def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performance Summary", dataset_slug=None, hop_label=None, dataset_display=None, caption_override=None, label_override=None):
     """
     Generates a LaTeX table from the aggregated benchmark results with mean ± SD format.
     Outputs a fragment suitable for inclusion in a larger document, wrapped in a table environment.
@@ -121,9 +121,27 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
 
     latex_string = "\\begin{table}[htbp]\n"
     latex_string += "\\centering\n"
-    latex_string += f"\\caption{{{table_title.replace('-', ' ').title()}. Times shown as mean ± standard deviation in milliseconds (ms).}}\n"
-    sanitized_title_for_label = re.sub(r'[^a-zA-Z0-9_]', '', table_title.lower().replace(' ', '_'))
-    latex_string += f"\\label{{fig:benchmark_summary_{sanitized_title_for_label}}}\n"
+
+    # Build hop-specific caption/label if provided/detectable
+    if caption_override is not None:
+        caption_text = caption_override
+    elif dataset_slug and hop_label and dataset_display:
+        # Map hop_label like '1hop' -> '1-hop' for caption
+        hop_caption = hop_label.replace('hop', '-hop') if hop_label.endswith('hop') else hop_label
+        caption_text = f"{dataset_display} {hop_caption} evaluation. Times shown as mean ± standard deviation in milliseconds (ms). Includes percentage improvement from previous strategy."
+    else:
+        caption_text = f"{table_title.replace('-', ' ').title()}. Times shown as mean ± standard deviation in milliseconds (ms)."
+
+    if label_override is not None:
+        label_text = label_override
+    elif dataset_slug and hop_label:
+        label_text = f"benchmark_summary_{dataset_slug}_{hop_label}"
+    else:
+        sanitized_title_for_label = re.sub(r'[^a-zA-Z0-9_]', '', table_title.lower().replace(' ', '_'))
+        label_text = f"benchmark_summary_{sanitized_title_for_label}"
+
+    latex_string += f"\\caption{{{caption_text}}}\n"
+    latex_string += f"\\label{{fig:{label_text}}}\n"
 
     latex_string += "\\begin{tabular}{@{}\n"
     latex_string += "c\n"
@@ -380,8 +398,24 @@ Examples:
             summary_output = generate_summary_table(aggregated_data, strategies_to_render, table_title)
             print(summary_output)
             print("=" * 80)
-            # Generate and print LaTeX table
-            latex_output = generate_latex_table(aggregated_data, strategies_to_render, table_title)
+            # Prepare hop label for LaTeX caption/label
+            hop_label_for_label = None
+            if hop_type_in_title == "1-hop":
+                hop_label_for_label = "1hop"
+            elif hop_type_in_title == "2-hops":
+                hop_label_for_label = "2hop"
+            elif hop_type_in_title == "3-hops":
+                hop_label_for_label = "3hop"
+
+            # Generate and print LaTeX table with hop-specific caption/label when detectable
+            latex_output = generate_latex_table(
+                aggregated_data,
+                strategies_to_render,
+                table_title,
+                dataset_slug="X",
+                hop_label=hop_label_for_label,
+                dataset_display="X"
+            )
             print(latex_output)
     else:
         # Errors from analyze_benchmarks (e.g., file not found) are printed to stderr within the function

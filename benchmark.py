@@ -787,7 +787,7 @@ if __name__ == "__main__":
     parser.add_argument("--index-root-dir", required=True, help="Root directory containing project index folders.")
     parser.add_argument("--full", action="store_true", help="Run cold and warm cache modes. Default: cold only.")
     parser.add_argument("--verbose", action="store_true", help="Verbose output from benchmark script and QueryCLI.")
-    parser.add_argument("--output-dir", required=True, help="Directory to store all benchmark results. A subdirectory will be created for each query file's benchmark type and name.")
+    parser.add_argument("--output-dir", required=True, help="Directory to store all benchmark results. A subdirectory will be created for each query file's name.")
     args = parser.parse_args()
 
     queries_to_run_orig = [] # This will be populated per file now
@@ -878,7 +878,7 @@ if __name__ == "__main__":
         results_for_this_file_accumulator = []
 
         original_filename_no_ext = os.path.splitext(current_filename)[0]
-        file_output_dir = os.path.join(args.output_dir, benchmark_type_for_file, original_filename_no_ext)
+        file_output_dir = os.path.join(args.output_dir, original_filename_no_ext)
         os.makedirs(file_output_dir, exist_ok=True)
         print(f"  Output for this file will be stored in: {file_output_dir}", flush=True)
 
@@ -954,7 +954,7 @@ if __name__ == "__main__":
         ]
         original_filename_no_ext = os.path.splitext(current_filename)[0]
         # benchmark_type_for_file should be correctly set from file reading
-        output_csv_filename = f"{original_filename_no_ext}_{benchmark_type_for_file}_results.csv"
+        output_csv_filename = f"{original_filename_no_ext}_results.csv"
         output_csv_filepath = os.path.join(file_output_dir, output_csv_filename)
 
         print(f"  Writing results for {current_filename} (Type: {benchmark_type_for_file}) to {output_csv_filepath}", flush=True)
