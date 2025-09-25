@@ -32,6 +32,8 @@ import com.example.core.Position;
 import com.example.core.PositionListSoA;
 import com.example.core.index.MockIndexAccess;
 import com.example.index.NashDateEntryWithId;
+import com.example.index.presence.RBGroupValueBlob;
+import com.example.index.presence.RBPresenceIndex;
 import com.example.index.util.NashSerializationUtils;
 import com.example.index.util.SynonymManager;
 import com.example.query.executor.AttributeRequirements;
@@ -105,6 +107,11 @@ public class QueryEndToEndTest {
         });
     }
 
+    private static void addPresence(Map<String, RBPresenceIndex> map, String key, int docId, int sentId) {
+        RBPresenceIndex idx = map.computeIfAbsent(key, k -> new RBPresenceIndex());
+        idx.add(docId, sentId);
+    }
+
     // Helper structure for preparing NASH mock data
     private static class NashMockDataEntry {
         LocalDate date;
@@ -138,10 +145,6 @@ public class QueryEndToEndTest {
         File sourceIndexPath = tempDir.resolve("testIndexes/source").toFile();
         sourceIndexPath.mkdirs();
 
-        // Initialize SqliteAccessor - using an in-memory DB for tests to avoid file conflicts
-        // or ensure each test class/method uses a unique file if disk-based is needed.
-        // For simplicity, if your tests allow, ":memory:" is good.
-        // If not, ensure dbFilePath is unique. Here, using a file in tempDir.
         String dbFilePath = tempDir.resolve("testQueryEndToEnd.db").toString();
         SqliteAccessor.initialize(dbFilePath);
 
@@ -149,38 +152,50 @@ public class QueryEndToEndTest {
         staticMockSynonymManager = org.mockito.Mockito.mock(SynonymManager.class);
         mockIndexManager = org.mockito.Mockito.mock(IndexManager.class); // Mock IndexManager
 
-        // Set up the factory with default strategy and granularity for tests
-        // Tests needing specific granularity for LogicalExecutor fusion might need to adjust this
-        // or QueryExecutor needs to re-create factory if granularity changes per query.
-        // The current QueryExecutor design re-creates factory per query, so this factory instance
-        // might not be what's used by QueryExecutor if its internal query has a different granularity.
-        // However, some tests might use this factory directly.
         factory = new ConditionExecutorFactory(staticMockSynonymManager, "optimized", Query.Granularity.DOCUMENT);
 
-        mockUnigramIndex = new MockIndexAccess("unigram");
-        // Add test data sorted by document ID (just like real indexes would be)
-        mockUnigramIndex.addTestData("apple", 1, 1, 0, 5);       // Document 1
-        mockUnigramIndex.addTestData("apple", 2, 1, 10, 15);     // Document 2
-        mockUnigramIndex.addTestData("banana", 2, 2, 20, 25);    // Document 2
-        mockUnigramIndex.addTestData("test", 0, 0, 0, 4);        // Document 0
-        mockUnigramIndex.addTestData("test", 1, 1, 0, 4);        // Document 1
-        mockUnigramIndex.addTestData("window", 0, 1, 0, 6);      // Document 0
-        mockUnigramIndex.addTestData("window", 0, 3, 0, 6);      // Document 0
-        mockUnigramIndex.addTestData("grape", 3, 1, 5, 10);      // Document 3
+        mockUnigramIndex = new MockIndexAccess("rb_unigram");
+        mockBigramIndex = new MockIndexAccess("rb_bigram");
+        mockTrigramIndex = new MockIndexAccess("rb_trigram");
 
-        mockBigramIndex = new MockIndexAccess();
-        mockBigramIndex.addTestData("read" + DELIMITER + "monkey", 3, 1, 10, 20);
-        mockBigramIndex.addTestData("big" + DELIMITER + "cat", 4, 1, 0, 6);
+        // Build RB presence for n-grams
+        Map<String, RBPresenceIndex> uniPresence = new HashMap<>();
+        Map<String, RBPresenceIndex> biPresence = new HashMap<>();
+        Map<String, RBPresenceIndex> triPresence = new HashMap<>();
 
-        mockTrigramIndex = new MockIndexAccess();
-        mockTrigramIndex.addTestData("the" + DELIMITER + "quick" + DELIMITER + "fox", 5, 1, 0, 15);
+        // Unigrams
+        addPresence(uniPresence, "apple", 1, 1);
+        addPresence(uniPresence, "apple", 2, 1);
+        addPresence(uniPresence, "banana", 2, 2);
+        addPresence(uniPresence, "test", 0, 0);
+        addPresence(uniPresence, "test", 1, 1);
+        addPresence(uniPresence, "window", 0, 1);
+        addPresence(uniPresence, "window", 0, 3);
+        addPresence(uniPresence, "grape", 3, 1);
 
-        mockNerIndex = new MockIndexAccess();
+        // Bigrams
+        addPresence(biPresence, "read" + DELIMITER + "monkey", 3, 1);
+        addPresence(biPresence, "big" + DELIMITER + "cat", 4, 1);
 
-        // --- New NER Mock Data Population ---
+        // Trigrams
+        addPresence(triPresence, "the" + DELIMITER + "quick" + DELIMITER + "fox", 5, 1);
+
+        // Write presence bytes
+        for (var e : uniPresence.entrySet()) {
+            mockUnigramIndex.addRawTestData(e.getKey().getBytes(StandardCharsets.UTF_8), e.getValue().toBytes());
+        }
+        for (var e : biPresence.entrySet()) {
+            mockBigramIndex.addRawTestData(e.getKey().getBytes(StandardCharsets.UTF_8), e.getValue().toBytes());
+        }
+        for (var e : triPresence.entrySet()) {
+            mockTrigramIndex.addRawTestData(e.getKey().getBytes(StandardCharsets.UTF_8), e.getValue().toBytes());
+        }
+
+        mockNerIndex = new MockIndexAccess("rb_ner");
+
+        // --- NER RBGroupValueBlob population (unchanged) ---
         Map<String, PositionListSoA> nerDataMap = new HashMap<>();
 
-        // Helper to add NER test data to the map
         NerDataAdder addNerData =
             (type, term, docId, sentId, begin, end) -> {
             int synId = getOrAssignNerSynId(term); // Uses helper, mocks staticMockSynonymManager
@@ -188,7 +203,6 @@ public class QueryEndToEndTest {
             soa.add(docId, sentId, begin, end, synId);
         };
 
-        // Old mockNerIndex.addTestData calls, converted:
         addNerData.add("PERSON", "albert einstein", 6, 1, 0, 15);
         addNerData.add("PERSON", "marie curie", 6, 2, 20, 30);
         addNerData.add("PERSON", "isaac newton", 7, 1, 5, 17);
@@ -202,18 +216,41 @@ public class QueryEndToEndTest {
         addNerData.add("PERSON", "albrecht kossel", 12, 1, 5, 20);
 
         for (Map.Entry<String, PositionListSoA> entry : nerDataMap.entrySet()) {
-            mockNerIndex.put(entry.getKey().getBytes(StandardCharsets.UTF_8), entry.getValue().serializeToCompositeBlob());
+            String type = entry.getKey();
+            PositionListSoA soa = entry.getValue();
+
+            // Build presence + value blocks
+            RBPresenceIndex presence = new RBPresenceIndex();
+            Map<Integer, Map<Integer, List<Integer>>> docSentVals = new HashMap<>();
+            int n = soa.getNumPositions();
+            for (int i = 0; i < n; i++) {
+                int d = soa.getDocIdAt(i);
+                int s = soa.getSentenceIdAt(i);
+                int synId = soa.getSynonymIdAt(i);
+                presence.add(d, s);
+                docSentVals.computeIfAbsent(d, k -> new HashMap<>())
+                           .computeIfAbsent(s, k -> new ArrayList<>())
+                           .add(synId);
+            }
+            Map<Integer, RBGroupValueBlob.DocBlock> blocks = RBGroupValueBlob.buildDocBlocksFromPresenceAndValues(presence, docSentVals);
+            RBGroupValueBlob blob = new RBGroupValueBlob(presence, blocks);
+            byte[] bytes = blob.toBytes();
+            mockNerIndex.addRawTestData(type.getBytes(StandardCharsets.UTF_8), bytes);
         }
-        // --- End New NER Mock Data Population ---
+        // --- End NER RBGroupValueBlob population ---
 
-        mockNerDateIndex = new MockIndexAccess("ner_date");
-        // Add test data sorted by document ID (just like real indexes would be)
-        mockNerDateIndex.addTestData("20230320", 1, 1, 30, 40);  // Document 1
-        mockNerDateIndex.addTestData("20230115", 2, 1, 0, 10);   // Document 2
-        mockNerDateIndex.addTestData("20240101", 3, 1, 50, 60);  // Document 3
-        mockNerDateIndex.addTestData("20240115", 30, 1, 0, 10);  // Document 30
+        mockNerDateIndex = new MockIndexAccess("rb_ner_date");
+        // rb_ner_date as RB presence
+        Map<String, RBPresenceIndex> datePresence = new HashMap<>();
+        addPresence(datePresence, "20230320", 1, 1);
+        addPresence(datePresence, "20230115", 2, 1);
+        addPresence(datePresence, "20240101", 3, 1);
+        addPresence(datePresence, "20240115", 30, 1);
+        for (var e : datePresence.entrySet()) {
+            mockNerDateIndex.addRawTestData(e.getKey().getBytes(StandardCharsets.UTF_8), e.getValue().toBytes());
+        }
 
-        mockNashIndex = new MockIndexAccess();
+        mockNashIndex = new MockIndexAccess("nash");
 
         // --- Consolidated NASH Mock Data Population ---
         List<LocalDate> idToDateLookupListForNash = new ArrayList<>();
@@ -315,11 +352,11 @@ public class QueryEndToEndTest {
         // --- End Consolidated NASH Mock Data Population ---
 
         mockIndexes = Map.of(
-            "unigram", mockUnigramIndex,
-            "bigram", mockBigramIndex,
-            "trigram", mockTrigramIndex,
-            "ner", mockNerIndex,
-            "ner_date", mockNerDateIndex,
+            "rb_unigram", mockUnigramIndex,
+            "rb_bigram", mockBigramIndex,
+            "rb_trigram", mockTrigramIndex,
+            "rb_ner", mockNerIndex,
+            "rb_ner_date", mockNerDateIndex,
             "nash", mockNashIndex
         );
 

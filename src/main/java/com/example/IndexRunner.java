@@ -296,7 +296,7 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new com.example.index.generators.rb.RBNerIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -314,7 +314,7 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new com.example.index.generators.rb.RBPosIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();

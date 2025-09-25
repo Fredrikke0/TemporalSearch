@@ -93,6 +93,10 @@ public class RocksDBBrowser {
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
                 .help("Show basic statistics about the selected index (or all indexes if 'all' is chosen for index_type). If no key or prefix is specified, only stats are shown.");
 
+        parser.addArgument("--analyze-syn")
+                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
+                .help("Analyze synonymIds compression usage and efficiency across entries. Honors --match prefix filter. Shows encoding distribution and average bytes/id.");
+
 
 
         try {
@@ -103,6 +107,7 @@ public class RocksDBBrowser {
             int limit = ns.getInt("limit");
             Integer topN = (Integer) ns.get("top");
             boolean showStats = ns.getBoolean("stats");
+            boolean analyzeSyn = ns.getBoolean("analyze_syn");
 
 
             Path synonymManagerDbPath = Paths.get(basePath, "global_values_lookup.db");
@@ -124,14 +129,14 @@ public class RocksDBBrowser {
                 for (String singleIndexType : ALL_INDEX_TYPES) {
                     System.out.printf("\n--- Processing Index: %s ---\n", singleIndexType);
                     try {
-                        processSingleIndex(singleIndexType, basePath, match, limit, topN, showStats, parser);
+                        processSingleIndex(singleIndexType, basePath, match, limit, topN, showStats, analyzeSyn, parser);
                     } catch (Exception e) {
                         System.err.printf("Error processing index %s: %s%n", singleIndexType, e.getMessage());
                         // Optionally print stack trace for more detail: e.printStackTrace();
                     }
                 }
             } else {
-                processSingleIndex(indexType, basePath, match, limit, topN, showStats, parser);
+                processSingleIndex(indexType, basePath, match, limit, topN, showStats, analyzeSyn, parser);
             }
 
         } catch (ArgumentParserException e) {
@@ -149,7 +154,7 @@ public class RocksDBBrowser {
         }
     }
 
-    private static void processSingleIndex(String indexType, String basePath, String match, int limit, Integer topN, boolean showStats, ArgumentParser parser) throws IOException {
+    private static void processSingleIndex(String indexType, String basePath, String match, int limit, Integer topN, boolean showStats, boolean analyzeSyn, ArgumentParser parser) throws IOException {
         Path dbPathActual;
         if ("synonym_manager_db".equalsIgnoreCase(indexType)) {
             dbPathActual = Paths.get(basePath, "global_values_lookup.db");
@@ -175,6 +180,11 @@ public class RocksDBBrowser {
                     options.close();
                     return;
                 }
+            }
+            if (analyzeSyn) {
+                analyzeSynonymCompression(db, indexType, match, limit);
+                options.close();
+                return;
             }
             if (match != null && topN == null) {
                 listEntriesByPrefix(db, match, limit, indexType);
@@ -382,6 +392,139 @@ public class RocksDBBrowser {
             System.out.printf("Average positions per entry: %.2f%n", totalEntries > 0 ? (double) totalPositions / totalEntries : 0);
         }
         System.out.println();
+    }
+
+    private static void analyzeSynonymCompression(RocksDB db, String indexType, String prefixFilter, int limit) throws IOException {
+        if (!indexType.equals("ner") && !indexType.equals("pos") && !indexType.startsWith("stitch_")) {
+            System.out.println("--analyze-syn is most meaningful for ner/pos/stitch indexes (synonymIds present). Proceeding anyway.");
+        }
+
+        String effectivePrefix = (prefixFilter != null && !prefixFilter.isBlank()) ? prefixFilter : null;
+
+        long entriesScanned = 0;
+        long totalPositions = 0;
+        long synAllEqualRLE = 0;
+        long synRunRLE = 0;
+        long synRawBytes = 0;
+        long synVarInt = 0;
+        long synRawInts = 0;
+        long synUnknownMarker = 0;
+        long totalSynBytes = 0;
+
+        try (RocksIterator iterator = db.newIterator()) {
+            iterator.seekToFirst();
+            while (iterator.isValid() && (limit == 0 || entriesScanned < limit)) {
+                String keyStr = asString(iterator.key());
+                if (effectivePrefix != null && !keyStr.startsWith(effectivePrefix)) {
+                    iterator.next();
+                    continue;
+                }
+                byte[] value = iterator.value();
+                try (java.io.DataInputStream dis = new java.io.DataInputStream(new java.io.ByteArrayInputStream(value))) {
+                    int num = dis.readInt();
+                    if (num <= 0) { iterator.next(); continue; }
+                    totalPositions += num;
+                    skipArray(dis, true);  // docIds
+                    skipArray(dis, true);  // sentIds
+                    skipArray(dis, true);  // begin
+                    skipArray(dis, false); // lengths
+
+                    int marker = dis.readInt();
+                    int bytesForSyn;
+                    if (marker == PositionListSoA.RLE_ENCODED_MARKER) {
+                        synAllEqualRLE++;
+                        bytesForSyn = 4; // single int payload
+                    } else if (marker == PositionListSoA.RLE_RUNS_MARKER) {
+                        synRunRLE++;
+                        bytesForSyn = dis.readInt();
+                        dis.skipBytes(bytesForSyn);
+                        // account header (marker + size int) in bytes tally
+                        totalSynBytes += 8L + bytesForSyn;
+                        entriesScanned++;
+                        iterator.next();
+                        continue;
+                    } else if (marker == PositionListSoA.VARINT_ENCODED_MARKER) {
+                        synVarInt++;
+                        bytesForSyn = dis.readInt();
+                        dis.skipBytes(bytesForSyn);
+                        totalSynBytes += 8L + bytesForSyn;
+                        entriesScanned++;
+                        iterator.next();
+                        continue;
+                    } else if (marker == PositionListSoA.RAW_BYTE_ARRAY_MARKER) {
+                        synRawBytes++;
+                        bytesForSyn = dis.readInt();
+                        dis.skipBytes(bytesForSyn);
+                        totalSynBytes += 8L + bytesForSyn;
+                        entriesScanned++;
+                        iterator.next();
+                        continue;
+                    } else if (marker > 0) {
+                        // Legacy/raw 4-byte ints
+                        synRawInts++;
+                        bytesForSyn = marker; // marker is byte count
+                        dis.skipBytes(bytesForSyn);
+                        totalSynBytes += 4L + bytesForSyn; // marker (size) + payload
+                        entriesScanned++;
+                        iterator.next();
+                        continue;
+                    } else {
+                        synUnknownMarker++;
+                        // best effort: nothing further
+                        entriesScanned++;
+                        iterator.next();
+                        continue;
+                    }
+                    // For RLE_ENCODED_MARKER branch: we read one extra int already
+                    totalSynBytes += 8L; // marker + one int value
+                } catch (Exception e) {
+                    System.err.printf("Failed to parse entry for key '%s': %s%n", keyStr, e.getMessage());
+                }
+                entriesScanned++;
+                iterator.next();
+            }
+        }
+
+        System.out.println("SynonymIds Compression Analysis");
+        System.out.println("================================");
+        System.out.printf("Entries scanned: %,d\n", entriesScanned);
+        System.out.printf("Total positions counted: %,d\n", totalPositions);
+        long encTotal = synAllEqualRLE + synRunRLE + synRawBytes + synVarInt + synRawInts + synUnknownMarker;
+        if (encTotal == 0) encTotal = 1; // avoid div by zero
+        System.out.printf("All-equal RLE: %,d (%.2f%%)\n", synAllEqualRLE, 100.0 * synAllEqualRLE / encTotal);
+        System.out.printf("Run RLE:       %,d (%.2f%%)\n", synRunRLE, 100.0 * synRunRLE / encTotal);
+        System.out.printf("Raw bytes:     %,d (%.2f%%)\n", synRawBytes, 100.0 * synRawBytes / encTotal);
+        System.out.printf("VarInt:        %,d (%.2f%%)\n", synVarInt, 100.0 * synVarInt / encTotal);
+        System.out.printf("Raw 4-byte:    %,d (%.2f%%)\n", synRawInts, 100.0 * synRawInts / encTotal);
+        if (synUnknownMarker > 0) {
+            System.out.printf("Unknown:       %,d (%.2f%%)\n", synUnknownMarker, 100.0 * synUnknownMarker / encTotal);
+        }
+        double avgBytesPerId = (totalPositions > 0) ? ((double) totalSynBytes / totalPositions) : 0.0;
+        System.out.printf("Estimated avg bytes per synonymId: %.3f\n", avgBytesPerId);
+    }
+
+    // Minimal array skipper mirroring PositionListSoA header semantics for stats
+    private static void skipArray(java.io.DataInputStream dis, boolean delta) throws IOException {
+        int marker = dis.readInt();
+        if (marker == PositionListSoA.RLE_ENCODED_MARKER) {
+            dis.readInt();
+            return;
+        }
+        if (!delta) {
+            if (marker == PositionListSoA.RLE_RUNS_MARKER || marker == PositionListSoA.VARINT_ENCODED_MARKER || marker == PositionListSoA.RAW_BYTE_ARRAY_MARKER) {
+                int payload = dis.readInt();
+                long skipped = dis.skipBytes(payload);
+                if (skipped != payload) throw new IOException("Failed to skip payload");
+                return;
+            }
+        }
+        if (marker > 0) {
+            long skipped = dis.skipBytes(marker);
+            if (skipped != marker) throw new IOException("Failed to skip array payload");
+            return;
+        }
+        if (marker == 0) return; // empty
+        throw new IOException("Unexpected marker while skipping array: " + marker);
     }
 
     private static void listEntriesByPrefix(RocksDB db, String prefix, int limit, String indexType) throws IOException {

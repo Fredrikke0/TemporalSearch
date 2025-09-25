@@ -159,7 +159,7 @@ public class IndexManager implements AutoCloseable {
                     logger.error("Failed to initialize required {} index at {}: {} [Type: {}]",
                         type, indexBaseDir.resolve(type), e.getMessage(), e.getErrorType());
                 }
-                if (specificOptions != null && !createdOptionsList.contains(specificOptions) && !indexes.containsValue(specificOptions)) {
+                if (specificOptions != null && !createdOptionsList.contains(specificOptions)) {
                     specificOptions.close();
                 }
             } catch (Exception e) {
@@ -170,7 +170,7 @@ public class IndexManager implements AutoCloseable {
                     logger.error("Unexpected error initializing required {} index at {}: {}",
                         type, indexBaseDir.resolve(type), e.getMessage(), e);
                 }
-                if (specificOptions != null && !createdOptionsList.contains(specificOptions) && !indexes.containsValue(specificOptions)) {
+                if (specificOptions != null && !createdOptionsList.contains(specificOptions)) {
                     specificOptions.close();
                 }
             }
@@ -241,14 +241,14 @@ public class IndexManager implements AutoCloseable {
     private Set<String> getAllKnownIndexTypes() {
         Set<String> knownTypes = new HashSet<>();
         // Base n-grams
-        knownTypes.add("unigram");
-        knownTypes.add("bigram");
-        knownTypes.add("trigram");
+        knownTypes.add("rb_unigram");
+        knownTypes.add("rb_bigram");
+        knownTypes.add("rb_trigram");
         // Annotation types
-        knownTypes.add("ner");
-        knownTypes.add("ner_date");
-        knownTypes.add("pos");
-        knownTypes.add("dependency");
+        knownTypes.add("rb_ner");
+        knownTypes.add("rb_ner_date");
+        knownTypes.add("rb_pos");
+        knownTypes.add("rb_dependency");
         // Special temporal index
         knownTypes.add("nash");
         // Stitch variants (add all common ones)
@@ -295,8 +295,8 @@ public class IndexManager implements AutoCloseable {
                 required.add("nash");
                  logger.debug("Nash strategy selected, requiring 'nash' index.");
             } else {
-                required.add("ner_date");
-                 logger.debug("Naive strategy selected (or DATE condition present), requiring 'ner_date' index.");
+                required.add("rb_ner_date");
+                 logger.debug("Naive strategy selected (or DATE condition present), requiring 'rb_ner_date' index.");
             }
         }
 
@@ -364,22 +364,21 @@ public class IndexManager implements AutoCloseable {
             collectIndexesForCondition(notCondition.condition(), required);
         } else if (condition instanceof Contains contains) {
             int numTerms = contains.terms().size();
-            if (numTerms >= 3) required.add("trigram");
-            if (numTerms >= 2) required.add("bigram"); // Needs bigram if 2 or more
-            if (numTerms >= 1) required.add("unigram"); // Always need unigram if CONTAINS is used
+            if (numTerms >= 3) required.add("rb_trigram");
+            if (numTerms >= 2) required.add("rb_bigram");
+            if (numTerms >= 1) required.add("rb_unigram");
         } else if (condition instanceof Ner ner) {
             if ("DATE".equalsIgnoreCase(ner.entityType())) {
-                required.add("ner_date");
+                required.add("rb_ner_date");
             } else {
-                required.add("ner");
+                required.add("rb_ner");
             }
         } else if (condition instanceof Pos) {
-            required.add("pos");
+            required.add("rb_pos");
         } else if (condition instanceof Dependency) {
-            required.add("dependency");
+            required.add("rb_dependency");
         } else if (condition instanceof Temporal) {
-            // The main logic in determineRequiredIndexes handles strategy-based index selection (nash/ner_date)
-            // No specific index needed *just* for Temporal condition itself here, strategy dictates it.
+            // Temporal handled separately in determineRequiredIndexes
         }
     }
 
@@ -411,6 +410,7 @@ public class IndexManager implements AutoCloseable {
       * @param query The query to check
       * @return true if a NER(DATE) condition exists, false otherwise
       */
+      @SuppressWarnings("unused")
       private boolean queryHasNerDateCondition(Query query) {
           if (query.conditions() != null && containsNerDateCondition(query.conditions())) {
               return true;
@@ -570,32 +570,32 @@ public class IndexManager implements AutoCloseable {
         if (condition instanceof Contains containsCondition) {
             String[] terms = containsCondition.terms().toArray(new String[0]);
             // Prefer most specific N-gram index *that was initialized*
-            if (terms.length >= 3 && indexes.containsKey("trigram")) {
-                return Optional.of(indexes.get("trigram"));
-            } else if (terms.length >= 2 && indexes.containsKey("bigram")) {
-                return Optional.of(indexes.get("bigram"));
-            } else if (indexes.containsKey("unigram")) { // Must have unigram if CONTAINS was used
-                return Optional.of(indexes.get("unigram"));
+            if (terms.length >= 3 && indexes.containsKey("rb_trigram")) {
+                return Optional.of(indexes.get("rb_trigram"));
+            } else if (terms.length >= 2 && indexes.containsKey("rb_bigram")) {
+                return Optional.of(indexes.get("rb_bigram"));
+            } else if (indexes.containsKey("rb_unigram")) { // Must have rb_unigram if CONTAINS was used
+                return Optional.of(indexes.get("rb_unigram"));
             }
         } else if (condition instanceof Ner nerCondition) {
             String entityType = nerCondition.entityType();
-            if ("DATE".equals(entityType) && indexes.containsKey("ner_date")) {
-                return Optional.of(indexes.get("ner_date"));
-            } else if (indexes.containsKey("ner")) {
-                return Optional.of(indexes.get("ner"));
+            if ("DATE".equals(entityType) && indexes.containsKey("rb_ner_date")) {
+                return Optional.of(indexes.get("rb_ner_date"));
+            } else if (indexes.containsKey("rb_ner")) {
+                return Optional.of(indexes.get("rb_ner"));
             }
         } else if (condition instanceof Temporal) {
-             // Temporal conditions rely on either 'nash' or 'ner_date' based on strategy
+             // Temporal conditions rely on either 'nash' or 'rb_ner_date' based on strategy
              // Check which one was initialized
              if (indexes.containsKey("nash")) {
                  return Optional.of(indexes.get("nash"));
-             } else if (indexes.containsKey("ner_date")) {
-                 return Optional.of(indexes.get("ner_date"));
+             } else if (indexes.containsKey("rb_ner_date")) {
+                 return Optional.of(indexes.get("rb_ner_date"));
              }
-        } else if (condition instanceof Dependency && indexes.containsKey("dependency")) {
-            return Optional.of(indexes.get("dependency"));
-        } else if (condition instanceof Pos && indexes.containsKey("pos")) {
-             return Optional.of(indexes.get("pos"));
+        } else if (condition instanceof Dependency && indexes.containsKey("rb_dependency")) {
+            return Optional.of(indexes.get("rb_dependency"));
+        } else if (condition instanceof Pos && indexes.containsKey("rb_pos")) {
+             return Optional.of(indexes.get("rb_pos"));
         }
 
         // If no specific index type matches or the required one wasn't initialized

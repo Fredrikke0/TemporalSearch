@@ -18,6 +18,9 @@ import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.index.AnnotationEntry;
 import com.example.index.presence.RBPresenceIndex;
+import com.example.index.presence.RBGroupValueBlob;
+import com.example.index.presence.RBGroupValueBlob.DocBlock;
+import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 
 public final class RBPosIndexGenerator implements AutoCloseable {
@@ -28,12 +31,14 @@ public final class RBPosIndexGenerator implements AutoCloseable {
     private final ProgressTracker progress;
     private final int batchSize;
     private long totalTermsWrittenToIndex = 0;
+    private final SynonymManager synonymManager;
 
-    public RBPosIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) {
+    public RBPosIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, SynonymManager synonymManager) {
         this.indexAccess = indexAccess;
         this.sqliteConn = sqliteConn;
         this.progress = progress;
         this.batchSize = batchSize;
+        this.synonymManager = synonymManager;
     }
 
     public long getDocumentCountForIndex() throws SQLException {
@@ -50,8 +55,8 @@ public final class RBPosIndexGenerator implements AutoCloseable {
         while (true) {
             List<AnnotationEntry> batch = fetchBatch(last);
             if (batch.isEmpty()) break;
-            Map<String, RBPresenceIndex> agg = processBatch(batch);
-            writeAggregates(agg);
+            var agg = processBatch(batch);
+            writeAggregates(agg.getKey(), agg.getValue());
             last = batch.get(batch.size() - 1);
             progress.updateIndex(batch.size());
         }
@@ -77,31 +82,92 @@ public final class RBPosIndexGenerator implements AutoCloseable {
         return batch;
     }
 
-    private Map<String, RBPresenceIndex> processBatch(List<AnnotationEntry> batch) {
-        Map<String, RBPresenceIndex> tmp = new HashMap<>();
+    private java.util.AbstractMap.SimpleEntry<Map<String, RBPresenceIndex>, Map<String, Map<Integer, Map<Integer, java.util.List<Integer>>>>> processBatch(List<AnnotationEntry> batch) {
+        Map<String, RBPresenceIndex> presenceByTag = new HashMap<>();
+        Map<String, Map<Integer, Map<Integer, java.util.List<Integer>>>> valuesByTag = new HashMap<>();
         for (AnnotationEntry e : batch) {
             String pos = e.getPos(); String token = e.getToken();
             if (pos == null || pos.isEmpty() || token == null || token.isEmpty()) continue;
             String key = pos.toUpperCase();
-            RBPresenceIndex idx = tmp.computeIfAbsent(key, k -> new RBPresenceIndex());
-            idx.add(e.getDocumentId(), e.getSentenceId());
+            presenceByTag.computeIfAbsent(key, k -> new RBPresenceIndex()).add(e.getDocumentId(), e.getSentenceId());
+            int synId;
+            try { synId = synonymManager.getId(token.toLowerCase()); } catch (Exception ex) { synId = -1; }
+            if (synId >= 0) {
+                valuesByTag
+                    .computeIfAbsent(key, k -> new HashMap<>())
+                    .computeIfAbsent(e.getDocumentId(), k -> new HashMap<>())
+                    .computeIfAbsent(e.getSentenceId(), k -> new java.util.ArrayList<>())
+                    .add(synId);
+            }
         }
-        return tmp;
+        return new java.util.AbstractMap.SimpleEntry<>(presenceByTag, valuesByTag);
     }
 
-    private void writeAggregates(Map<String, RBPresenceIndex> agg) throws IOException {
-        if (agg.isEmpty()) return; org.rocksdb.WriteBatch wb;
+    private void writeAggregates(Map<String, RBPresenceIndex> presenceByTag, Map<String, Map<Integer, Map<Integer, java.util.List<Integer>>>> valuesByTag) throws IOException {
+        if (presenceByTag.isEmpty()) return; org.rocksdb.WriteBatch wb;
         try { wb = indexAccess.createWriteBatch(); } catch (IndexAccessException e) { throw new IOException("Failed to create write batch", e); }
-        for (Map.Entry<String, RBPresenceIndex> e : agg.entrySet()) {
+        for (Map.Entry<String, RBPresenceIndex> e : presenceByTag.entrySet()) {
             String key = e.getKey(); byte[] k = key.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             try {
                 Optional<byte[]> existing = indexAccess.getRaw(k);
-                if (existing.isPresent()) { RBPresenceIndex prev = RBPresenceIndex.fromBytes(existing.get()); RBPresenceIndex merged = (RBPresenceIndex) prev.or(e.getValue()); wb.put(k, merged.toBytes()); }
-                else { wb.put(k, e.getValue().toBytes()); totalTermsWrittenToIndex++; }
+                Map<Integer, Map<Integer, java.util.List<Integer>>> docSentValues = valuesByTag.getOrDefault(key, java.util.Collections.emptyMap());
+                if (existing.isPresent()) {
+                    RBGroupValueBlob prev = RBGroupValueBlob.fromBytes(existing.get());
+                    RBPresenceIndex mergedPresence = (RBPresenceIndex) prev.getPresenceIndex().or(e.getValue());
+                    Map<Integer, DocBlock> existingBlocks = prev.getDocBlocks();
+                    Map<Integer, DocBlock> newBlocks = RBGroupValueBlob.buildDocBlocksFromPresenceAndValues(e.getValue(), docSentValues);
+                    Map<Integer, DocBlock> mergedBlocks = mergeBlocks(existingBlocks, newBlocks);
+                    RBGroupValueBlob out = new RBGroupValueBlob(mergedPresence, mergedBlocks);
+                    wb.put(k, out.toBytes());
+                } else {
+                    Map<Integer, DocBlock> blocks = RBGroupValueBlob.buildDocBlocksFromPresenceAndValues(e.getValue(), docSentValues);
+                    RBGroupValueBlob out = new RBGroupValueBlob(e.getValue(), blocks);
+                    wb.put(k, out.toBytes());
+                    totalTermsWrittenToIndex++;
+                }
             } catch (IndexAccessException ex) { throw new IOException("Index access error while writing key: " + key, ex); }
             catch (org.rocksdb.RocksDBException ex) { throw new IOException("RocksDB error while staging write for key: " + key, ex); }
         }
         try { indexAccess.write(wb); } catch (IndexAccessException ex) { throw new IOException("Failed to write batch", ex); } finally { wb.close(); }
+    }
+
+    private Map<Integer, DocBlock> mergeBlocks(Map<Integer, DocBlock> a, Map<Integer, DocBlock> b) {
+        Map<Integer, DocBlock> out = new HashMap<>();
+        java.util.Set<Integer> allDocs = new java.util.HashSet<>();
+        allDocs.addAll(a.keySet());
+        allDocs.addAll(b.keySet());
+        for (int docId : allDocs) {
+            DocBlock ab = a.get(docId);
+            DocBlock bb = b.get(docId);
+            if (ab == null) { out.put(docId, bb); continue; }
+            if (bb == null) { out.put(docId, ab); continue; }
+            java.util.Map<Integer, java.util.List<Integer>> map = new java.util.HashMap<>();
+            for (int i = 0; i < ab.sentIds.length; i++) {
+                int sid = ab.sentIds[i];
+                java.util.List<Integer> vals = map.computeIfAbsent(sid, k -> new java.util.ArrayList<>());
+                vals.addAll(ab.getValuesForSentenceIndex(i));
+            }
+            for (int i = 0; i < bb.sentIds.length; i++) {
+                int sid = bb.sentIds[i];
+                java.util.List<Integer> vals = map.computeIfAbsent(sid, k -> new java.util.ArrayList<>());
+                vals.addAll(bb.getValuesForSentenceIndex(i));
+            }
+            java.util.List<Integer> sids = new java.util.ArrayList<>(map.keySet());
+            java.util.Collections.sort(sids);
+            int S = sids.size();
+            int[] sentIds = new int[S];
+            int[] offsets = new int[S+1];
+            java.util.List<Integer> values = new java.util.ArrayList<>();
+            for (int i = 0; i < S; i++) {
+                int sid = sids.get(i); sentIds[i] = sid; offsets[i] = values.size();
+                java.util.LinkedHashSet<Integer> set = new java.util.LinkedHashSet<>(map.get(sid));
+                values.addAll(set);
+            }
+            offsets[S] = values.size();
+            int[] valArr = values.stream().mapToInt(Integer::intValue).toArray();
+            out.put(docId, new DocBlock(sentIds, offsets, valArr));
+        }
+        return out;
     }
 
     @Override public void close() throws IOException {}

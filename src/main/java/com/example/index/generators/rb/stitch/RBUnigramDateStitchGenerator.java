@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.Optional;
 
 import org.rocksdb.Options;
 import org.rocksdb.RocksIterator;
@@ -52,8 +51,8 @@ public final class RBUnigramDateStitchGenerator implements AutoCloseable {
 
         try (Options ro = RocksDBConfig.createOptimizedOptions()) {
             ro.setCreateIfMissing(false);
-            IndexAccessInterface unigram = new IndexAccess(baseDir.resolve("rb_unigram"), "rb_unigram", ro, true);
-            IndexAccessInterface dates = new IndexAccess(baseDir.resolve("rb_ner_date"), "rb_ner_date", ro, true);
+            try (IndexAccessInterface unigram = new IndexAccess(baseDir.resolve("rb_unigram"), "rb_unigram", ro, true);
+                 IndexAccessInterface dates = new IndexAccess(baseDir.resolve("rb_ner_date"), "rb_ner_date", ro, true)) {
 
             int wrote = 0;
             org.rocksdb.WriteBatch wb = outIndex.createWriteBatch();
@@ -77,8 +76,16 @@ public final class RBUnigramDateStitchGenerator implements AutoCloseable {
 
                     String outKeyStr = tokenStr + String.valueOf(com.example.core.IndexAccessInterface.DELIMITER) + dateStr;
                     byte[] outKey = outKeyStr.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    byte[] outBytes;
                     try {
-                        wb.put(outKey, intersect.toBytes());
+                        // Try to parse right side as RBGroupValueBlob to carry sentence blocks.
+                        // For rb_ner_date the values are dates; we only need presence. Keep presence-only blob.
+                        outBytes = intersect.toBytes();
+                    } catch (Exception e) {
+                        outBytes = intersect.toBytes();
+                    }
+                    try {
+                        wb.put(outKey, outBytes);
                     } catch (org.rocksdb.RocksDBException ex) {
                         throw new IOException("RocksDB error staging stitch put for key: " + outKeyStr, ex);
                     }
@@ -92,11 +99,10 @@ public final class RBUnigramDateStitchGenerator implements AutoCloseable {
                 uniIt.close();
             }
             dateIt.close();
-            if (wrote % 1000 != 0) {
-                outIndex.write(wb);
-            }
+            if (wrote % 1000 != 0) { outIndex.write(wb); }
             wb.close();
             try { outIndex.flushAndCompact(); } catch (IndexAccessException e) { logger.warn("Flush/compact failed for {}: {}", MY_INDEX_NAME, e.getMessage()); }
+            }
         } catch (IndexAccessException e) {
             throw new IOException("Failed building " + MY_INDEX_NAME + ": " + e.getMessage(), e);
         }

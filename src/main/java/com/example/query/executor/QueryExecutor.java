@@ -25,6 +25,7 @@ import com.example.query.model.condition.Logical.LogicalOperator;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
 import com.example.query.result.TableResultService;
+import com.example.query.executor.presence.PresenceReducer;
 
 /**
  * Executes queries against the provided indexes.
@@ -149,8 +150,14 @@ public class QueryExecutor {
         QueryResultSoA mainConditionsResult = null;
         List<Condition> mainConditions = query.conditions();
 
-        // Initial context for the main conditions is empty (will become unrestricted in LogicalExecutor if needed)
-        Optional<FilteringContext> initialContextForMainConditions = Optional.empty();
+        // Try to pre-compute a restrictive FilteringContext from presence bitmaps to reduce downstream work
+        Optional<FilteringContext> initialContextForMainConditions = PresenceReducer.tryBuildFilteringContext(mainConditions, indexes, granularity);
+        if (initialContextForMainConditions.isPresent()) {
+            logger.debug("PresenceReducer produced initial FilteringContext for main conditions (granularity: {}).", granularity);
+        } else {
+            // Fall back to no pre-filtering
+            initialContextForMainConditions = Optional.empty();
+        }
 
         if (!mainConditions.isEmpty()) {
             logger.debug("Executing main query conditions...");

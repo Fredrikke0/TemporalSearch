@@ -83,11 +83,11 @@ class QueryExecutorTest {
         testRequirements.needsSynonymIds = false;
 
         indexes = new HashMap<>();
-        indexes.put("unigram", unigramIndex);
-        indexes.put("ner", nerIndex);
-        indexes.put("pos", posIndex);
-        indexes.put("dependency", dependencyIndex);
-        indexes.put("ner_date", nerDateIndex);
+        indexes.put("rb_unigram", unigramIndex);
+        indexes.put("rb_ner", nerIndex);
+        indexes.put("rb_pos", posIndex);
+        indexes.put("rb_dependency", dependencyIndex);
+        indexes.put("rb_ner_date", nerDateIndex);
 
         queryExecutor = new QueryExecutor(mockTableResultService, "none", mockSynonymManager, factory);
 

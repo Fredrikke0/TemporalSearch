@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.index.presence.RBPresenceIndex;
 // import com.example.query.binding.MatchDetail; // Removed
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
@@ -26,7 +26,7 @@ import com.example.query.model.condition.Dependency;
  */
 public final class DependencyExecutor implements ConditionExecutor<Dependency> {
     private static final Logger logger = LoggerFactory.getLogger(DependencyExecutor.class);
-    private static final String DEPENDENCY_INDEX_NAME = "dependency";
+    private static final String DEPENDENCY_INDEX_NAME = "rb_dependency";
 
     public DependencyExecutor() {}
 
@@ -121,42 +121,33 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
         String searchKey = normalizedGovernor + String.valueOf(IndexAccessInterface.DELIMITER) +
                            normalizedRelation + String.valueOf(IndexAccessInterface.DELIMITER) +
                            normalizedDependent;
-        // Using merged lookup below; direct raw key bytes not required
+        // Using RB raw lookup
 
         logger.debug("Searching for specific dependency relation: {} (into QueryResultSoA)", searchKey);
-        Optional<PositionListSoA> mergedPositionsOpt = index.getMergedPositions(searchKey, context, requirements);
         int conceptualRowsAdded = 0;
-
-        if (mergedPositionsOpt.isPresent() && !mergedPositionsOpt.get().isEmpty()) {
-            PositionListSoA positions = mergedPositionsOpt.get();
-
-            if (positions.isEmpty()) {
-                logger.debug("No positions for dependency relation '{}' after applying context filters.", searchKey);
-                return currentConceptualRowId;
-            }
-            int numPositions = positions.getNumPositions();
-            logger.debug("Found {} positions for dependency relation '{}' after context filtering.", numPositions, searchKey);
-
+        java.util.Optional<byte[]> raw = index.getRaw(searchKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        if (raw.isPresent()) {
+            RBPresenceIndex presence = RBPresenceIndex.fromBytes(raw.get());
             String value = String.join(":", normalizedGovernor, normalizedRelation, normalizedDependent);
             String variableNameToUse = condition.isVariable() ? condition.variableName() : null;
-
-            for (int i = 0; i < numPositions; i++) {
+            org.roaringbitmap.longlong.LongIterator it = presence.getBitmap().getLongIterator();
+            while (it.hasNext()) {
+                long pair = it.next();
+                int docId = (int)(pair >>> 16);
+                int sentId = (int)(pair & 0xFFFFL);
                 resultSoA.add(
                     value,
                     ValueType.DEPENDENCY,
                     variableNameToUse,
-                    positions.getDocIdAt(i),
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
+                    docId,
+                    requirements.needsSentenceId ? sentId : -1,
+                    -1,
+                    -1,
+                    -1,
                     resultSoA.getNextConceptualRowId()
                 );
                 conceptualRowsAdded++;
             }
-            logger.debug("Added {} bindings for dependency '{}', creating {} conceptual rows.", numPositions, searchKey, conceptualRowsAdded);
-        } else {
-            logger.debug("No positions found for dependency relation: '{}' (including segments)", searchKey);
         }
         return currentConceptualRowId + conceptualRowsAdded;
     }
@@ -234,32 +225,33 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     }
 
                     String valueToBind = String.join(":", currentGovernor, currentRelation, currentDependent);
-                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context, requirements);
-
-                    if (positions.isEmpty()) {
-                        iterator.next();
-                        continue;
+                    try {
+                        RBPresenceIndex presence = RBPresenceIndex.fromBytes(valueBytes);
+                        org.roaringbitmap.longlong.LongIterator pit = presence.getBitmap().getLongIterator();
+                        int conceptualRowsAdded = 0;
+                        while (pit.hasNext()) {
+                            long pair = pit.next();
+                            int docId = (int)(pair >>> 16);
+                            int sentId = (int)(pair & 0xFFFFL);
+                            resultSoA.add(
+                                valueToBind,
+                                ValueType.DEPENDENCY,
+                                variableName,
+                                docId,
+                                requirements.needsSentenceId ? sentId : -1,
+                                -1,
+                                -1,
+                                -1,
+                                resultSoA.getNextConceptualRowId()
+                            );
+                            conceptualRowsAdded++;
+                        }
+                        currentConceptualRowId += conceptualRowsAdded;
+                    } catch (Exception parsePresence) {
+                        logger.warn("DependencyExecutor: failed to parse RB presence for key '{}', skipping. {}", key, parsePresence.getMessage());
                     }
-                    int numPositions = positions.getNumPositions();
-                    int conceptualRowsAdded = 0;
-
-                    for (int i = 0; i < numPositions; i++) {
-                        resultSoA.add(
-                            valueToBind,
-                            ValueType.DEPENDENCY,
-                            variableName,
-                            positions.getDocIdAt(i),
-                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                            requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                            resultSoA.getNextConceptualRowId()
-                        );
-                        conceptualRowsAdded++;
-                    }
-                    currentConceptualRowId += conceptualRowsAdded;
-                    logger.debug("Added {} bindings for dependency variable '{}' (key: '{}'), creating {} new conceptual rows.",
-                                 numPositions, variableName != null ? variableName : "<N/A>", key, conceptualRowsAdded);
+                    logger.debug("Added bindings for dependency variable '{}' (key: '{}').",
+                                 variableName != null ? variableName : "<N/A>", key);
                 } else {
                     logger.warn("Skipping invalid key format in dependency index: {}", key);
                 }

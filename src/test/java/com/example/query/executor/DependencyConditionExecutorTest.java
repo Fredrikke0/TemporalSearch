@@ -42,7 +42,7 @@ public class DependencyConditionExecutorTest {
     @BeforeEach
     void setUp() {
         executor = new DependencyExecutor();
-        indexes = Map.of("dependency", mockIndex);
+        indexes = Map.of("rb_dependency", mockIndex);
         defaultTestRequirements = new AttributeRequirements(); // Default, all true
         defaultTestRequirements.needsSentenceId = true; // Ensure sentence IDs are required
     }
@@ -52,10 +52,11 @@ public class DependencyConditionExecutorTest {
         Dependency condition = new Dependency("governor", "relation", "dependent");
         String expectedKey = "governor" + DELIMITER_STR + "relation" + DELIMITER_STR + "dependent";
 
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(new Position(1, 1, 10, 18)); // docId, sentId, begin, end
-        positions.add(new Position(1, 2, 5, 12));
-        when(mockIndex.getMergedPositions(eq(expectedKey.toLowerCase()), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
+        // RB presence bytes for the full key
+        com.example.index.presence.RBPresenceIndex presence = new com.example.index.presence.RBPresenceIndex();
+        presence.add(1, 1);
+        presence.add(1, 2);
+        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(presence.toBytes()));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -86,16 +87,17 @@ public class DependencyConditionExecutorTest {
         Dependency condition = new Dependency("subject", "nsubj", "dependent");
         String expectedKey = "subject" + DELIMITER_STR + "nsubj" + DELIMITER_STR + "dependent";
 
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(new Position(10, 1, 0, 7));
-        positions.add(new Position(10, 1, 15, 20)); // Same sentence, different position
-        positions.add(new Position(10, 2, 3, 9));   // Different sentence
-        when(mockIndex.getMergedPositions(eq(expectedKey.toLowerCase()), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
+        com.example.index.presence.RBPresenceIndex presence = new com.example.index.presence.RBPresenceIndex();
+        presence.add(10, 1);
+        presence.add(10, 1);
+        presence.add(10, 2);
+        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.of(presence.toBytes()));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
         assertNotNull(result);
-        assertEquals(3, result.size()); // Should get 3 binding entries
+        // Presence-based index returns one binding per (docId,sentId) occurrence; duplicates at same sentence collapse to one
+        assertEquals(2, result.size());
 
         // Verify sentence-level details (example for the first one)
         assertEquals(10, result.getDocumentIdAt(0));
@@ -110,9 +112,9 @@ public class DependencyConditionExecutorTest {
         String govRelPrefixKey = "city" + DELIMITER_STR + "located_in" + DELIMITER_STR;
         String fullKey = "city" + DELIMITER_STR + "located_in" + DELIMITER_STR + "country";
 
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(new Position(5, 3, 2, 8));
-        byte[] serializedPositions = positions.serializeToCompositeBlob();
+        com.example.index.presence.RBPresenceIndex presence = new com.example.index.presence.RBPresenceIndex();
+        presence.add(5, 3);
+        byte[] serializedPositions = presence.toBytes();
 
         // Mock for the iterative path (executeVariableSearchOptimized)
         org.rocksdb.RocksIterator mockRocksIterator = org.mockito.Mockito.mock(org.rocksdb.RocksIterator.class);
@@ -143,7 +145,7 @@ public class DependencyConditionExecutorTest {
     void testExecuteSpecificSearch_noMatchFound() throws QueryExecutionException, IndexAccessException, java.io.IOException {
         Dependency condition = new Dependency("unknown", "rel", "target");
         String expectedKey = "unknown" + DELIMITER_STR + "rel" + DELIMITER_STR + "target";
-        when(mockIndex.getMergedPositions(eq(expectedKey.toLowerCase()), eq(Optional.empty()), eq(defaultTestRequirements))).thenReturn(Optional.empty());
+        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenReturn(Optional.empty());
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -167,7 +169,7 @@ public class DependencyConditionExecutorTest {
     void testExecute_indexAccessError() throws IndexAccessException, java.io.IOException {
         Dependency condition = new Dependency("governor", "relation", "dependent");
         String expectedKey = "governor" + DELIMITER_STR + "relation" + DELIMITER_STR + "dependent";
-        when(mockIndex.getMergedPositions(eq(expectedKey.toLowerCase()), eq(Optional.empty()), eq(defaultTestRequirements))).thenThrow(new IndexAccessException("Test error accessing index", "dependency", IndexAccessException.ErrorType.READ_ERROR));
+        when(mockIndex.getRaw(eq(expectedKey.toLowerCase().getBytes()))).thenThrow(new IndexAccessException("Test error accessing index", "rb_dependency", IndexAccessException.ErrorType.READ_ERROR));
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
             executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());

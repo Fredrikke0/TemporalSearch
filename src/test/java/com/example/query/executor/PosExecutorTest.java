@@ -36,7 +36,8 @@ import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.index.presence.RBGroupValueBlob;
+import com.example.index.presence.RBPresenceIndex;
 import com.example.index.util.SynonymManager;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
@@ -55,7 +56,21 @@ class PosExecutorTest {
 
     private Map<String, IndexAccessInterface> indexes;
     private AttributeRequirements defaultTestRequirements;
-    private static final String POS_INDEX_NAME = "pos";
+    private static final String POS_INDEX_NAME = "rb_pos";
+
+    private byte[] buildBlobFromMap(Map<Integer, Map<Integer, java.util.List<Integer>>> docSentToValues) throws Exception {
+        RBPresenceIndex presence = new RBPresenceIndex();
+        for (var e : docSentToValues.entrySet()) {
+            int docId = e.getKey();
+            for (var se : e.getValue().entrySet()) {
+                int sentId = se.getKey();
+                presence.add(docId, sentId);
+            }
+        }
+        Map<Integer, RBGroupValueBlob.DocBlock> blocks = RBGroupValueBlob.buildDocBlocksFromPresenceAndValues(presence, docSentToValues);
+        RBGroupValueBlob blob = new RBGroupValueBlob(presence, blocks);
+        return blob.toBytes();
+    }
 
     @BeforeEach
     void setUp() throws IndexAccessException, RocksDBException, IOException {
@@ -80,11 +95,11 @@ class PosExecutorTest {
 
         when(synonymManager.getId("test")).thenReturn(testTermSynonymId);
 
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(1, 0, 5, 10, testTermSynonymId);
-        positions.add(2, 1, 15, 20, testTermSynonymId);
-        positions.add(1, 1, 25, 30, 456);
-        when(posIndex.getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
+        Map<Integer, java.util.List<Integer>> d1 = new HashMap<>(); d1.put(0, java.util.List.of(testTermSynonymId)); d1.put(1, java.util.List.of(456));
+        Map<Integer, java.util.List<Integer>> d2 = new HashMap<>(); d2.put(1, java.util.List.of(testTermSynonymId));
+        Map<Integer, Map<Integer, java.util.List<Integer>>> map = new HashMap<>();
+        map.put(1, d1); map.put(2, d2);
+        when(posIndex.getRaw(eq(expectedTagString.getBytes()))).thenReturn(Optional.of(buildBlobFromMap(map)));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -102,7 +117,7 @@ class PosExecutorTest {
             assertEquals(testTermSynonymId, result.getSynonymIdAt(i));
         }
         verify(synonymManager).getId("test");
-        verify(posIndex).getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements));
+        verify(posIndex).getRaw(eq(expectedTagString.getBytes()));
     }
 
     @Test
@@ -113,14 +128,10 @@ class PosExecutorTest {
 
         when(synonymManager.getId("run")).thenReturn(runTermSynonymId);
 
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(1, 1, 1, 2, runTermSynonymId);
-        positions.add(1, 2, 3, 4, runTermSynonymId);
-        positions.add(2, 1, 5, 6, runTermSynonymId);
-        positions.add(1, 1, 10, 15, runTermSynonymId);
-        positions.add(1, 3, 20, 25, 999);
-
-        when(posIndex.getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
+        Map<Integer, java.util.List<Integer>> d1 = new HashMap<>(); d1.put(1, java.util.List.of(runTermSynonymId, runTermSynonymId)); d1.put(2, java.util.List.of(runTermSynonymId)); d1.put(3, java.util.List.of(999));
+        Map<Integer, java.util.List<Integer>> d2 = new HashMap<>(); d2.put(1, java.util.List.of(runTermSynonymId));
+        Map<Integer, Map<Integer, java.util.List<Integer>>> map = new HashMap<>(); map.put(1, d1); map.put(2, d2);
+        when(posIndex.getRaw(eq(expectedTagString.getBytes()))).thenReturn(Optional.of(buildBlobFromMap(map)));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -146,7 +157,7 @@ class PosExecutorTest {
         assertEquals(4, foundRunTermSynonymIdCount, "All 4 results should be for 'run'");
 
         verify(synonymManager).getId("run");
-        verify(posIndex).getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements));
+        verify(posIndex).getRaw(eq(expectedTagString.getBytes()));
     }
 
     @Test
@@ -157,13 +168,10 @@ class PosExecutorTest {
 
         when(synonymManager.getId("noun")).thenReturn(nounTermSynonymId);
 
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(1, 0, 1, 2, nounTermSynonymId);
-        positions.add(1, 2, 3, 4, nounTermSynonymId);
-        positions.add(1, 3, 5, 6, nounTermSynonymId);
-        positions.add(2, 1, 7, 8, nounTermSynonymId);
-
-        when(posIndex.getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
+        Map<Integer, java.util.List<Integer>> d1 = new HashMap<>(); d1.put(0, java.util.List.of(nounTermSynonymId)); d1.put(2, java.util.List.of(nounTermSynonymId)); d1.put(3, java.util.List.of(nounTermSynonymId));
+        Map<Integer, java.util.List<Integer>> d2 = new HashMap<>(); d2.put(1, java.util.List.of(nounTermSynonymId));
+        Map<Integer, Map<Integer, java.util.List<Integer>>> map = new HashMap<>(); map.put(1, d1); map.put(2, d2);
+        when(posIndex.getRaw(eq(expectedTagString.getBytes()))).thenReturn(Optional.of(buildBlobFromMap(map)));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.SENTENCE, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -188,7 +196,7 @@ class PosExecutorTest {
         assertTrue(match2_1);
 
         verify(synonymManager).getId("noun");
-        verify(posIndex).getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements));
+        verify(posIndex).getRaw(eq(expectedTagString.getBytes()));
     }
 
     @Test
@@ -200,13 +208,11 @@ class PosExecutorTest {
         int badSynId = 20;
         int uglySynId = 30;
 
-        PositionListSoA positionsForJJ = new PositionListSoA();
-        positionsForJJ.add(1, 1, 5, 10, goodSynId);
-        positionsForJJ.add(2, 1, 15, 20, badSynId);
-        positionsForJJ.add(1, 2, 25, 30, uglySynId);
-        positionsForJJ.add(3, 0, 35, 40, goodSynId);
-
-        when(posIndex.getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements))).thenReturn(Optional.of(positionsForJJ));
+        Map<Integer, java.util.List<Integer>> d1 = new HashMap<>(); d1.put(1, java.util.List.of(goodSynId)); d1.put(2, java.util.List.of(uglySynId));
+        Map<Integer, java.util.List<Integer>> d2 = new HashMap<>(); d2.put(1, java.util.List.of(badSynId));
+        Map<Integer, java.util.List<Integer>> d3 = new HashMap<>(); d3.put(0, java.util.List.of(goodSynId));
+        Map<Integer, Map<Integer, java.util.List<Integer>>> map = new HashMap<>(); map.put(1, d1); map.put(2, d2); map.put(3, d3);
+        when(posIndex.getRaw(eq(expectedTagString.getBytes()))).thenReturn(Optional.of(buildBlobFromMap(map)));
 
         Set<Integer> expectedSynIds = new HashSet<>(Arrays.asList(goodSynId, badSynId, uglySynId));
         Map<Integer, String> expectedTermsMap = new HashMap<>();
@@ -240,7 +246,7 @@ class PosExecutorTest {
         assertEquals(1, (int)valueCounts.get("bad"));
         assertEquals(1, (int)valueCounts.get("ugly"));
 
-        verify(posIndex).getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements));
+        verify(posIndex).getRaw(eq(expectedTagString.getBytes()));
         verify(synonymManager, times(1)).getTerms(eq(expectedSynIds));
     }
 
@@ -249,12 +255,10 @@ class PosExecutorTest {
         Pos condition = new Pos("NNP", null);
         String expectedTagString = "NNP";
 
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(1, 0, 5, 10, 111);
-        positions.add(1, 1, 15, 20, 222);
-        positions.add(2, 0, 25, 30, 111);
-
-        when(posIndex.getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
+        Map<Integer, java.util.List<Integer>> d1 = new HashMap<>(); d1.put(0, java.util.List.of(111)); d1.put(1, java.util.List.of(222));
+        Map<Integer, java.util.List<Integer>> d2 = new HashMap<>(); d2.put(0, java.util.List.of(111));
+        Map<Integer, Map<Integer, java.util.List<Integer>>> map = new HashMap<>(); map.put(1, d1); map.put(2, d2);
+        when(posIndex.getRaw(eq(expectedTagString.getBytes()))).thenReturn(Optional.of(buildBlobFromMap(map)));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -273,7 +277,7 @@ class PosExecutorTest {
         }
         assertTrue(docIds.containsAll(Set.of(1, 2)));
 
-        verify(posIndex).getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements));
+        verify(posIndex).getRaw(eq(expectedTagString.getBytes()));
         verify(synonymManager, times(0)).getTerm(anyInt());
     }
 
@@ -284,22 +288,20 @@ class PosExecutorTest {
             executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
         });
         assertEquals(QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION, exception.getErrorType());
-        verify(posIndex, times(0)).getMergedPositions(anyString(), any(), any());
+        verify(posIndex, times(0)).getRaw(any());
     }
 
     @Test
-    void testExecuteSpecificSearch_withVariable() throws QueryExecutionException, IndexAccessException, IOException, RocksDBException {
+    void testExecuteSpecificSearch_withVariable() throws Exception {
         Pos condition = new Pos("JJ", "happy", "?adj");
         String expectedTagString = "JJ";
         int happySynId = 555;
 
         when(synonymManager.getId("happy")).thenReturn(happySynId);
 
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(1, 1, 10, 15, happySynId);
-        positions.add(1, 2, 20, 25, 666);
-
-        when(posIndex.getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements))).thenReturn(Optional.of(positions));
+        Map<Integer, java.util.List<Integer>> d1 = new HashMap<>(); d1.put(1, java.util.List.of(happySynId)); d1.put(2, java.util.List.of(666));
+        Map<Integer, Map<Integer, java.util.List<Integer>>> map = new HashMap<>(); map.put(1, d1);
+        when(posIndex.getRaw(eq(expectedTagString.getBytes()))).thenReturn(Optional.of(buildBlobFromMap(map)));
 
         QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
 
@@ -314,7 +316,7 @@ class PosExecutorTest {
         assertEquals(1, result.getDocumentIdAt(0));
 
         verify(synonymManager).getId("happy");
-        verify(posIndex).getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements));
+        verify(posIndex).getRaw(eq(expectedTagString.getBytes()));
     }
 
     @Test
@@ -323,17 +325,13 @@ class PosExecutorTest {
         String expectedTagString = "XYZ";
         int nonExistentTermSynId = 999;
 
-        when(synonymManager.getId("term_that_does_not_exist")).thenReturn(nonExistentTermSynId);
-        when(posIndex.getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements))).thenReturn(Optional.empty());
+        lenient().when(synonymManager.getId("term_that_does_not_exist")).thenReturn(nonExistentTermSynId);
+        when(posIndex.getRaw(eq(expectedTagString.getBytes()))).thenReturn(Optional.empty());
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
-
-        assertNotNull(result);
-        assertTrue(result.isEmpty());
-        assertEquals(0, result.getConceptualRowCount());
-
-        verify(synonymManager).getId("term_that_does_not_exist");
-        verify(posIndex).getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements));
+        QueryExecutionException ex = assertThrows(QueryExecutionException.class, () ->
+            executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty())
+        );
+        assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, ex.getErrorType());
     }
 
     @Test
@@ -341,14 +339,12 @@ class PosExecutorTest {
         Pos condition = new Pos("ABC", null, "?var");
         String expectedTagString = "ABC";
 
-        when(posIndex.getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements))).thenReturn(Optional.empty());
+        when(posIndex.getRaw(eq(expectedTagString.getBytes()))).thenReturn(Optional.empty());
 
-        QueryResultSoA result = executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty());
-        assertNotNull(result);
-        assertTrue(result.isEmpty());
-        assertEquals(0, result.getConceptualRowCount());
-
-        verify(posIndex).getMergedPositions(eq(expectedTagString), any(), eq(defaultTestRequirements));
+        QueryExecutionException ex = assertThrows(QueryExecutionException.class, () ->
+            executor.execute(condition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", defaultTestRequirements, Optional.empty())
+        );
+        assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, ex.getErrorType());
         verify(synonymManager, times(0)).getTerm(anyInt());
     }
 

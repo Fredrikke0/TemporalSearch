@@ -22,3 +22,5 @@ projects/
 benchmark/
 *.csv
 __pycache__
+rawr_index
+roaringdoc

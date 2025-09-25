@@ -1,6 +1,5 @@
 package com.example.query.executor;
 
-import java.io.IOException;
 import java.util.AbstractMap.SimpleEntry;
 import java.util.HashSet;
 import java.util.Map;
@@ -12,8 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
+import com.example.index.presence.RBPresenceIndex;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Condition;
@@ -25,7 +23,7 @@ import com.example.query.model.condition.Not;
  */
 public final class NotExecutor implements ConditionExecutor<Not> {
     private static final Logger logger = LoggerFactory.getLogger(NotExecutor.class);
-    private static final String UNIGRAM_INDEX_NAME = "unigram"; // Target index for universe approximation
+    private static final String UNIGRAM_INDEX_NAME = "rb_unigram"; // Target index for universe approximation
 
     private final ConditionExecutorFactory factory;
 
@@ -125,7 +123,7 @@ public final class NotExecutor implements ConditionExecutor<Not> {
 
         try (RocksIterator iterator = unigramIndex.iterateFromFirst()) {
             while (iterator.isValid()) {
-                byte[] keyBytes = iterator.key();
+                // byte[] keyBytes = iterator.key();
                 byte[] valueBytes = iterator.value();
                 if (valueBytes == null || valueBytes.length == 0) {
                     iterator.next();
@@ -133,25 +131,21 @@ public final class NotExecutor implements ConditionExecutor<Not> {
                 }
 
                 try {
-                    PositionListSoA positionList = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
+                    RBPresenceIndex presence = RBPresenceIndex.fromBytes(valueBytes);
                     count++;
-
-                    for (int i = 0; i < positionList.getNumPositions(); i++) {
-                        Position actualPosition = positionList.getPositionAt(i);
+                    org.roaringbitmap.longlong.LongIterator it = presence.getBitmap().getLongIterator();
+                    while (it.hasNext()) {
+                        long pair = it.next();
+                        int docId = (int)(pair >>> 16);
+                        int sentId = (int)(pair & 0xFFFFL);
                         if (granularity == Query.Granularity.DOCUMENT) {
-                            allIds.add(actualPosition.getDocumentId());
+                            allIds.add(docId);
                         } else {
-                            allIds.add(new SimpleEntry<>(actualPosition.getDocumentId(), actualPosition.getSentenceId()));
+                            allIds.add(new SimpleEntry<>(docId, sentId));
                         }
                     }
-                } catch (IOException e) {
-                    logger.warn("Failed to deserialize PositionListSoA for key '{}' in '{}': {}",
-                            new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8),
-                            UNIGRAM_INDEX_NAME, e.getMessage());
-                } catch (Exception e) {
-                    logger.warn("Error processing entry for key '{}' in '{}' during universe creation: {}",
-                            new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8),
-                            UNIGRAM_INDEX_NAME, e.getMessage());
+                } catch (Exception presenceEx) {
+                    // Mixed datasets not supported in RB-only mode; skip non-RB entries
                 }
                 iterator.next();
             }

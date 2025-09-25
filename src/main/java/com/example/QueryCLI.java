@@ -304,8 +304,8 @@ public class QueryCLI implements AutoCloseable {
 
         cliArgParser.addArgument("--index-root-dir")
                 .required(false)
-                .setDefault(".")
-                .help("Path to the root directory containing all project index folders. Defaults to current working directory.");
+                .setDefault("rawr_index")
+                .help("Path to the root directory containing all project index folders. Default: 'rawr_index'.");
 
         cliArgParser.addArgument("--export")
                 .help("Export results to a file in the specified format: csv:filename.csv, json:filename.json, or html:filename.html. Sets initial export for single query or interactive mode.");
@@ -320,8 +320,8 @@ public class QueryCLI implements AutoCloseable {
                 .help("Specify the initial predicate pushdown strategy (none or optimized). Default: optimized.");
 
         cliArgParser.addArgument("--stitch-strategy")
-                .choices("none", "optimized").setDefault("none")
-                .help("Specify the initial stitch execution strategy (none or optimized).");
+                .choices("none", "optimized").setDefault("optimized")
+                .help("Specify the initial stitch execution strategy (none or optimized). Default: optimized.");
 
         cliArgParser.addArgument("query")
                 .nargs("?")

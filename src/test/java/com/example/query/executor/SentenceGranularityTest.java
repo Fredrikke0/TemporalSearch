@@ -25,8 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
+import com.example.index.presence.RBPresenceIndex;
 import com.example.index.util.SynonymManager;
 import com.example.query.QueryParseException;
 import com.example.query.QueryParser;
@@ -69,12 +68,13 @@ public class SentenceGranularityTest {
         System.out.println("Sentence Granularity Test Teardown Complete.");
     }
 
-    private IndexAccess setupMockIndexBehavior(Map<String, PositionListSoA> mockData) throws IOException, IndexAccessException {
-        for (Map.Entry<String, PositionListSoA> entry : mockData.entrySet()) {
-            lenient().when(unigramIndex.getMergedPositions(eq(entry.getKey()), eq(Optional.empty()), any()))
-                   .thenReturn(Optional.ofNullable(entry.getValue()));
+    private IndexAccess setupMockIndexBehavior(Map<String, RBPresenceIndex> mockData) throws IOException, IndexAccessException {
+        for (Map.Entry<String, RBPresenceIndex> entry : mockData.entrySet()) {
+            byte[] bytes = entry.getValue().toBytes();
+            lenient().when(unigramIndex.getRaw(eq(entry.getKey().getBytes(java.nio.charset.StandardCharsets.UTF_8))))
+                   .thenReturn(Optional.of(bytes));
         }
-        lenient().when(unigramIndex.getMergedPositions(argThat(k -> mockData.keySet().stream().noneMatch(key -> key.equals(k))), eq(Optional.empty()), any()))
+        lenient().when(unigramIndex.getRaw(argThat(k -> mockData.keySet().stream().noneMatch(key -> key.equals(new String(k, java.nio.charset.StandardCharsets.UTF_8))))))
                .thenReturn(Optional.empty());
         return unigramIndex;
     }
@@ -105,13 +105,13 @@ public class SentenceGranularityTest {
     public void testSentenceGranularityBasic() throws Exception {
         String queryString = "SELECT DOCUMENT_ID FROM mockCorpusSent WHERE CONTAINS('test') GRANULARITY SENTENCE";
 
-        Map<String, PositionListSoA> mockData = new HashMap<>();
-        PositionListSoA testPositions = new PositionListSoA();
-        testPositions.add(new Position(0, 0, 0, 4));
-        testPositions.add(new Position(1, 1, 0, 4));
-        mockData.put("test", testPositions);
+        Map<String, RBPresenceIndex> mockData = new HashMap<>();
+        RBPresenceIndex testPresence = new RBPresenceIndex();
+        testPresence.add(0, 0);
+        testPresence.add(1, 1);
+        mockData.put("test", testPresence);
         IndexAccess mockIndexImpl = setupMockIndexBehavior(mockData);
-        Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndexImpl);
+        Map<String, IndexAccessInterface> testIndexes = Map.of("rb_unigram", mockIndexImpl);
 
         QueryResultSoA results = executeSentenceQuery(queryString, testIndexes);
 
@@ -126,13 +126,13 @@ public class SentenceGranularityTest {
     public void testSentenceGranularityWithWindow() throws Exception {
         String queryString = "SELECT DOCUMENT_ID FROM mockCorpusSent WHERE CONTAINS('window') GRANULARITY SENTENCE 1";
 
-        Map<String, PositionListSoA> mockData = new HashMap<>();
-        PositionListSoA windowPositions = new PositionListSoA();
-        windowPositions.add(new Position(0, 1, 0, 6));
-        windowPositions.add(new Position(0, 3, 0, 6));
-        mockData.put("window", windowPositions);
+        Map<String, RBPresenceIndex> mockData = new HashMap<>();
+        RBPresenceIndex windowPresence = new RBPresenceIndex();
+        windowPresence.add(0, 1);
+        windowPresence.add(0, 3);
+        mockData.put("window", windowPresence);
         IndexAccess mockIndexImpl = setupMockIndexBehavior(mockData);
-        Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndexImpl);
+        Map<String, IndexAccessInterface> testIndexes = Map.of("rb_unigram", mockIndexImpl);
 
         QueryResultSoA results = executeSentenceQuery(queryString, testIndexes);
 
@@ -149,13 +149,13 @@ public class SentenceGranularityTest {
     public void testSentenceGranularityWithLargerWindow() throws Exception {
         String queryString = "SELECT DOCUMENT_ID FROM mockCorpusSent WHERE CONTAINS('window') GRANULARITY SENTENCE 2";
 
-        Map<String, PositionListSoA> mockData = new HashMap<>();
-        PositionListSoA windowPositions = new PositionListSoA();
-        windowPositions.add(new Position(0, 1, 0, 6));
-        windowPositions.add(new Position(0, 3, 0, 6));
-        mockData.put("window", windowPositions);
+        Map<String, RBPresenceIndex> mockData = new HashMap<>();
+        RBPresenceIndex windowPresence = new RBPresenceIndex();
+        windowPresence.add(0, 1);
+        windowPresence.add(0, 3);
+        mockData.put("window", windowPresence);
         IndexAccess mockIndexImpl = setupMockIndexBehavior(mockData);
-        Map<String, IndexAccessInterface> testIndexes = Map.of("unigram", mockIndexImpl);
+        Map<String, IndexAccessInterface> testIndexes = Map.of("rb_unigram", mockIndexImpl);
 
         QueryResultSoA results = executeSentenceQuery(queryString, testIndexes);
 

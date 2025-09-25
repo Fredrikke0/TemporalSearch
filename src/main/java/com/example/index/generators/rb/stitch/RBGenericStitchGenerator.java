@@ -15,6 +15,8 @@ import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.index.RocksDBConfig;
 import com.example.index.presence.RBPresenceIndex;
+import com.example.index.presence.RBGroupValueBlob;
+import com.example.index.presence.RBGroupValueBlob.DocBlock;
 
 final class RBGenericStitchGenerator {
     private static final Logger logger = LoggerFactory.getLogger(RBGenericStitchGenerator.class);
@@ -41,8 +43,8 @@ final class RBGenericStitchGenerator {
 
         try (Options ro = RocksDBConfig.createOptimizedOptions()) {
             ro.setCreateIfMissing(false);
-            IndexAccessInterface left = new IndexAccess(baseDir.resolve(leftIndexName), leftIndexName, ro, true);
-            IndexAccessInterface right = new IndexAccess(baseDir.resolve(rightIndexName), rightIndexName, ro, true);
+            try (IndexAccessInterface left = new IndexAccess(baseDir.resolve(leftIndexName), leftIndexName, ro, true);
+                 IndexAccessInterface right = new IndexAccess(baseDir.resolve(rightIndexName), rightIndexName, ro, true)) {
 
             org.rocksdb.WriteBatch wb = outIndex.createWriteBatch();
             int staged = 0;
@@ -64,15 +66,48 @@ final class RBGenericStitchGenerator {
                     RBPresenceIndex leftIdx = RBPresenceIndex.fromBytes(lv);
                     var leftDocs = leftIdx.toDocBitmap();
                     if (leftDocs.isEmpty()) continue;
-                    var docProbe = RoaringBitmapUtils.intersects(leftDocs, rightDocs);
+                    boolean docProbe = intersects(leftDocs, rightDocs);
                     if (!docProbe) continue;
 
                     RBPresenceIndex inter = (RBPresenceIndex) leftIdx.and(rightIdx);
                     if (inter.toDocBitmap().isEmpty()) continue;
                     String outKeyStr = keyJoiner.apply(leftKey, rightKey);
                     byte[] outKey = outKeyStr.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+                    // Try to produce value blocks if right side has them
+                    byte[] rightRaw = rightIt.value();
+                    byte[] outBytes;
                     try {
-                        wb.put(outKey, inter.toBytes());
+                        RBGroupValueBlob rightBlob = RBGroupValueBlob.fromBytes(rightRaw);
+                        // Build values for sentences present in intersection
+                        java.util.Map<Integer, java.util.Map<Integer, java.util.List<Integer>>> docSentVals = new java.util.HashMap<>();
+                        org.roaringbitmap.longlong.LongIterator lit = inter.getBitmap().getLongIterator();
+                        while (lit.hasNext()) {
+                            long pair = lit.next();
+                            int docId = (int)(pair >>> 16);
+                            int sentId = (int)(pair & 0xFFFFL);
+                            DocBlock block = rightBlob.getDocBlocks().get(docId);
+                            if (block == null) continue;
+                            // find sentence index
+                            int idx = java.util.Arrays.binarySearch(block.sentIds, sentId);
+                            if (idx < 0) continue;
+                            java.util.List<Integer> vals = block.getValuesForSentenceIndex(idx);
+                            if (vals.isEmpty()) continue;
+                            docSentVals
+                                .computeIfAbsent(docId, k -> new java.util.HashMap<>())
+                                .computeIfAbsent(sentId, k -> new java.util.ArrayList<>())
+                                .addAll(vals);
+                        }
+                        java.util.Map<Integer, DocBlock> blocks = RBGroupValueBlob.buildDocBlocksFromPresenceAndValues(inter, docSentVals);
+                        RBGroupValueBlob outBlob = new RBGroupValueBlob(inter, blocks);
+                        outBytes = outBlob.toBytes();
+                    } catch (Exception parseFail) {
+                        // Fallback to presence-only
+                        outBytes = inter.toBytes();
+                    }
+
+                    try {
+                        wb.put(outKey, outBytes);
                     } catch (org.rocksdb.RocksDBException ex) {
                         throw new IOException("RocksDB error staging stitch put for key: " + outKeyStr, ex);
                     }
@@ -88,17 +123,15 @@ final class RBGenericStitchGenerator {
         } catch (IndexAccessException e) {
             throw new IOException("RB stitch build failed: " + e.getMessage(), e);
         }
+        }
     }
 
     // Tiny helper to avoid extra deps
-    private static final class RoaringBitmapUtils {
-        static boolean intersects(org.roaringbitmap.RoaringBitmap a, org.roaringbitmap.RoaringBitmap b) {
-            // Fast probe by iterating smaller
-            org.roaringbitmap.IntIterator it = (a.getCardinality() <= b.getCardinality()) ? a.getIntIterator() : b.getIntIterator();
-            org.roaringbitmap.RoaringBitmap other = (a.getCardinality() <= b.getCardinality()) ? b : a;
-            while (it.hasNext()) { if (other.contains(it.next())) return true; }
-            return false;
-        }
+    private static boolean intersects(org.roaringbitmap.RoaringBitmap a, org.roaringbitmap.RoaringBitmap b) {
+        org.roaringbitmap.IntIterator it = (a.getCardinality() <= b.getCardinality()) ? a.getIntIterator() : b.getIntIterator();
+        org.roaringbitmap.RoaringBitmap other = (a.getCardinality() <= b.getCardinality()) ? b : a;
+        while (it.hasNext()) { if (other.contains(it.next())) return true; }
+        return false;
     }
 }
 

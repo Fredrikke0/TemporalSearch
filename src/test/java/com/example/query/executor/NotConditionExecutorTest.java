@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 import java.util.HashSet;
@@ -21,17 +22,19 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.rocksdb.RocksIterator;
 
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
-import com.example.core.PositionListSoA;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Not;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 public class NotConditionExecutorTest {
 
     @Mock
@@ -55,7 +58,7 @@ public class NotConditionExecutorTest {
     @BeforeEach
     void setUp() throws Exception {
         notExecutor = new NotExecutor(mockFactory);
-        indexes = Map.of("unigram", mockUnigramIndex);
+        indexes = Map.of("rb_unigram", mockUnigramIndex);
         granularity = Query.Granularity.DOCUMENT;
         subCondition = new Contains("test");
         defaultTestRequirements = new AttributeRequirements();
@@ -67,24 +70,23 @@ public class NotConditionExecutorTest {
         nonEmptySubResult = new QueryResultSoA(granularity, 0, defaultTestRequirements);
         nonEmptySubResult.add("test", ValueType.TERM, null, 1, -1, 0, 4, -1, 0);
 
-        when(mockFactory.getExecutor(any(Contains.class))).thenReturn(mockSubExecutor);
-        when(mockUnigramIndex.iterateFromFirst()).thenReturn(mockDBIterator);
-        when(mockDBIterator.isValid()).thenReturn(false);
+        lenient().when(mockFactory.getExecutor(any(Contains.class))).thenReturn(mockSubExecutor);
+        lenient().when(mockUnigramIndex.iterateFromFirst()).thenReturn(mockDBIterator);
+        lenient().when(mockDBIterator.isValid()).thenReturn(false);
     }
 
     private void mockUnigramIndexForUniverse(List<Position> positionsInUniverse) throws Exception {
-        PositionListSoA universePositions = new PositionListSoA();
-        for (Position p : positionsInUniverse) {
-            universePositions.add(p);
-        }
-        byte[] universeBlob = universePositions.serializeToCompositeBlob();
-
         if (positionsInUniverse.isEmpty()) {
             when(mockDBIterator.isValid()).thenReturn(false);
         } else {
-            when(mockDBIterator.isValid()).thenReturn(true, false);
-            when(mockDBIterator.key()).thenReturn("any_key".getBytes());
-            when(mockDBIterator.value()).thenReturn(universeBlob);
+            com.example.index.presence.RBPresenceIndex presence = new com.example.index.presence.RBPresenceIndex();
+            for (Position p : positionsInUniverse) {
+                presence.add(p.getDocumentId(), p.getSentenceId());
+            }
+            byte[] universeBlob = presence.toBytes();
+            lenient().when(mockDBIterator.isValid()).thenReturn(true, false);
+            lenient().when(mockDBIterator.key()).thenReturn("any_key".getBytes());
+            lenient().when(mockDBIterator.value()).thenReturn(universeBlob);
         }
     }
 

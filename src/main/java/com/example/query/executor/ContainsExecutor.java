@@ -1,6 +1,5 @@
 package com.example.query.executor;
 
-import java.io.IOException;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -14,7 +13,8 @@ import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+// Legacy PositionListSoA removed in RB-only migration
+import com.example.index.presence.RBPresenceIndex;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Contains;
@@ -33,9 +33,9 @@ import com.example.query.model.condition.Contains;
 public final class ContainsExecutor implements ConditionExecutor<Contains> {
     private static final Logger logger = LoggerFactory.getLogger(ContainsExecutor.class);
 
-    private static final String UNIGRAM_INDEX = "unigram";
-    private static final String BIGRAM_INDEX = "bigram";
-    private static final String TRIGRAM_INDEX = "trigram";
+    private static final String UNIGRAM_INDEX = "rb_unigram";
+    private static final String BIGRAM_INDEX = "rb_bigram";
+    private static final String TRIGRAM_INDEX = "rb_trigram";
     private static final char DELIMITER = IndexAccessInterface.DELIMITER;
 
     /**
@@ -222,23 +222,39 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         try (RocksIterator iterator = index.seekWithBounds(prefixBytes, upperBound, 256 * 1024)) {
             final java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger(conceptualRowIdCounter);
             ExecutorIndexUtils.iterateGroupedByBase(iterator, prefix, (baseKey, blobs) -> {
-                Optional<PositionListSoA> mergedOpt = ExecutorIndexUtils.mergeAndFilter(blobs, context, requirements);
-                if (mergedOpt.isPresent() && !mergedOpt.get().isEmpty()) {
-                    PositionListSoA positions = mergedOpt.get();
-                    String actualValue = reconstructValue(baseKey, DELIMITER);
-                    for (int i = 0; i < positions.getNumPositions(); i++) {
-                        resultSoA.add(
-                            actualValue,
-                            ValueType.TERM,
-                            isVariable ? variableName : null,
-                            positions.getDocIdAt(i),
-                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                            requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                            counter.getAndIncrement()
-                        );
+                // RB presence merge across all blobs for the base key
+                try {
+                    RBPresenceIndex mergedPresence = null;
+                    for (byte[] b : blobs) {
+                        RBPresenceIndex p = RBPresenceIndex.fromBytes(b);
+                        mergedPresence = (mergedPresence == null)
+                            ? p
+                            : (RBPresenceIndex) mergedPresence.or(p);
                     }
+                    if (mergedPresence != null) {
+                        String actualValue = reconstructValue(baseKey, DELIMITER);
+                        org.roaringbitmap.longlong.LongIterator it = mergedPresence.getBitmap().getLongIterator();
+                        while (it.hasNext()) {
+                            long pair = it.next();
+                            int docId = (int)(pair >>> 16);
+                            int sentId = (int)(pair & 0xFFFFL);
+                            if (!passesContextFilter(context, requirements, docId, sentId)) continue;
+                            resultSoA.add(
+                                actualValue,
+                                ValueType.TERM,
+                                isVariable ? variableName : null,
+                                docId,
+                                requirements.needsSentenceId ? sentId : -1,
+                                -1,
+                                -1,
+                                -1,
+                                counter.getAndIncrement()
+                            );
+                        }
+                        // processed
+                    }
+                } catch (Exception ignorePresence) {
+                    // Mixed datasets not supported in RB-only mode; skip non-RB blobs
                 }
             });
             conceptualRowIdCounter = counter.get();
@@ -266,23 +282,25 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
         return String.join(" ", parts);
     }
 
+    private boolean passesContextFilter(Optional<FilteringContext> context, AttributeRequirements requirements, int docId, int sentId) {
+        if (context.isEmpty()) return true;
+        FilteringContext fc = context.get();
+        if (requirements.needsSentenceId && fc.granularity() == Query.Granularity.SENTENCE) {
+            if (fc.allowedDocumentSentenceIds().isPresent()) {
+                var allowed = fc.allowedDocumentSentenceIds().get();
+                var set = allowed.get(docId);
+                return set == null || set.contains(sentId);
+            }
+        } else if (fc.allowedDocumentIds().isPresent()) {
+            return fc.allowedDocumentIds().get().contains(docId);
+        }
+        return true;
+    }
+
     /**
-     * Executes a search for a specific pattern using selective deserialization for better performance.
-     * This method only deserializes the attributes actually needed, reducing memory usage and processing time.
-     *
+     * Executes a search for a specific pattern using RB presence bitmaps only.
      * Simplified wildcard behavior: if and only if the entire pattern ends with '*', perform a prefix scan.
-     * Otherwise, perform a direct key lookup. Any '*' not in the final position is treated literally.
-     *
-     * @param pattern The pattern to search for
-     * @param isVariable Whether this corresponds to a variable in the original condition
-     * @param variableName The original variable name (if isVariable is true)
-     * @param index The index to search in
-     * @param condition The condition object (used for ID)
-     * @param resultSoA The QueryResultSoA to populate
-     * @param conceptualRowIdCounter The current conceptualRowId counter
-     * @param requirements The AttributeRequirements for selective deserialization
-     * @param context FilteringContext for filtering
-     * @return The updated conceptualRowIdCounter
+     * Otherwise, perform a direct key lookup.
      */
     private int executePatternSearchOptimized(String pattern, boolean isVariable, String variableName,
                                         IndexAccessInterface index, Contains condition, QueryResultSoA resultSoA,
@@ -302,41 +320,38 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             logger.debug("Pattern '{}' ends with '*', performing prefix search for '{}'", pattern, prefix);
             return executePrefixSearch(prefix, isVariable, variableName, index, condition, resultSoA, conceptualRowIdCounter, requirements, context);
         } else {
-            Optional<PositionListSoA> positionsOpt;
+            // RB presence path (rb_* unigram/bigram/trigram are presence-only)
             try {
-                positionsOpt = index.getMergedPositions(pattern, context, requirements);
-            } catch (IOException ioe) {
-                throw new QueryExecutionException("Index access error during CONTAINS merged lookup", ioe, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
-            }
-
-            if (positionsOpt.isPresent() && !positionsOpt.get().isEmpty()) {
-                try {
-                    PositionListSoA positions = positionsOpt.get();
-
-                    int numPositions = positions.getNumPositions();
-
-                    String actualValue = reconstructValue(pattern, DELIMITER); // Reconstruct for display/binding
-
-                    for (int i = 0; i < numPositions; i++) {
-                        resultSoA.add(
-                            actualValue,
-                            ValueType.TERM,
-                            isVariable ? variableName : null,
-                            positions.getDocIdAt(i),
-                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                            requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                            conceptualRowIdCounter++
-                        );
+                Optional<byte[]> raw = index.getRaw(pattern.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                if (raw.isPresent()) {
+                    try {
+                        RBPresenceIndex presence = RBPresenceIndex.fromBytes(raw.get());
+                        String actualValue = reconstructValue(pattern, DELIMITER);
+                        org.roaringbitmap.longlong.LongIterator it = presence.getBitmap().getLongIterator();
+                        while (it.hasNext()) {
+                            long pair = it.next();
+                            int docId = (int)(pair >>> 16);
+                            int sentId = (int)(pair & 0xFFFFL);
+                            if (!passesContextFilter(context, requirements, docId, sentId)) continue;
+                            resultSoA.add(
+                                actualValue,
+                                ValueType.TERM,
+                                isVariable ? variableName : null,
+                                docId,
+                                requirements.needsSentenceId ? sentId : -1,
+                                -1,
+                                -1,
+                                -1,
+                                conceptualRowIdCounter++
+                            );
+                        }
+                        return conceptualRowIdCounter;
+                    } catch (Exception ignorePresence) {
+                        // Mixed datasets not supported in RB-only mode
                     }
-
-                } catch (Exception e) {
-                    logger.error("Error during merged lookup processing for pattern '{}': {}", pattern, e.getMessage(), e);
-                    throw new QueryExecutionException("Error during merged lookup for pattern " + pattern, e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
                 }
-            } else {
-                logger.debug("No positions found for pattern: '{}' (merged lookup)", pattern);
+            } catch (IndexAccessException iae) {
+                throw iae;
             }
             return conceptualRowIdCounter;
         }
