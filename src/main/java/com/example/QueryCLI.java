@@ -29,10 +29,13 @@ import com.example.query.result.TableResultService;
 import com.example.query.sqlite.SqliteAccessor;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
+import net.sourceforge.argparse4j.impl.Arguments;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
 import tech.tablesaw.api.Table;
+
+import one.profiler.AsyncProfiler;
 
 /**
  * Command-line interface for executing queries against the indexed corpus.
@@ -62,6 +65,10 @@ public class QueryCLI implements AutoCloseable {
     private final java.util.Map<String, IndexManager> projectIndexManagers = new java.util.HashMap<>();
     private final java.util.Map<String, TableResultService> projectTableServices = new java.util.HashMap<>();
 
+    // Profiling options
+    private Optional<String> profileOptions;
+    private boolean profileAroundExecution;
+
     /**
      * Creates a new QueryCLI instance.
      *
@@ -87,10 +94,69 @@ public class QueryCLI implements AutoCloseable {
         this.currentExportFilename = initialExportFilename;
 
         this.interactiveMode = interactiveMode;
+        this.profileOptions = Optional.empty();
+        this.profileAroundExecution = false;
 
         logger.info("Initialized QueryCLI. DB file: {}, Index dir: {}. Interactive: {}", dbFilePath, indexDirPath, interactiveMode);
         logger.info("Initial Strategies - Temporal: {}, Pushdown: {}, Stitch: {}", currentTemporalStrategyName, currentPushdownStrategy, currentStitchStrategyName);
         initialExportFormat.ifPresent(format -> logger.info("Initial Export: {} to {}", format, initialExportFilename.orElse("N/A")));
+    }
+
+    public QueryCLI(String dbFilePath, Path indexDirPath, String initialTemporalStrategy, PushdownStrategy initialPushdownStrategy, String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename, boolean interactiveMode, Optional<String> profileOptions, boolean profileAroundExecution) {
+        this(dbFilePath, indexDirPath, initialTemporalStrategy, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactiveMode);
+        this.profileOptions = profileOptions != null ? profileOptions : Optional.empty();
+        this.profileAroundExecution = profileAroundExecution;
+    }
+
+    private static String buildStartCommand(String profileOptions) {
+        java.util.Map<String, String> opts = parseProfileOptions(profileOptions);
+        String event = opts.getOrDefault("event", "wall");
+        String format = opts.getOrDefault("format", "jfr");
+        String interval = opts.getOrDefault("interval", "1ms");
+        String duration = opts.getOrDefault("duration", null);
+        String file = opts.getOrDefault("file", "/tmp/querycli-%p." + format);
+
+        StringBuilder cmd = new StringBuilder();
+        cmd.append("start");
+        if ("jfr".equalsIgnoreCase(format)) {
+            cmd.append(",jfr");
+            cmd.append(",file=").append(file);
+        }
+        cmd.append(",event=").append(event);
+        if (interval != null) cmd.append(",interval=").append(interval);
+        if (duration != null) cmd.append(",duration=").append(duration);
+        return cmd.toString();
+    }
+
+    private static String buildStopCommand(String profileOptions) {
+        java.util.Map<String, String> opts = parseProfileOptions(profileOptions);
+        String format = opts.getOrDefault("format", "jfr");
+        String file = opts.getOrDefault("file", "/tmp/querycli-%p." + format);
+        if ("jfr".equalsIgnoreCase(format)) {
+            return "stop"; // file was specified at start
+        }
+        return "stop,file=" + file + ",format=" + format;
+    }
+
+    private static java.util.Map<String, String> parseProfileOptions(String profileOptions) {
+        java.util.Map<String, String> opts = new java.util.HashMap<>();
+        if (profileOptions != null && !profileOptions.isBlank()) {
+            String normalized = profileOptions.replace(';', ',');
+            for (String kv : normalized.split(",")) {
+                if (kv == null) continue;
+                kv = kv.trim();
+                if (kv.isEmpty()) continue;
+                int eq = kv.indexOf('=');
+                if (eq > 0 && eq < kv.length() - 1) {
+                    String k = kv.substring(0, eq).trim().toLowerCase();
+                    String v = kv.substring(eq + 1).trim();
+                    if (!v.isEmpty()) opts.put(k, v);
+                } else {
+                    opts.put(kv.toLowerCase(), "true");
+                }
+            }
+        }
+        return opts;
     }
 
 
@@ -196,7 +262,34 @@ public class QueryCLI implements AutoCloseable {
                 int windowSize = query.granularitySize().orElse(0);
                 logger.info("Query granularity: {} with size: {}", queryGranularity, windowSize);
 
-            QueryResultSoA execResult = queryExecutor.execute(query, currentIndexManagerToUse);
+            AsyncProfiler ap = null;
+            boolean profiling = false;
+            if (profileAroundExecution && profileOptions.isPresent()) {
+                try {
+                    ap = AsyncProfiler.getInstance();
+                    String cmd = buildStartCommand(profileOptions.get());
+                    ap.execute(cmd);
+                    profiling = true;
+                    logger.info("async-profiler started: {}", cmd);
+                } catch (Throwable t) {
+                    logger.warn("Failed to start async-profiler: {}", t.toString());
+                }
+            }
+
+            QueryResultSoA execResult;
+            try {
+                execResult = queryExecutor.execute(query, currentIndexManagerToUse);
+            } finally {
+                if (profiling && ap != null) {
+                    try {
+                        String stopCmd = buildStopCommand(profileOptions.get());
+                        ap.execute(stopCmd);
+                        logger.info("async-profiler stopped.");
+                    } catch (Throwable t) {
+                        logger.warn("Failed to stop async-profiler: {}", t.toString());
+                    }
+                }
+            }
 
                 Table resultTable;
                 int matchCount;
@@ -323,6 +416,15 @@ public class QueryCLI implements AutoCloseable {
                 .choices("none", "optimized").setDefault("none")
                 .help("Specify the initial stitch execution strategy (none or optimized).");
 
+        // Profiling options (async-profiler Java API)
+        cliArgParser.addArgument("--profile")
+                .help("Enable async-profiler with a comma- or semicolon-separated options string (e.g., 'event=wall;format=svg;file=/tmp/profile-%p.svg').")
+                .required(false);
+        cliArgParser.addArgument("--profile-around-execution")
+                .action(Arguments.storeTrue())
+                .help("If set with --profile, starts profiler after indexes are ready and stops after query execution.")
+                .required(false);
+
         cliArgParser.addArgument("query")
                 .nargs("?")
                 .help("The query string to execute. If not provided, enters interactive mode.");
@@ -336,6 +438,8 @@ public class QueryCLI implements AutoCloseable {
             PushdownStrategy initialPushdownStrategy = PushdownStrategy.fromString(ns.getString("pushdown_strategy"));
             String initialStitchStrategy = ns.getString("stitch_strategy");
             String queryStr = ns.getString("query");
+            String profileOptions = ns.getString("profile");
+            boolean profileAroundExecution = ns.getBoolean("profile_around_execution") != null && ns.getBoolean("profile_around_execution");
 
             Optional<String> initialExportFormat = Optional.empty();
             Optional<String> initialExportFilename = Optional.empty();
@@ -352,7 +456,7 @@ public class QueryCLI implements AutoCloseable {
 
             boolean interactive = (queryStr == null);
 
-            try (QueryCLI cli = new QueryCLI(dbFile, indexDir, initialTemporalStrategy, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactive)) {
+            try (QueryCLI cli = new QueryCLI(dbFile, indexDir, initialTemporalStrategy, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactive, Optional.ofNullable(profileOptions), profileAroundExecution)) {
                 if (interactive) {
 
                 Scanner scanner = new Scanner(System.in);
