@@ -160,6 +160,8 @@ public class QueryCLI implements AutoCloseable {
     }
 
 
+
+
     /**
      * Executes a query string using current strategy and output settings.
      *
@@ -418,7 +420,7 @@ public class QueryCLI implements AutoCloseable {
 
         // Profiling options (async-profiler Java API)
         cliArgParser.addArgument("--profile")
-                .help("Enable async-profiler with a comma- or semicolon-separated options string (e.g., 'event=wall;format=svg;file=/tmp/profile-%p.svg').")
+                .help("Enable async-profiler with a comma- or semicolon-separated options string (e.g., 'event=wall;format=html;file=/tmp/profile-%p.html').")
                 .required(false);
         cliArgParser.addArgument("--profile-around-execution")
                 .action(Arguments.storeTrue())
