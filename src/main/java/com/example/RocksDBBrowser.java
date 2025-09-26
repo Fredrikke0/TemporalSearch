@@ -95,7 +95,7 @@ public class RocksDBBrowser {
 
         parser.addArgument("--analyze-syn")
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
-                .help("Analyze synonymIds compression. Uses top-N entries by positions (N from --limit, default 100). Honors --match prefix.");
+                .help("Analyze synonymIds compression (RLE-runs vs VarInt). Uses top-N entries by positions (N from --limit, default 100). Honors --match prefix. Skips index types without synonymIds.");
 
 
 
@@ -804,7 +804,7 @@ public class RocksDBBrowser {
         long totalPositions = 0;
         long synAllEqualRLE = 0;
         long synRunRLE = 0;
-        long synRawBytes = 0;
+        long synRawBytes = 0; // deprecated path; will remain zero
         long synVarInt = 0;
         long synRawInts = 0;
         long synUnknownMarker = 0;
@@ -833,7 +833,7 @@ public class RocksDBBrowser {
                     if (marker == PositionListSoA.RLE_ENCODED_MARKER) { synAllEqualRLE++; totalSynBytes += 8L; }
                     else if (marker == PositionListSoA.RLE_RUNS_MARKER) { int bytes = dis.readInt(); dis.skipBytes(bytes); totalSynBytes += 8L + bytes; synRunRLE++; }
                     else if (marker == PositionListSoA.VARINT_ENCODED_MARKER) { int bytes = dis.readInt(); dis.skipBytes(bytes); totalSynBytes += 8L + bytes; synVarInt++; }
-                    else if (marker == PositionListSoA.RAW_BYTE_ARRAY_MARKER) { int bytes = dis.readInt(); dis.skipBytes(bytes); totalSynBytes += 8L + bytes; synRawBytes++; }
+                    // RAW_BYTE_ARRAY_MARKER path removed
                     else if (marker > 0) { int bytes = marker; dis.skipBytes(bytes); totalSynBytes += 4L + bytes; synRawInts++; }
                     else { synUnknownMarker++; }
                 }
@@ -850,7 +850,8 @@ public class RocksDBBrowser {
         if (encTotal == 0) encTotal = 1;
         System.out.printf("All-equal RLE: %,d (%.2f%%)\n", synAllEqualRLE, 100.0 * synAllEqualRLE / encTotal);
         System.out.printf("Run RLE:       %,d (%.2f%%)\n", synRunRLE, 100.0 * synRunRLE / encTotal);
-        System.out.printf("Raw bytes:     %,d (%.2f%%)\n", synRawBytes, 100.0 * synRawBytes / encTotal);
+        // Raw bytes removed from encoder; keep line for historical comparison
+        System.out.printf("Raw bytes:     %,d (%.2f%%)\n", synRawBytes, 0.0);
         System.out.printf("VarInt:        %,d (%.2f%%)\n", synVarInt, 100.0 * synVarInt / encTotal);
         System.out.printf("Raw 4-byte:    %,d (%.2f%%)\n", synRawInts, 100.0 * synRawInts / encTotal);
         if (synUnknownMarker > 0) {
@@ -864,7 +865,7 @@ public class RocksDBBrowser {
         int marker = dis.readInt();
         if (marker == PositionListSoA.RLE_ENCODED_MARKER) { dis.readInt(); return; }
         if (!delta) {
-            if (marker == PositionListSoA.RLE_RUNS_MARKER || marker == PositionListSoA.VARINT_ENCODED_MARKER || marker == PositionListSoA.RAW_BYTE_ARRAY_MARKER) {
+            if (marker == PositionListSoA.RLE_RUNS_MARKER || marker == PositionListSoA.VARINT_ENCODED_MARKER) {
                 int payload = dis.readInt();
                 long skipped = dis.skipBytes(payload);
                 if (skipped != payload) throw new IOException("Failed to skip payload");

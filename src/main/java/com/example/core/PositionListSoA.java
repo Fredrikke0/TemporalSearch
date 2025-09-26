@@ -55,7 +55,6 @@ public class PositionListSoA {
     // New markers for adaptive non-delta encodings
     public static final int RLE_RUNS_MARKER = Integer.MIN_VALUE + 2025; // (value,int)(count,int) pairs payload
     public static final int VARINT_ENCODED_MARKER = Integer.MIN_VALUE + 2026; // base-128 varints payload size then bytes
-    public static final int RAW_BYTE_ARRAY_MARKER = Integer.MIN_VALUE + 2027; // raw unsigned bytes payload size then bytes
 
     /**
      * Convenience constructor, defaults to a non-stitch list (isStitchList = false).
@@ -422,8 +421,7 @@ public class PositionListSoA {
         }
         double avgRunLen = (double) numElementsInArray / Math.max(1, totalRuns);
         boolean chooseRuns = avgRunLen >= 2.0;
-        boolean chooseRawBytes = (minValue >= -128 && maxValue <= 127);
-        boolean chooseVarInt = !chooseRuns && !chooseRawBytes && (varIntEstimatedBytes + 8 < numElementsInArray * 4);
+        boolean chooseVarInt = !chooseRuns; // simplify: prefer VarInt otherwise
 
         if (chooseRuns) {
             ByteArrayOutputStream payload = new ByteArrayOutputStream(runPairs * 8);
@@ -446,13 +444,6 @@ public class PositionListSoA {
             return;
         }
 
-        if (chooseRawBytes) {
-            out.writeInt(RAW_BYTE_ARRAY_MARKER);
-            out.writeInt(numElementsInArray);
-            for (int k = 0; k < numElementsInArray; k++) out.writeByte((byte) data[k]);
-            return;
-        }
-
         if (chooseVarInt) {
             ByteArrayOutputStream payload = new ByteArrayOutputStream(varIntEstimatedBytes + 16);
             for (int k = 0; k < numElementsInArray; k++) {
@@ -465,9 +456,15 @@ public class PositionListSoA {
             return;
         }
 
-        // Fallback raw ints
-        out.writeInt(numElementsInArray * 4);
-        for (int k = 0; k < numElementsInArray; k++) out.writeInt(data[k]);
+        // Should not reach here now; fallback to VarInt
+        ByteArrayOutputStream payload = new ByteArrayOutputStream(varIntEstimatedBytes + 16);
+        for (int k = 0; k < numElementsInArray; k++) {
+            writeUnsignedVarInt(payload, data[k]);
+        }
+        byte[] bytes = payload.toByteArray();
+        out.writeInt(VARINT_ENCODED_MARKER);
+        out.writeInt(bytes.length);
+        out.write(bytes);
     }
 
     // --- VarInt helpers for adaptive non-delta encoding ---
@@ -645,14 +642,6 @@ public class PositionListSoA {
                     offset = r[1];
                 }
                 return list;
-            } else if (arraySizeOrMarker == RAW_BYTE_ARRAY_MARKER) {
-                int payloadBytes = in.readInt();
-                if (payloadBytes != numExpectedPositions) throw new IOException("RAW_BYTE_ARRAY size mismatch");
-                byte[] buf = new byte[payloadBytes];
-                in.readFully(buf);
-                IntArrayList list = new IntArrayList(numExpectedPositions);
-                for (int i = 0; i < numExpectedPositions; i++) list.add((int) buf[i]);
-                return list;
             }
             // Legacy raw ints fallback
             if (arraySizeOrMarker != numExpectedPositions * 4) {
@@ -823,7 +812,7 @@ public class PositionListSoA {
 
         if (arraySizeOrMarker == RLE_ENCODED_MARKER) {
             dis.readInt(); // Skip the RLE value
-        } else if (arraySizeOrMarker == RLE_RUNS_MARKER || arraySizeOrMarker == VARINT_ENCODED_MARKER || arraySizeOrMarker == RAW_BYTE_ARRAY_MARKER) {
+        } else if (arraySizeOrMarker == RLE_RUNS_MARKER || arraySizeOrMarker == VARINT_ENCODED_MARKER) {
             int payloadBytes = dis.readInt();
             long skipped = dis.skipBytes(payloadBytes);
             if (skipped != payloadBytes) {
