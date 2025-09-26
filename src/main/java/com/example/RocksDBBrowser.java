@@ -93,6 +93,10 @@ public class RocksDBBrowser {
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
                 .help("Show basic statistics about the selected index (or all indexes if 'all' is chosen for index_type). If no key or prefix is specified, only stats are shown.");
 
+        parser.addArgument("--analyze-syn")
+                .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
+                .help("Analyze synonymIds compression. Uses top-N entries by positions (N from --limit, default 100). Honors --match prefix.");
+
 
 
         try {
@@ -103,6 +107,7 @@ public class RocksDBBrowser {
             int limit = ns.getInt("limit");
             Integer topN = (Integer) ns.get("top");
             boolean showStats = ns.getBoolean("stats");
+            boolean analyzeSyn = ns.getBoolean("analyze_syn");
 
 
             Path synonymManagerDbPath = Paths.get(basePath, "global_values_lookup.db");
@@ -124,14 +129,14 @@ public class RocksDBBrowser {
                 for (String singleIndexType : ALL_INDEX_TYPES) {
                     System.out.printf("\n--- Processing Index: %s ---\n", singleIndexType);
                     try {
-                        processSingleIndex(singleIndexType, basePath, match, limit, topN, showStats, parser);
+                        processSingleIndex(singleIndexType, basePath, match, limit, topN, showStats, analyzeSyn, parser);
                     } catch (Exception e) {
                         System.err.printf("Error processing index %s: %s%n", singleIndexType, e.getMessage());
                         // Optionally print stack trace for more detail: e.printStackTrace();
                     }
                 }
             } else {
-                processSingleIndex(indexType, basePath, match, limit, topN, showStats, parser);
+                processSingleIndex(indexType, basePath, match, limit, topN, showStats, analyzeSyn, parser);
             }
 
         } catch (ArgumentParserException e) {
@@ -149,7 +154,7 @@ public class RocksDBBrowser {
         }
     }
 
-    private static void processSingleIndex(String indexType, String basePath, String match, int limit, Integer topN, boolean showStats, ArgumentParser parser) throws IOException {
+    private static void processSingleIndex(String indexType, String basePath, String match, int limit, Integer topN, boolean showStats, boolean analyzeSyn, ArgumentParser parser) throws IOException {
         Path dbPathActual;
         if ("synonym_manager_db".equalsIgnoreCase(indexType)) {
             dbPathActual = Paths.get(basePath, "global_values_lookup.db");
@@ -171,10 +176,19 @@ public class RocksDBBrowser {
             if (showStats) {
                 displayStats(db, indexType);
                 // If no further action requested (no match, no topN), return after stats
-                if (match == null && topN == null) {
+                if (match == null && topN == null && !analyzeSyn) {
                     options.close();
                     return;
                 }
+            }
+            if (analyzeSyn) {
+                if (!(indexType.equals("ner") || indexType.equals("pos") || indexType.startsWith("stitch_"))) {
+                    System.out.println("--analyze-syn skipped: index type does not store synonymIds (" + indexType + ")");
+                } else {
+                    analyzeSynonymCompressionTop(db, indexType, match, (limit <= 0 ? 100 : limit));
+                }
+                options.close();
+                return;
             }
             if (match != null && topN == null) {
                 listEntriesByPrefix(db, match, limit, indexType);
@@ -745,5 +759,120 @@ public class RocksDBBrowser {
                 }
             }
         }
+    }
+
+    private static void analyzeSynonymCompressionTop(RocksDB db, String indexType, String prefixFilter, int topN) throws IOException {
+        String effectivePrefix = (prefixFilter != null && !prefixFilter.isBlank()) ? prefixFilter : null;
+        PriorityQueue<TopEntry> minHeap = new PriorityQueue<>(Comparator.comparingLong(TopEntry::sum));
+        String currentBaseKey = null;
+        long currentBaseSum = 0L;
+        int currentBaseSegments = 0;
+        try (RocksIterator iterator = db.newIterator()) {
+            for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
+                byte[] keyBytes = iterator.key();
+                String keyStr = asString(keyBytes);
+                if (effectivePrefix != null && !keyStr.startsWith(effectivePrefix)) continue;
+                String baseKey = baseKeyWithoutSegmentSuffix(keyStr);
+                long positionsCountForThisEntry;
+                try {
+                    positionsCountForThisEntry = PositionListSoA.getNumPositionsFromBlob(iterator.value());
+                } catch (Exception e) {
+                    continue;
+                }
+                if (currentBaseKey == null) {
+                    currentBaseKey = baseKey;
+                    currentBaseSum = positionsCountForThisEntry;
+                    currentBaseSegments = 1;
+                } else if (baseKey.equals(currentBaseKey)) {
+                    currentBaseSum += positionsCountForThisEntry;
+                    currentBaseSegments++;
+                } else {
+                    offerIntoTopHeap(minHeap, currentBaseKey, currentBaseSum, currentBaseSegments, topN);
+                    currentBaseKey = baseKey;
+                    currentBaseSum = positionsCountForThisEntry;
+                    currentBaseSegments = 1;
+                }
+            }
+        }
+        if (currentBaseKey != null) {
+            offerIntoTopHeap(minHeap, currentBaseKey, currentBaseSum, currentBaseSegments, topN);
+        }
+        List<TopEntry> topList = new ArrayList<>(minHeap);
+        topList.sort((a, b) -> Long.compare(b.sum(), a.sum()));
+
+        long entriesScanned = 0;
+        long totalPositions = 0;
+        long synAllEqualRLE = 0;
+        long synRunRLE = 0;
+        long synRawBytes = 0;
+        long synVarInt = 0;
+        long synRawInts = 0;
+        long synUnknownMarker = 0;
+        long totalSynBytes = 0;
+
+        for (TopEntry entry : topList) {
+            String base = entry.key();
+            int seg = -1;
+            while (true) {
+                String key = (seg < 0 ? base : base + "#" + seg);
+                byte[] value;
+                try (RocksIterator it = db.newIterator()) {
+                    it.seek(bytes(key));
+                    if (!it.isValid() || !asString(it.key()).equals(key)) break;
+                    value = it.value();
+                }
+                try (java.io.DataInputStream dis = new java.io.DataInputStream(new java.io.ByteArrayInputStream(value))) {
+                    int num = dis.readInt();
+                    if (num <= 0) { seg++; continue; }
+                    totalPositions += num;
+                    skipArray(dis, true);  // docIds
+                    skipArray(dis, true);  // sentIds
+                    skipArray(dis, true);  // begin
+                    skipArray(dis, false); // lengths
+                    int marker = dis.readInt();
+                    if (marker == PositionListSoA.RLE_ENCODED_MARKER) { synAllEqualRLE++; totalSynBytes += 8L; }
+                    else if (marker == PositionListSoA.RLE_RUNS_MARKER) { int bytes = dis.readInt(); dis.skipBytes(bytes); totalSynBytes += 8L + bytes; synRunRLE++; }
+                    else if (marker == PositionListSoA.VARINT_ENCODED_MARKER) { int bytes = dis.readInt(); dis.skipBytes(bytes); totalSynBytes += 8L + bytes; synVarInt++; }
+                    else if (marker == PositionListSoA.RAW_BYTE_ARRAY_MARKER) { int bytes = dis.readInt(); dis.skipBytes(bytes); totalSynBytes += 8L + bytes; synRawBytes++; }
+                    else if (marker > 0) { int bytes = marker; dis.skipBytes(bytes); totalSynBytes += 4L + bytes; synRawInts++; }
+                    else { synUnknownMarker++; }
+                }
+                seg++;
+            }
+            entriesScanned++;
+        }
+
+        System.out.println("SynonymIds Compression Analysis");
+        System.out.println("================================");
+        System.out.printf("Entries scanned: %,d\n", entriesScanned);
+        System.out.printf("Total positions counted: %,d\n", totalPositions);
+        long encTotal = synAllEqualRLE + synRunRLE + synRawBytes + synVarInt + synRawInts + synUnknownMarker;
+        if (encTotal == 0) encTotal = 1;
+        System.out.printf("All-equal RLE: %,d (%.2f%%)\n", synAllEqualRLE, 100.0 * synAllEqualRLE / encTotal);
+        System.out.printf("Run RLE:       %,d (%.2f%%)\n", synRunRLE, 100.0 * synRunRLE / encTotal);
+        System.out.printf("Raw bytes:     %,d (%.2f%%)\n", synRawBytes, 100.0 * synRawBytes / encTotal);
+        System.out.printf("VarInt:        %,d (%.2f%%)\n", synVarInt, 100.0 * synVarInt / encTotal);
+        System.out.printf("Raw 4-byte:    %,d (%.2f%%)\n", synRawInts, 100.0 * synRawInts / encTotal);
+        if (synUnknownMarker > 0) {
+            System.out.printf("Unknown:       %,d (%.2f%%)\n", synUnknownMarker, 100.0 * synUnknownMarker / encTotal);
+        }
+        double avgBytesPerId = (totalPositions > 0) ? ((double) totalSynBytes / totalPositions) : 0.0;
+        System.out.printf("Estimated avg bytes per synonymId: %.3f\n", avgBytesPerId);
+    }
+
+    private static void skipArray(java.io.DataInputStream dis, boolean delta) throws IOException {
+        int marker = dis.readInt();
+        if (marker == PositionListSoA.RLE_ENCODED_MARKER) { dis.readInt(); return; }
+        if (!delta) {
+            if (marker == PositionListSoA.RLE_RUNS_MARKER || marker == PositionListSoA.VARINT_ENCODED_MARKER || marker == PositionListSoA.RAW_BYTE_ARRAY_MARKER) {
+                int payload = dis.readInt();
+                long skipped = dis.skipBytes(payload);
+                if (skipped != payload) throw new IOException("Failed to skip payload");
+                return;
+            }
+        }
+        if (marker > 0) { long skipped = dis.skipBytes(marker); if (skipped != marker) throw new IOException("Failed to skip array payload"); return; }
+        if (marker == 0) return;
+        throw new IOException("Unexpected marker while skipping array: " + marker);
     }
 }
