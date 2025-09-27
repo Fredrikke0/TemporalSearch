@@ -139,17 +139,25 @@ public class CountColumn implements SelectColumn {
 
         logger.debug("Applying COUNT aggregation, grouping by: {}, counting: {}", groupColumns, countColumns);
 
-        Table aggregatedTable = inputTable.summarize(groupColumns.get(0), AggregateFunctions.count).by(groupColumns.toArray(String[]::new));
+        // Robust row-count aggregation: add a temporary counter column and sum it per group
+        Table working = inputTable.copy();
+        final String tmpCounterCol = "__tmp_row_counter__";
+        IntColumn counter = IntColumn.create(tmpCounterCol);
+        for (int i = 0; i < working.rowCount(); i++) counter.append(1);
+        working.addColumns(counter);
 
-        String expectedAggColName = "Count [" + groupColumns.get(0) + "]";
+        Table aggregatedTable = working.summarize(tmpCounterCol, AggregateFunctions.sum).by(groupColumns.toArray(String[]::new));
+
+        // Rename the aggregated column to the desired COUNT column name
+        String expectedAggColName = "Sum [" + tmpCounterCol + "]";
         if (aggregatedTable.columnNames().contains(expectedAggColName) && !countColumns.isEmpty()) {
             aggregatedTable.column(expectedAggColName).setName(countColumns.get(0));
-        } else if (!countColumns.isEmpty()){
+        } else if (!countColumns.isEmpty()) {
             logger.warn("Could not find expected aggregated column '{}' to rename to '{}'", expectedAggColName, countColumns.get(0));
         }
 
         if (countColumns.size() > 1) {
-            logger.warn("Handling multiple COUNT columns ({}) with basic aggregation on first group column. This may not be correct for all count types.", countColumns);
+            logger.warn("Handling multiple COUNT columns ({}) with basic row-count aggregation. This may not be correct for all count types.", countColumns);
         }
 
         logger.debug("Aggregation complete, resulting table has {} rows.", aggregatedTable.rowCount());

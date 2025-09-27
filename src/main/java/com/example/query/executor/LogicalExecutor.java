@@ -52,8 +52,15 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         logger.debug("Executing logical condition: operator={}, subconditions={}, granularity={}, size={}, corpus={}, requirements={}, contextIsPresent={}",
                 condition.operator(), condition.conditions().size(), granularity, granularitySize, corpusName, requirements, context.isPresent());
 
-        // Reduce entire logical tree to a single presence bitmap
-        Optional<RBPresenceIndex> presenceOpt = PresenceReducer.tryReduceConditionToPresence(condition, indexes);
+        // If any subcondition produces variables, skip presence-only reduction so value columns get populated
+        boolean hasProducedVars = !condition.getProducedVariables().isEmpty();
+        Optional<RBPresenceIndex> presenceOpt = Optional.empty();
+        if (!hasProducedVars) {
+            // Reduce entire logical tree to a single presence bitmap
+            presenceOpt = PresenceReducer.tryReduceConditionToPresence(condition, indexes);
+        } else {
+            logger.debug("Skipping presence-only reduction because the logical subtree produces variables: {}", condition.getProducedVariables());
+        }
         if (presenceOpt.isPresent()) {
             RBPresenceIndex presence = presenceOpt.get();
             QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
@@ -108,7 +115,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
                 acc = combineAnd(java.util.List.of(acc, next), granularity, requirements);
                 current = Optional.of(current.get().intersect(next));
                 if (current.get().allowedDocumentIds().isPresent() && current.get().allowedDocumentIds().get().isEmpty()) {
-                    return new QueryResultSoA(granularity, granularitySize, requirements);
+            return new QueryResultSoA(granularity, granularitySize, requirements);
                 }
             }
             return acc;
@@ -127,7 +134,7 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         } else if (fc.allowedDocumentIds().isPresent()) {
             return fc.allowedDocumentIds().get().contains(docId);
         }
-        return true;
+                return true;
     }
 
     private QueryResultSoA combineOr(java.util.List<QueryResultSoA> inputs, Query.Granularity granularity, AttributeRequirements requirements) throws QueryExecutionException {
