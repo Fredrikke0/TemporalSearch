@@ -178,6 +178,8 @@ public class QueryCLI implements AutoCloseable {
         long startTimeNs = System.nanoTime();
 
         IndexManager localIndexManager = null; // For non-interactive mode or if shared init failed
+        AsyncProfiler ap = null;
+        boolean profiling = false;
 
         try {
             Query query = parser.parse(queryStr);
@@ -271,8 +273,6 @@ public class QueryCLI implements AutoCloseable {
                 int windowSize = query.granularitySize().orElse(0);
                 logger.info("Query granularity: {} with size: {}", queryGranularity, windowSize);
 
-            AsyncProfiler ap = null;
-            boolean profiling = false;
             if (profileAroundExecution && profileOptions.isPresent()) {
                 try {
                     ap = AsyncProfiler.getInstance();
@@ -288,23 +288,7 @@ public class QueryCLI implements AutoCloseable {
             QueryResultSoA execResult;
             try {
                 execResult = queryExecutor.execute(query, currentIndexManagerToUse);
-            } finally {
-                if (profiling && ap != null) {
-                    try {
-                        String stopCmd = buildStopCommand(profileOptions.get());
-                        ap.execute(stopCmd);
-                        logger.info("async-profiler stopped.");
-                        // Print resolved output file location
-                        java.util.Map<String, String> opts = parseProfileOptions(profileOptions.get());
-                        String output = opts.getOrDefault("output", "jfr");
-                        String filePattern = opts.getOrDefault("file", "/tmp/querycli-%p." + output);
-                        String resolved = expandProfilerFilename(filePattern, output);
-                        System.out.println("Profiler output: " + resolved);
-                    } catch (Throwable t) {
-                        logger.warn("Failed to stop async-profiler: {}", t.toString());
-                    }
-                }
-            }
+            } finally { }
 
                 Table resultTable;
                 int matchCount;
@@ -365,6 +349,23 @@ public class QueryCLI implements AutoCloseable {
             long endTimeNs = System.nanoTime();
             double executionTimeMs = (endTimeNs - startTimeNs) / 1_000_000.0;
             System.out.printf("BENCHMARK_EXECUTION_TIME_MS: %.3f%n", executionTimeMs);
+
+            // Stop profiler after benchmark time is printed
+            if (profiling && ap != null && profileOptions.isPresent()) {
+                try {
+                    String stopCmd = buildStopCommand(profileOptions.get());
+                    ap.execute(stopCmd);
+                    logger.info("async-profiler stopped.");
+                    // Print resolved output file location
+                    java.util.Map<String, String> opts = parseProfileOptions(profileOptions.get());
+                    String output = opts.getOrDefault("output", "html");
+                    String filePattern = opts.getOrDefault("file", "/tmp/querycli-%p." + output);
+                    String resolved = expandProfilerFilename(filePattern, output);
+                    System.out.println("Profiler output: " + resolved);
+                } catch (Throwable t) {
+                    logger.warn("Failed to stop async-profiler: {}", t.toString());
+                }
+            }
         }
     }
 
