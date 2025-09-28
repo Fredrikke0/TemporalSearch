@@ -111,14 +111,14 @@ public class QueryCLI implements AutoCloseable {
     private static String buildStartCommand(String profileOptions) {
         java.util.Map<String, String> opts = parseProfileOptions(profileOptions);
         String event = opts.getOrDefault("event", "wall");
-        String format = opts.getOrDefault("format", "jfr");
+        String output = opts.getOrDefault("output", "jfr");
         String interval = opts.getOrDefault("interval", "1ms");
         String duration = opts.getOrDefault("duration", null);
-        String file = opts.getOrDefault("file", "/tmp/querycli-%p." + format);
+        String file = opts.getOrDefault("file", "/tmp/querycli-%p." + output);
 
         StringBuilder cmd = new StringBuilder();
         cmd.append("start");
-        if ("jfr".equalsIgnoreCase(format)) {
+        if ("jfr".equalsIgnoreCase(output)) {
             cmd.append(",jfr");
             cmd.append(",file=").append(file);
         }
@@ -130,12 +130,12 @@ public class QueryCLI implements AutoCloseable {
 
     private static String buildStopCommand(String profileOptions) {
         java.util.Map<String, String> opts = parseProfileOptions(profileOptions);
-        String format = opts.getOrDefault("format", "jfr");
-        String file = opts.getOrDefault("file", "/tmp/querycli-%p." + format);
-        if ("jfr".equalsIgnoreCase(format)) {
+        String output = opts.getOrDefault("output", "jfr");
+        String file = opts.getOrDefault("file", "/tmp/querycli-%p." + output);
+        if ("jfr".equalsIgnoreCase(output)) {
             return "stop"; // file was specified at start
         }
-        return "stop,file=" + file + ",format=" + format;
+        return "stop,file=" + file + ",output=" + output;
     }
 
     private static java.util.Map<String, String> parseProfileOptions(String profileOptions) {
@@ -157,6 +157,13 @@ public class QueryCLI implements AutoCloseable {
             }
         }
         return opts;
+    }
+
+    private static String expandProfilerFilename(String filePattern, String output) {
+        String pattern = (filePattern == null || filePattern.isBlank()) ? "/tmp/querycli-%p." + output : filePattern;
+        long pid = java.lang.ProcessHandle.current().pid();
+        String ts = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").format(java.time.LocalDateTime.now());
+        return pattern.replace("%p", Long.toString(pid)).replace("%t", ts);
     }
 
 
@@ -287,6 +294,12 @@ public class QueryCLI implements AutoCloseable {
                         String stopCmd = buildStopCommand(profileOptions.get());
                         ap.execute(stopCmd);
                         logger.info("async-profiler stopped.");
+                        // Print resolved output file location
+                        java.util.Map<String, String> opts = parseProfileOptions(profileOptions.get());
+                        String output = opts.getOrDefault("output", "jfr");
+                        String filePattern = opts.getOrDefault("file", "/tmp/querycli-%p." + output);
+                        String resolved = expandProfilerFilename(filePattern, output);
+                        System.out.println("Profiler output: " + resolved);
                     } catch (Throwable t) {
                         logger.warn("Failed to stop async-profiler: {}", t.toString());
                     }
@@ -391,7 +404,8 @@ public class QueryCLI implements AutoCloseable {
     public static void main(String[] args) {
         ArgumentParser cliArgParser = ArgumentParsers.newFor("QueryCLI").build()
                 .defaultHelp(true)
-                .description("Execute queries against indexed projects. Queries specify the project via the FROM clause.");
+                .description("Execute queries against indexed projects. Queries specify the project via the FROM clause.\n\n" +
+                             "Profiling example: --profile 'event=wall,output=html,file=/tmp/profile-%p.html,interval=1ms' --profile-around-execution");
 
         cliArgParser.addArgument("--db-file")
                 .required(false)
@@ -420,7 +434,9 @@ public class QueryCLI implements AutoCloseable {
 
         // Profiling options (async-profiler Java API)
         cliArgParser.addArgument("--profile")
-                .help("Enable async-profiler with a comma- or semicolon-separated options string (e.g., 'event=wall;format=html;file=/tmp/profile-%p.html').")
+                .help("Enable async-profiler. Pass options as a single quoted, comma-separated string. " +
+                      "Example: 'event=wall,output=html,file=/tmp/profile-%p.html,interval=1ms'. " +
+                      "Keys: event, output, file, interval, duration.")
                 .required(false);
         cliArgParser.addArgument("--profile-around-execution")
                 .action(Arguments.storeTrue())
