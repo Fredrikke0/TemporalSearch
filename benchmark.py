@@ -19,6 +19,40 @@ PROCESS_TERMINATION_TIMEOUT_SECONDS = 15 # Timeout for QueryCLI to exit after QU
 
 PROMPT = "Query>" # Define the new prompt
 
+# --- Fatal error detection helpers ---
+def _contains_fatal_marker(text):
+    try:
+        if not text:
+            return False
+        t = text.lower()
+        fatal_markers = [
+            "error:",
+            " exception",
+            "critical",
+            "timeout/error",
+            "python_benchmark",
+        ]
+        return any(marker in t for marker in fatal_markers)
+    except Exception:
+        return False
+
+def detect_cli_fatal(stdout_text, stderr_text):
+    return _contains_fatal_marker(stderr_text) or _contains_fatal_marker(stdout_text)
+
+def _abort_on_cli_error(stderr_text, stdout_text, context_description, cli_process=None):
+    if detect_cli_fatal(stdout_text, stderr_text):
+        try:
+            if cli_process:
+                cli_process.close()
+        except Exception:
+            pass
+        print(f"\nFATAL: QueryCLI error detected during {context_description}. Aborting.", flush=True)
+        if stderr_text:
+            print(f"  STDERR: {stderr_text.strip()}", flush=True)
+        if stdout_text:
+            print(f"  STDOUT: {stdout_text.strip()}", flush=True)
+        exit(2)
+
 # Helper function for reading a stream in a separate thread
 def _enqueue_output(stream, q, stream_name, is_verbose):
     try:
@@ -158,7 +192,8 @@ def run_warm_mode(cli_process, queries_to_run, args, all_run_results_accumulator
             current_strategy_critical_failure = False
 
             try:
-                _, _, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
+                _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
+                _abort_on_cli_error(strat_set_stderr, strat_set_stdout, f"SET STRATEGY warm {original_query_id_str}", cli_process)
                 if strat_set_stderr: run_stderr_details += f"SET_STRATEGY_STDERR: {strat_set_stderr.strip()}\n"
             except (ConnectionAbortedError, TimeoutError, RuntimeError) as e_strat_set_critical:
                 print(f"{progress_prefix} CRITICAL ERROR setting strategy: {e_strat_set_critical}. Re-raising.", flush=True)
@@ -192,6 +227,7 @@ def run_warm_mode(cli_process, queries_to_run, args, all_run_results_accumulator
                 print(f"{progress_prefix}  Warm-up 1/1...", flush=True)
                 try:
                     _, wu_out, wu_err = cli_process.execute_query(query_text)
+                    _abort_on_cli_error(wu_err, wu_out, f"WARMUP warm {original_query_id_str}", cli_process)
                     if wu_err: run_stderr_details += f"WARMUP_QUERY_STDERR: {wu_err.strip()}\n"
                     if args.verbose and wu_out: run_stdout_details += f"WARMUP_QUERY_STDOUT: {wu_out.strip()}\n"
                 except (ConnectionAbortedError, TimeoutError, RuntimeError) as e_warmup_critical:
@@ -220,10 +256,12 @@ def run_warm_mode(cli_process, queries_to_run, args, all_run_results_accumulator
                 current_run_stdout, current_run_stderr = "", ""
                 try:
                     if verification_export_file and run_num == NUM_TIMED_RUNS_WARM - 1: # Last timed run
-                        _, _, set_out_err = cli_process.set_output("csv", verification_export_file)
+                        _, set_out_stdout, set_out_err = cli_process.set_output("csv", verification_export_file)
+                        _abort_on_cli_error(set_out_err, set_out_stdout, f"SET OUTPUT warm {original_query_id_str}", cli_process)
                         if set_out_err: run_stderr_details += f"SET_OUTPUT_VERIFY_STDERR (Run {run_num+1}): {set_out_err.strip()}\n"
 
                     b_time, out_q, err_q = cli_process.execute_query(query_text)
+                    _abort_on_cli_error(err_q, out_q, f"EXECUTE warm {original_query_id_str}", cli_process)
                     current_run_stdout = out_q
                     current_run_stderr = err_q
 
@@ -241,7 +279,8 @@ def run_warm_mode(cli_process, queries_to_run, args, all_run_results_accumulator
                         print(f"{progress_prefix}    Run {run_num+1}: ExecT=N/A. Check stderr.", flush=True)
 
                     if verification_export_file and run_num == NUM_TIMED_RUNS_WARM - 1: # Last timed run
-                        _, _, set_out_none_err = cli_process.set_output() # Revert to NONE
+                        _, set_none_stdout, set_out_none_err = cli_process.set_output() # Revert to NONE
+                        _abort_on_cli_error(set_out_none_err, set_none_stdout, f"SET OUTPUT NONE warm {original_query_id_str}", cli_process)
                         if set_out_none_err: run_stderr_details += f"SET_OUTPUT_NONE_STDERR (Run {run_num+1}): {set_out_none_err.strip()}\n"
 
                 except (ConnectionAbortedError, TimeoutError, RuntimeError) as e_query_run_critical:
@@ -383,10 +422,12 @@ def run_cold_mode(cli_process, queries_to_run, args, all_run_results_accumulator
             pass_error_flag = False
 
             try:
-                _, _, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
+                _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
+                _abort_on_cli_error(strat_set_stderr, strat_set_stdout, f"SET STRATEGY cold {original_query_id_str}", cli_process)
                 if strat_set_stderr: pass_stderr += f"SET_STRATEGY_STDERR: {strat_set_stderr.strip()}\n"
 
                 b_time, out_q, err_q = cli_process.execute_query(query_text)
+                _abort_on_cli_error(err_q, out_q, f"EXECUTE cold {original_query_id_str}", cli_process)
                 pass_stdout = out_q or ""
                 if err_q: pass_stderr += f"QUERY_STDERR (Pass {pass_num+1}): {err_q.strip()}\n"
                 pass_time = b_time

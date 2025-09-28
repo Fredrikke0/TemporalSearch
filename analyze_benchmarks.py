@@ -19,6 +19,30 @@ STRATEGY_DISPLAY_NAMES = {
     ('nash', 'optimized', 'optimized'): "S+P+N"
 }
 
+# Fatal error detection for CSV rows produced by runners
+def _contains_fatal_marker(text):
+    try:
+        if not text:
+            return False
+        t = text.lower()
+        markers = ["error:", " exception", "critical", "timeout", "cli_process_error", "failed"]
+        return any(m in t for m in markers)
+    except Exception:
+        return False
+
+def _row_indicates_cli_error(row):
+    try:
+        vs = (row.get('verification_status') or '').strip().upper()
+        if vs:
+            # Consider anything with ERROR/FAIL/TIMEOUT as fatal
+            if any(k in vs for k in ["ERROR", "FAIL", "TIMEOUT", "CLI_PROCESS_ERROR"]):
+                return True
+        se = row.get('stderr_output') or ''
+        so = row.get('stdout_output') or ''
+        return _contains_fatal_marker(se) or _contains_fatal_marker(so)
+    except Exception:
+        return False
+
 def get_hop_type(query_text):
     """Determines the hop type based on the number of JOIN clauses."""
     # Use word boundary to match JOIN as a complete word
@@ -60,6 +84,10 @@ def analyze_benchmarks(csv_filepath):
         with open(csv_filepath, 'r', newline='') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
+                # Abort early if CSV row indicates CLI errors
+                if _row_indicates_cli_error(row):
+                    print(f"FATAL: CLI error detected in input CSV '{csv_filepath}'. Row reported error status or stderr content.", file=sys.stderr)
+                    sys.exit(2)
                 # Include all queries regardless of verification status
                 # (verification is about answer correctness, not execution success)
 

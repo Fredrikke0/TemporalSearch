@@ -28,6 +28,34 @@ except Exception:
 
 PROMPT = "Query>"
 
+# Fatal error detection compatible with verify_correctness helpers if available
+def _contains_fatal_marker(text):
+    try:
+        if not text:
+            return False
+        t = text.lower()
+        markers = ["error:", " exception", "critical", "timeout/error", "python_benchmark"]
+        return any(m in t for m in markers)
+    except Exception:
+        return False
+
+def detect_cli_fatal(stdout_text, stderr_text):
+    return _contains_fatal_marker(stderr_text) or _contains_fatal_marker(stdout_text)
+
+def _abort_on_cli_error(stderr_text, stdout_text, context_description, cli_process=None):
+    if detect_cli_fatal(stdout_text, stderr_text):
+        try:
+            if cli_process:
+                cli_process.close()
+        except Exception:
+            pass
+        print(f"\nFATAL: QueryCLI error detected during {context_description}. Aborting.")
+        if stderr_text:
+            print(f"  STDERR: {stderr_text.strip()}")
+        if stdout_text:
+            print(f"  STDOUT: {stdout_text.strip()}")
+        exit(2)
+
 
 def _get_git_commit_short(repo_dir):
     try:
@@ -210,11 +238,14 @@ def main():
                 # Base run
                 try:
                     # Ensure base strategy
-                    cli.set_strategy('naive', 'none', 'none')
-                    _, _, set_out_err = cli.set_output('csv', base_fp)
+                    _, set_str_stdout, set_str_stderr = cli.set_strategy('naive', 'none', 'none')
+                    _abort_on_cli_error(set_str_stderr, set_str_stdout, f"SET STRATEGY base {q['id']+1}", cli)
+                    _, set_out_stdout, set_out_err = cli.set_output('csv', base_fp)
+                    _abort_on_cli_error(set_out_err, set_out_stdout, f"SET OUTPUT base {q['id']+1}", cli)
                     if set_out_err and args.verbose:
                         print(f"[QB] WARN set_output base: {set_out_err.strip()}")
                     _, stdout_q, stderr_q = cli.execute_query(q['text'])
+                    _abort_on_cli_error(stderr_q, stdout_q, f"EXECUTE base {q['id']+1}", cli)
                     bench_ms = _parse_benchmark_time_ms(stdout_q)
                     if bench_ms is None:
                         # Fallback to rough wall time if CLI didn't emit benchmark line
@@ -247,11 +278,14 @@ def main():
                     other_fp = os.path.join(subdir, f"{q['id']+1:04d}_{safe_q_part}_T{t_strat}_P{p_strat}_S{s_strat}.csv")
                     try:
                         # Set variant strategy
-                        cli.set_strategy(t_strat, p_strat, s_strat)
-                        _, _, set_out_err2 = cli.set_output('csv', other_fp)
+                        _, var_str_stdout, var_str_stderr = cli.set_strategy(t_strat, p_strat, s_strat)
+                        _abort_on_cli_error(var_str_stderr, var_str_stdout, f"SET STRATEGY var {q['id']+1}", cli)
+                        _, set_out_stdout2, set_out_err2 = cli.set_output('csv', other_fp)
+                        _abort_on_cli_error(set_out_err2, set_out_stdout2, f"SET OUTPUT var {q['id']+1}", cli)
                         if set_out_err2 and args.verbose:
                             print(f"[QB] WARN set_output other: {set_out_err2.strip()}")
-                        _, _, err = cli.execute_query(q['text'])
+                        _, out2, err = cli.execute_query(q['text'])
+                        _abort_on_cli_error(err, out2, f"EXECUTE var {q['id']+1}", cli)
                         if err:
                             all_consistent = False
                             failures += 1
@@ -281,7 +315,8 @@ def main():
 
                 # Reset output to console between queries
                 try:
-                    cli.set_output('csv')
+                    _, so_stdout, so_stderr = cli.set_output('csv')
+                    _abort_on_cli_error(so_stderr, so_stdout, "SET OUTPUT NONE/reset", cli)
                 except Exception:
                     pass
 

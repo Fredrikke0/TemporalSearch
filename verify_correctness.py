@@ -34,6 +34,43 @@ _OPERATOR_TOKENS = {
     'AND', 'OR', 'NOT'
 }
 
+# --- Fatal error detection helpers ---
+def _contains_fatal_marker(text):
+    try:
+        if not text:
+            return False
+        t = text.lower()
+        # Treat any clear error indicators as fatal. Warnings are not fatal.
+        fatal_markers = [
+            "error:",
+            " exception",
+            "critical",
+            "timeout/error",
+            "python_benchmark",
+            "python_verify",
+        ]
+        return any(marker in t for marker in fatal_markers)
+    except Exception:
+        return False
+
+def detect_cli_fatal(stdout_text, stderr_text):
+    """Public helper to let other modules check for fatal CLI errors."""
+    return _contains_fatal_marker(stderr_text) or _contains_fatal_marker(stdout_text)
+
+def _abort_on_cli_error(stderr_text, stdout_text, context_description, cli_process=None):
+    if detect_cli_fatal(stdout_text, stderr_text):
+        try:
+            if cli_process:
+                cli_process.close()
+        except Exception:
+            pass
+        print(f"\nFATAL: QueryCLI error detected during {context_description}. Aborting.", flush=True)
+        if stderr_text:
+            print(f"  STDERR: {stderr_text.strip()}", flush=True)
+        if stdout_text:
+            print(f"  STDOUT: {stdout_text.strip()}", flush=True)
+        exit(2)
+
 def _strip_string_literals(sql):
     """Remove content within single/double quotes to avoid counting tokens inside strings."""
     try:
@@ -291,17 +328,20 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
         base_run_ok = False
         try:
             # Set strategy
-            _, _, strat_set_stderr = cli_process.set_strategy(base_temp_s, base_push_s, base_stitch_s)
+            _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(base_temp_s, base_push_s, base_stitch_s)
+            _abort_on_cli_error(strat_set_stderr, strat_set_stdout, f"SET STRATEGY base {original_query_id_str}", cli_process)
             if strat_set_stderr and args.verbose:
                 print(f"{progress_prefix_base} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
 
             # Set output file for the CLI to write to directly
-            _, _, output_set_stderr = cli_process.set_output('csv', base_output_filepath)
+            _, out_set_stdout, output_set_stderr = cli_process.set_output('csv', base_output_filepath)
+            _abort_on_cli_error(output_set_stderr, out_set_stdout, f"SET OUTPUT base {original_query_id_str}", cli_process)
             if output_set_stderr and args.verbose:
                 print(f"{progress_prefix_base} WARNING: Stderr on set_output: {output_set_stderr.strip()}", flush=True)
 
             # Execute. The Java process will write the output file.
-            _, _, err_q = cli_process.execute_query(query_text)
+            _, out_q, err_q = cli_process.execute_query(query_text)
+            _abort_on_cli_error(err_q, out_q, f"EXECUTE base {original_query_id_str}", cli_process)
 
             if err_q:
                 print(f"{progress_prefix_base} ERROR executing query. Stderr: {err_q.strip()}", flush=True)
@@ -351,16 +391,19 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
             details = ""
 
             try:
-                _, _, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
+                _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
+                _abort_on_cli_error(strat_set_stderr, strat_set_stdout, f"SET STRATEGY cmp {original_query_id_str}", cli_process)
                 if strat_set_stderr and args.verbose:
                     print(f"{progress_prefix_other} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
 
                 # Set output file for the CLI to write to directly
-                _, _, output_set_stderr = cli_process.set_output('csv', other_output_filepath)
+                _, out_set_stdout, output_set_stderr = cli_process.set_output('csv', other_output_filepath)
+                _abort_on_cli_error(output_set_stderr, out_set_stdout, f"SET OUTPUT cmp {original_query_id_str}", cli_process)
                 if output_set_stderr and args.verbose:
                     print(f"{progress_prefix_other} WARNING: Stderr on set_output: {output_set_stderr.strip()}", flush=True)
 
-                _, _, err_q = cli_process.execute_query(query_text)
+                _, out_q, err_q = cli_process.execute_query(query_text)
+                _abort_on_cli_error(err_q, out_q, f"EXECUTE cmp {original_query_id_str}", cli_process)
                 if err_q:
                     print(f"{progress_prefix_other} ERROR executing query. Stderr: {err_q.strip()}", flush=True)
                     status = "EXECUTION_ERROR"
