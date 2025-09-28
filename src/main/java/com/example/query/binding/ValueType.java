@@ -13,5 +13,15 @@ public enum ValueType {
     POS_TAG_TYPE, // Represents the POS tag type itself (e.g., NN, VB)
     NUMBER,
     UNRESOLVED_NER_ID,
-    UNRESOLVED_POS_ID
+    UNRESOLVED_POS_ID;
+
+    private static final ValueType[] CACHED = values();
+
+    public static ValueType[] cachedValues() {
+        return CACHED;
+    }
+
+    public static ValueType fromOrdinal(int ordinal) {
+        return CACHED[ordinal];
+    }
 }

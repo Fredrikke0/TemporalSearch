@@ -342,7 +342,7 @@ public final class QueryResultSoA {
     public ValueType getValueTypeAt(int index) {
         validateIndex(index);
         byte typeOrdinal = valueTypes.getByte(index);
-        return ValueType.values()[typeOrdinal];
+        return ValueType.fromOrdinal(typeOrdinal);
     }
 
     /**
