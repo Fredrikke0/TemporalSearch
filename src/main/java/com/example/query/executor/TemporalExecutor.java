@@ -308,8 +308,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 throw new QueryExecutionException("Unexpected error in Nash temporal strategy: " + e.getMessage(), e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
             }
 
-            // Sort results by document ID to ensure proper ordering for merge joins
-            resultSoA.sort();
+            // Centralized sorting handled by QueryExecutor
             strategyLogger.debug("NashTemporalStrategy execution finished, {} results in SoA ({} conceptual rows).", resultSoA.size(), resultSoA.getConceptualRowCount());
             return resultSoA;
         }
@@ -559,8 +558,7 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                 throw new QueryExecutionException("Error accessing date index or deserializing data.", e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
             }
 
-            // Sort results by document ID to ensure proper ordering for merge joins
-            resultSoA.sort();
+            // Centralized sorting handled by QueryExecutor
             strategyLogger.debug("NaiveTemporalStrategy finished. QueryResultSoA size: {}.", resultSoA.size());
             return resultSoA;
         }

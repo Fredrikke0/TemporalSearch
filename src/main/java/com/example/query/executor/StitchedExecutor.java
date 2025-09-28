@@ -358,10 +358,8 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
         logger.debug("StitchedExecutor finished for type '{}', N-gram '{}', index '{}'. Found {} results.",
                      stitchedCondition.stitchType(), ngramPrefix, stitchIndexName, resultSoA.size());
 
-        if (resultSoA.size() > 1) {
-            resultSoA.sort();
-            logger.debug("Sorted StitchedExecutor results. Size: {}", resultSoA.size());
-        }
+        // Sorting is centralized by QueryExecutor
+        logger.debug("StitchedExecutor produced {} results.", resultSoA.size());
 
         return resultSoA;
     }

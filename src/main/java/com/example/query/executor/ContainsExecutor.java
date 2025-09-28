@@ -140,9 +140,7 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
             logger.debug("Found {} total entries in QueryResultSoA for terms: {} using selective deserialization",
                     resultSoA.size(), terms);
 
-            // Sort by document ID to ensure merge join optimization works correctly
-            resultSoA.sort();
-
+            // Sorting is centralized by QueryExecutor
             return resultSoA;
         } catch (Exception e) {
             if (e instanceof QueryExecutionException qee) throw qee;

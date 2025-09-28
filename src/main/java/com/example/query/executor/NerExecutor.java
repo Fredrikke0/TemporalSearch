@@ -119,8 +119,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
             }
             logger.debug("NER condition execution produced {} conceptual result rows, total SoA size: {}", conceptualRowsAdded, resultSoA.size());
 
-            resultSoA.sort();
-
+            // Sorting is centralized by QueryExecutor
             return resultSoA;
 
         } catch (IndexAccessException | IOException e) {

@@ -103,9 +103,7 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         logger.debug("POS condition execution produced {} conceptual rows, total SoA size: {}",
                      resultSoA.getConceptualRowCount(), resultSoA.size());
 
-        // Sort by document ID to ensure merge join optimization works correctly
-        resultSoA.sort();
-
+        // Sorting is centralized by QueryExecutor
         return resultSoA;
     }
 

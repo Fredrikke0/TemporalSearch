@@ -221,6 +221,10 @@ public final class LogicalExecutor implements ConditionExecutor<Logical> {
         logger.debug("Performing SoA AND operation (merge join). Left size: {}, Right size: {}. Granularity: {}",
                      left.size(), right.size(), granularity);
 
+        // Ensure inputs are sorted for merge-join semantics. Individual executors no longer sort.
+        left.ensureSorted();
+        right.ensureSorted();
+
         AttributeRequirements combinedReqs = new AttributeRequirements();
         combinedReqs.merge(left.getRequirements());
         combinedReqs.merge(right.getRequirements());

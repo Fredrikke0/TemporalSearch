@@ -59,6 +59,9 @@ public final class QueryResultSoA {
     private Query.Granularity granularity;
     private int granularitySize;
 
+    // Sorting state to avoid redundant sorts
+    private boolean isSorted;
+
 
     private int nextConceptualRowIdGenerator = 0; // Counter for getNextConceptualRowId()
 
@@ -93,6 +96,7 @@ public final class QueryResultSoA {
         this.variableNameIndices = new IntArrayList();
         this.valueTypes = new ByteArrayList();
         this.nextConceptualRowIdGenerator = 0;
+        this.isSorted = true; // Empty structure is trivially sorted
 
         logger.trace("QueryResultSoA Constructor (hashCode={}): Initialized. size={}, nextConceptualRowIdGenerator={}. Granularity={}, requirements={}",
                      System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator, granularity, requirements);
@@ -151,6 +155,7 @@ public final class QueryResultSoA {
         valueTypes.add((byte) valueType.ordinal());
 
         size++;
+        isSorted = false; // Mutating positional arrays invalidates sorted order
 
         logger.trace("QueryResultSoA add() (hashCode={}): AFTER. new_size={}, current_nextConceptualRowIdGenerator={}. Added: value={}, type={}, var={}, docId={}, conceptualRowId={}",
                      System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator,
@@ -471,6 +476,7 @@ public final class QueryResultSoA {
         this.size = 0;
         // No separate max conceptual row tracking
         this.nextConceptualRowIdGenerator = 0; // Reset conceptual row ID counter
+        this.isSorted = true;
         logger.trace("QueryResultSoA clear() (hashCode={}): AFTER. new_size={}, new_nextConceptualRowIdGenerator={}",
                      System.identityHashCode(this), this.size, this.nextConceptualRowIdGenerator);
     }
@@ -523,6 +529,7 @@ public final class QueryResultSoA {
      */
     public void sort() {
         if (size <= 1) {
+            this.isSorted = true;
             return;
         }
 
@@ -608,6 +615,17 @@ public final class QueryResultSoA {
         this.valueIndices = sortedValueIndices;
         this.variableNameIndices = sortedVariableNameIndices;
         this.valueTypes = sortedValueTypes;
+        this.isSorted = true;
+    }
+
+    /**
+     * Ensures the result is sorted according to the standard position order.
+     * Performs sorting only if the internal state is currently marked unsorted.
+     */
+    public void ensureSorted() {
+        if (!isSorted) {
+            sort();
+        }
     }
 
     public Set<Integer> getUniqueDocumentIds() {

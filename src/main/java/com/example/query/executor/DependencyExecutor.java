@@ -86,9 +86,7 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
 
             logger.debug("DEPENDENCY condition execution produced {} entries in QueryResultSoA ({} conceptual rows)", resultSoA.size(), conceptualRowIdCounter);
 
-            // Sort by document ID to ensure merge join optimization works correctly
-            resultSoA.sort();
-
+            // Sorting is centralized by QueryExecutor
             return resultSoA;
 
         } catch (IndexAccessException | IOException e) { // Catch specific IO/Index exceptions from helpers

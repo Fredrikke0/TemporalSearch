@@ -86,6 +86,8 @@ public class QueryExecutor {
 
             // Resolve any remaining unresolved IDs in the final result
             resolveSynonymIdsInSoA(result, query);
+            // Centralize sorting: ensure final SoA is sorted once before returning
+            result.ensureSorted();
 
             long executionTime = System.nanoTime() - startTime;
             logger.info("=== Query Execution Completed Successfully ===");
