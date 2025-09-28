@@ -3,6 +3,7 @@ import argparse
 import collections
 import csv
 import math
+import os
 import re
 import statistics
 import sys
@@ -212,9 +213,9 @@ def generate_latex_table(stats, strategy_tuples, table_title="Benchmark Performa
             elif baseline_avg_time is not None and current_row_avg_time is not None and abs(baseline_avg_time) > 1e-9:
                 percentage_improvement = ((baseline_avg_time - current_row_avg_time) / baseline_avg_time) * 100
                 if percentage_improvement > 0:
-                    improvement_val_for_siunitx = f"\color{{ForestGreen}}{{{percentage_improvement:.1f}\\%}}"
+                    improvement_val_for_siunitx = fr"\color{{ForestGreen}}{{{percentage_improvement:.1f}\%}}"
                 else:
-                    improvement_val_for_siunitx = f"\color{{red}}{{{percentage_improvement:.1f}\\%}}"
+                    improvement_val_for_siunitx = fr"\color{{red}}{{{percentage_improvement:.1f}\%}}"
 
             is_last_row_to_highlight = (strat_tuple == last_renderable_strat_tuple_with_data)
 
@@ -316,13 +317,14 @@ Examples:
   python analyze_benchmarks.py                    # Uses default 'bench_results.csv'
   python analyze_benchmarks.py -f bench.csv      # Uses 'bench.csv'
   python analyze_benchmarks.py --file data.csv   # Uses 'data.csv'
+  python analyze_benchmarks.py --file out/       # Recursively processes all CSVs under 'out/'
   python analyze_benchmarks.py --file results_1hop.csv --table-title "1-hop Benchmark Performance" # Example for specific formatting
         """
     )
     parser.add_argument(
         '-f', '--file',
         default='bench_results.csv',
-        help='Path to the CSV file containing benchmark results (default: bench_results.csv)'
+        help='Path to a CSV file or a directory containing benchmark result CSVs (default: bench_results.csv)'
     )
     parser.add_argument(
         '-t', '--table-title',
@@ -334,89 +336,103 @@ Examples:
     csv_path = args.file
     table_title = args.table_title
 
-    print(f"Analyzing benchmark data from: {csv_path}")
+    def process_single_csv(single_csv_path, title):
+        print(f"Analyzing benchmark data from: {single_csv_path}")
 
-    # Call analyze_benchmarks once to get all data and the full list of defined strategy permutations
-    aggregated_data, all_defined_strategy_permutations = analyze_benchmarks(csv_path)
+        aggregated_data, all_defined_strategy_permutations = analyze_benchmarks(single_csv_path)
 
-    if aggregated_data:
-        hop_type_in_title = None
-        filename_lower = csv_path.lower()
+        if aggregated_data:
+            hop_type_in_title = None
+            filename_lower = single_csv_path.lower()
 
-        # Hop type detection: ONLY from filename
-        if "1hop" in filename_lower:
-            hop_type_in_title = "1-hop"
-        elif "2hop" in filename_lower:
-            hop_type_in_title = "2-hops"
-        elif "3hop" in filename_lower:
-            hop_type_in_title = "3-hops"
+            if "1hop" in filename_lower:
+                hop_type_in_title = "1-hop"
+            elif "2hop" in filename_lower:
+                hop_type_in_title = "2-hops"
+            elif "3hop" in filename_lower:
+                hop_type_in_title = "3-hops"
 
-        strategies_to_render = []
+            strategies_to_render = []
 
-        if not hop_type_in_title:
-            print(f"Warning: Hop type ('1hop', '2hop', '3hop') not detected in CSV filename ('{csv_path}').", file=sys.stderr)
-            print("Displaying table with all strategy permutations defined by the analyzer.", file=sys.stderr)
-            print("To use specific row formatting, ensure hop type is in the CSV filename (e.g., 'my_1hop_data.csv').", file=sys.stderr)
-            strategies_to_render = all_defined_strategy_permutations
-        else:
-            # Define strategy tuples: (temporal, pushdown, stitch)
-            baseline = ('naive', 'none', 'none')          # B
-            nash_only = ('nash', 'none', 'none')          # N
-            stitch_optimized = ('naive', 'none', 'optimized') # S
-            pushdown_only = ('naive', 'optimized', 'none') # P
-            stitch_nash_optimized = ('nash', 'none', 'optimized') # S+N
-            stitch_pushdown_optimized = ('naive', 'optimized', 'optimized') # S+P
-            all_optimized_spn = ('nash', 'optimized', 'optimized') # S+P+N (was all_optimized)
-
-            if hop_type_in_title == "1-hop":
-                strategies_to_render = [
-                    baseline,
-                    nash_only,
-                    stitch_optimized,
-                    stitch_nash_optimized  # S+N
-                ]
-                print(f"Detected {hop_type_in_title}. Displaying strategies: B, N, S, S+N.")
-            elif hop_type_in_title in ["2-hops", "3-hops"]:
-                strategies_to_render = [
-                    baseline,                 # B
-                    nash_only,               # N
-                    stitch_optimized,         # S
-                    pushdown_only,           # P
-                    stitch_pushdown_optimized,# S+P
-                    all_optimized_spn         # S+P+N
-                ]
-                print(f"Detected {hop_type_in_title}. Displaying strategies: B, N, S, P, S+P, S+P+N.")
-            else: # Should not be reached if hop_type_in_title is one of the above or None
-                print(f"Internal Warning: Unhandled hop_type_in_title '{hop_type_in_title}'. Falling back to all defined permutations.", file=sys.stderr)
+            if not hop_type_in_title:
+                print(f"Warning: Hop type ('1hop', '2hop', '3hop') not detected in CSV filename ('{single_csv_path}').", file=sys.stderr)
+                print("Displaying table with all strategy permutations defined by the analyzer.", file=sys.stderr)
+                print("To use specific row formatting, ensure hop type is in the CSV filename (e.g., 'my_1hop_data.csv').", file=sys.stderr)
                 strategies_to_render = all_defined_strategy_permutations
+            else:
+                baseline = ('naive', 'none', 'none')
+                nash_only = ('nash', 'none', 'none')
+                stitch_optimized = ('naive', 'none', 'optimized')
+                pushdown_only = ('naive', 'optimized', 'none')
+                stitch_nash_optimized = ('nash', 'none', 'optimized')
+                stitch_pushdown_optimized = ('naive', 'optimized', 'optimized')
+                all_optimized_spn = ('nash', 'optimized', 'optimized')
 
-        if not strategies_to_render:
-             # This case would typically mean all_defined_strategy_permutations was empty and no hop type was matched.
-             print("Error: No strategies selected or defined for display. Table will be empty or may not generate.", file=sys.stderr)
+                if hop_type_in_title == "1-hop":
+                    strategies_to_render = [
+                        baseline,
+                        nash_only,
+                        stitch_optimized,
+                        stitch_nash_optimized
+                    ]
+                    print(f"Detected {hop_type_in_title}. Displaying strategies: B, N, S, S+N.")
+                elif hop_type_in_title in ["2-hops", "3-hops"]:
+                    strategies_to_render = [
+                        baseline,
+                        nash_only,
+                        stitch_optimized,
+                        pushdown_only,
+                        stitch_pushdown_optimized,
+                        all_optimized_spn
+                    ]
+                    print(f"Detected {hop_type_in_title}. Displaying strategies: B, N, S, P, S+P, S+P+N.")
+                else:
+                    print(f"Internal Warning: Unhandled hop_type_in_title '{hop_type_in_title}'. Falling back to all defined permutations.", file=sys.stderr)
+                    strategies_to_render = all_defined_strategy_permutations
+
+            if not strategies_to_render:
+                print("Error: No strategies selected or defined for display. Table will be empty or may not generate.", file=sys.stderr)
+            else:
+                summary_output = generate_summary_table(aggregated_data, strategies_to_render, title)
+                print(summary_output)
+                print("=" * 80)
+
+                hop_label_for_label = None
+                if hop_type_in_title == "1-hop":
+                    hop_label_for_label = "1hop"
+                elif hop_type_in_title == "2-hops":
+                    hop_label_for_label = "2hop"
+                elif hop_type_in_title == "3-hops":
+                    hop_label_for_label = "3hop"
+
+                latex_output = generate_latex_table(
+                    aggregated_data,
+                    strategies_to_render,
+                    title,
+                    dataset_slug="X",
+                    hop_label=hop_label_for_label,
+                    dataset_display="X"
+                )
+                print(latex_output)
         else:
-            # Print summary to console
-            summary_output = generate_summary_table(aggregated_data, strategies_to_render, table_title)
-            print(summary_output)
-            print("=" * 80)
-            # Prepare hop label for LaTeX caption/label
-            hop_label_for_label = None
-            if hop_type_in_title == "1-hop":
-                hop_label_for_label = "1hop"
-            elif hop_type_in_title == "2-hops":
-                hop_label_for_label = "2hop"
-            elif hop_type_in_title == "3-hops":
-                hop_label_for_label = "3hop"
+            print("Could not generate tables due to errors in data processing or file access.", file=sys.stderr)
 
-            # Generate and print LaTeX table with hop-specific caption/label when detectable
-            latex_output = generate_latex_table(
-                aggregated_data,
-                strategies_to_render,
-                table_title,
-                dataset_slug="X",
-                hop_label=hop_label_for_label,
-                dataset_display="X"
-            )
-            print(latex_output)
+    if os.path.isdir(csv_path):
+        discovered_csvs = []
+        for root, _, files in os.walk(csv_path):
+            for name in files:
+                if name.lower().endswith('.csv'):
+                    discovered_csvs.append(os.path.join(root, name))
+
+        if not discovered_csvs:
+            print(f"No CSV files found under directory: {csv_path}", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"Discovered {len(discovered_csvs)} CSV file(s) under directory: {csv_path}")
+        for idx, csv_file in enumerate(sorted(discovered_csvs)):
+            print("\n" + ("-" * 80))
+            print(f"[{idx+1}/{len(discovered_csvs)}] Processing: {csv_file}")
+            print("-" * 80)
+            process_single_csv(csv_file, table_title)
     else:
-        # Errors from analyze_benchmarks (e.g., file not found) are printed to stderr within the function
-        print("Could not generate tables due to errors in data processing or file access.", file=sys.stderr)
+        process_single_csv(csv_path, table_title)

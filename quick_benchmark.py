@@ -220,9 +220,17 @@ def main():
                         # Fallback to rough wall time if CLI didn't emit benchmark line
                         # Note: We cannot re-run; so we won't wall-time here to avoid extra cost.
                         pass
+                    base_ok = True
                     if stderr_q:
                         all_consistent = False
                         failures += 1
+                        base_ok = False
+                    if not os.path.exists(base_fp):
+                        if args.verbose:
+                            print(f"[QB] Base output not found: {base_fp}")
+                        all_consistent = False
+                        failures += 1
+                        base_ok = False
                     if bench_ms is not None:
                         hop_to_times[bt].append(bench_ms)
                 except Exception:
@@ -231,6 +239,10 @@ def main():
                     continue
 
                 # Compare other strategies against base
+                if not base_ok:
+                    # Cannot compare without a valid base output
+                    continue
+
                 for (t_strat, p_strat, s_strat) in [s for s in strategies if s != base]:
                     other_fp = os.path.join(subdir, f"{q['id']+1:04d}_{safe_q_part}_T{t_strat}_P{p_strat}_S{s_strat}.csv")
                     try:
@@ -241,6 +253,12 @@ def main():
                             print(f"[QB] WARN set_output other: {set_out_err2.strip()}")
                         _, _, err = cli.execute_query(q['text'])
                         if err:
+                            all_consistent = False
+                            failures += 1
+                            continue
+                        if not os.path.exists(other_fp):
+                            if args.verbose:
+                                print(f"[QB] Variant output not found: {other_fp}")
                             all_consistent = False
                             failures += 1
                             continue
@@ -263,7 +281,7 @@ def main():
 
                 # Reset output to console between queries
                 try:
-                    cli.set_output('csv', None)
+                    cli.set_output('csv')
                 except Exception:
                     pass
 

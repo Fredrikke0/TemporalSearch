@@ -338,6 +338,18 @@ public class TableResultService {
      * @throws IOException if an error occurs during export
      */
     public void exportTable(Table table, String format, String filename) throws IOException {
+        // Ensure parent directory exists to avoid FileNotFoundException on write
+        try {
+            java.nio.file.Path outPath = java.nio.file.Paths.get(filename).toAbsolutePath();
+            java.nio.file.Path parent = outPath.getParent();
+            if (parent != null) {
+                java.nio.file.Files.createDirectories(parent);
+            }
+        } catch (Exception e) {
+            // If directory creation fails, propagate as IOException for the caller to handle/log
+            throw new IOException("Failed to prepare output directory for export: " + e.getMessage(), e);
+        }
+
         switch (format.toLowerCase()) {
             case "csv" -> {
                 CsvWriteOptions options = CsvWriteOptions.builder(filename)
