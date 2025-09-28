@@ -111,7 +111,7 @@ public class QueryCLI implements AutoCloseable {
     private static String buildStartCommand(String profileOptions) {
         java.util.Map<String, String> opts = parseProfileOptions(profileOptions);
         String event = opts.getOrDefault("event", "wall");
-        String output = opts.getOrDefault("output", "jfr");
+        String output = opts.getOrDefault("output", "html");
         String interval = opts.getOrDefault("interval", "1ms");
         String duration = opts.getOrDefault("duration", null);
         String file = opts.getOrDefault("file", "/tmp/querycli-%p." + output);
@@ -130,7 +130,7 @@ public class QueryCLI implements AutoCloseable {
 
     private static String buildStopCommand(String profileOptions) {
         java.util.Map<String, String> opts = parseProfileOptions(profileOptions);
-        String output = opts.getOrDefault("output", "jfr");
+        String output = opts.getOrDefault("output", "html");
         String file = opts.getOrDefault("file", "/tmp/querycli-%p." + output);
         if ("jfr".equalsIgnoreCase(output)) {
             return "stop"; // file was specified at start
@@ -435,8 +435,8 @@ public class QueryCLI implements AutoCloseable {
         // Profiling options (async-profiler Java API)
         cliArgParser.addArgument("--profile")
                 .help("Enable async-profiler. Pass options as a single quoted, comma-separated string. " +
-                      "Example: 'event=wall,output=html,file=/tmp/profile-%p.html,interval=1ms'. " +
-                      "Keys: event, output, file, interval, duration.")
+                      "Example: 'event=wall,file=/tmp/profile-%p.html,interval=1ms'. " +
+                      "Keys: event, file, interval, duration. Output defaults to HTML.")
                 .required(false);
         cliArgParser.addArgument("--profile-around-execution")
                 .action(Arguments.storeTrue())
