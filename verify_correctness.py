@@ -343,13 +343,13 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
             _, out_q, err_q = cli_process.execute_query(query_text)
             _abort_on_cli_error(err_q, out_q, f"EXECUTE base {original_query_id_str}", cli_process)
 
-            if err_q:
-                print(f"{progress_prefix_base} ERROR executing query. Stderr: {err_q.strip()}", flush=True)
+            if detect_cli_fatal(out_q, err_q):
+                print(f"{progress_prefix_base} ERROR executing query. Stderr: {err_q.strip() if err_q else ''}", flush=True)
                 all_results.append({
                     "query_id": original_query_id_str,
                     "strategy": "BASE",
                     "status": "BASE_FAILED_EXEC",
-                    "details": err_q.strip(),
+                    "details": (err_q or "").strip(),
                     "benchmark_type": benchmark_type,
                     "source_file": source_file,
                     "query_text": query_text,
@@ -404,10 +404,10 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
 
                 _, out_q, err_q = cli_process.execute_query(query_text)
                 _abort_on_cli_error(err_q, out_q, f"EXECUTE cmp {original_query_id_str}", cli_process)
-                if err_q:
-                    print(f"{progress_prefix_other} ERROR executing query. Stderr: {err_q.strip()}", flush=True)
+                if detect_cli_fatal(out_q, err_q):
+                    print(f"{progress_prefix_other} ERROR executing query. Stderr: {err_q.strip() if err_q else ''}", flush=True)
                     status = "EXECUTION_ERROR"
-                    details = err_q.strip()
+                    details = (err_q or "").strip()
                     any_failure = True
                 else:
                     # File is written by Java. Now compare with base.
