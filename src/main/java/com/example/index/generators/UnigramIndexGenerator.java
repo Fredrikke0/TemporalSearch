@@ -46,10 +46,10 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
 
         if (isFirstBatch) {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
-                    "FROM annotations ORDER BY annotation_id LIMIT ?";
+                    "FROM annotations WHERE pos NOT IN ('FW', 'ADD') ORDER BY annotation_id LIMIT ?";
         } else {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
-                    "FROM annotations WHERE annotation_id > ? ORDER BY annotation_id LIMIT ?";
+                    "FROM annotations WHERE annotation_id > ? AND pos NOT IN ('FW', 'ADD') ORDER BY annotation_id LIMIT ?";
         }
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {

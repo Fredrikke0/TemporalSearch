@@ -61,11 +61,11 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         String sql;
         if (lastProcessedEntry == null) {
             sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner " +
-                  "FROM annotations WHERE ner != 'O' AND ner != 'DATE' " +
+                  "FROM annotations WHERE ner NOT IN " + NER_TAGS_TO_EXCLUDE_SQL + " " +
                   "ORDER BY annotation_id LIMIT ?";
         } else {
             sql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner " +
-                  "FROM annotations WHERE ner != 'O' AND ner != 'DATE' AND annotation_id > ? " +
+                  "FROM annotations WHERE ner NOT IN " + NER_TAGS_TO_EXCLUDE_SQL + " AND annotation_id > ? " +
                   "ORDER BY annotation_id LIMIT ?";
         }
 
@@ -101,7 +101,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
             String extendSql = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner " +
                                "FROM annotations " +
-                               "WHERE ner != 'O' AND ner != 'DATE' AND document_id = ? AND sentence_id = ? AND annotation_id > ? " +
+                               "WHERE ner NOT IN " + NER_TAGS_TO_EXCLUDE_SQL + " AND document_id = ? AND sentence_id = ? AND annotation_id > ? " +
                                "ORDER BY annotation_id";
             try (PreparedStatement extendStmt = sqliteConn.prepareStatement(extendSql)) {
                 extendStmt.setInt(1, lastDocId);

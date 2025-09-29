@@ -48,12 +48,12 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         if (isFirstBatch) {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
                     "FROM annotations " +
-                    "ORDER BY annotation_id LIMIT ?";
+                    "WHERE pos NOT IN ('FW', 'ADD') ORDER BY annotation_id LIMIT ?";
         } else {
             query = "SELECT annotation_id, document_id, sentence_id, begin_char, end_char, token " +
                     "FROM annotations " +
                     "WHERE annotation_id > ?" +
-                    "ORDER BY annotation_id LIMIT ?";
+                    "AND pos NOT IN ('FW', 'ADD') ORDER BY annotation_id LIMIT ?";
         }
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(query)) {
