@@ -231,7 +231,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         String sql = """
             SELECT sentence_id, begin_char, end_char, token
             FROM annotations
-            WHERE document_id = ?
+            WHERE document_id = ? AND pos NOT IN ('FW', 'ADD')
             ORDER BY sentence_id, begin_char
         """;
 

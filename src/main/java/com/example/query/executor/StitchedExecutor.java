@@ -152,8 +152,21 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         }
 
                         String datePart = currentKey.substring(searchPrefix.length());
+                        // Handle segmented keys by stripping trailing segment suffix like "#1", "#2", ...
+                        String baseDatePart = datePart;
+                        int hashPos = baseDatePart.lastIndexOf('#');
+                        if (hashPos > 0 && hashPos < baseDatePart.length() - 1) {
+                            boolean allDigits = true;
+                            for (int i = hashPos + 1; i < baseDatePart.length(); i++) {
+                                char c = baseDatePart.charAt(i);
+                                if (c < '0' || c > '9') { allDigits = false; break; }
+                            }
+                            if (allDigits) {
+                                baseDatePart = baseDatePart.substring(0, hashPos);
+                            }
+                        }
                         try {
-                            LocalDate dateFromKey = TemporalExecutor.parseDateKey(datePart);
+                            LocalDate dateFromKey = TemporalExecutor.parseDateKey(baseDatePart);
                             if (dateFromKey != null) {
                                 // Ensure date is within the supported range of the Nash index (1925-2025)
                                 if (dateFromKey.isBefore(Nash.GLOBAL_LOWER_BOUND) || dateFromKey.isAfter(Nash.GLOBAL_UPPER_BOUND)) {
