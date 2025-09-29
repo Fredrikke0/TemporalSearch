@@ -250,8 +250,8 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                     } catch (Exception parsePresence) {
                         logger.warn("DependencyExecutor: failed to parse RB presence for key '{}', skipping. {}", key, parsePresence.getMessage());
                     }
-                    logger.debug("Added bindings for dependency variable '{}' (key: '{}').",
-                                 variableName != null ? variableName : "<N/A>", key);
+                    // logger.debug("Added bindings for dependency variable '{}' (key: '{}').",
+                    //              variableName != null ? variableName : "<N/A>", key);
                 } else {
                     logger.warn("Skipping invalid key format in dependency index: {}", key);
                 }
