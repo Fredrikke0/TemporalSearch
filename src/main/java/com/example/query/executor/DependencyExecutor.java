@@ -256,8 +256,8 @@ public final class DependencyExecutor implements ConditionExecutor<Dependency> {
                         conceptualRowsAdded++;
                     }
                     currentConceptualRowId += conceptualRowsAdded;
-                    logger.debug("Added {} bindings for dependency variable '{}' (key: '{}'), creating {} new conceptual rows.",
-                                 numPositions, variableName != null ? variableName : "<N/A>", key, conceptualRowsAdded);
+                    // logger.debug("Added {} bindings for dependency variable '{}' (key: '{}'), creating {} new conceptual rows.",
+                    //              numPositions, variableName != null ? variableName : "<N/A>", key, conceptualRowsAdded);
                 } else {
                     logger.warn("Skipping invalid key format in dependency index: {}", key);
                 }
