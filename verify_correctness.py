@@ -476,10 +476,6 @@ class QueryCLIInteractiveProcess:
 
         command = [
             "java",
-            "-XX:+UseG1GC",
-            "--add-opens=java.base/java.lang=ALL-UNNAMED",
-            "--enable-native-access=ALL-UNNAMED",
-            "--sun-misc-unsafe-memory-access=allow",
             "-jar", jar_path,
         ]
         if db_file:

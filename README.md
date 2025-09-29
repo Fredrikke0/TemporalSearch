@@ -30,7 +30,13 @@ A high-performance temporal reasoning system. It annotates documents, builds mul
 
 1. Ensure Java 21+ and Maven are installed.
 
-2. Install the Nash dependency and build the project:
+2. Source the .env file:
+
+```bash
+source .env
+```
+
+3. Install the Nash dependency and build the project:
 
 ```bash
 mvn install:install-file -Dfile=sandbox/lib/nash.jar -DgroupId=no.ntnu -DartifactId=nash -Dversion=1.0 -Dpackaging=jar

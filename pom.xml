@@ -304,18 +304,8 @@
                 <version>3.5.2</version>
                 <configuration>
                     <argLine>
-                        -XX:+UseG1GC
                         -XX:MaxGCPauseMillis=200
                         -XX:+UseStringDeduplication
-                        -Xmx8g
-                        -Xms2g
-                        --add-opens java.base/java.lang=ALL-UNNAMED
-                        --add-opens java.base/java.util=ALL-UNNAMED
-                        --add-opens java.base/java.io=ALL-UNNAMED
-                        --add-opens java.base/java.nio=ALL-UNNAMED
-                        --add-opens java.base/sun.nio.ch=ALL-UNNAMED
-                        --add-opens java.base/java.lang.reflect=ALL-UNNAMED
-                        --add-opens java.base/java.security=ALL-UNNAMED
                     </argLine>
                 </configuration>
             </plugin>
@@ -372,10 +362,6 @@
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>com.example.QueryCLI</mainClass>
-                                    <manifestEntries>
-                                        <Add-Opens>java.base/java.lang=ALL-UNNAMED</Add-Opens>
-                                        <Add-Opens>java.base/sun.misc=ALL-UNNAMED</Add-Opens>
-                                    </manifestEntries>
                                 </transformer>
                             </transformers>
                         </configuration>
@@ -391,10 +377,6 @@
                 <configuration>
                     <mainClass>com.example.QueryCLI</mainClass>
                     <vmArgs>
-                        -XX:+UseG1GC
-                        --add-opens=java.base/java.lang=ALL-UNNAMED
-                        --enable-native-access=ALL-UNNAMED
-                        --sun-misc-unsafe-memory-access=allow
                     </vmArgs>
                 </configuration>
             </plugin>
@@ -452,11 +434,6 @@
                                     <transformers>
                                         <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                             <mainClass>com.example.Pipeline</mainClass>
-                                            <manifestEntries>
-                                                <Add-Opens>java.base/java.lang=ALL-UNNAMED</Add-Opens>
-                                                <Add-Opens>java.base/sun.misc=ALL-UNNAMED</Add-Opens>
-                                                <JVM-Args>-XX:MaxRAMPercentage=70</JVM-Args>
-                                            </manifestEntries>
                                         </transformer>
                                     </transformers>
                                 </configuration>
