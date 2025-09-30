@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Optional;
 
 import org.rocksdb.RocksIterator;
+import org.rocksdb.Options;
 
 /**
  * Interface defining the core access methods for indexes.
@@ -80,6 +81,23 @@ public interface IndexAccessInterface extends AutoCloseable {
      * The WriteBatch itself should be closed by the caller after use.
      */
     void write(org.rocksdb.WriteBatch batch) throws IndexAccessException;
+
+    /**
+     * Ingests external SST files into the underlying RocksDB instance.
+     * The files must be generated with a comparator compatible with the DB (default bytewise).
+     */
+    void ingestExternalFiles(java.util.List<String> sstFilePaths) throws IndexAccessException;
+
+    /**
+     * Triggers a manual compaction over the full key range.
+     */
+    void compactRange() throws IndexAccessException;
+
+    /**
+     * Returns the RocksDB Options used to open the DB, for creating compatible SST writers.
+     * Caller must not close the returned Options.
+     */
+    Options getOptionsForSstWriter();
 
     /**
      * Gets the type of this index (e.g., "unigram", "pos").

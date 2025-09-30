@@ -10,6 +10,7 @@ import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
+import org.rocksdb.IngestExternalFileOptions;
 import org.rocksdb.WriteBatch;
 import org.rocksdb.WriteOptions;
 import org.slf4j.Logger;
@@ -99,6 +100,25 @@ public class IndexAccess implements IndexAccessInterface {
         } catch (RocksDBException e) {
             throw new IndexAccessException(
                 "Failed to write batch: " + e.getMessage(),
+                indexType,
+                IndexAccessException.ErrorType.WRITE_ERROR,
+                e
+            );
+        }
+    }
+
+    /**
+     * Ingest external SST files into the DB.
+     */
+    @Override
+    public void ingestExternalFiles(java.util.List<String> sstFilePaths) throws IndexAccessException {
+        checkOpen();
+        try (IngestExternalFileOptions ifo = new IngestExternalFileOptions()) {
+            // Use defaults; caller should have disabled compactions if desired
+            db.ingestExternalFile(sstFilePaths, ifo);
+        } catch (RocksDBException e) {
+            throw new IndexAccessException(
+                "Failed to ingest external SST files: " + e.getMessage(),
                 indexType,
                 IndexAccessException.ErrorType.WRITE_ERROR,
                 e
@@ -239,6 +259,21 @@ public class IndexAccess implements IndexAccessInterface {
         }
     }
 
+    @Override
+    public void compactRange() throws IndexAccessException {
+        checkOpen();
+        try {
+            db.compactRange();
+        } catch (RocksDBException e) {
+            throw new IndexAccessException(
+                "Failed to compact range: " + e.getMessage(),
+                indexType,
+                IndexAccessException.ErrorType.WRITE_ERROR,
+                e
+            );
+        }
+    }
+
     /**
      * Gets the type of this index.
      */
@@ -266,6 +301,11 @@ public class IndexAccess implements IndexAccessInterface {
     @Override
     public Path getIndexPath() {
         return java.nio.file.Path.of(this.indexPath);
+    }
+
+    @Override
+    public Options getOptionsForSstWriter() {
+        return this.options;
     }
 
     @Override

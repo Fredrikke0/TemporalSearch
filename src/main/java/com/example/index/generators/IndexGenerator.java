@@ -103,6 +103,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     // Helper record for returning multiple values from processTermBlobsAndAddToBatch
     private record ProcessTermResult(org.rocksdb.WriteBatch batch, long currentBatchSizeBytes, int putsInCurrentBatch, long totalSegmentsWrittenAfterCall) {}
 
+    // Bulk load settings for SST generation
+    private static final long TARGET_SST_BYTES = 512L * 1024 * 1024; // rotate SST files around 512MB
+
     // Primary constructor that all IndexGenerator implementations should use.
     @SuppressWarnings("this-escape") // For getDocumentCountForIndex and getIndexType in constructor
     protected IndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath,
@@ -389,19 +392,53 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @param sortedFile The file containing the sorted entries
      */
     protected void writeToLevelDB(File sortedFile) throws IOException {
-        logger.info("Starting to write to RocksDB from sorted file: {}", sortedFile.getAbsolutePath());
+        logger.info("Starting bulk load (SST ingestion) from sorted file: {}", sortedFile.getAbsolutePath());
         long totalTermsProcessedFromFile = 0;
         long totalSegmentsWritten = 0;
-        final long TARGET_BATCH_BYTES = 8 * 1024 * 1024;
-        long currentBatchSizeBytes = 0;
-        int putsInCurrentBatch = 0;
 
         String currentTerm = null;
         List<byte[]> blobsForCurrentTerm = new ArrayList<>();
 
-        org.rocksdb.WriteBatch batch = null;
-        try {
-            batch = indexAccess.createWriteBatch();
+        java.util.List<String> producedSstFiles = new java.util.ArrayList<>();
+        final org.rocksdb.SstFileWriter[] sstRef = new org.rocksdb.SstFileWriter[1];
+        final long[] currentSstBytesRef = new long[] { 0L };
+        try (org.rocksdb.EnvOptions envOptions = new org.rocksdb.EnvOptions();
+             org.rocksdb.Options sstOptions = com.example.index.RocksDBConfig.createOptimizedOptions()) {
+            // Attempt to disable auto-compactions during ingest (best-effort; safe to skip if not applicable)
+            try {
+                com.example.index.RocksDBConfig.configureForBulkLoad(sstOptions);
+            } catch (Throwable t) {
+                logger.debug("Bulk load configuration on Options skipped: {}", t.getMessage());
+            }
+
+            java.util.function.Supplier<org.rocksdb.SstFileWriter> sstFactory = () -> new org.rocksdb.SstFileWriter(envOptions, sstOptions);
+
+            java.util.function.Consumer<Boolean> rotateSst = (force) -> {
+                try {
+                    if (force || sstRef[0] == null || currentSstBytesRef[0] >= TARGET_SST_BYTES) {
+                        if (sstRef[0] != null) {
+                            sstRef[0].finish();
+                            sstRef[0].close();
+                            sstRef[0] = null;
+                        }
+                        String sstPath = indexAccess.getIndexPath().resolve("ingest-" + System.nanoTime() + ".sst").toString();
+                        try {
+                            sstRef[0] = sstFactory.get();
+                            sstRef[0].open(sstPath);
+                            producedSstFiles.add(sstPath);
+                            currentSstBytesRef[0] = 0L;
+                            logger.debug("Opened new SST file: {}", sstPath);
+                        } catch (org.rocksdb.RocksDBException e) {
+                            throw new RuntimeException("Failed to open SST file: " + sstPath, e);
+                        }
+                    }
+                } catch (org.rocksdb.RocksDBException e) {
+                    throw new RuntimeException(e);
+                }
+            };
+
+            rotateSst.accept(true); // open first
+
             try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
@@ -420,30 +457,20 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     }
 
                     if (!termFromFile.equals(currentTerm)) {
-                        // Term has changed, process the accumulated blobs for the previous 'currentTerm'
                         if (!blobsForCurrentTerm.isEmpty()) {
-                            ProcessTermResult result = processTermBlobsAndAddToBatch(
-                                    currentTerm,
-                                    blobsForCurrentTerm,
-                                    batch,
-                                    currentBatchSizeBytes,
-                                    putsInCurrentBatch,
-                                    totalSegmentsWritten,
-                                    TARGET_BATCH_BYTES,
-                                    this.indexAccess,
-                                    this.progress,
-                                    3,
-                                    1000L
-                            );
-                            batch = result.batch();
-                            currentBatchSizeBytes = result.currentBatchSizeBytes();
-                            putsInCurrentBatch = result.putsInCurrentBatch();
-                            totalSegmentsWritten = result.totalSegmentsWrittenAfterCall();
-                            totalTermsProcessedFromFile++; // Increment for each term from file that had blobs
+                            byte[] merged = mergeBlobsForSegment(blobsForCurrentTerm, currentTerm);
+                            String keyToWrite = currentTerm;
+                            try {
+                                sstRef[0].put(bytes(keyToWrite), merged);
+                                currentSstBytesRef[0] += keyToWrite.length() + merged.length;
+                            } catch (org.rocksdb.RocksDBException e) {
+                                throw new IOException("Failed to add key to SST: " + keyToWrite, e);
+                            }
+                            totalTermsProcessedFromFile++;
+                            blobsForCurrentTerm.clear();
+                            if (currentSstBytesRef[0] >= TARGET_SST_BYTES) rotateSst.accept(false);
                         }
-                        // Reset for the new term
                         currentTerm = termFromFile;
-                        blobsForCurrentTerm.clear();
                     }
 
                     if (lineCompositeBlob != null && lineCompositeBlob.length > 0) {
@@ -453,47 +480,48 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             }
 
             if (currentTerm != null && !blobsForCurrentTerm.isEmpty()) {
-                ProcessTermResult result = processTermBlobsAndAddToBatch(
-                        currentTerm,
-                        blobsForCurrentTerm,
-                        batch,
-                        currentBatchSizeBytes,
-                        putsInCurrentBatch,
-                        totalSegmentsWritten,
-                        TARGET_BATCH_BYTES,
-                        this.indexAccess,
-                        this.progress,
-                        3,
-                        1000L
-                );
-                batch = result.batch();
-                currentBatchSizeBytes = result.currentBatchSizeBytes();
-                putsInCurrentBatch = result.putsInCurrentBatch();
-                totalSegmentsWritten = result.totalSegmentsWrittenAfterCall();
+                byte[] merged = mergeBlobsForSegment(blobsForCurrentTerm, currentTerm);
+                String keyToWrite = currentTerm;
+                try {
+                    sstRef[0].put(bytes(keyToWrite), merged);
+                    currentSstBytesRef[0] += keyToWrite.length() + merged.length;
+                } catch (org.rocksdb.RocksDBException e) {
+                    throw new IOException("Failed to add key to SST: " + keyToWrite, e);
+                }
                 totalTermsProcessedFromFile++;
             }
 
-            if (putsInCurrentBatch > 0) {
-                 writeBatchWithRetry(batch, 3, 1000, putsInCurrentBatch);
-                 progress.updateIndex(putsInCurrentBatch);
-                logger.info("Written final batch of {} DB entries to RocksDB. Total unique terms processed from file: {}, total segments written: {}",
-                        putsInCurrentBatch, totalTermsProcessedFromFile, totalSegmentsWritten);
+            // finalize current SST
+            if (sstRef[0] != null) {
+                try {
+                    sstRef[0].finish();
+                } catch (org.rocksdb.RocksDBException e) {
+                    throw new IOException("Failed to finish SST file", e);
+                }
+                sstRef[0].close();
+                sstRef[0] = null;
             }
+
+            // Ingest all produced SSTs
+            logger.info("Ingesting {} SST files into RocksDB for index [{}]...", producedSstFiles.size(), getIndexName());
+            indexAccess.ingestExternalFiles(producedSstFiles);
             this.totalTermsWrittenToIndex = totalTermsProcessedFromFile;
 
         } catch (IOException e) {
-            logger.error("IOException during writeToRocksDB. Last term processed: {}. Total unique terms processed from file: {}, total segments: {}. Error: {}",
+            logger.error("IOException during SST bulk load. Last term processed: {}. Total unique terms processed from file: {}, total segments: {}. Error: {}",
                     currentTerm, totalTermsProcessedFromFile, totalSegmentsWritten, e.getMessage(), e);
             throw e;
         } catch (IndexAccessException e) {
-            logger.error("IndexAccessException during writeToRocksDB. Last term processed: {}. Total unique terms processed from file: {}, total segments: {}. Error: {}",
+            logger.error("IndexAccessException during SST ingestion. Last term processed: {}. Total unique terms processed from file: {}, total segments: {}. Error: {}",
                     currentTerm, totalTermsProcessedFromFile, totalSegmentsWritten, e.getMessage(), e);
-            throw new IOException("Database access error during writeToRocksDB: " + e.getMessage(), e);
+            throw new IOException("Database access error during SST ingestion: " + e.getMessage(), e);
         } finally {
-            if (batch != null) {
-                batch.close();
+            try {
+                indexAccess.compactRange();
+            } catch (Exception ex) {
+                logger.warn("Post-ingestion compaction/config restore encountered an error: {}", ex.getMessage());
             }
-            logger.info("Finished writing to RocksDB for index [{}]. Total unique base terms written: {}. Total segments written: {}.",
+            logger.info("Finished SST bulk load for index [{}]. Total unique base terms written: {}. Total segments written: {}.",
                 getIndexName(), this.totalTermsWrittenToIndex, totalSegmentsWritten);
         }
     }
@@ -579,9 +607,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             progress.startIndex(getIndexName(), totalCountForProgressBar);
 
             while (true) {
-                long startTimeFetch = System.nanoTime();
                 List<T> batch = fetchBatch(lastProcessedEntry);
-                long durationFetchNanos = System.nanoTime() - startTimeFetch;
                 int rawEntriesInBatch = batch.size();
                 totalRawEntriesFetched += rawEntriesInBatch;
 
@@ -589,9 +615,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     break;
                 }
 
-                long startTimeProcess = System.nanoTime();
                 ListMultimap<String, PositionListSoA> positions = processBatch(batch);
-                long durationProcessNanos = System.nanoTime() - startTimeProcess;
 
                 if (!positions.isEmpty()) {
                     File tempFile = writeBatchToTempFile(positions);

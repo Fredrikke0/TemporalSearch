@@ -359,6 +359,22 @@ public class MockIndexAccess implements IndexAccessInterface {
     }
 
     @Override
+    public void ingestExternalFiles(List<String> sstFilePaths) throws IndexAccessException {
+        // No-op in mock: simulate successful ingestion by reading any SSTs if needed (skipped here)
+    }
+
+    @Override
+    public void compactRange() throws IndexAccessException {
+        // No-op in mock
+    }
+
+    @Override
+    public Options getOptionsForSstWriter() {
+        // Return a default Options for compatibility; not used in mock
+        return new Options();
+    }
+
+    @Override
     public Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<FilteringContext> context,
                                                         com.example.query.executor.AttributeRequirements requirements) throws IOException, IndexAccessException {
         if (closed) {

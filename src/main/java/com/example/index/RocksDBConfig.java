@@ -1,7 +1,5 @@
 package com.example.index;
 
-import java.lang.management.ManagementFactory;
-
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.CompressionType;
 import org.rocksdb.LRUCache;
@@ -67,6 +65,7 @@ public class RocksDBConfig {
         options.setTableFormatConfig(tableOptions);
 
         options.setCompressionType(CompressionType.SNAPPY_COMPRESSION);
+        options.setIncreaseParallelism(Runtime.getRuntime().availableProcessors());
 
         options.setStatistics(new Statistics());
 
@@ -91,6 +90,20 @@ public class RocksDBConfig {
                    true);
 
         return options;
+    }
+
+    /**
+     * Adjusts options for bulk load (disable auto compactions). Caller should re-enable post-ingest.
+     */
+    public static void configureForBulkLoad(Options options) {
+        options.setDisableAutoCompactions(true);
+    }
+
+    /**
+     * Reverts options after bulk load (enable compactions back).
+     */
+    public static void configureAfterBulkLoad(Options options) {
+        options.setDisableAutoCompactions(false);
     }
 
     /**
