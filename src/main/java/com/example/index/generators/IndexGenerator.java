@@ -230,7 +230,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             // Sort the entries by term (key) before writing to ensure each batch file is sorted.
             List<Map.Entry<String, Collection<PositionListSoA>>> sortedEntries =
                 new ArrayList<>(positions.asMap().entrySet());
-            sortedEntries.sort(Map.Entry.comparingByKey());
+            sortedEntries.sort((e1, e2) -> compareKeysUtf8(e1.getKey(), e2.getKey()));
 
             for (Map.Entry<String, Collection<PositionListSoA>> entry : sortedEntries) {
                 // Merge all position lists for this term within this batch
@@ -743,20 +743,28 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     private static class PositionListComparator implements Comparator<String> {
         @Override
         public int compare(String a, String b) {
-            int ia = 0, ib = 0, na = a.length(), nb = b.length();
-            while (true) {
-                char ca = ia < na ? a.charAt(ia) : '\t';
-                char cb = ib < nb ? b.charAt(ib) : '\t';
-                if (ca == '\t' || cb == '\t') {
-                    return ca - cb;
-                }
-                if (ca != cb) {
-                    return ca - cb;
-                }
-                ia++;
-                ib++;
-            }
+            int ta = a.indexOf('\t');
+            if (ta < 0) ta = a.length();
+            int tb = b.indexOf('\t');
+            if (tb < 0) tb = b.length();
+            String ka = a.substring(0, ta);
+            String kb = b.substring(0, tb);
+            return compareKeysUtf8(ka, kb);
         }
+    }
+
+    private static int compareKeysUtf8(String a, String b) {
+        byte[] ab = a.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] bb = b.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int la = ab.length, lb = bb.length, i = 0;
+        int min = Math.min(la, lb);
+        while (i < min) {
+            int va = ab[i] & 0xFF;
+            int vb = bb[i] & 0xFF;
+            if (va != vb) return va - vb;
+            i++;
+        }
+        return la - lb;
     }
 
     /**
