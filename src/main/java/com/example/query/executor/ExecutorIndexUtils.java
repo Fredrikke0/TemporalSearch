@@ -23,7 +23,12 @@ final class ExecutorIndexUtils {
             char c = key.charAt(i);
             if (c < '0' || c > '9') return key;
         }
-        return key.substring(0, hashPos);
+        String base = key.substring(0, hashPos);
+        // If we used a low-delimiter (e.g., '\0') before '#', strip it too
+        if (!base.isEmpty() && base.charAt(base.length() - 1) == com.example.core.IndexAccessInterface.DELIMITER) {
+            base = base.substring(0, base.length() - 1);
+        }
+        return base;
     }
 
     /**

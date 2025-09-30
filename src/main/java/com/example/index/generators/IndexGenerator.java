@@ -458,15 +458,50 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                     if (!termFromFile.equals(currentTerm)) {
                         if (!blobsForCurrentTerm.isEmpty()) {
-                            byte[] merged = mergeBlobsForSegment(blobsForCurrentTerm, currentTerm);
-                            String keyToWrite = currentTerm;
-                            try {
-                                sstRef[0].put(bytes(keyToWrite), merged);
-                                currentSstBytesRef[0] += keyToWrite.length() + merged.length;
-                            } catch (org.rocksdb.RocksDBException e) {
-                                throw new IOException("Failed to add key to SST: " + keyToWrite, e);
+                            // Build segments under MAX_POSITIONS_PER_SEGMENT
+                            List<byte[]> segmentBlobs = new ArrayList<>();
+                            List<byte[]> accum = new ArrayList<>();
+                            int accumPositions = 0;
+                            for (byte[] b : blobsForCurrentTerm) {
+                                int p = PositionListSoA.getNumPositionsFromBlob(b);
+                                if (accumPositions > 0 && (accumPositions + p > MAX_POSITIONS_PER_SEGMENT)) {
+                                    segmentBlobs.add(mergeBlobsForSegment(accum, currentTerm));
+                                    accum.clear();
+                                    accumPositions = 0;
+                                }
+                                accum.add(b);
+                                accumPositions += p;
                             }
-                            totalTermsProcessedFromFile++;
+                            if (!accum.isEmpty()) {
+                                segmentBlobs.add(mergeBlobsForSegment(accum, currentTerm));
+                            }
+
+                            // Write base segment
+                            if (!segmentBlobs.isEmpty()) {
+                                String keyToWrite = currentTerm;
+                                byte[] payload = segmentBlobs.get(0);
+                                try {
+                                    sstRef[0].put(bytes(keyToWrite), payload);
+                                    currentSstBytesRef[0] += keyToWrite.length() + payload.length;
+                                } catch (org.rocksdb.RocksDBException e) {
+                                    throw new IOException("Failed to add key to SST: " + keyToWrite, e);
+                                }
+
+                                // Write additional segments with ordering-safe suffix: base + DELIMITER + # + zero-padded index
+                                for (int i = 1; i < segmentBlobs.size(); i++) {
+                                    String segKey = currentTerm + IndexAccessInterface.DELIMITER + String.format("#%09d", i);
+                                    byte[] segBlob = segmentBlobs.get(i);
+                                    try {
+                                        sstRef[0].put(bytes(segKey), segBlob);
+                                        currentSstBytesRef[0] += segKey.length() + segBlob.length;
+                                        totalSegmentsWritten++;
+                                    } catch (org.rocksdb.RocksDBException e) {
+                                        throw new IOException("Failed to add segment key to SST: " + segKey, e);
+                                    }
+                                }
+                                totalTermsProcessedFromFile++;
+                            }
+
                             blobsForCurrentTerm.clear();
                             if (currentSstBytesRef[0] >= TARGET_SST_BYTES) rotateSst.accept(false);
                         }
@@ -480,15 +515,45 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             }
 
             if (currentTerm != null && !blobsForCurrentTerm.isEmpty()) {
-                byte[] merged = mergeBlobsForSegment(blobsForCurrentTerm, currentTerm);
-                String keyToWrite = currentTerm;
-                try {
-                    sstRef[0].put(bytes(keyToWrite), merged);
-                    currentSstBytesRef[0] += keyToWrite.length() + merged.length;
-                } catch (org.rocksdb.RocksDBException e) {
-                    throw new IOException("Failed to add key to SST: " + keyToWrite, e);
+                List<byte[]> segmentBlobs = new ArrayList<>();
+                List<byte[]> accum = new ArrayList<>();
+                int accumPositions = 0;
+                for (byte[] b : blobsForCurrentTerm) {
+                    int p = PositionListSoA.getNumPositionsFromBlob(b);
+                    if (accumPositions > 0 && (accumPositions + p > MAX_POSITIONS_PER_SEGMENT)) {
+                        segmentBlobs.add(mergeBlobsForSegment(accum, currentTerm));
+                        accum.clear();
+                        accumPositions = 0;
+                    }
+                    accum.add(b);
+                    accumPositions += p;
                 }
-                totalTermsProcessedFromFile++;
+                if (!accum.isEmpty()) {
+                    segmentBlobs.add(mergeBlobsForSegment(accum, currentTerm));
+                }
+
+                if (!segmentBlobs.isEmpty()) {
+                    String keyToWrite = currentTerm;
+                    byte[] payload = segmentBlobs.get(0);
+                    try {
+                        sstRef[0].put(bytes(keyToWrite), payload);
+                        currentSstBytesRef[0] += keyToWrite.length() + payload.length;
+                    } catch (org.rocksdb.RocksDBException e) {
+                        throw new IOException("Failed to add key to SST: " + keyToWrite, e);
+                    }
+                    for (int i = 1; i < segmentBlobs.size(); i++) {
+                        String segKey = currentTerm + IndexAccessInterface.DELIMITER + String.format("#%09d", i);
+                        byte[] segBlob = segmentBlobs.get(i);
+                        try {
+                            sstRef[0].put(bytes(segKey), segBlob);
+                            currentSstBytesRef[0] += segKey.length() + segBlob.length;
+                            totalSegmentsWritten++;
+                        } catch (org.rocksdb.RocksDBException e) {
+                            throw new IOException("Failed to add segment key to SST: " + segKey, e);
+                        }
+                    }
+                    totalTermsProcessedFromFile++;
+                }
             }
 
             // finalize current SST

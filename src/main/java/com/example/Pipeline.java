@@ -119,7 +119,7 @@ public class Pipeline {
                 .help("Path to file containing stopwords to exclude.");
 
         indexGroup.addArgument("--idx-batch-size")
-                .setDefault(200000)
+                .setDefault(500000)
                 .type(Integer.class)
                 .help("Number of documents to fetch from DB at a time by an index generator.");
 
