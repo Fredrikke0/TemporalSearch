@@ -405,14 +405,15 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    String[] parts = line.split("\t", 2);
-                    if (parts.length != 2) {
+                    int tab = line.indexOf('\t');
+                    if (tab <= 0 || tab == line.length() - 1) {
                         logger.warn("Skipping malformed line in sorted file: {}", line);
                         continue;
                     }
 
-                    String termFromFile = parts[0];
-                    byte[] lineCompositeBlob = Base64.getDecoder().decode(parts[1]);
+                    String termFromFile = line.substring(0, tab);
+                    String b64 = line.substring(tab + 1);
+                    byte[] lineCompositeBlob = Base64.getDecoder().decode(b64);
 
                     if (currentTerm == null) {
                         currentTerm = termFromFile;
@@ -652,10 +653,20 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      */
     private static class PositionListComparator implements Comparator<String> {
         @Override
-        public int compare(String line1, String line2) {
-            String term1 = line1.split("\t", 2)[0];
-            String term2 = line2.split("\t", 2)[0];
-            return term1.compareTo(term2);
+        public int compare(String a, String b) {
+            int ia = 0, ib = 0, na = a.length(), nb = b.length();
+            while (true) {
+                char ca = ia < na ? a.charAt(ia) : '\t';
+                char cb = ib < nb ? b.charAt(ib) : '\t';
+                if (ca == '\t' || cb == '\t') {
+                    return ca - cb;
+                }
+                if (ca != cb) {
+                    return ca - cb;
+                }
+                ia++;
+                ib++;
+            }
         }
     }
 
