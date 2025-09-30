@@ -59,6 +59,7 @@ public final class UnigramPosStitchGenerator extends AbstractNgramStitchGenerato
             FROM annotations
             WHERE document_id = ?
                 AND pos NOT IN %s
+                AND (pos IS NULL OR pos NOT IN ('FW', 'ADD'))
             ORDER BY sentence_id, begin_char
         """, POSIndexGenerator.POS_TAGS_TO_EXCLUDE_SQL);
 

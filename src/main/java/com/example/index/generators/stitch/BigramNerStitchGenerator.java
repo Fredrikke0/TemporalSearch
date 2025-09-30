@@ -69,6 +69,7 @@ public final class BigramNerStitchGenerator extends AbstractNgramStitchGenerator
             WHERE document_id = ?
                 AND ner != '' AND ner IS NOT NULL
                 AND ner NOT IN %s
+                AND (pos IS NULL OR pos NOT IN ('FW', 'ADD'))
             ORDER BY sentence_id, begin_char
         """, NerIndexGenerator.NER_TAGS_TO_EXCLUDE_SQL);
 

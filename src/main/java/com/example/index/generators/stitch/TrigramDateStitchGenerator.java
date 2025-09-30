@@ -64,6 +64,7 @@ public final class TrigramDateStitchGenerator extends AbstractNgramStitchGenerat
             WHERE document_id = ?
                 AND ner = 'DATE'
                 AND normalized_ner IS NOT NULL AND normalized_ner != ''
+                AND (pos IS NULL OR pos NOT IN ('FW', 'ADD'))
             ORDER BY sentence_id, begin_char
         """;
 
