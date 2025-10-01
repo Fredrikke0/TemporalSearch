@@ -298,11 +298,6 @@ public class TableResultService {
         }
 
         if (orderByColumnName.startsWith("COUNT(") && orderByColumnName.endsWith(")")) {
-            // New path: countBy(...) produces a column literally named "Count"
-            if (table.columnNames().contains("Count")) {
-                logger.debug("Mapping ORDER BY '{}' to actual column 'Count' (countBy result)", orderByColumnName);
-                return "Count";
-            }
             for (String colName : table.columnNames()) {
                 if (colName.startsWith("Count [") && colName.endsWith("]")) {
                     logger.debug("Mapping ORDER BY column '{}' to actual column '{}'", orderByColumnName, colName);
@@ -312,10 +307,6 @@ public class TableResultService {
         }
 
         if ("COUNT(DOCUMENTS)".equals(orderByColumnName)) {
-            if (table.columnNames().contains("Count")) {
-                logger.debug("Mapping ORDER BY 'COUNT(DOCUMENTS)' to actual column 'Count' (countBy result)");
-                return "Count";
-            }
             for (String colName : table.columnNames()) {
                 if (colName.startsWith("Count [") && colName.endsWith("]")) {
                     logger.debug("Mapping ORDER BY column 'COUNT(DOCUMENTS)' to actual column '{}'", colName);
@@ -462,44 +453,21 @@ public class TableResultService {
         List<String> columnsToSummarize = new ArrayList<>();
         List<AggregateFunction<?, ?>> functionsToApply = new ArrayList<>();
 
-        // We'll aggregate with Tablesaw's ability to apply all functions to all provided columns.
-        // For COUNT(*), use a synthetic non-missing column to ensure true row counts per group.
-        final String rowMarkerCol = "__row_marker__";
-        boolean needsCountStar = countColumns.stream().anyMatch(cc -> ((CountColumn) cc).getVariableNameForValidation() == null);
-
-        if (needsCountStar) {
-            try {
-                if (!table.columnNames().contains(rowMarkerCol)) {
-                    tech.tablesaw.api.IntColumn marker = tech.tablesaw.api.IntColumn.create(rowMarkerCol, table.rowCount());
-                    for (int i = 0; i < table.rowCount(); i++) {
-                        marker.set(i, 1);
-                    }
-                    table.addColumns(marker);
-                }
-            } catch (Exception e) {
-                logger.error("Failed to add row marker column for COUNT(*): {}", e.getMessage(), e);
-                throw new ResultGenerationException("Failed to prepare COUNT(*): " + e.getMessage(), e,
-                                                   query.mainAlias().orElse("groupBy_err"),
-                                                   ResultGenerationException.ErrorType.INTERNAL_ERROR);
-            }
-            columnsToSummarize.add(rowMarkerCol);
-            functionsToApply.add(count);
-        }
-
         for (SelectColumn sc : countColumns) {
             CountColumn cc = (CountColumn) sc;
             String targetCol = cc.getVariableNameForValidation();
 
-            if (targetCol != null) {
+            if (targetCol == null) {
+                columnsToSummarize.add(table.columnNames().get(0));
+                functionsToApply.add(count);
+            } else {
                 if (table.columnNames().contains(targetCol)) {
                     columnsToSummarize.add(targetCol);
                     functionsToApply.add(countNonMissing);
                 } else {
-                    logger.warn("COUNT target column '{}' not found in table. Using COUNT(*) instead.", targetCol);
-                    if (!columnsToSummarize.contains(rowMarkerCol)) {
-                        columnsToSummarize.add(rowMarkerCol);
-                        functionsToApply.add(count);
-                    }
+                    logger.warn("COUNT target column '{}' not found in table. Falling back to COUNT(*).", targetCol);
+                    columnsToSummarize.add(table.columnNames().get(0));
+                    functionsToApply.add(count);
                 }
             }
         }
@@ -520,19 +488,12 @@ public class TableResultService {
         }
 
         try {
-            logger.debug("Applying GROUP BY with {} functions across {} columns", functionsToApply.size(), columnsToSummarize.size());
+            logger.debug("Applying GROUP BY with {} functions on {} columns", functionsToApply.size(), columnsToSummarize.size());
 
-            Table groupedTable;
-            if (nonGroupingColumns.isEmpty() && !countColumns.isEmpty()) {
-                // COUNT-only path: use deterministic row counts per group
-                groupedTable = table.countBy(groupByColumns.toArray(new String[0]));
-            } else {
-                // Legacy path: summarize on a single anchor column (first in list)
-                String firstColumn = columnsToSummarize.get(0);
-                groupedTable = table
-                        .summarize(firstColumn, functionsToApply.toArray(new AggregateFunction<?, ?>[0]))
-                        .by(groupByColumns.toArray(new String[0]));
-            }
+            // Use first column for summarization with all functions
+            String firstColumn = columnsToSummarize.get(0);
+            Table groupedTable = table.summarize(firstColumn, functionsToApply.toArray(new AggregateFunction<?, ?>[0]))
+                                      .by(groupByColumns.toArray(new String[0]));
 
             // Select columns based on the original SELECT list
             List<String> finalColumnNames = new ArrayList<>();
@@ -548,17 +509,10 @@ public class TableResultService {
             // Add aggregated columns - Tablesaw generates names like "Count [column_name]", "First [column_name]"
             for (SelectColumn sc : selectColumns) {
                 if (sc instanceof CountColumn) {
-                    if (availableColumns.contains("Count")) {
-                        finalColumnNames.add("Count");
-                    } else {
-                        // Legacy summarized name
-                        // Determine anchor used above if not count-only path
-                        for (String colName : availableColumns) {
-                            if (colName.startsWith("Count [") && colName.endsWith("]")) {
-                                finalColumnNames.add(colName);
-                                break;
-                            }
-                        }
+                    // Look for count column result
+                    String expectedCountColName = "Count [" + firstColumn + "]";
+                    if (availableColumns.contains(expectedCountColName)) {
+                        finalColumnNames.add(expectedCountColName);
                     }
                 } else if (!groupByColumns.contains(sc.getColumnName())) {
                     // Look for first() result
