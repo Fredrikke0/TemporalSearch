@@ -222,14 +222,8 @@ public class QueryCLI implements AutoCloseable {
                 // Reuse or create and cache IndexManager & TableResultService for this project
                 currentIndexManagerToUse = projectIndexManagers.get(projectName);
                 if (currentIndexManagerToUse == null) {
-                    // Build a maximal preload query to force all index types to open, including n-gram (uni/bi/tri)
-                    // Use a multi-word phrase in CONTAINS to ensure bigram/trigram indexes are initialized
-                    String preloadQueryStr = String.format(
-                        "SELECT DOCUMENT_ID FROM %s WHERE " +
-                        "CONTAINS('preload') AND CONTAINS('alpha beta') AND CONTAINS('gamma delta epsilon') AND " +
-                        "NER(PERSON) AND POS(NN) AND DEPENDS('dep','rel','dep_rel') AND DATE(= 2000)",
-                        projectName
-                    );
+                    // Build a maximal preload query to force all index types to open
+                    String preloadQueryStr = String.format("SELECT DOCUMENT_ID FROM %s WHERE CONTAINS('preload_x') AND NER(PERSON) AND POS(NN) AND DEPENDS('dep','rel','dep_rel') AND DATE(= 2000)", projectName);
                     Query preloadQuery;
                     try {
                         preloadQuery = parser.parse(preloadQueryStr);
@@ -237,8 +231,7 @@ public class QueryCLI implements AutoCloseable {
                         // Fallback: use the actual query for required indexes only
                         preloadQuery = query;
                     }
-                    // Create IndexManager honoring the CURRENT interactive strategies
-                    currentIndexManagerToUse = new IndexManager(projectIndexDir, projectName, preloadQuery, this.currentTemporalStrategyName, this.currentStitchStrategyName);
+                    currentIndexManagerToUse = new IndexManager(projectIndexDir, projectName, preloadQuery, "nash", "optimized");
                     projectIndexManagers.put(projectName, currentIndexManagerToUse);
 
                     // TableResultService per project (DB path may differ across projects)
@@ -547,15 +540,6 @@ public class QueryCLI implements AutoCloseable {
                             }
                         }
                         if (strategyUpdated) {
-                            // Invalidate cached per-project managers so next execution reflects new strategies
-                            try {
-                                for (IndexManager mgr : cli.projectIndexManagers.values()) {
-                                    try { mgr.close(); } catch (IndexAccessException e) { /* best-effort close */ }
-                                }
-                            } finally {
-                                cli.projectIndexManagers.clear();
-                                cli.projectTableServices.clear();
-                            }
                         } else if (!inputLine.trim().equalsIgnoreCase("SET STRATEGY")) {
                             System.err.println("No valid strategy key-value pairs found in SET STRATEGY command. Format: key=value ...");
                         }
