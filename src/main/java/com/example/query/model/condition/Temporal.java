@@ -11,16 +11,15 @@ import java.util.Set;
 
 import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
+import com.example.query.model.TemporalBounds;
 import com.example.query.model.TemporalPredicate;
 import com.example.query.model.TemporalRange;
-
-import no.ntnu.sandbox.Nash;
 
 /**
  * Represents a temporal condition in the query language.
  * This condition matches documents based on temporal expressions.
  *
- * The temporal types are designed to align with Nash predicates for efficient querying.
+ * The temporal types describe relationships between date intervals.
  */
 public record Temporal(
     Optional<LocalDateTime> startDate,
@@ -31,9 +30,9 @@ public record Temporal(
 ) implements Condition {
 
     /**
-     * Helper record to store parsed start and end dates from a Nash interval.
+     * Helper record to store parsed start and end dates from a bracketed date-range string.
      */
-    private record NashIntervalDatePair(LocalDate start, LocalDate end) {}
+    private record DateRangePair(LocalDate start, LocalDate end) {}
 
     /**
      * Maps comparison operators to TemporalPredicate
@@ -56,36 +55,34 @@ public record Temporal(
         }
     }
 
-    // Date formatters for Nash interval conversion
-    private static final DateTimeFormatter NASH_DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
-    // Define MIN/MAX bounds based on Nash implementation
-    private static final LocalDate MIN_NASH_DATE = Nash.GLOBAL_LOWER_BOUND;
-    private static final LocalDate MAX_NASH_DATE = Nash.GLOBAL_UPPER_BOUND;
+    // Date formatters for date-range interval serialization
+    private static final DateTimeFormatter DATE_RANGE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
+    // Global temporal bounds shared across the query subsystem
+    private static final LocalDate MIN_DATE = TemporalBounds.LOWER;
+    private static final LocalDate MAX_DATE = TemporalBounds.UPPER;
 
     /**
-     * Parses a Nash interval string (e.g., "[YYYY-MM-DD , YYYY-MM-DD]") into a pair of LocalDate objects.
+     * Parses a bracketed date-range interval string (e.g., "[YYYY-MM-DD , YYYY-MM-DD]") into a pair of LocalDate objects.
      *
-     * @param nashInterval The interval string.
-     * @return An Optional containing a NashIntervalDatePair if parsing is successful, otherwise empty.
+     * @param intervalString The interval string.
+     * @return An Optional containing a DateRangePair if parsing is successful, otherwise empty.
      */
-    private static Optional<NashIntervalDatePair> parseNashIntervalToDates(String nashInterval) {
-        if (nashInterval == null || nashInterval.isBlank()) {
+    private static Optional<DateRangePair> parseDateRangeString(String intervalString) {
+        if (intervalString == null || intervalString.isBlank()) {
             return Optional.empty();
         }
-        String interval = nashInterval.replaceAll("[\\[\\]]", "").trim();
+        String interval = intervalString.replaceAll("[\\[\\]]", "").trim();
         String[] parts = interval.split(" *, *");
 
         if (parts.length != 2) {
-            // logger.warn("Invalid Nash interval format for parsing to dates: {}", nashInterval);
             return Optional.empty();
         }
 
         try {
-            LocalDate startDateVal = LocalDate.parse(parts[0].trim(), NASH_DATE_FORMAT);
-            LocalDate endDateVal = LocalDate.parse(parts[1].trim(), NASH_DATE_FORMAT);
-            return Optional.of(new NashIntervalDatePair(startDateVal, endDateVal));
+            LocalDate startDateVal = LocalDate.parse(parts[0].trim(), DATE_RANGE_FORMAT);
+            LocalDate endDateVal = LocalDate.parse(parts[1].trim(), DATE_RANGE_FORMAT);
+            return Optional.of(new DateRangePair(startDateVal, endDateVal));
         } catch (Exception e) {
-            // logger.warn("Failed to parse dates from Nash interval string '{}': {}", nashInterval, e.getMessage());
             return Optional.empty();
         }
     }
@@ -228,22 +225,22 @@ public record Temporal(
     }
 
     /**
-     * Constructor that creates a Temporal from a Nash-compatible interval string.
+     * Constructor that creates a Temporal from a bracketed date-range interval string.
      * Format expected: [YYYY-MM-DD , YYYY-MM-DD]
      *
      * @param type The temporal type for this condition
-     * @param nashIntervalString The interval string in Nash format
+     * @param intervalString The interval string in the expected format
      */
-    public static Temporal fromNashInterval(TemporalPredicate type, String nashIntervalString) {
-        String interval = nashIntervalString.replaceAll("[\\[\\]]", "").trim();
+    public static Temporal fromDateRangeString(TemporalPredicate type, String intervalString) {
+        String interval = intervalString.replaceAll("[\\[\\]]", "").trim();
         String[] parts = interval.split(" *, *");
 
         if (parts.length != 2) {
-            throw new IllegalArgumentException("Invalid Nash interval format: " + nashIntervalString);
+            throw new IllegalArgumentException("Invalid date-range interval format: " + intervalString);
         }
 
-        LocalDate startDateVal = LocalDate.parse(parts[0].trim(), NASH_DATE_FORMAT);
-        LocalDate endDateVal = LocalDate.parse(parts[1].trim(), NASH_DATE_FORMAT);
+        LocalDate startDateVal = LocalDate.parse(parts[0].trim(), DATE_RANGE_FORMAT);
+        LocalDate endDateVal = LocalDate.parse(parts[1].trim(), DATE_RANGE_FORMAT);
 
         return new Temporal(
             Optional.of(startDateVal.atStartOfDay()),
@@ -255,13 +252,13 @@ public record Temporal(
     }
 
     /**
-     * Converts this Temporal to a Nash-compatible interval string.
+     * Converts this Temporal to a bracketed date-range interval string.
      * Handles comparison operators by converting them into appropriate ranges
-     * using MIN_NASH_DATE and MAX_NASH_DATE.
+     * clamped to the global temporal bounds ({@link TemporalBounds}).
      *
      * @return A string in the format [YYYY-MM-DD , YYYY-MM-DD]
      */
-    public Optional<String> toNashInterval() {
+    public Optional<String> toDateRangeString() {
         if (isComparisonPredicate(temporalType)) {
             if (startDate.isEmpty()) {
                 // Cannot form an interval for comparison if the date is not present
@@ -270,85 +267,85 @@ public record Temporal(
             LocalDateTime comparisonDate = startDate.get();
 
             // Prioritize already set endDate (from constructor) for EQUAL predicate.
-            // Only re-derive effectiveEndDateForNash if endDate is truly empty.
-            LocalDateTime effectiveEndDateForNash = null;
+            // Only re-derive effectiveEndDate if endDate is truly empty.
+            LocalDateTime effectiveEndDate = null;
             if (temporalType == TemporalPredicate.EQUAL) {
                 if (endDate.isPresent()) {
-                    effectiveEndDateForNash = endDate.get();
+                    effectiveEndDate = endDate.get();
                 } else {
                     // endDate is not present, so derive it based on startDate
                     LocalDateTime start = startDate.get();
                     boolean isStartOfDay = start.getHour() == 0 && start.getMinute() == 0 && start.getSecond() == 0 && start.getNano() == 0;
                     if (isStartOfDay) {
                         if (start.getDayOfMonth() == 1 && start.getMonthValue() == 1) { // YYYY
-                            effectiveEndDateForNash = LocalDateTime.of(start.getYear(), 12, 31, 23, 59, 59);
+                            effectiveEndDate = LocalDateTime.of(start.getYear(), 12, 31, 23, 59, 59);
                         } else if (start.getDayOfMonth() == 1) { // YYYY-MM
                             java.time.YearMonth ym = java.time.YearMonth.from(start);
-                            effectiveEndDateForNash = LocalDateTime.of(start.getYear(), start.getMonth(), ym.lengthOfMonth(), 23, 59, 59);
+                            effectiveEndDate = LocalDateTime.of(start.getYear(), start.getMonth(), ym.lengthOfMonth(), 23, 59, 59);
                         } else { // YYYY-MM-DD
-                            effectiveEndDateForNash = start.toLocalDate().atTime(23, 59, 59);
+                            effectiveEndDate = start.toLocalDate().atTime(23, 59, 59);
                         }
                     } else { // Non-start-of-day date, equality still means the whole day for DATE()
-                        effectiveEndDateForNash = start.toLocalDate().atTime(23, 59, 59);
+                        effectiveEndDate = start.toLocalDate().atTime(23, 59, 59);
                     }
                 }
             } else { // For other comparison predicates, endDate is not typically used directly for interval construction.
-                effectiveEndDateForNash = endDate.orElse(null); // Though it might be null.
+                effectiveEndDate = endDate.orElse(null); // Though it might be null.
             }
 
             return switch (temporalType) {
                 case BEFORE -> {
                     LocalDate dateOnly = comparisonDate.toLocalDate().minusDays(1);
-                    if (dateOnly.isBefore(MIN_NASH_DATE)) dateOnly = MIN_NASH_DATE;
-                    LocalDate effectiveMinNash = MIN_NASH_DATE;
-                    if (dateOnly.isBefore(effectiveMinNash)) dateOnly = effectiveMinNash; // Should not happen if MIN_NASH_DATE is truly min
+                    if (dateOnly.isBefore(MIN_DATE)) dateOnly = MIN_DATE;
+                    LocalDate effectiveMin = MIN_DATE;
+                    if (dateOnly.isBefore(effectiveMin)) dateOnly = effectiveMin; // Should not happen if MIN_DATE is truly min
 
                     yield Optional.of(String.format("[%s , %s]",
-                                             NASH_DATE_FORMAT.format(effectiveMinNash),
-                                             NASH_DATE_FORMAT.format(dateOnly)));
+                                             DATE_RANGE_FORMAT.format(effectiveMin),
+                                             DATE_RANGE_FORMAT.format(dateOnly)));
                 }
                 case AFTER -> {
                     LocalDate dateOnly = comparisonDate.toLocalDate().plusDays(1);
-                    if (dateOnly.isAfter(MAX_NASH_DATE)) dateOnly = MAX_NASH_DATE;
-                    LocalDate effectiveMaxNash = MAX_NASH_DATE;
-                    if (dateOnly.isAfter(effectiveMaxNash)) dateOnly = effectiveMaxNash; // Should not happen
+                    if (dateOnly.isAfter(MAX_DATE)) dateOnly = MAX_DATE;
+                    LocalDate effectiveMax = MAX_DATE;
+                    if (dateOnly.isAfter(effectiveMax)) dateOnly = effectiveMax; // Should not happen
 
                     yield Optional.of(String.format("[%s , %s]",
-                                            NASH_DATE_FORMAT.format(dateOnly),
-                                            NASH_DATE_FORMAT.format(effectiveMaxNash)));
+                                            DATE_RANGE_FORMAT.format(dateOnly),
+                                            DATE_RANGE_FORMAT.format(effectiveMax)));
                 }
                 case BEFORE_EQUAL -> {
                     LocalDate dateOnly = comparisonDate.toLocalDate();
-                    if (dateOnly.isBefore(MIN_NASH_DATE)) dateOnly = MIN_NASH_DATE; // Should use MIN_NASH_DATE if target is before
+                    if (dateOnly.isBefore(MIN_DATE)) dateOnly = MIN_DATE; // Should use MIN_DATE if target is before
                     yield Optional.of(String.format("[%s , %s]",
-                                                  NASH_DATE_FORMAT.format(MIN_NASH_DATE),
-                                                  NASH_DATE_FORMAT.format(dateOnly)));
+                                                  DATE_RANGE_FORMAT.format(MIN_DATE),
+                                                  DATE_RANGE_FORMAT.format(dateOnly)));
                 }
                 case AFTER_EQUAL -> {
                     LocalDate dateOnly = comparisonDate.toLocalDate();
-                    if (dateOnly.isAfter(MAX_NASH_DATE)) dateOnly = MAX_NASH_DATE; // Should use MAX_NASH_DATE if target is after
+                    if (dateOnly.isAfter(MAX_DATE)) dateOnly = MAX_DATE; // Should use MAX_DATE if target is after
                     yield Optional.of(String.format("[%s , %s]",
-                                                 NASH_DATE_FORMAT.format(dateOnly),
-                                                 NASH_DATE_FORMAT.format(MAX_NASH_DATE)));
+                                                 DATE_RANGE_FORMAT.format(dateOnly),
+                                                 DATE_RANGE_FORMAT.format(MAX_DATE)));
                 }
                 case EQUAL -> {
                     LocalDate dateOnlyStartOriginal = startDate.get().toLocalDate();
-                    // Use effectiveEndDateForNash if available (derived for YYYY, YYYY-MM, YYYY-MM-DD cases)
+                    // Use effectiveEndDate if available (derived for YYYY, YYYY-MM, YYYY-MM-DD cases)
                     // otherwise use the original endDate if present, or default to start date if both empty (single day)
-                    LocalDate dateOnlyEnd = Optional.ofNullable(effectiveEndDateForNash)
+                    LocalDate dateOnlyEnd = Optional.ofNullable(effectiveEndDate)
                                                     .map(LocalDateTime::toLocalDate)
-                                                    .orElse(dateOnlyStartOriginal); // Fallback to start if somehow effectiveEndDateForNash is still null
+                                                    .orElse(dateOnlyStartOriginal); // Fallback to start if somehow effectiveEndDate is still null
 
                     LocalDate finalDateOnlyStart = dateOnlyStartOriginal;
-                    // Clamp to Nash bounds
-                    if (finalDateOnlyStart.isBefore(MIN_NASH_DATE)) finalDateOnlyStart = MIN_NASH_DATE;
-                    if (dateOnlyEnd.isAfter(MAX_NASH_DATE)) dateOnlyEnd = MAX_NASH_DATE;
+                    // Clamp to the global temporal bounds
+                    if (finalDateOnlyStart.isBefore(MIN_DATE)) finalDateOnlyStart = MIN_DATE;
+                    if (dateOnlyEnd.isAfter(MAX_DATE)) dateOnlyEnd = MAX_DATE;
                     // Ensure valid range (end not before start)
                     if (dateOnlyEnd.isBefore(finalDateOnlyStart)) dateOnlyEnd = finalDateOnlyStart;
 
                     yield Optional.of(String.format("[%s , %s]",
-                                           NASH_DATE_FORMAT.format(finalDateOnlyStart),
-                                           NASH_DATE_FORMAT.format(dateOnlyEnd)));
+                                           DATE_RANGE_FORMAT.format(finalDateOnlyStart),
+                                           DATE_RANGE_FORMAT.format(dateOnlyEnd)));
                 }
                 default -> Optional.empty(); // Should not happen for comparison predicates
             };
@@ -362,13 +359,13 @@ public record Temporal(
                 LocalDate start = startDate.get().toLocalDate();
                 LocalDate end = endDate.get().toLocalDate();
 
-                if (start.isBefore(MIN_NASH_DATE)) start = MIN_NASH_DATE;
-                if (end.isAfter(MAX_NASH_DATE)) end = MAX_NASH_DATE;
+                if (start.isBefore(MIN_DATE)) start = MIN_DATE;
+                if (end.isAfter(MAX_DATE)) end = MAX_DATE;
                 if (end.isBefore(start)) end = start;
 
                 return Optional.of(String.format("[%s , %s]",
-                                         NASH_DATE_FORMAT.format(start),
-                                         NASH_DATE_FORMAT.format(end)));
+                                         DATE_RANGE_FORMAT.format(start),
+                                         DATE_RANGE_FORMAT.format(end)));
             } else {
                 return Optional.empty();
             }
@@ -382,7 +379,7 @@ public record Temporal(
     }
 
     /**
-     * Expands year-only Nash intervals to full dates.
+     * Expands year-only intervals to full dates.
      * For example, [2023, 2024] becomes [2023-01-01, 2024-12-31].
      *
      * @param interval The interval string to expand
@@ -452,13 +449,13 @@ public record Temporal(
             // This requires mapping back from the internal representation, which is complex.
             // For simplicity, show the internal INTERSECT format.
             sb.append(temporalType.name()).append(" ");
-            sb.append("[").append(NASH_DATE_FORMAT.format(startDate.get()));
-            sb.append(", ").append(NASH_DATE_FORMAT.format(endDate.get())).append("]");
+            sb.append("[").append(DATE_RANGE_FORMAT.format(startDate.get()));
+            sb.append(", ").append(DATE_RANGE_FORMAT.format(endDate.get())).append("]");
         } else {
             sb.append(temporalType.name());
             if (startDate.isPresent()) {
-                 sb.append(" ").append(NASH_DATE_FORMAT.format(startDate.get()));
-                 endDate.ifPresent(end -> sb.append(" .. ").append(NASH_DATE_FORMAT.format(end)));
+                 sb.append(" ").append(DATE_RANGE_FORMAT.format(startDate.get()));
+                 endDate.ifPresent(end -> sb.append(" .. ").append(DATE_RANGE_FORMAT.format(end)));
             }
         }
 
@@ -491,22 +488,22 @@ public record Temporal(
      *         or results in an invalid/empty interval.
      */
     public Optional<Temporal> intersectWith(Temporal otherNonBindingFilter) {
-        Optional<String> thisIntervalOpt = this.toNashInterval();
-        Optional<String> otherIntervalOpt = otherNonBindingFilter.toNashInterval();
+        Optional<String> thisIntervalOpt = this.toDateRangeString();
+        Optional<String> otherIntervalOpt = otherNonBindingFilter.toDateRangeString();
 
         if (thisIntervalOpt.isEmpty() || otherIntervalOpt.isEmpty()) {
             return Optional.empty(); // Cannot merge if one doesn't produce a valid interval
         }
 
-        Optional<NashIntervalDatePair> p1Opt = parseNashIntervalToDates(thisIntervalOpt.get());
-        Optional<NashIntervalDatePair> p2Opt = parseNashIntervalToDates(otherIntervalOpt.get());
+        Optional<DateRangePair> p1Opt = parseDateRangeString(thisIntervalOpt.get());
+        Optional<DateRangePair> p2Opt = parseDateRangeString(otherIntervalOpt.get());
 
         if (p1Opt.isEmpty() || p2Opt.isEmpty()) {
             return Optional.empty(); // Parsing failed for one of the intervals
         }
 
-        NashIntervalDatePair p1 = p1Opt.get();
-        NashIntervalDatePair p2 = p2Opt.get();
+        DateRangePair p1 = p1Opt.get();
+        DateRangePair p2 = p2Opt.get();
 
         LocalDate s1 = p1.start(); LocalDate e1 = p1.end();
         LocalDate s2 = p2.start(); LocalDate e2 = p2.end();

@@ -50,7 +50,6 @@ public class QueryCLI implements AutoCloseable {
     private final QuerySemanticValidator validator;
 
     // Current strategy settings - mutable for interactive mode
-    private String currentTemporalStrategyName;
     private PushdownStrategy currentPushdownStrategy;
     private String currentStitchStrategyName;
 
@@ -74,20 +73,18 @@ public class QueryCLI implements AutoCloseable {
      *
      * @param dbFilePath The path to the project's SQLite database file.
      * @param indexDirPath The path to the directory containing project indexes.
-     * @param initialTemporalStrategy The initial temporal execution strategy ("nash" or "naive")
      * @param initialPushdownStrategy The initial pushdown strategy
      * @param initialStitchStrategy The initial stitch execution strategy ("none" or "optimized")
      * @param initialExportFormat Optional initial export format
      * @param initialExportFilename Optional initial export filename
      * @param interactiveMode True if running in interactive mode, false for single query execution.
      */
-    public QueryCLI(String dbFilePath, Path indexDirPath, String initialTemporalStrategy, PushdownStrategy initialPushdownStrategy, String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename, boolean interactiveMode) {
+    public QueryCLI(String dbFilePath, Path indexDirPath, PushdownStrategy initialPushdownStrategy, String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename, boolean interactiveMode) {
         this.dbFilePath = dbFilePath;
         this.indexRootDir = indexDirPath;
         this.parser = new QueryParser();
         this.validator = new QuerySemanticValidator();
 
-        this.currentTemporalStrategyName = initialTemporalStrategy;
         this.currentPushdownStrategy = initialPushdownStrategy;
         this.currentStitchStrategyName = initialStitchStrategy;
         this.currentExportFormat = initialExportFormat;
@@ -98,12 +95,12 @@ public class QueryCLI implements AutoCloseable {
         this.profileAroundExecution = false;
 
         logger.info("Initialized QueryCLI. DB file: {}, Index dir: {}. Interactive: {}", dbFilePath, indexDirPath, interactiveMode);
-        logger.info("Initial Strategies - Temporal: {}, Pushdown: {}, Stitch: {}", currentTemporalStrategyName, currentPushdownStrategy, currentStitchStrategyName);
+        logger.info("Initial Strategies - Pushdown: {}, Stitch: {}", currentPushdownStrategy, currentStitchStrategyName);
         initialExportFormat.ifPresent(format -> logger.info("Initial Export: {} to {}", format, initialExportFilename.orElse("N/A")));
     }
 
-    public QueryCLI(String dbFilePath, Path indexDirPath, String initialTemporalStrategy, PushdownStrategy initialPushdownStrategy, String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename, boolean interactiveMode, Optional<String> profileOptions, boolean profileAroundExecution) {
-        this(dbFilePath, indexDirPath, initialTemporalStrategy, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactiveMode);
+    public QueryCLI(String dbFilePath, Path indexDirPath, PushdownStrategy initialPushdownStrategy, String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename, boolean interactiveMode, Optional<String> profileOptions, boolean profileAroundExecution) {
+        this(dbFilePath, indexDirPath, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactiveMode);
         this.profileOptions = profileOptions != null ? profileOptions : Optional.empty();
         this.profileAroundExecution = profileAroundExecution;
     }
@@ -231,7 +228,7 @@ public class QueryCLI implements AutoCloseable {
                         // Fallback: use the actual query for required indexes only
                         preloadQuery = query;
                     }
-                    currentIndexManagerToUse = new IndexManager(projectIndexDir, projectName, preloadQuery, "nash", "optimized");
+                    currentIndexManagerToUse = new IndexManager(projectIndexDir, projectName, preloadQuery, "optimized");
                     projectIndexManagers.put(projectName, currentIndexManagerToUse);
 
                     // TableResultService per project (DB path may differ across projects)
@@ -244,7 +241,7 @@ public class QueryCLI implements AutoCloseable {
                 // Non-interactive: fresh components each query
                 SqliteAccessor.initialize(this.dbFilePath);
                 currentTableResultService = new TableResultService(this.dbFilePath);
-                localIndexManager = new IndexManager(projectIndexDir, projectName, query, this.currentTemporalStrategyName, this.currentStitchStrategyName);
+                localIndexManager = new IndexManager(projectIndexDir, projectName, query, this.currentStitchStrategyName);
                 currentIndexManagerToUse = localIndexManager;
                 currentSynonymManager = currentIndexManagerToUse.getSynonymManager();
             }
@@ -263,8 +260,7 @@ public class QueryCLI implements AutoCloseable {
                 }
 
             ConditionExecutorFactory factory = new ConditionExecutorFactory(currentSynonymManager, this.currentStitchStrategyName, queryGranularity);
-            factory.setTemporalStrategy(this.currentTemporalStrategyName);
-            logger.debug("ConditionExecutorFactory configured with T:{}, S:{}, Granularity:{}", this.currentTemporalStrategyName, this.currentStitchStrategyName, queryGranularity);
+            logger.debug("ConditionExecutorFactory configured with S:{}, Granularity:{}", this.currentStitchStrategyName, queryGranularity);
 
             QueryExecutor queryExecutor = new QueryExecutor(currentTableResultService, this.currentStitchStrategyName, currentSynonymManager, factory);
             queryExecutor.setPushdownStrategy(this.currentPushdownStrategy);
@@ -370,14 +366,12 @@ public class QueryCLI implements AutoCloseable {
     }
 
     // Setters for interactive mode
-    public void setCurrentTemporalStrategyName(String name) { this.currentTemporalStrategyName = name; }
     public void setCurrentPushdownStrategy(PushdownStrategy strategy) { this.currentPushdownStrategy = strategy; }
     public void setCurrentStitchStrategyName(String name) { this.currentStitchStrategyName = name; }
     public void setCurrentExportFormat(Optional<String> format) { this.currentExportFormat = format; }
     public void setCurrentExportFilename(Optional<String> filename) { this.currentExportFilename = filename; }
 
     // Getters for ACK messages
-    public String getCurrentTemporalStrategyName() { return currentTemporalStrategyName; }
     public PushdownStrategy getCurrentPushdownStrategy() { return currentPushdownStrategy; }
     public String getCurrentStitchStrategyName() { return currentStitchStrategyName; }
 
@@ -420,10 +414,6 @@ public class QueryCLI implements AutoCloseable {
         cliArgParser.addArgument("--export")
                 .help("Export results to a file in the specified format: csv:filename.csv, json:filename.json, or html:filename.html. Sets initial export for single query or interactive mode.");
 
-        cliArgParser.addArgument("--temporal-strategy")
-                .choices("nash", "naive").setDefault("naive")
-                .help("Specify the initial temporal execution strategy (nash or naive).");
-
         cliArgParser.addArgument("--pushdown-strategy")
                 .choices("none", "optimized").setDefault("optimized")
                 .type(String.class)
@@ -453,7 +443,6 @@ public class QueryCLI implements AutoCloseable {
             String dbFile = ns.getString("db_file");
             Path indexDir = Path.of(ns.getString("index_root_dir"));
             String exportArg = ns.getString("export");
-            String initialTemporalStrategy = ns.getString("temporal_strategy");
             PushdownStrategy initialPushdownStrategy = PushdownStrategy.fromString(ns.getString("pushdown_strategy"));
             String initialStitchStrategy = ns.getString("stitch_strategy");
             String queryStr = ns.getString("query");
@@ -475,16 +464,15 @@ public class QueryCLI implements AutoCloseable {
 
             boolean interactive = (queryStr == null);
 
-            try (QueryCLI cli = new QueryCLI(dbFile, indexDir, initialTemporalStrategy, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactive, Optional.ofNullable(profileOptions), profileAroundExecution)) {
+            try (QueryCLI cli = new QueryCLI(dbFile, indexDir, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactive, Optional.ofNullable(profileOptions), profileAroundExecution)) {
                 if (interactive) {
 
                 Scanner scanner = new Scanner(System.in);
                     System.out.println("QueryCLI Interactive Mode");
                     System.out.println("Type 'EXIT' or 'QUIT' to leave.");
-                    System.out.println("Commands: SET STRATEGY temporal=<val> pushdown=<val> stitch=<val>");
+                    System.out.println("Commands: SET STRATEGY pushdown=<val> stitch=<val>");
                     System.out.println("          SET OUTPUT <format> <filename> | SET OUTPUT NONE");
-                    System.out.println("Current strategies: T:" + cli.getCurrentTemporalStrategyName() +
-                                       " P:" + cli.getCurrentPushdownStrategy().name().toLowerCase() +
+                    System.out.println("Current strategies: P:" + cli.getCurrentPushdownStrategy().name().toLowerCase() +
                                        " S:" + cli.getCurrentStitchStrategyName());
                     cli.currentExportFormat.ifPresentOrElse(
                         f -> System.out.println("Current output: " + f + " to " + cli.currentExportFilename.orElse("N/A")),
@@ -512,14 +500,6 @@ public class QueryCLI implements AutoCloseable {
                             String value = matcher.group(2);
                             try {
                                 switch (key) {
-                                    case "temporal":
-                                        if (Arrays.asList("nash", "naive").contains(value.toLowerCase())) {
-                                           cli.setCurrentTemporalStrategyName(value.toLowerCase());
-                                           strategyUpdated = true;
-                                        } else {
-                                            System.err.println("Invalid temporal strategy value: " + value + ". Must be 'nash' or 'naive'.");
-                                        }
-                                        break;
                                     case "pushdown":
                                         cli.setCurrentPushdownStrategy(PushdownStrategy.fromString(value));
                                         strategyUpdated = true;

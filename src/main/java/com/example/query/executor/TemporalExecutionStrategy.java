@@ -12,7 +12,7 @@ import com.example.query.model.condition.Temporal;
 public interface TemporalExecutionStrategy {
 
     /**
-     * Gets the unique name of this strategy (e.g., "nash", "naive").
+     * Gets the unique name of this strategy (e.g., "naive").
      * @return The strategy name.
      */
     String getName();

@@ -21,14 +21,13 @@ import com.example.core.PositionListSoA;
 import com.example.index.util.SynonymManager;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
+import com.example.query.model.TemporalBounds;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Pos;
 import com.example.query.model.condition.StitchedCondition;
 import com.example.query.model.condition.Temporal;
-
-import no.ntnu.sandbox.Nash;
 
 public final class StitchedExecutor implements ConditionExecutor<StitchedCondition> {
     private static final Logger logger = LoggerFactory.getLogger(StitchedExecutor.class);
@@ -168,8 +167,8 @@ public final class StitchedExecutor implements ConditionExecutor<StitchedConditi
                         try {
                             LocalDate dateFromKey = TemporalExecutor.parseDateKey(baseDatePart);
                             if (dateFromKey != null) {
-                                // Ensure date is within the supported range of the Nash index (1925-2025)
-                                if (dateFromKey.isBefore(Nash.GLOBAL_LOWER_BOUND) || dateFromKey.isAfter(Nash.GLOBAL_UPPER_BOUND)) {
+                                // Ensure date is within the globally supported temporal range (1925-2025)
+                                if (dateFromKey.isBefore(TemporalBounds.LOWER) || dateFromKey.isAfter(TemporalBounds.UPPER)) {
                                     iterator.next();
                                     continue;
                                 }

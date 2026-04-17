@@ -1,9 +1,5 @@
 package com.example.query.model;
 
-import java.util.Optional;
-
-import no.ntnu.sandbox.Nash;
-
 /**
  * Unified predicates for temporal relationships between date ranges.
  * Used throughout the system for both direct temporal conditions and join operations.
@@ -40,27 +36,6 @@ public enum TemporalPredicate {
      * For example: 2023-01-01 PROXIMITY 2023-01-03 (within 2 days)
      */
     PROXIMITY;
-
-    /**
-     * Maps this TemporalPredicate to the corresponding Nash.RangePredicate.
-     *
-     * @return The Nash predicate that corresponds to this temporal predicate, or Optional.empty() if none directly applies.
-     */
-    public Optional<Nash.RangePredicate> toNashPredicate() {
-        return switch (this) {
-            case CONTAINS -> Optional.of(Nash.RangePredicate.CONTAINS);
-            case CONTAINED_BY -> Optional.of(Nash.RangePredicate.CONTAINED_BY);
-            case INTERSECT -> Optional.of(Nash.RangePredicate.INTERSECT);
-            case PROXIMITY -> Optional.of(Nash.RangePredicate.PROXIMITY);
-
-            // Comparisons define specific intervals. Querying Nash with these intervals
-            // usually involves checking for intersection.
-            case EQUAL, BEFORE_EQUAL, AFTER_EQUAL -> Optional.of(Nash.RangePredicate.INTERSECT);
-
-            // BEFORE and AFTER are handled differently by NashTemporalStrategy (using CONTAINS)
-            case BEFORE, AFTER -> Optional.empty(); // Return empty; handled specifically in NashTemporalStrategy
-        };
-    }
 
     /**
      * Checks if this predicate is a basic comparison operator.

@@ -47,26 +47,23 @@ public class IndexManager implements AutoCloseable {
     private SynonymManager synonymManager;
     private boolean isClosed = false;
     private final String stitchStrategy;
-    private final String temporalStrategy;
 
     /**
      * Creates a new IndexManager for a specific index set and query.
-     * Initializes only the indexes required by the query and temporal strategy,
-     * or attempts to preload all known types if specific preloading parameters are met.
+     * Initializes only the indexes required by the query, or attempts to
+     * preload all known types if specific preloading parameters are met.
      *
      * @param actualIndexDir The direct path to the directory containing the various index type subdirectories (e.g., unigram, ner_date).
      * @param indexSetName The name of the index set to use (from FROM clause), used for logging and identification.
      * @param query The parsed query object. Used to determine required indexes unless maximal preloading is triggered.
-     * @param temporalStrategy The name of the temporal strategy ("nash" or "naive")
      * @param stitchStrategy The name of the stitch strategy (e.g., "optimized", "none")
      * @throws IndexAccessException if the base index directory doesn't exist or synonym manager fails to initialize
      */
-    public IndexManager(Path actualIndexDir, String indexSetName, Query query, String temporalStrategy, String stitchStrategy) throws IndexAccessException {
+    public IndexManager(Path actualIndexDir, String indexSetName, Query query, String stitchStrategy) throws IndexAccessException {
         this.indexBaseDir = actualIndexDir;
         this.indexSetName = indexSetName;
         this.indexes = new HashMap<>();
         this.stitchStrategy = stitchStrategy;
-        this.temporalStrategy = temporalStrategy;
 
         if (!Files.exists(this.indexBaseDir)) {
             throw new IndexAccessException(
@@ -105,16 +102,14 @@ public class IndexManager implements AutoCloseable {
      */
     private void initializeRequiredIndexes(Query query) throws IndexAccessException {
         Set<String> requiredIndexNames;
-        boolean isMaximalPreload = "nash".equalsIgnoreCase(this.temporalStrategy) &&
-                                   "optimized".equalsIgnoreCase(this.stitchStrategy) &&
+        boolean isMaximalPreload = "optimized".equalsIgnoreCase(this.stitchStrategy) &&
                                    query != null && isMaximalPreloadQuery(query);
-                                   // QueryCLI now sends a specific query for this
 
         if (isMaximalPreload) {
-            logger.info("Maximal preloading triggered for IndexManager based on strategies and query structure.");
-            requiredIndexNames = getAllKnownIndexTypes(); // Attempt to load all
+            logger.info("Maximal preloading triggered for IndexManager based on strategy and query structure.");
+            requiredIndexNames = getAllKnownIndexTypes();
         } else {
-            requiredIndexNames = determineRequiredIndexes(query, this.temporalStrategy, this.stitchStrategy);
+            requiredIndexNames = determineRequiredIndexes(query, this.stitchStrategy);
         }
 
         logger.info("Attempting to initialize indexes: {}", requiredIndexNames);
@@ -249,8 +244,6 @@ public class IndexManager implements AutoCloseable {
         knownTypes.add("ner_date");
         knownTypes.add("pos");
         knownTypes.add("dependency");
-        // Special temporal index
-        knownTypes.add("nash");
         // Stitch variants (add all common ones)
         String[] ngramPrefixes = {"unigram", "bigram", "trigram"};
         String[] annotationSuffixes = {"pos", "ner", "date"};
@@ -264,13 +257,12 @@ public class IndexManager implements AutoCloseable {
     }
 
     /**
-     * Determines the set of index names required by a query and temporal strategy.
+     * Determines the set of index names required by a query.
      *
      * @param query The query object
-     * @param temporalStrategy The temporal strategy name
-     * @return A set of required index names (e.g., "unigram", "ner_date", "nash")
+     * @return A set of required index names (e.g., "unigram", "ner_date")
      */
-    private Set<String> determineRequiredIndexes(Query query, String temporalStrategy, String stitchStrategy) {
+    private Set<String> determineRequiredIndexes(Query query, String stitchStrategy) {
         Set<String> required = new HashSet<>();
 
         // 1. Analyze main query conditions
@@ -288,16 +280,10 @@ public class IndexManager implements AutoCloseable {
             }
         }
 
-        // 3. Determine index based on temporal strategy and presence of DATE conditions
-        boolean needsTemporal = queryHasTemporalCondition(query);
-        if (needsTemporal) {
-             if ("nash".equalsIgnoreCase(temporalStrategy)) {
-                required.add("nash");
-                 logger.debug("Nash strategy selected, requiring 'nash' index.");
-            } else {
-                required.add("ner_date");
-                 logger.debug("Naive strategy selected (or DATE condition present), requiring 'ner_date' index.");
-            }
+        // 3. Add ner_date for any temporal/DATE-related conditions (sole temporal strategy now).
+        if (queryHasTemporalCondition(query)) {
+            required.add("ner_date");
+            logger.debug("Temporal or NER(DATE) condition present; requiring 'ner_date' index.");
         }
 
         // 4. Add stitch indexes if strategy is optimized and relevant conditions are present
@@ -378,8 +364,7 @@ public class IndexManager implements AutoCloseable {
         } else if (condition instanceof Dependency) {
             required.add("dependency");
         } else if (condition instanceof Temporal) {
-            // The main logic in determineRequiredIndexes handles strategy-based index selection (nash/ner_date)
-            // No specific index needed *just* for Temporal condition itself here, strategy dictates it.
+            // determineRequiredIndexes adds 'ner_date' when a temporal condition is present.
         }
     }
 
@@ -406,28 +391,6 @@ public class IndexManager implements AutoCloseable {
      }
 
      /**
-      * Checks if the query (including subquery) contains any NER(DATE) conditions.
-      *
-      * @param query The query to check
-      * @return true if a NER(DATE) condition exists, false otherwise
-      */
-      private boolean queryHasNerDateCondition(Query query) {
-          if (query.conditions() != null && containsNerDateCondition(query.conditions())) {
-              return true;
-          }
-          // Check subqueries in JoinSteps
-          if (!query.joinSteps().isEmpty()) {
-             for (com.example.query.model.JoinStep step : query.joinSteps()) {
-                 Query subquery = step.subquery();
-                 if (subquery.conditions() != null && containsNerDateCondition(subquery.conditions())) {
-                     return true;
-                 }
-             }
-         }
-          return false;
-      }
-
-     /**
       * Helper to recursively check a list of conditions for Temporal or NER(DATE).
       */
      private boolean containsTemporalCondition(List<Condition> conditions) {
@@ -443,22 +406,6 @@ public class IndexManager implements AutoCloseable {
          }
          return false;
      }
-
-     /**
-      * Helper to recursively check a list of conditions specifically for NER(DATE).
-      */
-      private boolean containsNerDateCondition(List<Condition> conditions) {
-          for (Condition condition : conditions) {
-              if (condition instanceof Ner ner && "DATE".equalsIgnoreCase(ner.entityType())) return true;
-              if (condition instanceof Logical logical) {
-                  if (containsNerDateCondition(logical.conditions())) return true;
-              }
-              if (condition instanceof Not notCond) {
-                   if (containsNerDateCondition(Collections.singletonList(notCond.condition()))) return true;
-              }
-          }
-          return false;
-      }
 
     /**
      * Helper to recursively collect N-gram levels from CONTAINS conditions.
@@ -585,11 +532,7 @@ public class IndexManager implements AutoCloseable {
                 return Optional.of(indexes.get("ner"));
             }
         } else if (condition instanceof Temporal) {
-             // Temporal conditions rely on either 'nash' or 'ner_date' based on strategy
-             // Check which one was initialized
-             if (indexes.containsKey("nash")) {
-                 return Optional.of(indexes.get("nash"));
-             } else if (indexes.containsKey("ner_date")) {
+             if (indexes.containsKey("ner_date")) {
                  return Optional.of(indexes.get("ner_date"));
              }
         } else if (condition instanceof Dependency && indexes.containsKey("dependency")) {

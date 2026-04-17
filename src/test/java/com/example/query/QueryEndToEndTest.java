@@ -1,9 +1,9 @@
 package com.example.query;
 
-import static org.junit.Assert.assertNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 
@@ -11,10 +11,8 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.time.LocalDate;
 import java.util.*;
 
-import org.apache.pig.impl.util.MultiMap;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -28,11 +26,8 @@ import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
 import com.example.core.PositionListSoA;
 import com.example.core.index.MockIndexAccess;
-import com.example.index.NashDateEntryWithId;
-import com.example.index.util.NashSerializationUtils;
 import com.example.index.util.SynonymManager;
 import com.example.query.executor.AttributeRequirements;
 import com.example.query.executor.ConditionExecutorFactory;
@@ -46,7 +41,6 @@ import com.example.query.result.ResultGenerationException;
 import com.example.query.result.TableResultService;
 import com.example.query.sqlite.SqliteAccessor;
 
-import no.ntnu.sandbox.Nash;
 import tech.tablesaw.api.Table;
 
 /**
@@ -72,7 +66,6 @@ public class QueryEndToEndTest {
     private static MockIndexAccess mockTrigramIndex;
     private static MockIndexAccess mockNerIndex;
     private static MockIndexAccess mockNerDateIndex;
-    private static MockIndexAccess mockNashIndex;
     private static Map<String, IndexAccessInterface> mockIndexes;
     private static QueryParser queryParser;
     private static ConditionExecutorFactory factory;
@@ -103,30 +96,6 @@ public class QueryEndToEndTest {
             }
             return id;
         });
-    }
-
-    // Helper structure for preparing NASH mock data
-    private static class NashMockDataEntry {
-        LocalDate date;
-        Position position;
-
-        NashMockDataEntry(LocalDate date, Position position) {
-            this.date = date;
-            this.position = position;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            NashMockDataEntry that = (NashMockDataEntry) o;
-            return Objects.equals(date, that.date) && Objects.equals(position, that.position);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(date, position);
-        }
     }
 
     @BeforeAll
@@ -213,114 +182,12 @@ public class QueryEndToEndTest {
         mockNerDateIndex.addTestData("20240101", 3, 1, 50, 60);  // Document 3
         mockNerDateIndex.addTestData("20240115", 30, 1, 0, 10);  // Document 30
 
-        mockNashIndex = new MockIndexAccess();
-
-        // --- Consolidated NASH Mock Data Population ---
-        List<LocalDate> idToDateLookupListForNash = new ArrayList<>();
-        Map<LocalDate, Integer> dateToIdMapForNash = new HashMap<>();
-        // Use a MultiMap to store the inverted index: Nash prefix -> list of date IDs
-        MultiMap<String, Integer> invertedNashIndex = new MultiMap<>();
-        // Store the actual NashDateEntryWithId objects mapped by their original date ID for later retrieval
-        Map<Integer, List<NashDateEntryWithId>> dateIdToNashEntries = new HashMap<>();
-
-
-        // 1. Collect all data points (original and from mockNerDateIndex)
-        List<NashMockDataEntry> allNashDataPoints = new ArrayList<>();
-        allNashDataPoints.add(new NashMockDataEntry(LocalDate.parse("2024-01-15"), new com.example.core.Position(30, 1, 0, 10)));
-        allNashDataPoints.add(new NashMockDataEntry(LocalDate.parse("2023-01-15"), new Position(2,1,0,10)));
-        allNashDataPoints.add(new NashMockDataEntry(LocalDate.parse("2023-03-20"), new Position(1,1,30,40)));
-        allNashDataPoints.add(new NashMockDataEntry(LocalDate.parse("2024-01-01"), new Position(3,1,50,60)));
-
-        // 2. Process all collected data points for NASH indexing
-        // First, create a list of unique interval strings and map original date IDs to their entries
-        List<String> uniqueIntervalStringsForInvert = new ArrayList<>();
-        Map<Integer, NashDateEntryWithId> tempOriginalDateIdToEntry = new HashMap<>(); // Temporary map
-
-        for (NashMockDataEntry dataPoint : allNashDataPoints) {
-            LocalDate currentDate = dataPoint.date;
-            Position currentPosition = dataPoint.position;
-
-            int dateId = dateToIdMapForNash.computeIfAbsent(currentDate, d -> {
-                idToDateLookupListForNash.add(d);
-                uniqueIntervalStringsForInvert.add(String.format("[%s , %s]", d.toString(), d.toString()));
-                return idToDateLookupListForNash.size() - 1; // This dateId is an index into idToDateLookupListForNash and uniqueIntervalStringsForInvert
-            });
-
-            NashDateEntryWithId nashEntry = new NashDateEntryWithId(currentPosition, dateId);
-            dateIdToNashEntries.computeIfAbsent(dateId, k -> new ArrayList<>()).add(nashEntry);
-        }
-
-        // 3. Generate the inverted index using Nash.invert
-        try {
-            invertedNashIndex = Nash.invert(uniqueIntervalStringsForInvert);
-        } catch (IOException e) {
-            throw new RuntimeException("Error inverting Nash intervals for mock setup", e);
-        }
-
-        // 4. Store the aggregated entries in mockNashIndex based on the inverted index
-        for (String nashPrefix : invertedNashIndex.keySet()) { // Iterate over keys
-            List<Integer> dateIdsForPrefix = invertedNashIndex.get(nashPrefix); // Get values for the current key
-
-            PositionListSoA entriesToStoreForPrefixSoA = new PositionListSoA();
-
-            if (dateIdsForPrefix != null) { // Check if there are any date IDs for this prefix
-                for (Integer originalDateId : dateIdsForPrefix) { // originalDateId is the one derived from idToDateLookupListForNash index
-                    List<NashDateEntryWithId> actualEntries = dateIdToNashEntries.get(originalDateId);
-                    if (actualEntries != null) {
-                        // OLD: entriesToStoreForPrefix.addAll(actualEntries);
-                        // NEW: Add to PositionListSoA
-                        for (NashDateEntryWithId entry : actualEntries) {
-                            Position pos = entry.position();
-                            entriesToStoreForPrefixSoA.add(
-                                pos.getDocumentId(),
-                                pos.getSentenceId(),
-                                pos.getBeginPosition(),
-                                pos.getEndPosition(),
-                                entry.dateId() // entry.dateId() is the originalDateId here
-                            );
-                        }
-                    } else {
-                         logger.warn("Warning: No NashDateEntryWithId found for originalDateId: {} during mockNashIndex population for prefix: {}", originalDateId, nashPrefix);
-                    }
-                }
-            }
-
-            if (!entriesToStoreForPrefixSoA.isEmpty()) { // Check the new SoA list
-                // OLD: byte[] serializedEntries = NashSerializationUtils.serializeNashEntries(entriesToStoreForPrefix);
-                byte[] serializedEntries = entriesToStoreForPrefixSoA.serializeToCompositeBlob(); // NEW
-                mockNashIndex.put(nashPrefix.getBytes(StandardCharsets.UTF_8), serializedEntries);
-            }
-        }
-        logger.info("Mock Nash Index: Stored entries for {} unique dates, using {} NASH prefixes from Nash.invert().", idToDateLookupListForNash.size(), invertedNashIndex.size());
-
-        // ---- DEBUG LOGGING: Stored NASH Prefixes ----
-        logger.debug("DEBUG QueryEndToEndTest: Stored NASH Prefixes in mockNashIndex (from Nash.invert):");
-        List<String> sortedStoredPrefixes = new ArrayList<>(invertedNashIndex.keySet());
-        java.util.Collections.sort(sortedStoredPrefixes);
-        for (String storedPrefix : sortedStoredPrefixes) {
-            logger.debug("  Stored Prefix: {}", storedPrefix);
-        }
-        logger.debug("---- END DEBUG LOGGING ----");
-
-        // 5. Store the consolidated date lookup table for NASH
-        if (!idToDateLookupListForNash.isEmpty()) {
-             byte[] serializedLookup = NashSerializationUtils.serializeDateLookup(idToDateLookupListForNash);
-             mockNashIndex.put(NashSerializationUtils.DATE_LOOKUP_KEY, serializedLookup);
-             logger.info("Mock Nash Index: Stored date lookup table with {} entries.", idToDateLookupListForNash.size());
-        } else {
-            logger.warn("Warning: Nash date lookup table is empty.");
-            byte[] serializedLookup = NashSerializationUtils.serializeDateLookup(Collections.emptyList());
-            mockNashIndex.put(NashSerializationUtils.DATE_LOOKUP_KEY, serializedLookup);
-        }
-        // --- End Consolidated NASH Mock Data Population ---
-
         mockIndexes = Map.of(
             "unigram", mockUnigramIndex,
             "bigram", mockBigramIndex,
             "trigram", mockTrigramIndex,
             "ner", mockNerIndex,
-            "ner_date", mockNerDateIndex,
-            "nash", mockNashIndex
+            "ner_date", mockNerDateIndex
         );
 
         // Mock IndexManager to return our mockIndexes and mockSynonymManager

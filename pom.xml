@@ -17,13 +17,6 @@
         <mockito.version>5.17.0</mockito.version>
     </properties>
 
-    <repositories>
-        <repository>
-            <id>clojars</id>
-            <url>https://clojars.org/repo/</url>
-        </repository>
-    </repositories>
-
     <dependencies>
         <!-- Stanford CoreNLP - for annotation phase -->
         <dependency>
@@ -182,47 +175,6 @@
             <version>0.44.1</version>
         </dependency>
 
-        <!-- Nash - for temporal indices -->
-        <dependency>
-            <groupId>no.ntnu</groupId>
-            <artifactId>nash</artifactId>
-            <version>1.0</version>
-        </dependency>
-
-        <!-- Apache Pig - required by Nash -->
-        <dependency>
-            <groupId>org.apache.pig</groupId>
-            <artifactId>pig</artifactId>
-            <version>0.17.0</version>
-            <exclusions>
-                <!-- Exclude Hadoop dependencies to reduce size -->
-                <exclusion>
-                    <groupId>org.apache.hadoop</groupId>
-                    <artifactId>hadoop-core</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.hadoop</groupId>
-                    <artifactId>hadoop-common</artifactId>
-                </exclusion>
-                <!-- Exclude Jackson 1.x to attempt to resolve NoSuchMethodError -->
-                <exclusion>
-                    <groupId>org.codehaus.jackson</groupId>
-                    <artifactId>jackson-mapper-asl</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.codehaus.jackson</groupId>
-                    <artifactId>jackson-core-asl</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-        <!-- Commons Lang - required by Nash -->
-        <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-lang3</artifactId>
-            <version>3.5</version>
-        </dependency>
-
         <!-- Add Apache Commons Compress -->
         <dependency>
             <groupId>org.apache.commons</groupId>
@@ -258,31 +210,9 @@
             </resource>
         </resources>
 
-        <!-- Add the sandbox source directory to build path -->
         <sourceDirectory>src/main/java</sourceDirectory>
         <testSourceDirectory>src/test/java</testSourceDirectory>
         <plugins>
-            <!-- Add additional source directory for sandbox code -->
-            <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>build-helper-maven-plugin</artifactId>
-                <version>3.5.0</version>
-                <executions>
-                    <execution>
-                        <id>add-source</id>
-                        <phase>generate-sources</phase>
-                        <goals>
-                            <goal>add-source</goal>
-                        </goals>
-                        <configuration>
-                            <sources>
-                                <source>sandbox/src</source>
-                            </sources>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
             <!-- Compiler plugin -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

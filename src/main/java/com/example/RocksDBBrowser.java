@@ -5,7 +5,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDate;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -26,7 +25,6 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessInterface;
 import com.example.core.Position;
 import com.example.core.PositionListSoA;
-import com.example.index.util.NashSerializationUtils;
 import com.example.index.util.SynonymManager;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
@@ -44,7 +42,7 @@ public class RocksDBBrowser {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBBrowser.class);
     private static SynonymManager globalSynonymManager;
     private static final List<String> ALL_INDEX_TYPES = Collections.unmodifiableList(Arrays.asList(
-        "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym", "nash",
+        "unigram", "bigram", "trigram", "dependency", "ner_date", "ner", "pos", "hypernym",
         "synonym_manager_db",
         // Stitch indexes
         "stitch_unigram_date", "stitch_unigram_ner",
@@ -87,7 +85,7 @@ public class RocksDBBrowser {
 
         parser.addArgument("--top")
                 .type(Integer.class)
-                .help("Show top N terms by position count for the selected index. Use --match to restrict aggregation to keys starting with the given prefix. Not supported for 'nash' or 'synonym_manager_db'. Overrides regular listing when no --match is provided.");
+                .help("Show top N terms by position count for the selected index. Use --match to restrict aggregation to keys starting with the given prefix. Not supported for 'synonym_manager_db'. Overrides regular listing when no --match is provided.");
 
         parser.addArgument("-s", "--stats")
                 .action(net.sourceforge.argparse4j.impl.Arguments.storeTrue())
@@ -214,7 +212,6 @@ public class RocksDBBrowser {
         }
 
         boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
-        boolean isNash = "nash".equals(indexType);
         if (isSynonymDb) {
             return; // Silently skip for synonym manager DB
         }
@@ -231,10 +228,6 @@ public class RocksDBBrowser {
         try (RocksIterator iterator = db.newIterator()) {
             for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
                 byte[] keyBytes = iterator.key();
-                if (isNash && Arrays.equals(keyBytes, NashSerializationUtils.DATE_LOOKUP_KEY)) {
-                    continue; // Skip the date lookup table entry
-                }
-
                 String keyStr = asString(keyBytes);
                 String baseKey = baseKeyWithoutSegmentSuffix(keyStr);
 
@@ -333,24 +326,13 @@ public class RocksDBBrowser {
         long totalEntries = 0;
         long totalPositions = 0;
         long totalKeyBytes = 0;
-        long nashDateLookupCount = 0;
-        boolean isNashIndex = "nash".equals(indexType);
         boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
 
         try (RocksIterator iterator = db.newIterator()) {
             for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
                 totalEntries++;
                 totalKeyBytes += iterator.key() != null ? iterator.key().length : 0;
-                if (isNashIndex) {
-                    if (Arrays.equals(iterator.key(), NashSerializationUtils.DATE_LOOKUP_KEY)) {
-                        try {
-                            List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(iterator.value());
-                            nashDateLookupCount = dateLookup.size();
-                        } catch (IOException e) {
-                            logger.warn("Could not deserialize Nash date lookup table during stats: {}", e.getMessage());
-                        }
-                    }
-                } else if (!isSynonymDb) {
+                if (!isSynonymDb) {
                     try {
                         byte[] value = iterator.value();
                         totalPositions += PositionListSoA.getNumPositionsFromBlob(value);
@@ -386,11 +368,6 @@ public class RocksDBBrowser {
             System.out.printf("  Term-to-ID mappings ('term:'): %,d%n", termToIdCount);
             System.out.printf("  ID-to-Term mappings ('id:'): %,d%n", idToTermCount);
             System.out.printf("  Next ID value ('__NEXT_ID__'): %s%n", nextIdVal);
-        } else if (isNashIndex) {
-            if (nashDateLookupCount > 0) {
-                System.out.printf("Total dates in lookup table: %,d%n", nashDateLookupCount);
-            }
-            System.out.println("(Detailed position counts are not applicable for Nash index in this view)");
         } else {
             System.out.printf("Total positions: %,d%n", totalPositions);
             System.out.printf("Average positions per entry: %.2f%n", totalEntries > 0 ? (double) totalPositions / totalEntries : 0);
@@ -399,7 +376,6 @@ public class RocksDBBrowser {
     }
 
     private static void listEntriesByPrefix(RocksDB db, String prefix, int limit, String indexType) throws IOException {
-        boolean isNash = indexType.equals("nash");
         boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
 
         System.out.printf("Entries with prefix '%s':%n", prefix);
@@ -416,9 +392,7 @@ public class RocksDBBrowser {
 
                 if (!currentKey.startsWith(prefix)) break;
 
-                if (isNash) {
-                    displayNashEntry(keyBytes, valueBytes);
-                } else if (isSynonymDb) {
+                if (isSynonymDb) {
                     displaySynonymDbEntry(keyBytes, valueBytes);
                 } else {
                     PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
@@ -435,7 +409,6 @@ public class RocksDBBrowser {
     }
 
     private static void listAllEntries(RocksDB db, int limit, String indexType) throws IOException {
-        boolean isNash = indexType.equals("nash");
         boolean isSynonymDb = "synonym_manager_db".equalsIgnoreCase(indexType);
 
         System.out.println("All Entries Summary");
@@ -466,61 +439,28 @@ public class RocksDBBrowser {
         }
 
         List<Map.Entry<String, Integer>> keyAndCountsList = new ArrayList<>();
-        List<Map.Entry<byte[], byte[]>> nashEntriesList = new ArrayList<>();
 
-        if (isNash) {
-            try (RocksIterator iterator = db.newIterator()) {
-                iterator.seekToFirst();
-                while (iterator.isValid()) {
-                    nashEntriesList.add(new AbstractMap.SimpleEntry<>(iterator.key(), iterator.value()));
-                    iterator.next();
-                }
+        try (RocksIterator iterator = db.newIterator()) {
+            iterator.seekToFirst();
+            while (iterator.isValid()) {
+                String key = asString(iterator.key());
+                int positionCount = PositionListSoA.getNumPositionsFromBlob(iterator.value());
+                keyAndCountsList.add(new AbstractMap.SimpleEntry<>(key, positionCount));
+                iterator.next();
             }
-        } else {
-            try (RocksIterator iterator = db.newIterator()) {
-                iterator.seekToFirst();
-                while (iterator.isValid()) {
-                    String key = asString(iterator.key());
-                    int positionCount = PositionListSoA.getNumPositionsFromBlob(iterator.value());
-                    keyAndCountsList.add(new AbstractMap.SimpleEntry<>(key, positionCount));
-                    iterator.next();
-                }
-            }
-            keyAndCountsList.sort((e1, e2) -> Integer.compare(e2.getValue(), e1.getValue()));
         }
+        keyAndCountsList.sort((e1, e2) -> Integer.compare(e2.getValue(), e1.getValue()));
 
         int count = 0;
-        if (isNash) {
-            for (Map.Entry<byte[], byte[]> entry : nashEntriesList) {
-                if (limit > 0 && count >= limit) break;
-                byte[] keyBytes = entry.getKey();
-                byte[] valueBytes = entry.getValue();
-                String keyStr = asString(keyBytes);
-
-                if (Arrays.equals(keyBytes, NashSerializationUtils.DATE_LOOKUP_KEY)) {
-                    List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(valueBytes);
-                    System.out.printf("Key: %s (Date Lookup Table), Dates: %d%n", keyStr, dateLookup.size());
-                } else {
-                    try {
-                        PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
-                        System.out.printf("Key: %s (Nash Prefix), Position Entries: %d%n", keyStr, positionsSoA.getNumPositions());
-                    } catch (IOException e) {
-                        System.out.printf("Key: %s (Nash Prefix), Error deserializing: %s%n", keyStr, e.getMessage());
-                    }
-                }
-                count++;
-            }
-        } else {
-            for (Map.Entry<String, Integer> entry : keyAndCountsList) {
-                if (limit > 0 && count >= limit) break;
-                String formattedKey = formatKey(entry.getKey(), indexType);
-                System.out.printf("Key: %s, Position Count: %d%n", formattedKey, entry.getValue());
-                count++;
-            }
+        for (Map.Entry<String, Integer> entry : keyAndCountsList) {
+            if (limit > 0 && count >= limit) break;
+            String formattedKey = formatKey(entry.getKey(), indexType);
+            System.out.printf("Key: %s, Position Count: %d%n", formattedKey, entry.getValue());
+            count++;
         }
 
         if (limit > 0 && count == limit) {
-            long totalEntriesInDb = isNash ? nashEntriesList.size() : keyAndCountsList.size();
+            long totalEntriesInDb = keyAndCountsList.size();
             System.out.printf("%nShowing first %d entries (of %,d total). Use --limit 0 to see all.%n", limit, totalEntriesInDb);
         }
     }
@@ -661,48 +601,6 @@ public class RocksDBBrowser {
 
     private static String asString(byte[] bytes) {
         return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
-    }
-
-    private static void displayNashEntry(byte[] keyBytes, byte[] valueBytes) throws IOException {
-        if (Arrays.equals(keyBytes, NashSerializationUtils.DATE_LOOKUP_KEY)) {
-            System.out.printf("%nKey: %s (Date Lookup Table)%n", asString(keyBytes));
-            System.out.println("----------");
-            try {
-                List<LocalDate> dateLookup = NashSerializationUtils.deserializeDateLookup(valueBytes);
-                System.out.printf("Dates: %d%n", dateLookup.size());
-                int displayCount = 0;
-                for (LocalDate date : dateLookup) {
-                    System.out.printf("  [%d]: %s%n", displayCount, date);
-                    displayCount++;
-                    if (displayCount >= 100) {
-                         System.out.println("  ... (showing first 100 dates)");
-                         break;
-                    }
-                }
-            } catch (IOException e) {
-                System.out.println("  Error deserializing date lookup table: " + e.getMessage());
-            }
-        } else {
-            String key = asString(keyBytes);
-            System.out.printf("%nKey: %s (Nash Prefix)%n", key);
-            System.out.println("----------");
-            try {
-                PositionListSoA positionsSoA = PositionListSoA.deserializeFromCompositeBlob(valueBytes);
-                System.out.printf("Entries: %d%n", positionsSoA.getNumPositions());
-                for (int i = 0; i < positionsSoA.getNumPositions(); i++) {
-                    if (i >= 100) { // Limit display
-                        System.out.println("  ... (showing first 100 entries)");
-                        break;
-                    }
-                    Position pos = positionsSoA.getPositionAt(i);
-                    int dateId = positionsSoA.getSynonymIdAt(i); // dateId is in synonymId
-                    System.out.printf("  Entry %d: DocID=%d, SentID=%d, Begin=%d, End=%d, DateID=%d%n",
-                                      i, pos.getDocumentId(), pos.getSentenceId(), pos.getBeginPosition(), pos.getEndPosition(), dateId);
-                }
-            } catch (IOException e) {
-                System.out.println("  Error deserializing Nash prefix data (PositionListSoA): " + e.getMessage());
-            }
-        }
     }
 
     private static void displaySynonymDbEntry(byte[] keyBytes, byte[] valueBytes) {

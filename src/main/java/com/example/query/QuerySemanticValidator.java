@@ -44,7 +44,7 @@ public class QuerySemanticValidator {
     // Maximum proximity window for temporal joins
     private static final int MAX_TEMPORAL_PROXIMITY_WINDOW = 365;
 
-    // Global date bounds mirroring Nash.java for validation
+    // Global date bounds for validation (mirrors TemporalBounds)
     private static final LocalDate GLOBAL_LOWER_BOUND = LocalDate.parse("1925-01-01");
     private static final LocalDate GLOBAL_UPPER_BOUND = LocalDate.parse("2025-12-31");
 

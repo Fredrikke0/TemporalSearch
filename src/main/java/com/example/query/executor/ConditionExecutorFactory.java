@@ -32,45 +32,11 @@ public class ConditionExecutorFactory {
     private final String stitchStrategy;
     private final Query.Granularity queryGranularity;
 
-    private String desiredTemporalStrategy = "naive";
-
     public ConditionExecutorFactory(SynonymManager synonymManager, String stitchStrategy, Query.Granularity queryGranularity) {
         this.synonymManager = synonymManager;
         this.stitchStrategy = stitchStrategy;
         this.queryGranularity = queryGranularity;
         logger.debug("Initialized condition executor factory with SynonymManager, stitchStrategy: {}, queryGranularity: {}.", stitchStrategy, queryGranularity);
-    }
-
-    /**
-     * Sets the desired strategy name for the TemporalExecutor.
-     * Must be called before the TemporalExecutor is first requested.
-     *
-     * @param strategyName The name of the strategy ("nash" or "naive").
-     */
-    public void setTemporalStrategy(String strategyName) {
-        if ("nash".equalsIgnoreCase(strategyName) || "naive".equalsIgnoreCase(strategyName)) {
-            this.desiredTemporalStrategy = strategyName.toLowerCase();
-            logger.info("Temporal execution strategy set to: {}", this.desiredTemporalStrategy);
-            TemporalExecutor existingExecutor = (TemporalExecutor) executorCache.get(Temporal.class);
-            if (existingExecutor != null) {
-                 try {
-                     existingExecutor.setActiveStrategy(this.desiredTemporalStrategy);
-                 } catch (IllegalArgumentException e) {
-                      logger.error("Failed to set active strategy '{}' on existing TemporalExecutor: {}", this.desiredTemporalStrategy, e.getMessage());
-                 }
-            }
-        } else {
-            logger.warn("Invalid temporal strategy name provided: '{}'. Using default '{}'.", strategyName, this.desiredTemporalStrategy);
-        }
-    }
-
-    /**
-     * Gets the currently configured temporal strategy name.
-     *
-     * @return The name of the temporal strategy ("nash" or "naive").
-     */
-    public String getTemporalStrategy() {
-        return this.desiredTemporalStrategy;
     }
 
     /**
@@ -87,14 +53,8 @@ public class ConditionExecutorFactory {
 
         if (conditionClass == Temporal.class) {
             return (ConditionExecutor<T>) executorCache.computeIfAbsent(Temporal.class, k -> {
-                TemporalExecutor temporalExecutor = new TemporalExecutor();
-                 try {
-                     temporalExecutor.setActiveStrategy(desiredTemporalStrategy);
-                 } catch (IllegalArgumentException e) {
-                     logger.error("Failed to set initial strategy '{}' on new TemporalExecutor: {}. Defaulting might occur.", desiredTemporalStrategy, e.getMessage());
-                 }
-                 logger.debug("Created and cached TemporalExecutor instance with initial strategy preference: {}", desiredTemporalStrategy);
-                return temporalExecutor;
+                logger.debug("Creating and caching TemporalExecutor instance.");
+                return new TemporalExecutor();
             });
         }
 

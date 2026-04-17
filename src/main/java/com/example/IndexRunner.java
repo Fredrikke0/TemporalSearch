@@ -28,7 +28,6 @@ import com.example.index.RocksDBConfig;
 import com.example.index.generators.BigramIndexGenerator;
 import com.example.index.generators.DependencyIndexGenerator;
 import com.example.index.generators.HypernymIndexGenerator;
-import com.example.index.generators.NashIndexGenerator;
 import com.example.index.generators.NerDateIndexGenerator;
 import com.example.index.generators.NerIndexGenerator;
 import com.example.index.generators.POSIndexGenerator;
@@ -72,7 +71,7 @@ public class IndexRunner {
 
     private static final List<String> ALL_NON_STITCH_INDEX_TYPES = List.of(
         "unigram", "bigram", "trigram", "dependency",
-        "ner_date", "pos", "ner", "nash"
+        "ner_date", "pos", "ner"
     );
 
     public static void main(String[] args) {
@@ -346,25 +345,6 @@ public class IndexRunner {
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
                             } catch (Exception e) {
                                 logger.error("Error generating hypernym index: {}", e.getMessage(), e);
-                            } finally {
-                                metrics.endIndexProcessing(type, itemsWritten);
-                                progress.completeIndex();
-                                if (gen != null) gen.close();
-                            }
-                        }
-
-                        if (type.equals("nash")) {
-                            metrics.startIndexProcessing(type);
-                            NashIndexGenerator gen = null;
-                            long itemsWritten = -1;
-                            try {
-                                gen = new NashIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath);
-                                progress.startIndex(type, gen.getDocumentCountForIndex());
-                                gen.generateIndex();
-                                itemsWritten = gen.getTotalTermsWrittenToIndex();
-                            } catch (Exception e) {
-                                logger.error("Error generating nash index: {}", e.getMessage(), e);
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
