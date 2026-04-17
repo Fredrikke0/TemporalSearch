@@ -13,7 +13,6 @@ import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
 import com.example.query.model.TemporalBounds;
 import com.example.query.model.TemporalPredicate;
-import com.example.query.model.TemporalRange;
 
 /**
  * Represents a temporal condition in the query language.
@@ -25,7 +24,6 @@ public record Temporal(
     Optional<LocalDateTime> startDate,
     Optional<LocalDateTime> endDate,
     Optional<String> qualifiedVariableName,
-    Optional<TemporalRange> range,
     TemporalPredicate temporalType
 ) implements Condition {
 
@@ -94,7 +92,6 @@ public record Temporal(
         Objects.requireNonNull(startDate, "Start date Optional cannot be null");
         Objects.requireNonNull(endDate, "End date Optional cannot be null");
         Objects.requireNonNull(qualifiedVariableName, "Qualified variable name Optional cannot be null");
-        Objects.requireNonNull(range, "Range Optional cannot be null");
         Objects.requireNonNull(temporalType, "Temporal type cannot be null");
 
         if (qualifiedVariableName.isPresent() && qualifiedVariableName.get().isBlank()) {
@@ -174,7 +171,6 @@ public record Temporal(
         this(Optional.of(LocalDateTime.of(year, 1, 1, 0, 0)),
              Optional.empty(),
              Optional.empty(),
-             Optional.empty(),
              comparisonType.getTemporalPredicate());
     }
 
@@ -185,7 +181,6 @@ public record Temporal(
         this(Optional.of(LocalDateTime.of(year, 1, 1, 0, 0)),
              Optional.empty(),
              Optional.of(variableName),
-             Optional.empty(),
              comparisonType.getTemporalPredicate());
     }
 
@@ -193,35 +188,21 @@ public record Temporal(
      * Constructor for simple temporal condition (now expects Optional startDate).
      */
     public Temporal(TemporalPredicate type, LocalDateTime startDate) {
-        this(Optional.of(startDate), Optional.empty(), Optional.empty(), Optional.empty(), type);
+        this(Optional.of(startDate), Optional.empty(), Optional.empty(), type);
     }
 
     /**
      * Constructor for date range condition (now expects Optional startDate).
      */
     public Temporal(LocalDateTime startDate, LocalDateTime endDate) {
-        this(Optional.of(startDate), Optional.of(endDate), Optional.empty(), Optional.empty(), TemporalPredicate.CONTAINS);
+        this(Optional.of(startDate), Optional.of(endDate), Optional.empty(), TemporalPredicate.CONTAINS);
     }
 
     /**
      * Constructor for date range condition with specific temporal type (now expects Optional startDate).
      */
     public Temporal(TemporalPredicate type, LocalDateTime startDate, LocalDateTime endDate) {
-        this(Optional.of(startDate), Optional.of(endDate), Optional.empty(), Optional.empty(), type);
-    }
-
-    /**
-     * Constructor for temporal condition with range (now expects Optional startDate).
-     */
-    public Temporal(TemporalPredicate type, LocalDateTime date, String range) {
-        this(Optional.of(date), Optional.empty(), Optional.empty(), Optional.of(new TemporalRange(range)), type);
-    }
-
-    /**
-     * Constructor for temporal condition with range and variable (now expects Optional startDate).
-     */
-    public Temporal(TemporalPredicate type, LocalDateTime date, Optional<TemporalRange> range, String variableName) {
-        this(Optional.of(date), Optional.empty(), Optional.of(variableName), range, type);
+        this(Optional.of(startDate), Optional.of(endDate), Optional.empty(), type);
     }
 
     /**
@@ -245,7 +226,6 @@ public record Temporal(
         return new Temporal(
             Optional.of(startDateVal.atStartOfDay()),
             Optional.of(endDateVal.atStartOfDay()),
-            Optional.empty(),
             Optional.empty(),
             type
         );
@@ -371,10 +351,6 @@ public record Temporal(
             }
         }
 
-        if (temporalType == TemporalPredicate.PROXIMITY) {
-            return Optional.empty();
-        }
-
         return Optional.empty();
     }
 
@@ -459,7 +435,6 @@ public record Temporal(
             }
         }
 
-        range.ifPresent(r -> sb.append(" RADIUS ").append(r.value()));
         sb.append(")");
 
         // Append qualified variable name if present
@@ -481,7 +456,7 @@ public record Temporal(
      * Attempts to intersect this Temporal condition with another (typically non-binding) Temporal condition.
      * If successful, returns a new Temporal condition representing the intersection.
      * The new condition will have TemporalPredicate.INTERSECT and will retain the
-     * qualifiedVariableName and range of this original condition.
+     * qualifiedVariableName of this original condition.
      *
      * @param otherNonBindingFilter The other Temporal condition to intersect with.
      * @return An Optional containing the merged Temporal condition, or empty if merging is not possible
@@ -518,13 +493,11 @@ public record Temporal(
             return Optional.empty();
         }
 
-        // Create new Temporal with INTERSECT, new dates, and this condition's variable name and range.
-        // Range is preserved from 'this' original condition.
+        // Create new Temporal with INTERSECT, new dates, and this condition's variable name.
         return Optional.of(new Temporal(
             Optional.of(newStart.atStartOfDay()),
             Optional.of(newEnd.atStartOfDay()),
             this.qualifiedVariableName(), // Preserve original variable binding
-            this.range(),                 // Preserve original range
             TemporalPredicate.INTERSECT
         ));
     }
@@ -553,7 +526,6 @@ public record Temporal(
             this.startDate,
             this.endDate,
             Optional.of(newVarName),
-            this.range,
             this.temporalType
         );
     }
@@ -602,16 +574,6 @@ public record Temporal(
 
                 yield !docStart.toLocalDate().isBefore(queryDate) &&
                       !docEnd.toLocalDate().isAfter(effectiveQueryEndDate);
-            }
-            case PROXIMITY -> {
-                // PROXIMITY is complex and usually involves range calculation based on radius.
-                // For a simple true/false based on a single doc date, it's tricky without more context.
-                // This might be better handled if PROXIMITY implies an INTERSECT test against a pre-calculated range.
-                // For now, treating as INTERSECT if query has a range, otherwise false.
-                if (queryStartOpt.isPresent() && queryEndOpt.isPresent()) {
-                    yield !queryStartOpt.get().isAfter(docEnd) && !queryEndOpt.get().isBefore(docStart); // Intersect
-                }
-                yield false;
             }
             default -> false;
         };

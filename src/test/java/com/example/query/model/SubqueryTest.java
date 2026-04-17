@@ -98,7 +98,7 @@ class SubqueryTest {
 
         JoinType actualJoinType = JoinType.INNER; // Define the JoinType
         // Use full constructor for temporal join with INTERSECT
-        JoinCondition joinCondition = new JoinCondition("main.date", "sub.date", actualJoinType, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT), Optional.empty());
+        JoinCondition joinCondition = new JoinCondition("main.date", "sub.date", actualJoinType, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT));
 
         // Create a JoinStep, passing actualJoinType directly
         JoinStep joinStep = new JoinStep("sub", subquerySpec.subquery(), joinCondition, actualJoinType, "main");
@@ -127,38 +127,25 @@ class SubqueryTest {
     @Test
     @DisplayName("Test JoinCondition validation")
     void testJoinConditionValidation() {
-        // Test valid TEMPORAL condition (Proximity)
-        assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.PROXIMITY), Optional.of(5)));
-        // Test valid TEMPORAL condition (Non-Proximity)
-        assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT), Optional.empty()));
+        // Test valid TEMPORAL condition
+        assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT)));
         // Test factory method for Temporal
         assertDoesNotThrow(() -> JoinCondition.createTemporalJoin("l.col", "r.col", JoinType.INNER, TemporalPredicate.INTERSECT));
 
         // Test valid EQUALITY condition
-        assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.empty()));
+        assertDoesNotThrow(() -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty()));
         // Test factory method for Equality
         assertDoesNotThrow(() -> JoinCondition.createEqualityJoin("l.col", "r.col", JoinType.INNER));
 
         // Test null checks (using full constructor)
-        assertThrows(NullPointerException.class, () -> new JoinCondition(null, "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.empty()));
-        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", null, JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.empty()));
-        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", "r.col", null, JoinOperatorType.EQUALITY, Optional.empty(), Optional.empty()));
-        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, null, Optional.empty(), Optional.empty())); // Operator type
-        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, null, Optional.empty())); // Temporal predicate Optional
+        assertThrows(NullPointerException.class, () -> new JoinCondition(null, "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty()));
+        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", null, JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty()));
+        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", "r.col", null, JoinOperatorType.EQUALITY, Optional.empty()));
+        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, null, Optional.empty())); // Operator type
+        assertThrows(NullPointerException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, null)); // Temporal predicate Optional
 
         // Test operator type / temporal predicate mismatch
-        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.empty(), Optional.empty()), "Temporal predicate required for TEMPORAL join");
-        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.of(TemporalPredicate.INTERSECT), Optional.empty()), "Temporal predicate not allowed for EQUALITY join");
-
-        // Test proximity validation
-        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.PROXIMITY), Optional.empty()),
-            "Proximity window must be specified for PROXIMITY joins");
-
-        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.of(TemporalPredicate.INTERSECT), Optional.of(5)),
-            "Proximity window should not be specified for non-PROXIMITY joins");
-
-        // Test window with EQUALITY join
-        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.empty(), Optional.of(5)),
-            "Proximity window should not be specified for non-PROXIMITY joins"); // EQUALITY is implicitly non-proximity
+        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.TEMPORAL, Optional.empty()), "Temporal predicate required for TEMPORAL join");
+        assertThrows(IllegalArgumentException.class, () -> new JoinCondition("l.col", "r.col", JoinType.INNER, JoinOperatorType.EQUALITY, Optional.of(TemporalPredicate.INTERSECT)), "Temporal predicate not allowed for EQUALITY join");
     }
 }

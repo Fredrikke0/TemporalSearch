@@ -729,7 +729,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             startDate, // The year as a LocalDateTime (start of year)
             endDate, // End date not used for simple year comparisons
             Optional.ofNullable(qualifiedVariableName), // Variable name if BIND clause present
-            Optional.empty(), // Range not applicable for year comparisons
             temporalType // The comparison predicate (BEFORE, AFTER, etc.)
         );
     }
@@ -755,13 +754,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             startDate = (LocalDateTime) dateValue;
         }
 
-        Optional<TemporalRange> range = Optional.empty();
-        if (ctx.radius != null && ctx.unit != null) {
-            int radiusVal = Integer.parseInt(ctx.radius.getText());
-            String unitVal = ctx.unit.getText();
-            range = Optional.ofNullable(new TemporalRange(radiusVal + unitVal));
-        }
-
         String qualifiedVariableName = null;
         if (ctx.BIND() != null && ctx.var != null) {
             String plainVarName = (String) visit(ctx.var);
@@ -772,7 +764,7 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
 
         // Model updated to store qualified name (as Optional)
         // Wrap startDate in Optional.of() to match the updated Temporal constructor
-        return new Temporal(Optional.of(startDate), endDate, Optional.ofNullable(qualifiedVariableName), range, type);
+        return new Temporal(Optional.of(startDate), endDate, Optional.ofNullable(qualifiedVariableName), type);
     }
 
     @Override
@@ -807,7 +799,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             case "CONTAINS" -> TemporalPredicate.CONTAINS;
             case "CONTAINED_BY" -> TemporalPredicate.CONTAINED_BY;
             case "INTERSECT" -> TemporalPredicate.INTERSECT;
-            case "PROXIMITY" -> TemporalPredicate.PROXIMITY;
             case "BEFORE" -> TemporalPredicate.BEFORE;
             case "AFTER" -> TemporalPredicate.AFTER;
             default -> throw new IllegalArgumentException("Invalid temporal operator: " + operator);
@@ -1284,19 +1275,12 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         }
 
         // Update the join condition with the correct join type
-        Optional<Integer> proximityWindow = joinCondition.proximityWindow();
-        if (joinCondition.operatorType() != JoinCondition.JoinOperatorType.TEMPORAL ||
-            joinCondition.temporalPredicate().isEmpty() ||
-            joinCondition.temporalPredicate().get() != TemporalPredicate.PROXIMITY) {
-            proximityWindow = Optional.empty();
-        }
         joinCondition = new JoinCondition(
             joinCondition.leftColumn(),       // Keep original
             joinCondition.rightColumn(),      // Keep original
             joinType,                         // Use the determined type (INNER/LEFT/RIGHT)
             joinCondition.operatorType(),     // Keep original
-            joinCondition.temporalPredicate(), // Keep original
-            proximityWindow                    // Only keep if valid
+            joinCondition.temporalPredicate() // Keep original
         );
 
         // Return both the subquery and the updated join condition
@@ -1323,20 +1307,13 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
         // Get the temporal operator
         TemporalPredicate temporalPredicate = mapOperatorToTemporal(ctx.op.getText()); // Use labeled op
 
-        // Check if there's a window specification
-        Optional<Integer> proximityWindow = Optional.empty();
-        if (ctx.window != null) {
-            proximityWindow = Optional.of(Integer.parseInt(ctx.window.getText()));
-        }
-
         // Create and return the TEMPORAL join condition
         return new JoinCondition(
             leftColumn, // Now potentially qualified
             rightColumn, // Now potentially qualified
             JoinCondition.JoinType.INNER,       // Default type, updated later
             JoinCondition.JoinOperatorType.TEMPORAL, // Explicitly TEMPORAL
-            Optional.of(temporalPredicate),     // The actual predicate
-            proximityWindow                     // The proximity window
+            Optional.of(temporalPredicate)      // The actual predicate
         );
     }
 
@@ -1429,7 +1406,6 @@ public class QueryModelBuilder extends QueryLangBaseVisitor<Object> {
             Optional.of(parsedStartDate),
             effectiveEndDate, // Pass the calculated endDate for EQUAL, or empty for others
             Optional.ofNullable(qualifiedVariableName), // The (potentially implicit) variable/field being compared
-            Optional.empty(), // Range not applicable here
             temporalType // Use the specific predicate (BEFORE, AFTER, etc.)
         );
     }

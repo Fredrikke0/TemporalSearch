@@ -343,16 +343,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                     // No start key - iterate from the beginning of the index
                     break;
 
-                case PROXIMITY:
-                    // For proximity, use the same range as INTERSECT
-                    if (queryStartDate != null) {
-                        startKey = formatDateKey(queryStartDate);
-                    }
-                    if (queryEndDate != null) {
-                        endKey = formatDateKey(queryEndDate.plusDays(1));
-                    }
-                    break;
-
                 default:
                     strategyLogger.warn("Unknown temporal predicate type: {}. Using full index scan.", type);
                     // No start/end keys - full scan
@@ -489,9 +479,6 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                           !docDateTimeEnd.toLocalDate().isAfter(effectiveQueryEnd.toLocalDate());
                 }
             }
-             case PROXIMITY ->
-                 // PROXIMITY currently collapses to INTERSECT semantics.
-                 queryStart != null && queryEnd != null && !queryStart.isAfter(docDateTimeEnd) && !queryEnd.isBefore(docDateTimeStart);
              default -> {
                  logger.warn("Unsupported TemporalPredicate type encountered in evaluation: {}. Returning false.", type);
                  yield false;

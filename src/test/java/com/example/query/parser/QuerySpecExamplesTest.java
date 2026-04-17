@@ -97,9 +97,7 @@ public class QuerySpecExamplesTest {
         "SELECT timestamp FROM corpus WHERE DATE(CONTAINED_BY 2000)",
         "SELECT doc FROM corpus WHERE DATE(CONTAINED_BY 2000) BIND doc",
         "SELECT timestamp FROM corpus WHERE DATE(INTERSECT [1990-01-01, 2000-01-01])",
-        "SELECT doc FROM corpus WHERE DATE(INTERSECT [1990-01-01, 2000-01-01]) BIND doc",
-        "SELECT timestamp FROM corpus WHERE DATE(PROXIMITY 2000 RADIUS 5y)",
-        "SELECT doc FROM corpus WHERE DATE(PROXIMITY 2000 RADIUS 5y) BIND doc"
+        "SELECT doc FROM corpus WHERE DATE(INTERSECT [1990-01-01, 2000-01-01]) BIND doc"
         // Add DATE literal examples
     );
 

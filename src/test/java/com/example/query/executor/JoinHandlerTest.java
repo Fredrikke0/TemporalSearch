@@ -117,8 +117,7 @@ class JoinHandlerTest {
             RIGHT_ALIAS + "." + DATE_KEY,
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.TEMPORAL,
-            Optional.of(TemporalPredicate.BEFORE),
-            Optional.empty()
+            Optional.of(TemporalPredicate.BEFORE)
         );
 
         QueryResultSoA resultSoA = joinHandler.performBinaryJoin(
@@ -194,8 +193,7 @@ class JoinHandlerTest {
             RIGHT_ALIAS + "." + DATE_KEY,
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.TEMPORAL,
-            Optional.of(TemporalPredicate.AFTER),
-            Optional.empty()
+            Optional.of(TemporalPredicate.AFTER)
         );
 
         QueryResultSoA resultSoA = joinHandler.performBinaryJoin(
@@ -260,8 +258,7 @@ class JoinHandlerTest {
             RIGHT_ALIAS + "." + DATE_KEY,
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.TEMPORAL,
-            Optional.of(TemporalPredicate.BEFORE),
-            Optional.empty()
+            Optional.of(TemporalPredicate.BEFORE)
         );
 
         QueryResultSoA resultSoA = joinHandler.performBinaryJoin(
@@ -300,8 +297,7 @@ class JoinHandlerTest {
             RIGHT_ALIAS + "." + DATE_KEY,
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.TEMPORAL,
-            Optional.of(TemporalPredicate.AFTER),
-            Optional.empty()
+            Optional.of(TemporalPredicate.AFTER)
         );
 
         QueryResultSoA resultSoA = joinHandler.performBinaryJoin(
@@ -337,8 +333,7 @@ class JoinHandlerTest {
             RIGHT_ALIAS + "." + DATE_KEY,
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.TEMPORAL,
-            Optional.of(TemporalPredicate.BEFORE),
-            Optional.empty()
+            Optional.of(TemporalPredicate.BEFORE)
         );
 
         QueryResultSoA resultSoA = joinHandler.performBinaryJoin(
@@ -386,8 +381,7 @@ class JoinHandlerTest {
             RIGHT_ALIAS + "." + DATE_KEY,
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.TEMPORAL,
-            Optional.of(TemporalPredicate.AFTER),
-            Optional.empty()
+            Optional.of(TemporalPredicate.AFTER)
         );
 
         QueryResultSoA resultSoA = joinHandler.performBinaryJoin(
@@ -434,8 +428,7 @@ class JoinHandlerTest {
             RIGHT_ALIAS + "." + DATE_KEY,
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.TEMPORAL,
-            Optional.of(TemporalPredicate.BEFORE),
-            Optional.empty()
+            Optional.of(TemporalPredicate.BEFORE)
         );
 
         QueryResultSoA resultSoA = joinHandler.performBinaryJoin(
@@ -469,8 +462,7 @@ class JoinHandlerTest {
             RIGHT_ALIAS + "." + DATE_KEY,
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.TEMPORAL,
-            Optional.of(TemporalPredicate.AFTER),
-            Optional.empty()
+            Optional.of(TemporalPredicate.AFTER)
         );
 
         QueryResultSoA resultSoA = joinHandler.performBinaryJoin(
@@ -504,8 +496,7 @@ class JoinHandlerTest {
             RIGHT_ALIAS + "." + DATE_KEY,
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.TEMPORAL,
-            Optional.of(TemporalPredicate.BEFORE),
-            Optional.empty()
+            Optional.of(TemporalPredicate.BEFORE)
         );
 
         QueryResultSoA resultSoA = joinHandler.performBinaryJoin(
@@ -530,7 +521,6 @@ class JoinHandlerTest {
                 RIGHT_ALIAS + "." + DATE_KEY,
                 JoinCondition.JoinType.INNER,
                 JoinCondition.JoinOperatorType.TEMPORAL,
-                Optional.empty(),
                 Optional.empty()
             );
         });
@@ -555,7 +545,6 @@ class JoinHandlerTest {
             RIGHT_ALIAS + ".ID",
             JoinCondition.JoinType.INNER,
             JoinCondition.JoinOperatorType.EQUALITY,
-            Optional.empty(),
             Optional.empty()
         );
 

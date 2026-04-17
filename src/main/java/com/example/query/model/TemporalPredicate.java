@@ -29,13 +29,7 @@ public enum TemporalPredicate {
      * Date ranges have any overlap with each other.
      * For example: [2023-01-01, 2023-06-30] INTERSECT [2023-05-01, 2023-12-31]
      */
-    INTERSECT,
-
-    /**
-     * Dates are within a specified time window of each other.
-     * For example: 2023-01-01 PROXIMITY 2023-01-03 (within 2 days)
-     */
-    PROXIMITY;
+    INTERSECT;
 
     /**
      * Checks if this predicate is a basic comparison operator.

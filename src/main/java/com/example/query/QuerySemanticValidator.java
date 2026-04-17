@@ -22,7 +22,6 @@ import com.example.query.model.Query;
 import com.example.query.model.SelectColumn;
 import com.example.query.model.SnippetColumn;
 import com.example.query.model.StructuralColumn;
-import com.example.query.model.TemporalPredicate;
 import com.example.query.model.VariableColumn;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
@@ -40,9 +39,6 @@ public class QuerySemanticValidator {
     private static final int MAX_CONDITION_DEPTH = 10; // Max nesting depth for conditions
     private static final int MAX_JOIN_DEPTH = 5;       // Max number of joins
     private static final int MAX_SNIPPET_WINDOW_SIZE = 150; // Max characters for snippet window
-
-    // Maximum proximity window for temporal joins
-    private static final int MAX_TEMPORAL_PROXIMITY_WINDOW = 365;
 
     // Global date bounds for validation (mirrors TemporalBounds)
     private static final LocalDate GLOBAL_LOWER_BOUND = LocalDate.parse("1925-01-01");
@@ -379,12 +375,6 @@ public class QuerySemanticValidator {
             JoinCondition condition = step.onCondition();
             validateSingleJoinColumn(condition.leftColumn(), step.leftSourceAlias(), aliasToRegistryMap, "left", query.mainAlias(), query.joinSteps(), allKnownAliasesForStructuralCheck, step);
             validateSingleJoinColumn(condition.rightColumn(), step.rightSourceAlias(), aliasToRegistryMap, "right", query.mainAlias(), query.joinSteps(), allKnownAliasesForStructuralCheck, step);
-            if (condition.operatorType() == JoinCondition.JoinOperatorType.TEMPORAL && condition.temporalPredicate().orElse(null) == TemporalPredicate.PROXIMITY) {
-                condition.proximityWindow().ifPresent(window -> {
-                    if (window <= 0) throw new RuntimeException(new QueryParseException("Proximity window > 0"));
-                    if (window > MAX_TEMPORAL_PROXIMITY_WINDOW) throw new RuntimeException(new QueryParseException(String.format("Proximity window %d > max %d", window, MAX_TEMPORAL_PROXIMITY_WINDOW)));
-                });
-            }
         }
     }
 

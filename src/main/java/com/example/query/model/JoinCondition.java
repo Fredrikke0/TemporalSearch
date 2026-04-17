@@ -12,9 +12,8 @@ public record JoinCondition(
     String leftColumn,
     String rightColumn,
     JoinType type,
-    JoinOperatorType operatorType, // New field: TEMPORAL or EQUALITY
-    Optional<TemporalPredicate> temporalPredicate, // Optional, only for TEMPORAL
-    Optional<Integer> proximityWindow
+    JoinOperatorType operatorType, // TEMPORAL or EQUALITY
+    Optional<TemporalPredicate> temporalPredicate // Only for TEMPORAL
 ) {
     /**
      * Type of join to perform.
@@ -42,7 +41,6 @@ public record JoinCondition(
         Objects.requireNonNull(type, "Join type cannot be null");
         Objects.requireNonNull(operatorType, "Operator type cannot be null");
         Objects.requireNonNull(temporalPredicate, "Temporal predicate Optional cannot be null");
-        Objects.requireNonNull(proximityWindow, "Proximity window cannot be null");
 
         // Temporal predicate must be present if operatorType is TEMPORAL
         if (operatorType == JoinOperatorType.TEMPORAL && temporalPredicate.isEmpty()) {
@@ -52,25 +50,14 @@ public record JoinCondition(
         if (operatorType == JoinOperatorType.EQUALITY && temporalPredicate.isPresent()) {
             throw new IllegalArgumentException("Temporal predicate must not be provided for EQUALITY joins");
         }
-
-        // For PROXIMITY joins, the window size must be provided
-        if (temporalPredicate.isPresent() && temporalPredicate.get() == TemporalPredicate.PROXIMITY && proximityWindow.isEmpty()) {
-            throw new IllegalArgumentException("Proximity window must be specified for PROXIMITY joins");
-        }
-
-        // For non-PROXIMITY joins, window should not be specified
-        if (proximityWindow.isPresent() && (temporalPredicate.isEmpty() || temporalPredicate.get() != TemporalPredicate.PROXIMITY)) {
-            System.err.println("[DEBUG] Throwing exception: temporalPredicate=" + temporalPredicate + ", proximityWindow=" + proximityWindow);
-            throw new IllegalArgumentException("Proximity window should not be specified for non-PROXIMITY joins");
-        }
     }
 
     /**
-     * Creates a standard temporal join condition (without proximity).
+     * Creates a standard temporal join condition.
      */
     public static JoinCondition createTemporalJoin(String leftColumn, String rightColumn, JoinType type, TemporalPredicate temporalPredicate) {
         return new JoinCondition(leftColumn, rightColumn, type, JoinOperatorType.TEMPORAL,
-                                 Optional.of(temporalPredicate), Optional.empty());
+                                 Optional.of(temporalPredicate));
     }
 
     /**
@@ -78,7 +65,7 @@ public record JoinCondition(
      */
     public static JoinCondition createEqualityJoin(String leftColumn, String rightColumn, JoinType type) {
         return new JoinCondition(leftColumn, rightColumn, type, JoinOperatorType.EQUALITY,
-                                 Optional.empty(), Optional.empty());
+                                 Optional.empty());
     }
 
     @Override
@@ -92,9 +79,6 @@ public record JoinCondition(
         }
         sb.append(" ");
         sb.append(rightColumn);
-
-        proximityWindow.ifPresent(window ->
-            sb.append(" WINDOW ").append(window));
 
         return sb.toString();
     }

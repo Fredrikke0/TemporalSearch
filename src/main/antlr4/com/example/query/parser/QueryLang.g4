@@ -28,12 +28,10 @@ WHERE: 'WHERE';
 ALIAS: 'ALIAS';
 BIND: 'BIND';
 SNIPPET: 'SNIPPET';
-WINDOW: 'WINDOW';
 NER: 'NER';
 POS: 'POS';
 DEPENDS: 'DEPENDS';
 DATE: 'DATE'; // Used for DATE() condition and NER(DATE) type
-PROXIMITY: 'PROXIMITY';
 GRANULARITY: 'GRANULARITY';
 DOCUMENT: 'DOCUMENT';
 SENTENCE: 'SENTENCE';
@@ -44,7 +42,6 @@ CONTAINED_BY: 'CONTAINED_BY';
 INTERSECT: 'INTERSECT';
 BEFORE: 'BEFORE';
 AFTER: 'AFTER';
-RADIUS: 'RADIUS';
 AND: 'AND';
 OR: 'OR';
 NOT: 'NOT';
@@ -211,15 +208,13 @@ singleCondition
 dateExpression
     : DATE LPAREN comparisonOp year=INTEGER_LITERAL RPAREN (BIND var=variable)?        # DateComparisonExpression
     | DATE LPAREN comparisonOp date=DATE_LITERAL RPAREN (BIND var=variable)?           # DateLiteralComparisonExpression
-    | DATE LPAREN dateOperator dateValue
-      (RADIUS radius=INTEGER_LITERAL unit=timeUnit)? RPAREN (BIND var=variable)?       # DateOperatorExpression
+    | DATE LPAREN dateOperator dateValue RPAREN (BIND var=variable)?                   # DateOperatorExpression
     ;
 
 dateOperator
     : CONTAINS
     | CONTAINED_BY
     | INTERSECT
-    | PROXIMITY
     | BEFORE
     | AFTER
     ;
@@ -362,8 +357,7 @@ subquery
     ;
 
 joinCondition
-    : leftColumn=joinColumn op=temporalOp rightColumn=joinColumn
-      (WINDOW window=INTEGER_LITERAL)?                 # TemporalJoinCondition
+    : leftColumn=joinColumn op=temporalOp rightColumn=joinColumn   # TemporalJoinCondition
     | leftColumn=joinColumn op=(EQ | EQUALS) rightColumn=joinColumn # EqualityJoinCondition
     ;
 
@@ -376,7 +370,6 @@ temporalOp
     : CONTAINS
     | CONTAINED_BY
     | INTERSECT
-    | PROXIMITY
     | BEFORE
     | AFTER
     ;
