@@ -194,6 +194,13 @@
             <artifactId>async-profiler</artifactId>
             <version>4.1</version>
         </dependency>
+
+        <!-- RoaringBitmap - compressed bitsets -->
+        <dependency>
+            <groupId>org.roaringbitmap</groupId>
+            <artifactId>RoaringBitmap</artifactId>
+            <version>1.6.14</version>
+        </dependency>
     </dependencies>
 
     <build>
