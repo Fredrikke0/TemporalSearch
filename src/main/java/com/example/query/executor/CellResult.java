@@ -130,18 +130,16 @@ public final class CellResult {
         }
 
         Bindings resultBindings = null;
-        // Merge bindings from both sides into a new combined Bindings
-        // For now, just concatenate both bindings if present, narrowed to matched
-        // cells.
-        // A full implementation would do per-cell cross-product, matching the old
-        // LogicalExecutor.processMatchingGranule semantics. We'll implement that
-        // as a helper in a later phase.
+        // Merge bindings from both sides into a new combined Bindings.
+        // Uses per-cell cross-product via CsrIntersectHelper for the
+        // two-bindings case, and narrows single-side bindings down to
+        // cells that survived the AND.
         if (this.bindings != null && other.bindings != null) {
             resultBindings = mergeBindings(this.bindings, other.bindings, this.cells, other.cells, resultCells);
         } else if (this.bindings != null) {
-            resultBindings = narrowBindingsToCells(this.bindings, resultCells);
+            resultBindings = narrowBindingsToCells(this.bindings, this.cells, resultCells);
         } else if (other.bindings != null) {
-            resultBindings = narrowBindingsToCells(other.bindings, resultCells);
+            resultBindings = narrowBindingsToCells(other.bindings, other.cells, resultCells);
         }
 
         return new CellResult(resultCells, resultOcc, resultBindings, granularity);
@@ -179,16 +177,14 @@ public final class CellResult {
 
     // --- Private helpers ---
 
-    private static Bindings narrowBindingsToCells(Bindings b, Roaring64NavigableMap matchedCells) {
+    private static Bindings narrowBindingsToCells(Bindings b,
+            Roaring64NavigableMap originalCells,
+            Roaring64NavigableMap matchedCells) {
         if (b == null)
             return null;
-        // Build a parallel cellKeys array from the cells bitmap
-        long[] cellKeys = new long[(int) matchedCells.getLongCardinality()];
-        int i = 0;
-        var iter = matchedCells.getLongIterator();
-        while (iter.hasNext()) {
-            cellKeys[i++] = iter.next();
-        }
+        // Build cellKeys from the *original* cells bitmap, which is parallel
+        // to the bindings rows. matchedCells is used as the filter set.
+        long[] cellKeys = extractSortedCellKeys(originalCells);
         return b.narrowToCells(matchedCells, cellKeys);
     }
 
@@ -196,10 +192,25 @@ public final class CellResult {
             Roaring64NavigableMap leftCells,
             Roaring64NavigableMap rightCells,
             Roaring64NavigableMap resultCells) {
-        // Simplified: just narrow left bindings to result cells.
-        // The full cross-product semantics from LogicalExecutor will be
-        // implemented in the CsrIntersectHelper in a later phase.
-        return narrowBindingsToCells(left, resultCells);
+        // Use row-level cell keys if available (from previous merges),
+        // otherwise extract from the cell bitmap (for first-time binds).
+        long[] leftCellKeys = left.rowCellKeys() != null
+                ? left.rowCellKeys()
+                : extractSortedCellKeys(leftCells);
+        long[] rightCellKeys = right.rowCellKeys() != null
+                ? right.rowCellKeys()
+                : extractSortedCellKeys(rightCells);
+        return CsrIntersectHelper.mergeBindings(left, leftCellKeys, right, rightCellKeys);
+    }
+
+    private static long[] extractSortedCellKeys(Roaring64NavigableMap cells) {
+        long[] keys = new long[(int) cells.getLongCardinality()];
+        int i = 0;
+        var iter = cells.getLongIterator();
+        while (iter.hasNext()) {
+            keys[i++] = iter.next();
+        }
+        return keys;
     }
 
     @Override

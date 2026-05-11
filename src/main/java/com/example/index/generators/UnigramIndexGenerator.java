@@ -12,11 +12,14 @@ import java.util.List;
 import java.util.Map;
 
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.core.OccurrencesBlock;
+import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 /**
  * Generates a streaming unigram index from annotation entries.
@@ -25,11 +28,13 @@ import com.google.common.collect.ListMultimap;
  */
 public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry> {
 
-    public UnigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize) throws IOException {
+    public UnigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn,
+            ProgressTracker progress, int batchSize) throws IOException {
         this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    public UnigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+    public UnigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn,
+            ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
         super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
@@ -65,15 +70,15 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                     String rawToken = rs.getString("token");
                     String token = (rawToken != null) ? rawToken.trim() : null;
                     AnnotationEntry entry = new AnnotationEntry(
-                        rs.getLong("annotation_id"),
-                        rs.getInt("document_id"),
-                        rs.getInt("sentence_id"),
-                        rs.getInt("begin_char"),
-                        rs.getInt("end_char"),
-                        token,
-                        null, // pos
-                        null, // ner
-                        null // normalizedNer
+                            rs.getLong("annotation_id"),
+                            rs.getInt("document_id"),
+                            rs.getInt("sentence_id"),
+                            rs.getInt("begin_char"),
+                            rs.getInt("end_char"),
+                            token,
+                            null, // pos
+                            null, // ner
+                            null // normalizedNer
                     );
                     batch.add(entry);
                 }
@@ -83,9 +88,11 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
     }
 
     @Override
-    protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
-        ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
-        Map<String, PositionListSoA> tempAggregator = new HashMap<>();
+    protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
+        ListMultimap<String, PostingList> index = ArrayListMultimap.create();
+        // Collect cell-level data per term: term -> (cellKey -> list of begin offsets)
+        Map<String, Map<Long, IntArrayList>> termCellMap = new HashMap<>();
+        Map<String, Byte> termConstLen = new HashMap<>();
 
         for (AnnotationEntry entry : batch) {
             if (entry.getToken() == null || entry.getToken().isEmpty()) {
@@ -96,22 +103,57 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                 continue;
             }
 
-            PositionListSoA pl = tempAggregator.computeIfAbsent(tokenLower, k -> new PositionListSoA());
-            pl.add(entry.getDocumentId(), entry.getSentenceId(), entry.getBeginChar(), entry.getEndChar());
+            long cellKey = PostingList.packCellKey(entry.getDocumentId(), entry.getSentenceId());
+            Map<Long, IntArrayList> cellMap = termCellMap.computeIfAbsent(tokenLower,
+                    k -> new java.util.LinkedHashMap<>());
+            cellMap.computeIfAbsent(cellKey, k -> new IntArrayList()).add(entry.getBeginChar());
+
+            // Compute constant length (clamped to byte range)
+            int len = entry.getEndChar() - entry.getBeginChar();
+            byte cl = (byte) Math.min(len, 255);
+            termConstLen.putIfAbsent(tokenLower, cl);
         }
 
-        for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
-            index.put(mapEntry.getKey(), mapEntry.getValue());
+        // Build PostingList for each term
+        for (Map.Entry<String, Map<Long, IntArrayList>> termEntry : termCellMap.entrySet()) {
+            String term = termEntry.getKey();
+            Map<Long, IntArrayList> cellMap = termEntry.getValue();
+
+            Roaring64NavigableMap cells = new Roaring64NavigableMap();
+            for (long ck : cellMap.keySet()) {
+                cells.add(ck);
+            }
+
+            int numCells = cellMap.size();
+            long[] cellKeysArr = new long[numCells];
+            byte[][] beginsArr = new byte[numCells][];
+            int idx = 0;
+            for (Map.Entry<Long, IntArrayList> e : cellMap.entrySet()) {
+                cellKeysArr[idx] = e.getKey();
+                IntArrayList bl = e.getValue();
+                byte[] b = new byte[bl.size()];
+                for (int j = 0; j < bl.size(); j++) {
+                    b[j] = (byte) bl.getInt(j);
+                }
+                beginsArr[idx] = b;
+                idx++;
+            }
+
+            byte constantLength = termConstLen.getOrDefault(term, (byte) 0);
+            OccurrencesBlock occ = OccurrencesBlock.fromUnsorted(cellKeysArr, beginsArr, constantLength);
+            PostingList pl = PostingList.fromCellsAndOccurrences(cells, constantLength, occ);
+            index.put(term, pl);
         }
         return index;
     }
 
     @Override
     public long getDocumentCountForIndex() throws SQLException {
-        // Unigrams are derived from annotations, so count annotations. This is an intentional approximation for speed.
+        // Unigrams are derived from annotations, so count annotations. This is an
+        // intentional approximation for speed.
         String countSql = "SELECT MAX(annotation_id) FROM annotations";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
-             ResultSet rs = stmt.executeQuery()) {
+                ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {
                 return rs.getLong(1);
             }

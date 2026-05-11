@@ -1,10 +1,12 @@
 package com.example.query.executor;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,670 +16,183 @@ import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Logical.LogicalOperator;
-import com.example.query.model.condition.Ner;
-import com.example.query.model.condition.Pos;
-import com.example.query.model.condition.StitchedCondition;
-import com.example.query.model.condition.Temporal;
 
 /**
  * Executor for logical conditions (AND, OR).
- * Handles recursive execution and result combination of subconditions using QueryResultSoA.
- * Also implements stitch fusion logic for AND conditions.
+ *
+ * <p>
+ * Uses {@link CellResult#and(CellResult)} and {@link CellResult#or(CellResult)}
+ * to combine sub-condition results. No merge-join or stitch fusion is needed
+ * &mdash; cell intersection, occurrence narrowing, and binding merging are
+ * handled by {@code CellResult} itself.
  */
 public final class LogicalExecutor implements ConditionExecutor<Logical> {
     private static final Logger logger = LoggerFactory.getLogger(LogicalExecutor.class);
 
     private final ConditionExecutorFactory executorFactory;
-    private final String stitchStrategy;
-    private final Query.Granularity queryGranularity;
 
-    /**
-     * Creates a new LogicalConditionExecutor that uses the provided factory to create
-     * executors for subconditions.
-     *
-     * @param executorFactory The factory to use for creating condition executors
-     * @param stitchStrategy The strategy for stitch optimization (e.g., "optimized", "none")
-     * @param queryGranularity The granularity of the query (e.g., SENTENCE, DOCUMENT)
-     */
-    public LogicalExecutor(ConditionExecutorFactory executorFactory, String stitchStrategy, Query.Granularity queryGranularity) {
+    public LogicalExecutor(ConditionExecutorFactory executorFactory, String stitchStrategy,
+            Query.Granularity queryGranularity) {
         this.executorFactory = executorFactory;
-        this.stitchStrategy = stitchStrategy;
-        this.queryGranularity = queryGranularity;
-    }
-
-    private <C extends Condition> QueryResultSoA executeCondition(
-        C condition,
-        Map<String, IndexAccessInterface> indexes,
-        Query.Granularity granularity,
-        int granularitySize,
-        String corpusName,
-        AttributeRequirements requirements,
-        Optional<FilteringContext> context) throws QueryExecutionException {
-        ConditionExecutor<C> executor = executorFactory.getExecutor(condition);
-        return executor.execute(condition, indexes, granularity, granularitySize, corpusName, requirements, context);
+        // stitchStrategy and queryGranularity are accepted for backward
+        // compatibility with existing callers but are no longer used.
+        logger.info("LogicalExecutor initialized (stitch fusion is now handled by CellResult).");
     }
 
     @Override
-    public QueryResultSoA execute(Logical condition, Map<String, IndexAccessInterface> indexes,
-                               Query.Granularity granularity,
-                               int granularitySize,
-                               String corpusName,
-                               AttributeRequirements requirements,
-                               Optional<FilteringContext> context)
-        throws QueryExecutionException {
-        return executeInternal(condition, indexes, granularity, granularitySize, corpusName, requirements, context);
-    }
-
-    private QueryResultSoA executeInternal(Logical condition, Map<String, IndexAccessInterface> indexes,
-                                      Query.Granularity granularity,
-                                      int granularitySize,
-                                      String corpusName,
-                                      AttributeRequirements requirements,
-                                      Optional<FilteringContext> context)
-        throws QueryExecutionException {
-
-        logger.debug(">>> Executing LogicalExecutor (internally)");
-        logger.debug("Executing logical condition internally: operator={}, subconditions={}, granularity={}, size={}, corpus={}, requirements={}, contextIsPresent={}",
-                condition.operator(), condition.conditions().size(), granularity, granularitySize, corpusName, requirements, context.isPresent());
+    public CellResult execute(Logical condition, Map<String, IndexAccessInterface> indexes,
+            Query.Granularity granularity,
+            int granularitySize,
+            String corpusName,
+            AttributeRequirements requirements,
+            Optional<Roaring64NavigableMap> allowedCells)
+            throws QueryExecutionException {
 
         List<Condition> subConditions = condition.conditions();
         if (subConditions.isEmpty()) {
-            logger.debug("Logical condition has no subconditions, returning empty QueryResultSoA");
-            return new QueryResultSoA(granularity, granularitySize, requirements);
+            logger.debug("Logical condition has no sub-conditions, returning empty CellResult");
+            return CellResult.empty(granularity);
         }
 
         LogicalOperator operator = condition.operator();
+        CellResult result;
         if (operator == LogicalOperator.AND) {
-            return executeAnd(subConditions, indexes, granularity, granularitySize, corpusName, requirements, context);
+            result = executeAnd(subConditions, indexes, granularity, granularitySize,
+                    corpusName, requirements);
         } else if (operator == LogicalOperator.OR) {
-            return executeOr(subConditions, indexes, granularity, granularitySize, corpusName, requirements, context);
+            result = executeOr(subConditions, indexes, granularity, granularitySize,
+                    corpusName, requirements);
         } else {
-            throw new QueryExecutionException("Unsupported logical operator: " + operator, condition.toString(), QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
+            throw new QueryExecutionException("Unsupported logical operator: " + operator,
+                    condition.toString(), QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
         }
+
+        // Apply allowedCells filter at the end if present
+        if (allowedCells.isPresent() && !result.isEmpty()) {
+            Roaring64NavigableMap filtered = result.cells().clone();
+            filtered.and(allowedCells.get());
+            result = CellResult.of(filtered, granularity);
+            logger.debug("Applied allowedCells filter: {} cells remain", filtered.getLongCardinality());
+        }
+
+        return result;
     }
 
     /**
-     * Executes a logical AND, operating on QueryResultSoA, with FilteringContext propagation.
+     * Executes AND by sorting sub-conditions cheapest-first and folding via
+     * {@link CellResult#and(CellResult)}.
      */
-    private QueryResultSoA executeAnd(List<Condition> originalConditionsFromParentLogicalNode,
+    private CellResult executeAnd(List<Condition> conditions,
             Map<String, IndexAccessInterface> indexes,
             Query.Granularity granularity,
             int granularitySize,
             String corpusName,
-            AttributeRequirements requirements,
-            Optional<FilteringContext> initialContext)
-        throws QueryExecutionException {
+            AttributeRequirements requirements)
+            throws QueryExecutionException {
 
-        List<Condition> allOperandsForCurrentAndSequence = flattenAndConditions(originalConditionsFromParentLogicalNode);
-        List<Condition> conditionsToExecute = allOperandsForCurrentAndSequence;
+        // Sort by estimated cost: Contains (cheapest) first, then by type
+        List<Condition> sorted = new ArrayList<>(flattenAndConditions(conditions));
+        sorted.sort(COST_COMPARATOR);
 
-        if ("optimized".equals(this.stitchStrategy) && this.queryGranularity == Query.Granularity.SENTENCE) {
-            if (allOperandsForCurrentAndSequence.size() >= 2) {
-                logger.debug("Attempting to fuse stitchable pairs for AND with {} flattened conditions.", allOperandsForCurrentAndSequence.size());
-                conditionsToExecute = fuseAllNonOverlappingStitchablePairs(allOperandsForCurrentAndSequence);
-                if (conditionsToExecute.size() < allOperandsForCurrentAndSequence.size()) {
-                    logger.info("Fused {} flattened conditions down to {} conditions for AND execution.", allOperandsForCurrentAndSequence.size(), conditionsToExecute.size());
-                } else {
-                    logger.debug("No fusion occurred for {} flattened conditions.", allOperandsForCurrentAndSequence.size());
-                }
-            } else {
-                logger.debug("Skipping fusion for AND: less than 2 flattened conditions or stitch strategy/granularity not applicable. Flattened conditions count: {}", allOperandsForCurrentAndSequence.size());
+        // Execute cheapest first
+        ConditionExecutor<Condition> firstExecutor = executorFactory.getExecutor(sorted.get(0));
+        CellResult cumulative = firstExecutor.execute(sorted.get(0), indexes, granularity,
+                granularitySize, corpusName, requirements, Optional.empty());
+        logger.debug("AND: first condition ({} cells) type={}",
+                cumulative.cellCount(), sorted.get(0).getClass().getSimpleName());
+
+        if (cumulative.isEmpty()) {
+            return cumulative;
+        }
+
+        // Fold remaining conditions
+        for (int i = 1; i < sorted.size(); i++) {
+            ConditionExecutor<Condition> executor = executorFactory.getExecutor(sorted.get(i));
+            CellResult next = executor.execute(sorted.get(i), indexes, granularity,
+                    granularitySize, corpusName, requirements, Optional.empty());
+            logger.debug("AND: condition {}/{} returned {} cells (type={})",
+                    i + 1, sorted.size(), next.cellCount(),
+                    sorted.get(i).getClass().getSimpleName());
+
+            cumulative = cumulative.and(next);
+            logger.debug("AND: after folding condition {}, cumulative={} cells",
+                    i + 1, cumulative.cellCount());
+
+            if (cumulative.isEmpty()) {
+                return cumulative;
             }
         }
 
-        if (conditionsToExecute.isEmpty()) {
-            return new QueryResultSoA(granularity, granularitySize, requirements);
-        }
-
-        Optional<FilteringContext> currentContext = initialContext.isPresent() ? initialContext :
-                                                Optional.of(FilteringContext.unrestricted(granularity));
-        logger.debug("executeAnd: Initial FilteringContext isPresent: {}, isUnrestricted: {}",
-                     currentContext.isPresent(), currentContext.map(FilteringContext::isUnrestricted).orElse(true));
-
-        QueryResultSoA firstResult = executeCondition(conditionsToExecute.get(0), indexes, granularity, granularitySize, corpusName, requirements, currentContext);
-
-        if (firstResult.isEmpty()) {
-            logger.debug("executeAnd: First condition (or fused condition) returned empty result. AND chain result is empty.");
-            return firstResult;
-        }
-
-        currentContext = Optional.of(currentContext.get().intersect(firstResult));
-        logger.debug("executeAnd: Context after first condition, isPresent: {}, isUnrestricted: {}, isEmptyFilter: {}",
-                     currentContext.isPresent(), currentContext.map(FilteringContext::isUnrestricted).orElse(true),
-                     currentContext.map(c -> c.allowedDocumentIds().isPresent() && c.allowedDocumentIds().get().isEmpty()).orElse(false));
-
-        if (currentContext.get().allowedDocumentIds().isPresent() && currentContext.get().allowedDocumentIds().get().isEmpty()){
-            logger.debug("executeAnd: FilteringContext became empty (no doc IDs) after first condition. AND chain result is empty.");
-            return new QueryResultSoA(granularity, granularitySize, requirements);
-        }
-
-        QueryResultSoA cumulativeResult = firstResult;
-
-        for (int i = 1; i < conditionsToExecute.size(); i++) {
-            logger.debug("executeAnd: Processing condition {} of {} with current context.", i + 1, conditionsToExecute.size());
-            QueryResultSoA currentStepResult = executeCondition(conditionsToExecute.get(i), indexes, granularity, granularitySize, corpusName, requirements, currentContext);
-
-            if (currentStepResult.isEmpty()) {
-                logger.debug("executeAnd: Condition {} returned empty result. AND chain result is empty.", i + 1);
-                return currentStepResult;
-            }
-
-            cumulativeResult = performAndSoA(cumulativeResult, currentStepResult, granularity, requirements);
-            logger.debug("executeAnd: Cumulative result size after performAndSoA with condition {}: {}", i + 1, cumulativeResult.size());
-
-            if (cumulativeResult.isEmpty()) {
-                logger.debug("executeAnd: Cumulative result became empty after performAndSoA. AND chain result is empty.");
-                return cumulativeResult;
-            }
-
-            currentContext = Optional.of(currentContext.get().intersect(currentStepResult));
-            logger.debug("executeAnd: Context updated after condition {}, isPresent: {}, isUnrestricted: {}, isEmptyFilter: {}",
-                         i + 1, currentContext.isPresent(), currentContext.map(FilteringContext::isUnrestricted).orElse(true),
-                         currentContext.map(c -> c.allowedDocumentIds().isPresent() && c.allowedDocumentIds().get().isEmpty()).orElse(false));
-
-            if (currentContext.get().allowedDocumentIds().isPresent() && currentContext.get().allowedDocumentIds().get().isEmpty()){
-                logger.debug("executeAnd: FilteringContext became empty (no doc IDs) after condition {}. AND chain result is empty.", i + 1);
-                return new QueryResultSoA(granularity, granularitySize, requirements);
-            }
-        }
-        logger.debug("executeAnd: Completed. Final cumulative result size: {}", cumulativeResult.size());
-        return cumulativeResult;
+        return cumulative;
     }
 
     /**
-     * Executes a logical OR, operating on QueryResultSoA. Each branch of OR is filtered by the incoming context.
+     * Executes OR by folding sub-conditions via
+     * {@link CellResult#or(CellResult)}.
      */
-    private QueryResultSoA executeOr(List<Condition> conditions,
+    private CellResult executeOr(List<Condition> conditions,
             Map<String, IndexAccessInterface> indexes,
             Query.Granularity granularity,
             int granularitySize,
             String corpusName,
-            AttributeRequirements requirements,
-            Optional<FilteringContext> context)
-        throws QueryExecutionException {
-        if (conditions.isEmpty()) {
-            return new QueryResultSoA(granularity, granularitySize, requirements);
-        }
+            AttributeRequirements requirements)
+            throws QueryExecutionException {
 
-        QueryResultSoA combinedResult = executeCondition(conditions.get(0), indexes, granularity, granularitySize, corpusName, requirements, context);
+        ConditionExecutor<Condition> firstExecutor = executorFactory.getExecutor(conditions.get(0));
+        CellResult cumulative = firstExecutor.execute(conditions.get(0), indexes, granularity,
+                granularitySize, corpusName, requirements, Optional.empty());
 
         for (int i = 1; i < conditions.size(); i++) {
-            QueryResultSoA currentResult = executeCondition(conditions.get(i), indexes, granularity, granularitySize, corpusName, requirements, context);
-            if (currentResult.isEmpty()) {
+            ConditionExecutor<Condition> executor = executorFactory.getExecutor(conditions.get(i));
+            CellResult next = executor.execute(conditions.get(i), indexes, granularity,
+                    granularitySize, corpusName, requirements, Optional.empty());
+            if (next.isEmpty()) {
                 continue;
             }
-            if (combinedResult.isEmpty()) {
-                combinedResult = currentResult;
+            if (cumulative.isEmpty()) {
+                cumulative = next;
                 continue;
             }
-            combinedResult = performOrSoA(combinedResult, currentResult, granularity, requirements);
-        }
-        return combinedResult;
-    }
-
-    private QueryResultSoA performAndSoA(QueryResultSoA left, QueryResultSoA right,
-                                         Query.Granularity granularity, AttributeRequirements requirements)
-            throws QueryExecutionException {
-        logger.debug("Performing SoA AND operation (merge join). Left size: {}, Right size: {}. Granularity: {}",
-                     left.size(), right.size(), granularity);
-
-        // Ensure inputs are sorted for merge-join semantics. Individual executors no longer sort.
-        left.ensureSorted();
-        right.ensureSorted();
-
-        AttributeRequirements combinedReqs = new AttributeRequirements();
-        combinedReqs.merge(left.getRequirements());
-        combinedReqs.merge(right.getRequirements());
-        combinedReqs.merge(requirements);
-        combinedReqs.needsConceptualRowIds = true;
-
-        QueryResultSoA resultSoA = new QueryResultSoA(granularity, left.getGranularitySize(), combinedReqs);
-        int nextConceptualRowId = 0;
-
-        int leftIdx = 0;
-        int rightIdx = 0;
-
-        // Determine if inputs contain variable bindings; used to avoid artificial multiplication
-        boolean leftHasVariables = hasAnyVariables(left);
-        boolean rightHasVariables = hasAnyVariables(right);
-
-        if (granularity == Query.Granularity.DOCUMENT) {
-            while (leftIdx < left.size() && rightIdx < right.size()) {
-                int leftDocId = left.getDocumentIdAt(leftIdx);
-                int rightDocId = right.getDocumentIdAt(rightIdx);
-
-                logger.trace("Merge join (Doc): comparing left[{}] docId={} vs right[{}] docId={}",
-                           leftIdx, leftDocId, rightIdx, rightDocId);
-
-                if (leftDocId < rightDocId) {
-                    logger.trace("Left docId {} < right docId {}, advancing left", leftDocId, rightDocId);
-                    leftIdx++;
-                } else if (leftDocId > rightDocId) {
-                    logger.trace("Left docId {} > right docId {}, advancing right", leftDocId, rightDocId);
-                    rightIdx++;
-                } else {
-                    // Found matching docId
-                    int granuleMatchDocId = leftDocId;
-                    logger.trace("Granule match on docId={}", granuleMatchDocId);
-
-                    int leftGranuleStartIdx = leftIdx;
-                    int rightGranuleStartIdx = rightIdx;
-
-                    int countLeftInGranule = 0;
-                    while (leftIdx + countLeftInGranule < left.size() && left.getDocumentIdAt(leftIdx + countLeftInGranule) == granuleMatchDocId) {
-                        countLeftInGranule++;
-                    }
-
-                    int countRightInGranule = 0;
-                    while (rightIdx + countRightInGranule < right.size() && right.getDocumentIdAt(rightIdx + countRightInGranule) == granuleMatchDocId) {
-                        countRightInGranule++;
-                    }
-
-                    logger.trace("DocId={}: Left entries in granule: {}, Right entries in granule: {}.",
-                               granuleMatchDocId, countLeftInGranule, countRightInGranule);
-
-                    List<Integer> leftIndicesForGranule = new ArrayList<>(countLeftInGranule);
-                    for(int i=0; i < countLeftInGranule; ++i) {
-                        leftIndicesForGranule.add(leftGranuleStartIdx + i);
-                    }
-
-                    List<Integer> rightIndicesForGranule = new ArrayList<>(countRightInGranule);
-                    for(int i=0; i < countRightInGranule; ++i) {
-                        rightIndicesForGranule.add(rightGranuleStartIdx + i);
-                    }
-
-                    if (!leftIndicesForGranule.isEmpty() && !rightIndicesForGranule.isEmpty()) {
-                         nextConceptualRowId = processMatchingGranule(
-                            resultSoA, left, right,
-                            leftIndicesForGranule, rightIndicesForGranule,
-                            combinedReqs, nextConceptualRowId,
-                            leftHasVariables, rightHasVariables);
-                    } else {
-                        logger.warn("Skipping processMatchingGranule for docId={} as one side has zero entries in the determined granule lists (left list size: {}, right list size: {}). Actual counts: left {}, right {}.",
-                            granuleMatchDocId, leftIndicesForGranule.size(), rightIndicesForGranule.size(), countLeftInGranule, countRightInGranule);
-                    }
-
-                    leftIdx += countLeftInGranule;
-                    rightIdx += countRightInGranule;
-                }
-            }
-        } else { // Granularity.SENTENCE
-            while (leftIdx < left.size() && rightIdx < right.size()) {
-                int leftDocId = left.getDocumentIdAt(leftIdx);
-                int rightDocId = right.getDocumentIdAt(rightIdx);
-                int leftSentId = combinedReqs.needsSentenceId ? left.getSentenceIdAt(leftIdx) : -1;
-                int rightSentId = combinedReqs.needsSentenceId ? right.getSentenceIdAt(rightIdx) : -1;
-
-                int comparison = Integer.compare(leftDocId, rightDocId);
-                if (comparison == 0 && combinedReqs.needsSentenceId) {
-                    comparison = Integer.compare(leftSentId, rightSentId);
-                }
-
-                if (comparison < 0) {
-                    leftIdx++;
-                } else if (comparison > 0) {
-                    rightIdx++;
-                } else {
-                    int granuleMatchDocId = leftDocId;
-                    int granuleMatchSentId = leftSentId;
-
-                    logger.trace("Granule match on docId={}, sentId={}", granuleMatchDocId, granuleMatchSentId);
-
-                    int leftGranuleStartIdx = leftIdx;
-                    int rightGranuleStartIdx = rightIdx;
-
-                    int countLeftInGranule = 0;
-                    while (leftIdx + countLeftInGranule < left.size() &&
-                           left.getDocumentIdAt(leftIdx + countLeftInGranule) == granuleMatchDocId &&
-                           (!combinedReqs.needsSentenceId || left.getSentenceIdAt(leftIdx + countLeftInGranule) == granuleMatchSentId)) {
-                        countLeftInGranule++;
-                    }
-
-                    int countRightInGranule = 0;
-                    while (rightIdx + countRightInGranule < right.size() &&
-                           right.getDocumentIdAt(rightIdx + countRightInGranule) == granuleMatchDocId &&
-                           (!combinedReqs.needsSentenceId || right.getSentenceIdAt(rightIdx + countRightInGranule) == granuleMatchSentId)) {
-                        countRightInGranule++;
-                    }
-
-                    logger.trace("DocId={}, SentId={}: Left entries in granule: {}, Right entries in granule: {}.",
-                               granuleMatchDocId, granuleMatchSentId, countLeftInGranule, countRightInGranule);
-
-                    List<Integer> leftIndicesForGranule = new ArrayList<>(countLeftInGranule);
-                    for(int i=0; i < countLeftInGranule; ++i) {
-                        leftIndicesForGranule.add(leftGranuleStartIdx + i);
-                    }
-
-                    List<Integer> rightIndicesForGranule = new ArrayList<>(countRightInGranule);
-                    for(int i=0; i < countRightInGranule; ++i) {
-                        rightIndicesForGranule.add(rightGranuleStartIdx + i);
-                    }
-
-                    if (!leftIndicesForGranule.isEmpty() && !rightIndicesForGranule.isEmpty()) {
-                        nextConceptualRowId = processMatchingGranule(
-                           resultSoA, left, right,
-                           leftIndicesForGranule, rightIndicesForGranule,
-                           combinedReqs, nextConceptualRowId,
-                           leftHasVariables, rightHasVariables);
-                    } else {
-                       logger.warn("Skipping processMatchingGranule for docId={}, sentId={} as one side has zero entries in the determined granule lists (left list size: {}, right list size: {}). Actual counts: left {}, right {}.",
-                           granuleMatchDocId, granuleMatchSentId, leftIndicesForGranule.size(), rightIndicesForGranule.size(), countLeftInGranule, countRightInGranule);
-                    }
-
-                    leftIdx += countLeftInGranule;
-                    rightIdx += countRightInGranule;
-                }
-            }
+            cumulative = cumulative.or(next);
         }
 
-        logger.debug("SoA AND operation (merge join) complete. Result size: {}", resultSoA.size());
-        return resultSoA;
+        return cumulative;
     }
 
     /**
-     * Helper method to process a matching granule (docId or docId/sentId) by forming
-     * a Cartesian product of conceptual groups from left and right SoAs.
+     * Flattens nested AND conditions so that
+     * {@code AND(AND(a,b), c)} becomes {@code [a, b, c]}.
      */
-    private int processMatchingGranule(
-        QueryResultSoA resultSoA,
-        QueryResultSoA leftSoa, QueryResultSoA rightSoa,
-        List<Integer> leftGranuleRowIndices,
-        List<Integer> rightGranuleRowIndices,
-        AttributeRequirements combinedReqs,
-        int currentNextConceptualRowId,
-        boolean leftHasVariables,
-        boolean rightHasVariables) throws QueryExecutionException {
-
-        if (!leftSoa.getRequirements().needsConceptualRowIds || !rightSoa.getRequirements().needsConceptualRowIds) {
-            String errorMsg = "Input QueryResultSoA to performAndSoA's granule processing is missing conceptualRowIds attribute. Left needs: " +
-                              leftSoa.getRequirements().needsConceptualRowIds + ", Right needs: " + rightSoa.getRequirements().needsConceptualRowIds;
-            logger.error(errorMsg);
-            throw new QueryExecutionException(
-                errorMsg,
-                "LogicalExecutor.processMatchingGranule",
-                QueryExecutionException.ErrorType.INTERNAL_ERROR
-            );
-        }
-
-        Map<Integer, List<Integer>> leftConceptualMap = new java.util.HashMap<>();
-        for (int idx : leftGranuleRowIndices) {
-            leftConceptualMap.computeIfAbsent(leftSoa.getConceptualRowIdAt(idx), k -> new ArrayList<>()).add(idx);
-        }
-
-        Map<Integer, List<Integer>> rightConceptualMap = new java.util.HashMap<>();
-        for (int idx : rightGranuleRowIndices) {
-            rightConceptualMap.computeIfAbsent(rightSoa.getConceptualRowIdAt(idx), k -> new ArrayList<>()).add(idx);
-        }
-
-        if (leftConceptualMap.isEmpty() || rightConceptualMap.isEmpty()) {
-            logger.warn("One or both conceptual maps are empty in processMatchingGranule. Left map size: {}, Right map size: {}. Input granule row counts left: {}, right: {}. Skipping product.",
-                        leftConceptualMap.size(), rightConceptualMap.size(), leftGranuleRowIndices.size(), rightGranuleRowIndices.size());
-            return currentNextConceptualRowId;
-        }
-
-        logger.trace("Processing granule. Left conceptual groups: {}, Right conceptual groups: {}", leftConceptualMap.size(), rightConceptualMap.size());
-
-        for (List<Integer> leftConceptGroupIndices : leftConceptualMap.values()) {
-            for (List<Integer> rightConceptGroupIndices : rightConceptualMap.values()) {
-                // If only one side has variables, treat the other side as a pure filter: no cross-product
-                if (leftHasVariables && !rightHasVariables) {
-                    int conceptualIdForThisProduct = currentNextConceptualRowId++;
-                    for (int lIdx : leftConceptGroupIndices) {
-                        resultSoA.add(
-                            leftSoa.getValueAt(lIdx),
-                            leftSoa.getValueTypeAt(lIdx),
-                            leftSoa.getVariableNameAt(lIdx),
-                            leftSoa.getDocumentIdAt(lIdx),
-                            combinedReqs.needsSentenceId && leftSoa.getRequirements().needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : -1,
-                            combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getBeginCharAt(lIdx) : -1,
-                            combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getEndCharAt(lIdx) : -1,
-                            combinedReqs.needsSynonymIds && leftSoa.getRequirements().needsSynonymIds ? leftSoa.getSynonymIdAt(lIdx) : -1,
-                            conceptualIdForThisProduct
-                        );
-                    }
-                } else if (!leftHasVariables && rightHasVariables) {
-                    int conceptualIdForThisProduct = currentNextConceptualRowId++;
-                    for (int rIdx : rightConceptGroupIndices) {
-                        resultSoA.add(
-                            rightSoa.getValueAt(rIdx),
-                            rightSoa.getValueTypeAt(rIdx),
-                            rightSoa.getVariableNameAt(rIdx),
-                            rightSoa.getDocumentIdAt(rIdx),
-                            combinedReqs.needsSentenceId && rightSoa.getRequirements().needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : -1,
-                            combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getBeginCharAt(rIdx) : -1,
-                            combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getEndCharAt(rIdx) : -1,
-                            combinedReqs.needsSynonymIds && rightSoa.getRequirements().needsSynonymIds ? rightSoa.getSynonymIdAt(rIdx) : -1,
-                            conceptualIdForThisProduct
-                        );
-                    }
-                } else {
-                    // Both sides have variables (or both sides don't) -> perform cross product as before
-                    int conceptualIdForThisProduct = currentNextConceptualRowId++;
-                    for (int lIdx : leftConceptGroupIndices) {
-                        resultSoA.add(
-                            leftSoa.getValueAt(lIdx),
-                            leftSoa.getValueTypeAt(lIdx),
-                            leftSoa.getVariableNameAt(lIdx),
-                            leftSoa.getDocumentIdAt(lIdx),
-                            combinedReqs.needsSentenceId && leftSoa.getRequirements().needsSentenceId ? leftSoa.getSentenceIdAt(lIdx) : -1,
-                            combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getBeginCharAt(lIdx) : -1,
-                            combinedReqs.needsPositions && leftSoa.getRequirements().needsPositions ? leftSoa.getEndCharAt(lIdx) : -1,
-                            combinedReqs.needsSynonymIds && leftSoa.getRequirements().needsSynonymIds ? leftSoa.getSynonymIdAt(lIdx) : -1,
-                            conceptualIdForThisProduct
-                        );
-                    }
-                    for (int rIdx : rightConceptGroupIndices) {
-                        resultSoA.add(
-                            rightSoa.getValueAt(rIdx),
-                            rightSoa.getValueTypeAt(rIdx),
-                            rightSoa.getVariableNameAt(rIdx),
-                            rightSoa.getDocumentIdAt(rIdx),
-                            combinedReqs.needsSentenceId && rightSoa.getRequirements().needsSentenceId ? rightSoa.getSentenceIdAt(rIdx) : -1,
-                            combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getBeginCharAt(rIdx) : -1,
-                            combinedReqs.needsPositions && rightSoa.getRequirements().needsPositions ? rightSoa.getEndCharAt(rIdx) : -1,
-                            combinedReqs.needsSynonymIds && rightSoa.getRequirements().needsSynonymIds ? rightSoa.getSynonymIdAt(rIdx) : -1,
-                            conceptualIdForThisProduct
-                        );
-                    }
-                }
-            }
-        }
-        return currentNextConceptualRowId;
-    }
-
-    private boolean hasAnyVariables(QueryResultSoA soa) {
-        if (soa == null || soa.size() == 0) return false;
-        for (int i = 0; i < soa.size(); i++) {
-            if (soa.getVariableNameAt(i) != null) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private QueryResultSoA performOrSoA(QueryResultSoA left, QueryResultSoA right,
-                                        Query.Granularity granularity, AttributeRequirements baseRequirements)
-        throws QueryExecutionException {
-        logger.debug("Performing SoA OR operation. Left size: {}, Right size: {}. Granularity: {}",
-                    left.size(), right.size(), granularity);
-
-        AttributeRequirements combinedReqs = new AttributeRequirements();
-        combinedReqs.merge(left.getRequirements());
-        combinedReqs.merge(right.getRequirements());
-        combinedReqs.merge(baseRequirements);
-        combinedReqs.needsConceptualRowIds = true; // OR operations also need to manage conceptual IDs
-
-        QueryResultSoA resultSoA = new QueryResultSoA(granularity, left.getGranularitySize(), combinedReqs);
-        int maxLeftConceptualId = -1;
-
-        // Add all from left, preserving conceptual IDs and finding max
-        if (left.getRequirements().needsConceptualRowIds) {
-            for (int i = 0; i < left.size(); i++) {
-                int conceptualId = left.getConceptualRowIdAt(i);
-                resultSoA.add(
-                    left.getValueAt(i),
-                    left.getValueTypeAt(i),
-                    left.getVariableNameAt(i),
-                    left.getDocumentIdAt(i),
-                    combinedReqs.needsSentenceId && left.getRequirements().needsSentenceId ? left.getSentenceIdAt(i) : -1,
-                    combinedReqs.needsPositions && left.getRequirements().needsPositions ? left.getBeginCharAt(i) : -1,
-                    combinedReqs.needsPositions && left.getRequirements().needsPositions ? left.getEndCharAt(i) : -1,
-                    combinedReqs.needsSynonymIds && left.getRequirements().needsSynonymIds ? left.getSynonymIdAt(i) : -1,
-                    conceptualId
-                );
-                if (conceptualId > maxLeftConceptualId) {
-                    maxLeftConceptualId = conceptualId;
-                }
-            }
-        } else {
-            String errorMessage = "Left operand QueryResultSoA in performOrSoA is missing conceptualRowIds, which is a required attribute. " +
-                                  "This indicates a bug in the executor that produced this QueryResultSoA.";
-            logger.error(errorMessage);
-            throw new QueryExecutionException(errorMessage,
-                                             "LogicalExecutor.performOrSoA - Left Operand",
-                                             QueryExecutionException.ErrorType.INTERNAL_ERROR);
-        }
-
-
-        // Add all from right, offsetting conceptual IDs to ensure uniqueness
-        int offset = maxLeftConceptualId + 1;
-        if (right.getRequirements().needsConceptualRowIds) {
-            for (int i = 0; i < right.size(); i++) {
-                int conceptualId = right.getConceptualRowIdAt(i) + offset;
-                resultSoA.add(
-                    right.getValueAt(i),
-                    right.getValueTypeAt(i),
-                    right.getVariableNameAt(i),
-                    right.getDocumentIdAt(i),
-                    combinedReqs.needsSentenceId && right.getRequirements().needsSentenceId ? right.getSentenceIdAt(i) : -1,
-                    combinedReqs.needsPositions && right.getRequirements().needsPositions ? right.getBeginCharAt(i) : -1,
-                    combinedReqs.needsPositions && right.getRequirements().needsPositions ? right.getEndCharAt(i) : -1,
-                    combinedReqs.needsSynonymIds && right.getRequirements().needsSynonymIds ? right.getSynonymIdAt(i) : -1,
-                    conceptualId
-                );
-            }
-        } else {
-            String errorMessage = "Right operand QueryResultSoA in performOrSoA is missing conceptualRowIds, which is a required attribute. " +
-                                  "This indicates a bug in the executor that produced this QueryResultSoA.";
-            logger.error(errorMessage);
-            throw new QueryExecutionException(errorMessage,
-                                             "LogicalExecutor.performOrSoA - Right Operand",
-                                             QueryExecutionException.ErrorType.INTERNAL_ERROR);
-        }
-
-        logger.debug("SoA OR operation complete. Result size: {}", resultSoA.size());
-        return resultSoA;
-    }
-
-    /**
-     * private helper method to fuse stitchable pairs.
-     * Logic: Greedy, Single-Pass, Multi-Fusion, Non-Adjacent.
-     */
-    private List<Condition> fuseAllNonOverlappingStitchablePairs(List<Condition> originalConditions) {
-        logger.debug("Fusing all non-overlapping stitchable pairs. Original conditions size: {}", originalConditions.size());
-        if (originalConditions.size() < 2) {
-            return originalConditions;
-        }
-
-        ArrayList<Condition> resultingConditions = new ArrayList<>();
-        boolean[] consumed = new boolean[originalConditions.size()];
-
-        for (int i = 0; i < originalConditions.size(); i++) {
-            if (consumed[i]) {
-                continue;
-            }
-            Condition c1 = originalConditions.get(i);
-            boolean foundPairForC1 = false;
-
-            // Select best candidate by longest n-gram CONTAINS among all stitchable partners with c1
-            Contains bestContains = null;
-            Condition bestAnnotation = null;
-            String bestStitchType = null;
-            int bestContainsNgram = -1;
-            int bestJ = -1;
-
-            for (int j = i + 1; j < originalConditions.size(); j++) {
-                if (consumed[j]) {
-                    continue;
-                }
-                Condition c2 = originalConditions.get(j);
-
-                // Permutation A: c1 is CONTAINS, c2 is annotation
-                if (c1 instanceof Contains c && (c.terms().size() >= 1 && c.terms().size() <= 3)) {
-                    Condition annotationPart = null;
-                    String stitchType = null;
-                    if (c2 instanceof Ner ner && !"DATE".equalsIgnoreCase(ner.entityType())) {
-                        annotationPart = ner;
-                        stitchType = "CONTAINS_NER_STITCH";
-                    } else if (c2 instanceof Pos pos) {
-                        annotationPart = pos;
-                        stitchType = "CONTAINS_POS_STITCH";
-                    } else if (c2 instanceof Temporal temporal) {
-                        annotationPart = temporal;
-                        stitchType = "CONTAINS_TEMPORAL_STITCH"; // Or CONTAINS_DATE_STITCH
-                    }
-                    if (annotationPart != null && c.terms().size() > bestContainsNgram) {
-                        bestContains = c;
-                        bestAnnotation = annotationPart;
-                        bestStitchType = stitchType;
-                        bestContainsNgram = c.terms().size();
-                        bestJ = j;
-                    }
-                }
-
-                // Permutation B: c2 is CONTAINS, c1 is annotation
-                if (c2 instanceof Contains c && (c.terms().size() >= 1 && c.terms().size() <= 3)) {
-                    Condition annotationPart = null;
-                    String stitchType = null;
-                    if (c1 instanceof Ner ner && !"DATE".equalsIgnoreCase(ner.entityType())) {
-                        annotationPart = ner;
-                        stitchType = "CONTAINS_NER_STITCH";
-                    } else if (c1 instanceof Pos pos) {
-                        annotationPart = pos;
-                        stitchType = "CONTAINS_POS_STITCH";
-                    } else if (c1 instanceof Temporal temporal) {
-                        annotationPart = temporal;
-                        stitchType = "CONTAINS_TEMPORAL_STITCH";
-                    }
-                    if (annotationPart != null && c.terms().size() > bestContainsNgram) {
-                        bestContains = c;
-                        bestAnnotation = annotationPart;
-                        bestStitchType = stitchType;
-                        bestContainsNgram = c.terms().size();
-                        bestJ = j;
-                    }
-                }
-            }
-
-            if (bestContains != null && bestAnnotation != null && bestJ >= 0) {
-                StitchedCondition fused = new StitchedCondition(bestContains, bestAnnotation, bestStitchType);
-                resultingConditions.add(fused);
-                consumed[i] = true;
-                consumed[bestJ] = true;
-                foundPairForC1 = true;
-                logger.debug("Fused condition (selected by longest n-gram: {}): {} with {}. New fused condition: {}", bestContainsNgram, c1, originalConditions.get(bestJ), fused);
-            }
-
-            if (!foundPairForC1) {
-                resultingConditions.add(c1); // Add c1 unmodified
-            }
-        }
-
-        if (resultingConditions.size() < originalConditions.size()) {
-            logger.info("Stitch fusion transformed {} conditions into {} conditions.", originalConditions.size(), resultingConditions.size());
-        }
-        return resultingConditions;
-    }
-
     private List<Condition> flattenAndConditions(List<Condition> conditions) {
         List<Condition> flattened = new ArrayList<>();
         for (Condition cond : conditions) {
-            if (cond instanceof Logical logicalCond && logicalCond.operator() == LogicalOperator.AND) {
-                flattened.addAll(flattenAndConditions(logicalCond.conditions())); // Recurse
+            if (cond instanceof Logical logicalCond
+                    && logicalCond.operator() == LogicalOperator.AND) {
+                flattened.addAll(flattenAndConditions(logicalCond.conditions()));
             } else {
                 flattened.add(cond);
             }
         }
         return flattened;
+    }
+
+    /**
+     * Cost comparator that ranks {@link Contains} conditions as cheapest
+     * (lowest cost first), with a tie-break on class name for determinism.
+     */
+    private static final Comparator<Condition> COST_COMPARATOR = (a, b) -> {
+        int costA = costRank(a);
+        int costB = costRank(b);
+        if (costA != costB) {
+            return Integer.compare(costA, costB);
+        }
+        return a.getClass().getSimpleName().compareTo(b.getClass().getSimpleName());
+    };
+
+    private static int costRank(Condition c) {
+        if (c instanceof Contains) {
+            return 0; // cheapest
+        }
+        return 1; // everything else
     }
 }

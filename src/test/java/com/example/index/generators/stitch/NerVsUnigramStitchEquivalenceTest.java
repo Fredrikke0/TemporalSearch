@@ -22,8 +22,11 @@ import org.mockito.MockitoAnnotations;
 import org.rocksdb.RocksDBException;
 
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.core.OccurrencesBlock;
+import com.example.core.OccurrencesView;
+import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
+import com.example.index.KeySchema;
 import com.example.index.generators.BaseIndexTest; // Assuming this class exists and provides setup
 import com.example.index.generators.NerIndexGenerator;
 import com.example.index.util.SynonymManager;
@@ -33,7 +36,9 @@ import com.google.common.collect.ListMultimap;
 // Assuming BaseIndexTest provides sqliteConn and some tempDir functionality (e.g., indexBaseDir)
 public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
 
-    private record IdentifiedEntity(String entityType, int entityValueSynonymId, int docId, int sentId, int beginChar, int endChar) {}
+    private record IdentifiedEntity(String entityType, int entityValueSynonymId, int docId, int sentId, int beginChar,
+            int endChar) {
+    }
 
     private SynonymManager synonymManager;
     private NerIndexGenerator nerIndexGenerator;
@@ -44,7 +49,8 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
     @Mock
     private ProgressTracker mockProgressTracker;
 
-    @TempDir // JUnit Jupiter creates and cleans this temp directory, BaseIndexTest might also have one.
+    @TempDir // JUnit Jupiter creates and cleans this temp directory, BaseIndexTest might
+             // also have one.
     Path classLevelTempDir;
 
     private Path synonymDbPath;
@@ -56,7 +62,8 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
         super.setUp(); // Sets up sqliteConn from BaseIndexTest
         MockitoAnnotations.openMocks(this);
 
-        // Setup SynonymManager with a temporary RocksDB path within the class-level temp dir
+        // Setup SynonymManager with a temporary RocksDB path within the class-level
+        // temp dir
         synonymDbPath = classLevelTempDir.resolve("synonyms_equivalence_test");
         Files.createDirectories(synonymDbPath.getParent());
         synonymManager = new SynonymManager(synonymDbPath);
@@ -66,31 +73,35 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
         Files.createFile(dummyStopwordsFile);
 
         // Initialize generators (they are final, so no subclassing)
-        nerIndexGenerator = new NerIndexGenerator(mockIndexAccess, dummyStopwordsFile.toString(), sqliteConn, mockProgressTracker, 10, synonymManager);
-        unigramStitchGenerator = new UnigramNerStitchGenerator(mockIndexAccess, dummyStopwordsFile.toString(), sqliteConn, mockProgressTracker, 10, classLevelTempDir.resolve("stitchtemp_equiv"), synonymManager);
+        nerIndexGenerator = new NerIndexGenerator(mockIndexAccess, dummyStopwordsFile.toString(), sqliteConn,
+                mockProgressTracker, 10, synonymManager);
+        unigramStitchGenerator = new UnigramNerStitchGenerator(mockIndexAccess, dummyStopwordsFile.toString(),
+                sqliteConn, mockProgressTracker, 10, classLevelTempDir.resolve("stitchtemp_equiv"), synonymManager);
 
         // Create annotations table (if not handled by BaseIndexTest setUp)
         // Assuming BaseIndexTest only provides connection, not schema.
         try (Statement stmt = sqliteConn.createStatement()) {
             stmt.execute("DROP TABLE IF EXISTS annotations"); // Clear if exists
             stmt.execute("CREATE TABLE annotations (" +
-                         "annotation_id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                         "document_id INTEGER, " +
-                         "sentence_id INTEGER, " +
-                         "begin_char INTEGER, " +
-                         "end_char INTEGER, " +
-                         "token TEXT, " +
-                         "pos TEXT, " +
-                         "ner TEXT, " +
-                         "normalized_ner TEXT, " +
-                         "lemma TEXT)");
+                    "annotation_id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "document_id INTEGER, " +
+                    "sentence_id INTEGER, " +
+                    "begin_char INTEGER, " +
+                    "end_char INTEGER, " +
+                    "token TEXT, " +
+                    "pos TEXT, " +
+                    "ner TEXT, " +
+                    "normalized_ner TEXT, " +
+                    "lemma TEXT)");
         }
     }
 
-    private void insertAnnotation(int docId, int sentId, int begin, int end, String token, String ner, String normalizedNer) throws SQLException {
+    private void insertAnnotation(int docId, int sentId, int begin, int end, String token, String ner,
+            String normalizedNer) throws SQLException {
         String nerToInsert = (ner == null || ner.isEmpty()) ? "O" : ner;
-        String sql = "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma) " +
-                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos, ner, normalized_ner, lemma) "
+                +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(sql)) {
             pstmt.setInt(1, docId);
             pstmt.setInt(2, sentId);
@@ -111,7 +122,8 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
         if (synonymManager != null) {
             synonymManager.close();
             // Attempt to delete if needed, though @TempDir should handle its contents.
-            // For robust cleanup of RocksDB specifically if it lives outside @TempDir controlled area.
+            // For robust cleanup of RocksDB specifically if it lives outside @TempDir
+            // controlled area.
             // If synonymDbPath is inside classLevelTempDir, JUnit manages it.
         }
         // sqliteConn is managed by BaseIndexTest.tearDown()
@@ -128,22 +140,27 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
 
     // Helper method for reflection to call protected NerIndexGenerator.processBatch
     @SuppressWarnings("unchecked")
-    private ListMultimap<String, PositionListSoA> invokeNerProcessBatch(List<AnnotationEntry> batch) throws Exception {
+    private ListMultimap<String, PostingList> invokeNerProcessBatch(List<AnnotationEntry> batch) throws Exception {
         Method method = NerIndexGenerator.class.getDeclaredMethod("processBatch", List.class);
         method.setAccessible(true);
         try {
-            return (ListMultimap<String, PositionListSoA>) method.invoke(nerIndexGenerator, batch);
+            return (ListMultimap<String, PostingList>) method.invoke(nerIndexGenerator, batch);
         } catch (java.lang.reflect.InvocationTargetException e) {
-            // Unwrap the actual exception if it\'s a RocksDBException or other relevant exception
-            if (e.getCause() instanceof RocksDBException) throw (RocksDBException) e.getCause();
-            if (e.getCause() instanceof RuntimeException) throw (RuntimeException) e.getCause();
+            // Unwrap the actual exception if it\'s a RocksDBException or other relevant
+            // exception
+            if (e.getCause() instanceof RocksDBException)
+                throw (RocksDBException) e.getCause();
+            if (e.getCause() instanceof RuntimeException)
+                throw (RuntimeException) e.getCause();
             throw e; // Re-throw if it is not one of the expected wrapped exceptions
         }
     }
 
-    // Helper method for reflection to call protected UnigramNerStitchIndexGenerator.fetchAnnotationsForDocument
+    // Helper method for reflection to call protected
+    // UnigramNerStitchIndexGenerator.fetchAnnotationsForDocument
     @SuppressWarnings("unchecked")
-    private List<AbstractNgramStitchGenerator.AnnotationData> invokeUnigramFetchAnnotations(int docId) throws Exception {
+    private List<AbstractNgramStitchGenerator.AnnotationData> invokeUnigramFetchAnnotations(int docId)
+            throws Exception {
         Method method = UnigramNerStitchGenerator.class.getDeclaredMethod("fetchAnnotationsForDocument", int.class);
         method.setAccessible(true);
         return (List<AbstractNgramStitchGenerator.AnnotationData>) method.invoke(unigramStitchGenerator, docId);
@@ -157,7 +174,7 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
         insertAnnotation(1, 1, 6, 9, "met", "O", "meet");
         insertAnnotation(1, 1, 10, 13, "Bob", "PERSON", "bob");
         insertAnnotation(1, 2, 0, 6, "Google", "ORGANIZATION", "google");
-        insertAnnotation(1, 2, 7, 10, "Inc.", "ORGANIZATION", "inc.");  // Forms "Google Inc."
+        insertAnnotation(1, 2, 7, 10, "Inc.", "ORGANIZATION", "inc."); // Forms "Google Inc."
         insertAnnotation(1, 2, 11, 12, ".", "O", "."); // Adjacency check needs correct end_char for "Inc."
         insertAnnotation(1, 3, 0, 3, "NYC", "LOCATION", "nyc");
 
@@ -170,17 +187,19 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
         insertAnnotation(2, 1, 7, 17, "Washington", "PERSON", "g. washington"); // Forms "George Washington"
         insertAnnotation(2, 1, 18, 21, "and", "O", "and");
         insertAnnotation(2, 1, 22, 26, "John", "PERSON", "j. adams");
-        insertAnnotation(2, 1, 27, 32, "Adams", "PERSON", "j. adams");       // Forms "John Adams"
+        insertAnnotation(2, 1, 27, 32, "Adams", "PERSON", "j. adams"); // Forms "John Adams"
 
-        // Doc 3: Single token entities and gaps which should result in separate entities
+        // Doc 3: Single token entities and gaps which should result in separate
+        // entities
         insertAnnotation(3, 1, 0, 5, "Paris", "LOCATION", "paris");
         // Deliberate gap, should not merge "Paris" and "France"
-        insertAnnotation(3, 1, 20, 26, "France", "LOCATION", "france"); // Note: begin_char 20 implies a gap from Paris (ends 5)
+        insertAnnotation(3, 1, 20, 26, "France", "LOCATION", "france"); // Note: begin_char 20 implies a gap from Paris
+                                                                        // (ends 5)
 
         // Doc 4: Entity break due to different NER tag
-        insertAnnotation(4,1,0,5, "Apple", "ORGANIZATION", "apple_org");
-        insertAnnotation(4,1,6,10, "Inc.", "ORGANIZATION", "apple_org"); // Forms Apple Inc.
-        insertAnnotation(4,1,11,16, "Swift", "LANGUAGE", "swift_lang"); // Different NER type, breaks entity
+        insertAnnotation(4, 1, 0, 5, "Apple", "ORGANIZATION", "apple_org");
+        insertAnnotation(4, 1, 6, 10, "Inc.", "ORGANIZATION", "apple_org"); // Forms Apple Inc.
+        insertAnnotation(4, 1, 11, 16, "Swift", "LANGUAGE", "swift_lang"); // Different NER type, breaks entity
 
         // --- Process with NerIndexGenerator ---
         Set<IdentifiedEntity> nerGeneratorEntities = new HashSet<>();
@@ -189,21 +208,39 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
         do {
             batch = invokeNerFetchBatch(lastProcessed);
             if (!batch.isEmpty()) {
-                ListMultimap<String, PositionListSoA> processedBatch = invokeNerProcessBatch(batch);
+                ListMultimap<String, PostingList> processedBatch = invokeNerProcessBatch(batch);
                 assertNotNull(processedBatch, "Processed batch from NerIndexGenerator should not be null");
 
-                for (String entityType : processedBatch.keySet()) {
-                    List<PositionListSoA> plsList = processedBatch.get(entityType);
-                    for (PositionListSoA pls : plsList) {
-                        for (int i = 0; i < pls.getNumPositions(); i++) {
+                for (String key : processedBatch.keySet()) {
+                    // Key format: TYPE\0<4-byte synId> via KeySchema
+                    byte[] keyBytes = key.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    KeySchema.DecodedKey dk = KeySchema.decodeKey(keyBytes);
+                    String entityType = dk.type();
+                    int synId = dk.synId();
+
+                    for (PostingList pl : processedBatch.get(key)) {
+                        long[] cellArr = pl.cells().toArray();
+                        for (long ck : cellArr) {
+                            int docId = PostingList.docIdFromCellKey(ck);
+                            int sentId = PostingList.sentIdFromCellKey(ck);
+                            int beginChar = 0;
+                            int endChar = 0;
+                            if (pl.occurrences() != null) {
+                                // Find the cell index for this cell key
+                                OccurrencesBlock occ = pl.occurrences();
+                                for (int ci = 0; ci < occ.numCells(); ci++) {
+                                    if (occ.cellKey(ci) == ck) {
+                                        OccurrencesView ov = occ.occurrences(ci);
+                                        if (ov.size() > 0) {
+                                            beginChar = ov.begin(0);
+                                            endChar = beginChar + (occ.constantLength() & 0xFF);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
                             nerGeneratorEntities.add(new IdentifiedEntity(
-                                entityType,
-                                pls.getSynonymIdAt(i),
-                                pls.getDocIdAt(i),
-                                pls.getSentenceIdAt(i),
-                                pls.getBeginCharAt(i),
-                                pls.getEndCharAt(i)
-                            ));
+                                    entityType, synId, docId, sentId, beginChar, endChar));
                         }
                     }
                 }
@@ -215,33 +252,41 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
 
         // --- Process with UnigramNerStitchGenerator ---
         Set<IdentifiedEntity> unigramStitchEntities = new HashSet<>();
-        int[] docIdsToTest = {1, 2, 3, 4};
+        int[] docIdsToTest = { 1, 2, 3, 4 };
 
         for (int docId : docIdsToTest) {
             List<AbstractNgramStitchGenerator.AnnotationData> annotationDataList = invokeUnigramFetchAnnotations(docId);
-            assertNotNull(annotationDataList, "AnnotationData list from UnigramNerStitchGenerator should not be null for doc " + docId);
+            assertNotNull(annotationDataList,
+                    "AnnotationData list from UnigramNerStitchGenerator should not be null for doc " + docId);
 
             for (AbstractNgramStitchGenerator.AnnotationData ad : annotationDataList) {
                 int entityValueSynonymId = synonymManager.getId(ad.specificValueForSynonym());
                 unigramStitchEntities.add(new IdentifiedEntity(
-                    ad.annotationKeyComponent(),
-                    entityValueSynonymId,
-                    docId,
-                    ad.sentenceId(),
-                    ad.beginChar(),
-                    ad.endChar()
-                ));
+                        ad.annotationKeyComponent(),
+                        entityValueSynonymId,
+                        docId,
+                        ad.sentenceId(),
+                        ad.beginChar(),
+                        ad.endChar()));
             }
         }
 
         // --- Assertions ---
         System.out.println("NerIndexGenerator Entities (" + nerGeneratorEntities.size() + "):");
-        nerGeneratorEntities.stream().sorted(java.util.Comparator.comparing(IdentifiedEntity::docId).thenComparing(IdentifiedEntity::sentId).thenComparing(IdentifiedEntity::beginChar)).forEach(System.out::println);
+        nerGeneratorEntities
+                .stream().sorted(java.util.Comparator.comparing(IdentifiedEntity::docId)
+                        .thenComparing(IdentifiedEntity::sentId).thenComparing(IdentifiedEntity::beginChar))
+                .forEach(System.out::println);
 
         System.out.println("\\nUnigramNerStitchGenerator Entities (" + unigramStitchEntities.size() + "):");
-        unigramStitchEntities.stream().sorted(java.util.Comparator.comparing(IdentifiedEntity::docId).thenComparing(IdentifiedEntity::sentId).thenComparing(IdentifiedEntity::beginChar)).forEach(System.out::println);
+        unigramStitchEntities
+                .stream().sorted(java.util.Comparator.comparing(IdentifiedEntity::docId)
+                        .thenComparing(IdentifiedEntity::sentId).thenComparing(IdentifiedEntity::beginChar))
+                .forEach(System.out::println);
 
-        assertEquals(nerGeneratorEntities.size(), unigramStitchEntities.size(), "Number of identified entities should be the same.");
-        assertEquals(nerGeneratorEntities, unigramStitchEntities, "The set of identified entities should be identical.");
+        assertEquals(nerGeneratorEntities.size(), unigramStitchEntities.size(),
+                "Number of identified entities should be the same.");
+        assertEquals(nerGeneratorEntities, unigramStitchEntities,
+                "The set of identified entities should be identical.");
     }
 }

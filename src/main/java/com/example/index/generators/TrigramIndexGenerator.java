@@ -13,15 +13,19 @@ import java.util.List;
 import java.util.Map;
 
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.core.OccurrencesBlock;
+import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 /**
  * Generates a streaming trigram index from annotation entries.
- * Each entry maps a sequence of three consecutive tokens to their positions in the corpus.
+ * Each entry maps a sequence of three consecutive tokens to their positions in
+ * the corpus.
  * Uses streaming processing and external sorting for efficient memory usage.
  *
  */
@@ -35,7 +39,8 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         this(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, null);
     }
 
-    public TrigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn, ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
+    public TrigramIndexGenerator(IndexAccessInterface indexAccess, String stopwordsPath, Connection sqliteConn,
+            ProgressTracker progress, int batchSize, Path customTempPath) throws IOException {
         super(indexAccess, stopwordsPath, sqliteConn, progress, batchSize, customTempPath);
     }
 
@@ -69,15 +74,15 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                     String rawToken = rs.getString("token");
                     String token = (rawToken != null) ? rawToken.trim() : null;
                     AnnotationEntry entry = new AnnotationEntry(
-                        rs.getLong("annotation_id"),
-                        rs.getInt("document_id"),
-                        rs.getInt("sentence_id"),
-                        rs.getInt("begin_char"),
-                        rs.getInt("end_char"),
-                        token,
-                        null, // pos
-                        null, // ner
-                        null // normalizedNer
+                            rs.getLong("annotation_id"),
+                            rs.getInt("document_id"),
+                            rs.getInt("sentence_id"),
+                            rs.getInt("begin_char"),
+                            rs.getInt("end_char"),
+                            token,
+                            null, // pos
+                            null, // ner
+                            null // normalizedNer
                     );
                     batch.add(entry);
                 }
@@ -88,7 +93,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
     }
 
     @Override
-    protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
+    protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
         // Augment current batch with up to two tail tokens from the previous batch
         // so that trigrams spanning the boundary are generated in this call.
         List<AnnotationEntry> augmented = new ArrayList<>(tailFromPreviousBatch.size() + batch.size());
@@ -96,25 +101,28 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
         augmented.addAll(batch);
 
         augmented.sort(Comparator.comparingInt(AnnotationEntry::getDocumentId)
-            .thenComparingInt(AnnotationEntry::getSentenceId)
-            .thenComparingInt(AnnotationEntry::getBeginChar));
+                .thenComparingInt(AnnotationEntry::getSentenceId)
+                .thenComparingInt(AnnotationEntry::getBeginChar));
 
-        ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
-        Map<String, PositionListSoA> positionLists = new HashMap<>();
+        ListMultimap<String, PostingList> index = ArrayListMultimap.create();
+        Map<String, Map<Long, IntArrayList>> termCellMap = new HashMap<>();
+        Map<String, Byte> termConstLen = new HashMap<>();
 
         for (int i = 0; i < augmented.size() - 2; i++) { // Need 3 tokens for a trigram
             AnnotationEntry firstEntry = augmented.get(i);
             AnnotationEntry secondEntry = augmented.get(i + 1);
             AnnotationEntry thirdEntry = augmented.get(i + 2);
 
-            if (firstEntry.getDocumentId() != secondEntry.getDocumentId() || firstEntry.getSentenceId() != secondEntry.getSentenceId() ||
-                secondEntry.getDocumentId() != thirdEntry.getDocumentId() || secondEntry.getSentenceId() != thirdEntry.getSentenceId()) {
+            if (firstEntry.getDocumentId() != secondEntry.getDocumentId()
+                    || firstEntry.getSentenceId() != secondEntry.getSentenceId() ||
+                    secondEntry.getDocumentId() != thirdEntry.getDocumentId()
+                    || secondEntry.getSentenceId() != thirdEntry.getSentenceId()) {
                 continue;
             }
 
             // Check for non-adjacency between all parts of the trigram.
             if (secondEntry.getBeginChar() > firstEntry.getEndChar() + 2 ||
-                thirdEntry.getBeginChar() > secondEntry.getEndChar() + 2) {
+                    thirdEntry.getBeginChar() > secondEntry.getEndChar() + 2) {
                 continue;
             }
 
@@ -123,8 +131,8 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             String thirdToken = thirdEntry.getToken();
 
             if (firstToken == null || firstToken.isEmpty() ||
-                secondToken == null || secondToken.isEmpty() ||
-                thirdToken == null || thirdToken.isEmpty()) {
+                    secondToken == null || secondToken.isEmpty() ||
+                    thirdToken == null || thirdToken.isEmpty()) {
                 continue;
             }
 
@@ -136,21 +144,52 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
                 continue;
             }
 
-
             String key = String.format("%s%s%s%s%s",
-                t1,
-                DELIMITER,
-                t2,
-                DELIMITER,
-                t3);
+                    t1,
+                    DELIMITER,
+                    t2,
+                    DELIMITER,
+                    t3);
 
-            PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
-            posList.add(thirdEntry.getDocumentId(), thirdEntry.getSentenceId(),
-                firstEntry.getBeginChar(), thirdEntry.getEndChar());
+            long cellKey = PostingList.packCellKey(thirdEntry.getDocumentId(), thirdEntry.getSentenceId());
+            Map<Long, IntArrayList> cellMap = termCellMap.computeIfAbsent(key, k -> new java.util.LinkedHashMap<>());
+            cellMap.computeIfAbsent(cellKey, k -> new IntArrayList()).add(firstEntry.getBeginChar());
+
+            // Compute constant length for the trigram span
+            int len = thirdEntry.getEndChar() - firstEntry.getBeginChar();
+            byte cl = (byte) Math.min(len, 255);
+            termConstLen.putIfAbsent(key, cl);
         }
 
-        for (Map.Entry<String, PositionListSoA> entry : positionLists.entrySet()) {
-            index.put(entry.getKey(), entry.getValue());
+        // Build PostingList for each trigram key
+        for (Map.Entry<String, Map<Long, IntArrayList>> termEntry : termCellMap.entrySet()) {
+            String key = termEntry.getKey();
+            Map<Long, IntArrayList> cellMap = termEntry.getValue();
+
+            Roaring64NavigableMap cells = new Roaring64NavigableMap();
+            for (long ck : cellMap.keySet()) {
+                cells.add(ck);
+            }
+
+            int numCells = cellMap.size();
+            long[] cellKeysArr = new long[numCells];
+            byte[][] beginsArr = new byte[numCells][];
+            int idx = 0;
+            for (Map.Entry<Long, IntArrayList> e : cellMap.entrySet()) {
+                cellKeysArr[idx] = e.getKey();
+                IntArrayList bl = e.getValue();
+                byte[] b = new byte[bl.size()];
+                for (int j = 0; j < bl.size(); j++) {
+                    b[j] = (byte) bl.getInt(j);
+                }
+                beginsArr[idx] = b;
+                idx++;
+            }
+
+            byte constantLength = termConstLen.getOrDefault(key, (byte) 0);
+            OccurrencesBlock occ = OccurrencesBlock.fromUnsorted(cellKeysArr, beginsArr, constantLength);
+            PostingList pl = PostingList.fromCellsAndOccurrences(cells, constantLength, occ);
+            index.put(key, pl);
         }
 
         // Update tail: keep the last two tokens to bridge with the next batch
@@ -174,7 +213,7 @@ public final class TrigramIndexGenerator extends IndexGenerator<AnnotationEntry>
     public long getDocumentCountForIndex() throws SQLException {
         String countSql = "SELECT MAX(annotation_id) FROM annotations";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
-             ResultSet rs = stmt.executeQuery()) {
+                ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {
                 return rs.getLong(1);
             }

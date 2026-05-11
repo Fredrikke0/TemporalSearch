@@ -53,7 +53,7 @@ public class AttributeRequirements {
     }
 
     /**
-     * Gets the set of required SoA attribute names for selective deserialization.
+     * Gets the set of required attribute names for selective deserialization.
      *
      * @return Set of attribute names that need to be deserialized
      */

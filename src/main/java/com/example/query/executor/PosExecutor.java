@@ -1,31 +1,32 @@
 package com.example.query.executor;
 
-import java.io.IOException;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
+import org.rocksdb.RocksDBException;
+import org.rocksdb.RocksIterator;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.core.PostingList;
+import com.example.index.KeySchema;
 import com.example.index.util.SynonymManager;
-import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Pos;
 
 /**
- * Executor for POS conditions.
- * Handles matching POS tags against indexed data.
+ * Executor for POS (Part-of-Speech) conditions.
+ * Handles matching POS tags against indexed data using the new
+ * {@code KeySchema}/{@code CellResult} interface.
  *
- * POS Condition Logic:
- *   - Simple match: POS(tag) -> Finds sentences containing the specified tag. Value stored is the tag itself (e.g. "NN") with ValueType.POS_TAG_TYPE.
- *   - Match with term: POS(tag, term) -> Finds sentences where 'term' has the specified tag. Value stored is 'term' (e.g. "apple") with ValueType.POS_TERM.
- *   - Variable binding: POS(tag) BIND var -> Binds var to the 'term' (e.g. "apple") that has the tag. ValueType.POS_TERM.
+ * <p>
+ * The POS index stores keys as {@code TAG\0<4-byte synId>} (see
+ * {@link KeySchema#encodeKey(String, int)}). A prefix scan over
+ * {@code TAG\0} retrieves all terms with that tag; a specific lookup
+ * encodes the synonym ID of the desired term value.
  */
 public final class PosExecutor implements ConditionExecutor<Pos> {
     private static final Logger logger = LoggerFactory.getLogger(PosExecutor.class);
@@ -35,231 +36,182 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
 
     /**
      * Creates a new POS executor.
-     * @param synonymManager The synonym manager instance.
+     *
+     * @param synonymManager the synonym manager instance
      */
     public PosExecutor(SynonymManager synonymManager) {
         this.synonymManager = synonymManager;
     }
 
     @Override
-    public QueryResultSoA execute(Pos condition, Map<String, IndexAccessInterface> indexes, Query.Granularity granularity,
-                                 int granularitySize, String corpusName, AttributeRequirements requirements,
-                                 Optional<FilteringContext> context)
+    public CellResult execute(Pos condition, Map<String, IndexAccessInterface> indexes,
+            Query.Granularity granularity,
+            int granularitySize,
+            String corpusName,
+            AttributeRequirements requirements,
+            Optional<Roaring64NavigableMap> allowedCells)
             throws QueryExecutionException {
         logger.debug(">>> Executing PosExecutor");
-        logger.debug("Executing POS condition: {}, AttrReqs: {}, ContextIsPresent: {}",
-                     condition, requirements, context.isPresent());
+        logger.debug("Executing POS condition: {}, granularity: {}", condition, granularity);
 
         IndexAccessInterface posIndex = indexes.get(POS_INDEX_NAME);
         if (posIndex == null) {
-            throw new QueryExecutionException("POS index not found in provided indexes.", condition.toString(), QueryExecutionException.ErrorType.MISSING_INDEX);
+            throw new QueryExecutionException("POS index not found in provided indexes.",
+                    condition.toString(), QueryExecutionException.ErrorType.MISSING_INDEX);
         }
-
-        QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
 
         String tagFromQuery = condition.posTag().toUpperCase();
         String termFromQuery = condition.term();
-        String variableName = condition.variableName();
 
         logger.debug("POS condition details: tag='{}', term='{}', isVariable={}, variableName='{}'",
-                     tagFromQuery, termFromQuery, (variableName != null), variableName != null ? variableName : "(none)");
+                tagFromQuery, termFromQuery,
+                condition.isVariable(),
+                condition.isVariable() ? condition.variableName() : "(none)");
 
         if (ALL_POS_TAGS_WILDCARD.equals(tagFromQuery)) {
             throw new QueryExecutionException(
-                "Wildcard POS tag (*) is not supported for direct execution. Use specific tags or variable binding for tags.",
-                condition.toString(),
-                QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION
-            );
+                    "Wildcard POS tag (*) is not supported for direct execution.",
+                    condition.toString(),
+                    QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
         }
         if (termFromQuery != null && termFromQuery.contains("*")) {
             throw new QueryExecutionException(
-                "Wildcard in target term ('" + termFromQuery + "') for POS condition is not supported.",
-                condition.toString(),
-                QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
+                    "Wildcard in target term ('" + termFromQuery + "') for POS condition is not supported.",
+                    condition.toString(),
+                    QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
         }
+
+        PostingList.DeserializeMode mode = requirements.toDeserializeMode();
+        CellResult result;
 
         try {
             if (termFromQuery != null) {
-                logger.debug("POS path: Specific Term Search. Tag='{}', TermFromQuery='{}', VarName='{}'", tagFromQuery, termFromQuery, variableName);
-                executeSpecificTermSearch(tagFromQuery, termFromQuery, variableName, posIndex, requirements, resultSoA, context);
+                // Specific term search: resolve term to synId, exact key lookup
+                result = executeSpecificTermSearch(tagFromQuery, termFromQuery, posIndex, granularity, mode);
             } else {
-                logger.debug("POS path: Tag-Only or Variable Binding to Term. Tag='{}', VarName='{}'", tagFromQuery, variableName);
-                executeTagOnlyOrVariableTermSearch(tagFromQuery, variableName, posIndex, requirements, resultSoA, context);
+                // Tag-only or variable binding (bind any term with that tag): prefix scan
+                result = executeTagOnlySearch(tagFromQuery, posIndex, granularity, mode);
             }
-        } catch (IOException e) {
-            logger.error("IOException during POS condition execution: {}", e.getMessage(), e);
-            throw new QueryExecutionException("Unexpected IO error executing POS condition: " + e.getMessage(),
-                                            e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
+
+            // Apply allowedCells filtering if present
+            if (allowedCells.isPresent() && !allowedCells.get().isEmpty()) {
+                logger.debug("Applying allowedCells filter with {} cells",
+                        allowedCells.get().getLongCardinality());
+                result = result.and(CellResult.of(allowedCells.get(), granularity));
+            }
+
         } catch (IndexAccessException e) {
             logger.error("IndexAccessException during POS condition execution: {}", e.getMessage(), e);
-            throw new QueryExecutionException("Unexpected index access error executing POS condition: " + e.getMessage(),
-                                            e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
-        } catch (org.rocksdb.RocksDBException rde) {
-            logger.error("RocksDBException during POS condition execution: {}", rde.getMessage(), rde);
-            throw new QueryExecutionException("RocksDB error executing POS condition: " + rde.getMessage(),
-                                            rde, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+            throw new QueryExecutionException(
+                    "Unexpected index access error executing POS condition: " + e.getMessage(),
+                    e, condition.toString(), QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+        } catch (Exception e) {
+            if (e instanceof QueryExecutionException qee) {
+                throw qee;
+            }
+            logger.error("Unexpected error during POS condition execution: {}", e.getMessage(), e);
+            throw new QueryExecutionException(
+                    "Unexpected error executing POS condition: " + e.getMessage(),
+                    e, condition.toString(), QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
 
-        logger.debug("POS condition execution produced {} conceptual rows, total SoA size: {}",
-                     resultSoA.getConceptualRowCount(), resultSoA.size());
-
-        // Sorting is centralized by QueryExecutor
-        return resultSoA;
+        logger.debug("POS condition execution produced CellResult with {} cells", result.cellCount());
+        return result;
     }
 
-    private void executeSpecificTermSearch(String tagFromQuery, String termFromQuery, String variableName, IndexAccessInterface index,
-                                           AttributeRequirements requirements, QueryResultSoA resultSoA,
-                                           Optional<FilteringContext> context)
-            throws IOException, IndexAccessException, org.rocksdb.RocksDBException {
-
-        if (!requirements.needsSynonymIds && variableName == null) {
-            logger.warn("executeSpecificTermSearch called for Tag='{}', Term='{}' but AttributeRequirements.needsSynonymIds is false. Efficient filtering by synonym ID is not possible.",
-                        tagFromQuery, termFromQuery);
+    /**
+     * Specific term search: {@code POS(tag, term)} or
+     * {@code POS(tag, term) BIND var}.
+     * <p>
+     * Resolves the term to a synonym ID, builds the exact key
+     * {@code TAG\0<synId>}, and fetches the posting list.
+     */
+    private CellResult executeSpecificTermSearch(String tag, String term,
+            IndexAccessInterface index,
+            Query.Granularity granularity,
+            PostingList.DeserializeMode mode)
+            throws IndexAccessException {
+        String normalizedTerm = term.toLowerCase();
+        int synId;
+        try {
+            synId = synonymManager.getId(normalizedTerm);
+            logger.debug("executeSpecificTermSearch: Tag='{}', Term='{}', SynId={}", tag, term, synId);
+        } catch (RocksDBException e) {
+            logger.warn("Failed to get synonym ID for term '{}': {}", term, e.getMessage());
+            return CellResult.empty(granularity);
         }
 
-        String normalizedTargetTerm = termFromQuery.toLowerCase();
-        int targetSynonymId = synonymManager.getId(normalizedTargetTerm);
+        byte[] key = KeySchema.encodeKey(tag, synId);
+        Optional<PostingList> plOpt = index.getPostingList(key, mode);
 
-        logger.debug("executeSpecificTermSearch: Tag='{}', TermValue='{}' (original), NormalizedTerm='{}', TargetSynonymID={}",
-            tagFromQuery, termFromQuery, normalizedTargetTerm, targetSynonymId);
-
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context, requirements);
-
-        if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
-            logger.debug("executeSpecificTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);
-            return;
+        if (plOpt.isPresent() && !plOpt.get().isEmpty()) {
+            return toCellResult(plOpt.get(), granularity, mode);
         }
-
-        PositionListSoA positions = positionsOptional.get();
-
-        if (positions.isEmpty()) {
-            logger.debug("executeSpecificTermSearch: No positions for tag '{}' after context filtering (positions.isEmpty() check).", tagFromQuery);
-            return;
-        }
-
-        int numPositionsTotal = positions.getNumPositions();
-        if (numPositionsTotal == 0) return; // Should be caught by positions.isEmpty() but defensive check.
-
-        int conceptualRowsAdded = 0;
-
-        for (int i = 0; i < numPositionsTotal; i++) {
-            if (positions.getSynonymIdAt(i) == targetSynonymId) {
-                resultSoA.add(
-                    termFromQuery,
-                    ValueType.POS_TERM,
-                    variableName,
-                    positions.getDocIdAt(i),
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    targetSynonymId,
-                    resultSoA.getNextConceptualRowId() // Each match gets a new conceptual row
-                );
-                conceptualRowsAdded++;
-            }
-        }
-        logger.debug("executeSpecificTermSearch for Tag '{}', Term '{}' added {} positions to QueryResultSoA, creating {} conceptual rows.",
-            tagFromQuery, termFromQuery, conceptualRowsAdded, conceptualRowsAdded);
+        logger.debug("executeSpecificTermSearch: No data for tag '{}', synId {}", tag, synId);
+        return CellResult.empty(granularity);
     }
 
-    private void executeTagOnlyOrVariableTermSearch(String tagFromQuery, String variableName, IndexAccessInterface index,
-                                                    AttributeRequirements requirements, QueryResultSoA resultSoA,
-                                                    Optional<FilteringContext> context)
-            throws IOException, IndexAccessException, org.rocksdb.RocksDBException, QueryExecutionException {
+    /**
+     * Tag-only search: {@code POS(tag)} or {@code POS(tag) BIND var} (bind
+     * any term with that tag).
+     * <p>
+     * Performs a prefix scan over {@code TAG\0} in the POS index, fetches the
+     * posting list for each key, and ORs all results together.
+     */
+    private CellResult executeTagOnlySearch(String tag, IndexAccessInterface index,
+            Query.Granularity granularity,
+            PostingList.DeserializeMode mode)
+            throws IndexAccessException {
+        logger.debug("executeTagOnlySearch: Prefix scan for tag '{}'", tag);
 
-        Optional<PositionListSoA> positionsOptional = index.getMergedPositions(tagFromQuery, context, requirements);
+        byte[] prefix = KeySchema.encodeTypePrefix(tag);
+        CellResult result = CellResult.empty(granularity);
 
-        if (!positionsOptional.isPresent() || positionsOptional.get().isEmpty()) {
-            logger.debug("executeTagOnlyOrVariableTermSearch: No data found for POS tag '{}' after getMergedPositions (with context filtering)", tagFromQuery);
-            return;
-        }
-
-        PositionListSoA positions = positionsOptional.get();
-        // The positions object is already filtered by the context.
-
-        if (positions.isEmpty()) { // Defensive check
-            logger.debug("executeTagOnlyOrVariableTermSearch: No positions for tag '{}' after context filtering (positions.isEmpty() check).", tagFromQuery);
-            return;
-        }
-
-        int numPositions = positions.getNumPositions();
-        logger.debug("executeTagOnlyOrVariableTermSearch: Positions found for '{}'. numPositions: {}", tagFromQuery, numPositions);
-
-        if (numPositions == 0) return;
-
-        if (variableName != null) {
-            // Collect unique synonym IDs
-            Set<Integer> uniqueSynonymIds = new HashSet<>();
-            for (int i = 0; i < numPositions; i++) {
-                uniqueSynonymIds.add(positions.getSynonymIdAt(i));
-            }
-
-            // Fetch terms in a batch
-            Map<Integer, String> resolvedTermsCache = Collections.emptyMap(); // Default to empty
-            if (!uniqueSynonymIds.isEmpty()) {
-                try {
-                    resolvedTermsCache = synonymManager.getTerms(uniqueSynonymIds);
-                    logger.debug("executeTagOnlyOrVariableTermSearch: Batch fetched {} terms for {} unique synonym IDs for POS tag '{}'.",
-                                 resolvedTermsCache.size(), uniqueSynonymIds.size(), tagFromQuery);
-                } catch (org.rocksdb.RocksDBException e) {
-                    logger.error("RocksDBException while batch fetching terms in POS variable binding for Tag '{}'", tagFromQuery, e);
-                    // Propagate as a QueryExecutionException or a more specific custom exception if desired
-                    throw new QueryExecutionException("Failed to batch fetch terms from SynonymManager for POS BIND",
-                                                    e, "POS(" + tagFromQuery + ") BIND " + variableName,
-                                                    QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
+        try (RocksIterator iter = index.seek(prefix)) {
+            int keysExamined = 0;
+            while (iter.isValid()) {
+                byte[] key = iter.key();
+                if (!startsWith(key, prefix)) {
+                    break;
                 }
-            }
+                keysExamined++;
 
-            Map<String, Integer> resolvedTermToConceptualRowId = new java.util.HashMap<>();
-            int conceptualRowsAdded = 0;
-
-            for (int i = 0; i < numPositions; i++) {
-                int currentSynonymId = positions.getSynonymIdAt(i);
-                String termToBind = resolvedTermsCache.get(currentSynonymId);
-
-                if (termToBind == null) {
-                    // This can happen if a synonym ID was in positions but not resolvable by getTerms (e.g. not in DB, cache issue)
-                    logger.warn("executeTagOnlyOrVariableTermSearch: No term found in pre-fetched cache for synonymId {} (tag: {}). Skipping.",
-                                currentSynonymId, tagFromQuery);
-                    continue;
+                Optional<PostingList> plOpt = index.getPostingList(key, mode);
+                if (plOpt.isPresent() && !plOpt.get().isEmpty()) {
+                    CellResult cr = toCellResult(plOpt.get(), granularity, mode);
+                    result = result.or(cr);
                 }
-
-                int conceptualRowId = resultSoA.getNextConceptualRowId(); // Each match gets a new conceptual row
-
-                resultSoA.add(
-                    termToBind,
-                    ValueType.POS_TERM,
-                    variableName,
-                    positions.getDocIdAt(i),
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    currentSynonymId,
-                    conceptualRowId
-                );
-                conceptualRowsAdded++;
+                iter.next();
             }
-            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' BIND '{}' created {} conceptual rows from {} total bindings.",
-                tagFromQuery, variableName, conceptualRowsAdded, resultSoA.size());
-
-        } else { // Tag-only search, no variable binding for the term itself
-            int conceptualRowsAdded = 0;
-            for (int i = 0; i < numPositions; i++) {
-                resultSoA.add(
-                    tagFromQuery, // Value is the tag itself
-                    ValueType.POS_TAG_TYPE,
-                    null, // No variable name for the tag value
-                    positions.getDocIdAt(i),
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    -1, // No specific synonym ID is relevant when just matching the tag
-                    resultSoA.getNextConceptualRowId() // Each match gets a new conceptual row
-                );
-                conceptualRowsAdded++;
-            }
-            logger.debug("executeTagOnlyOrVariableTermSearch for Tag '{}' (no BIND) added {} positions to QueryResultSoA, creating {} conceptual rows.",
-                tagFromQuery, conceptualRowsAdded, conceptualRowsAdded);
+            logger.debug("executeTagOnlySearch: Examined {} keys for tag '{}', result has {} cells",
+                    keysExamined, tag, result.cellCount());
         }
+
+        return result;
+    }
+
+    /**
+     * Converts a PostingList to a CellResult, choosing the appropriate factory
+     * based on deserialization mode.
+     */
+    private static CellResult toCellResult(PostingList pl, Query.Granularity granularity,
+            PostingList.DeserializeMode mode) {
+        if (mode == PostingList.DeserializeMode.FULL) {
+            return CellResult.fromPostingListWithOccurrences(pl, granularity);
+        }
+        return CellResult.fromPostingList(pl, granularity);
+    }
+
+    /** Checks if {@code array} starts with {@code prefix}. */
+    private static boolean startsWith(byte[] array, byte[] prefix) {
+        if (array.length < prefix.length) {
+            return false;
+        }
+        for (int i = 0; i < prefix.length; i++) {
+            if (array[i] != prefix[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 }

@@ -63,6 +63,55 @@ public final class PostingList {
         return new PostingList(new Roaring64NavigableMap(), constantLength, null);
     }
 
+    /**
+     * Merges another PostingList into this one (logical OR of cells, merge
+     * occurrences). Both must have the same constantLength.
+     *
+     * @param other the other PostingList to merge in
+     * @return a new merged PostingList
+     */
+    public PostingList merge(PostingList other) {
+        if (other == null || other.isEmpty()) {
+            return this;
+        }
+        if (this.isEmpty()) {
+            return other;
+        }
+        Roaring64NavigableMap mergedCells = this.cells.clone();
+        mergedCells.or(other.cells);
+
+        OccurrencesBlock mergedOcc = null;
+        // If both have occurrences, merge by concatenating CSR data
+        if (this.occurrences != null && other.occurrences != null) {
+            mergedOcc = OccurrencesBlock.merge(this.occurrences, other.occurrences);
+        } else if (this.occurrences != null) {
+            mergedOcc = this.occurrences;
+        } else if (other.occurrences != null) {
+            mergedOcc = other.occurrences;
+        }
+
+        byte cl = this.constantLength != 0 ? this.constantLength : other.constantLength;
+        return new PostingList(mergedCells, cl, mergedOcc);
+    }
+
+    /**
+     * Creates a union of multiple PostingLists. All must have the same
+     * constantLength (or 0 which is ignored).
+     *
+     * @param lists the lists to union
+     * @return a merged PostingList
+     */
+    public static PostingList union(java.util.List<PostingList> lists) {
+        if (lists == null || lists.isEmpty()) {
+            return empty((byte) 0);
+        }
+        PostingList result = lists.get(0);
+        for (int i = 1; i < lists.size(); i++) {
+            result = result.merge(lists.get(i));
+        }
+        return result;
+    }
+
     // --- Getters ---
 
     public Roaring64NavigableMap cells() {
@@ -107,6 +156,13 @@ public final class PostingList {
             }
         }
         return baos.toByteArray();
+    }
+
+    /**
+     * Deserializes from a byte array in CELLS_ONLY mode (backward compat).
+     */
+    public static PostingList deserialize(byte[] data) throws IOException {
+        return deserialize(data, DeserializeMode.CELLS_ONLY);
     }
 
     /**

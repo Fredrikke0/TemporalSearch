@@ -35,14 +35,19 @@ public final class Bindings {
     // Type storage (one byte per row)
     private final byte[] valueTypes; // length = size
 
+    // Per-row cell keys (null if not tracked)
+    private final long[] rowCellKeys; // length = size, or null
+
     private Bindings(int size, List<Object> uniqueValues, int[] valueIdx,
-            List<String> uniqueVariableNames, int[] varIdx, byte[] valueTypes) {
+            List<String> uniqueVariableNames, int[] varIdx, byte[] valueTypes,
+            long[] rowCellKeys) {
         this.size = size;
         this.uniqueValues = Collections.unmodifiableList(uniqueValues);
         this.valueIdx = valueIdx;
         this.uniqueVariableNames = Collections.unmodifiableList(uniqueVariableNames);
         this.varIdx = varIdx;
         this.valueTypes = valueTypes;
+        this.rowCellKeys = rowCellKeys;
     }
 
     // --- Getters ---
@@ -89,6 +94,16 @@ public final class Bindings {
         return valueTypes[i];
     }
 
+    /** Returns the cell key for row i, or -1 if not tracked. */
+    public long rowCellKeyAt(int i) {
+        return rowCellKeys != null ? rowCellKeys[i] : -1;
+    }
+
+    /** Returns the row cell keys array, or null if not tracked. */
+    public long[] rowCellKeys() {
+        return rowCellKeys;
+    }
+
     // --- Narrowing ---
 
     /**
@@ -114,17 +129,19 @@ public final class Bindings {
         int[] newValueIdx = new int[survivors];
         int[] newVarIdx = new int[survivors];
         byte[] newTypes = new byte[survivors];
+        long[] newRowCellKeys = new long[survivors];
         int out = 0;
         for (int i = 0; i < size; i++) {
             if (matchedCells.contains(cellKeys[i])) {
                 newValueIdx[out] = valueIdx[i];
                 newVarIdx[out] = varIdx[i];
                 newTypes[out] = valueTypes[i];
+                newRowCellKeys[out] = cellKeys[i];
                 out++;
             }
         }
         return new Bindings(survivors, uniqueValues, newValueIdx,
-                uniqueVariableNames, newVarIdx, newTypes);
+                uniqueVariableNames, newVarIdx, newTypes, newRowCellKeys);
     }
 
     // --- Builder ---
@@ -143,6 +160,14 @@ public final class Bindings {
         private final List<Integer> varIdxList = new ArrayList<>();
 
         private final List<Byte> typeList = new ArrayList<>();
+        private final List<Long> cellKeyList = new ArrayList<>();
+        private long currentCellKey = -1;
+
+        /** Sets the cell key for subsequently added rows. */
+        public Builder withCellKey(long cellKey) {
+            this.currentCellKey = cellKey;
+            return this;
+        }
 
         public Builder add(Object value, ValueType valueType, String variableName) {
             // Dedup value
@@ -170,6 +195,9 @@ public final class Bindings {
             // Type
             typeList.add((byte) valueType.ordinal());
 
+            // Cell key
+            cellKeyList.add(currentCellKey);
+
             return this;
         }
 
@@ -178,13 +206,19 @@ public final class Bindings {
             int[] vIdx = new int[n];
             byte[] types = new byte[n];
             int[] nIdx = new int[n];
+            long[] cellKeys = new long[n];
+            boolean hasCellKeys = false;
             for (int i = 0; i < n; i++) {
                 vIdx[i] = valueIdxList.get(i);
                 types[i] = typeList.get(i);
                 nIdx[i] = varIdxList.get(i);
+                cellKeys[i] = cellKeyList.get(i);
+                if (cellKeys[i] != -1)
+                    hasCellKeys = true;
             }
             return new Bindings(n, new ArrayList<>(valueList), vIdx,
-                    new ArrayList<>(varNameList), nIdx, types);
+                    new ArrayList<>(varNameList), nIdx, types,
+                    hasCellKeys ? cellKeys : null);
         }
 
         public boolean isEmpty() {

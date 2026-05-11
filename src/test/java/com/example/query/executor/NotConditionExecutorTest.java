@@ -8,10 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -21,12 +21,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 import org.rocksdb.RocksIterator;
 
+import com.example.core.IndexAccess;
 import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
-import com.example.query.binding.ValueType;
+import com.example.core.PostingList;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Not;
@@ -39,7 +39,7 @@ public class NotConditionExecutorTest {
     @Mock
     private ContainsExecutor mockSubExecutor;
     @Mock
-    private IndexAccessInterface mockUnigramIndex;
+    private IndexAccess mockUnigramIndex;
     @Mock
     private RocksIterator mockDBIterator;
 
@@ -48,9 +48,8 @@ public class NotConditionExecutorTest {
     private Query.Granularity granularity;
     private String corpusName = "test_corpus";
     private Contains subCondition;
-    private QueryResultSoA emptySubResult;
-    private QueryResultSoA nonEmptySubResult;
-    private AttributeRequirements defaultTestRequirements;
+    private CellResult emptySubResult;
+    private CellResult nonEmptySubResult;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -58,28 +57,27 @@ public class NotConditionExecutorTest {
         indexes = Map.of("unigram", mockUnigramIndex);
         granularity = Query.Granularity.DOCUMENT;
         subCondition = new Contains("test");
-        defaultTestRequirements = new AttributeRequirements();
-        defaultTestRequirements.needsConceptualRowIds = true;
-        defaultTestRequirements.needsSentenceId = true;
 
-        emptySubResult = new QueryResultSoA(granularity, 0, defaultTestRequirements);
+        emptySubResult = CellResult.empty(granularity);
 
-        nonEmptySubResult = new QueryResultSoA(granularity, 0, defaultTestRequirements);
-        nonEmptySubResult.add("test", ValueType.TERM, null, 1, -1, 0, 4, -1, 0);
+        Roaring64NavigableMap nonEmptyCells = new Roaring64NavigableMap();
+        nonEmptyCells.add(PostingList.packCellKey(1, 0));
+        nonEmptySubResult = CellResult.of(nonEmptyCells, granularity);
 
-        when(mockFactory.getExecutor(any(Contains.class))).thenReturn(mockSubExecutor);
-        when(mockUnigramIndex.iterateFromFirst()).thenReturn(mockDBIterator);
-        when(mockDBIterator.isValid()).thenReturn(false);
+        lenient().when(mockFactory.getExecutor(any(Contains.class))).thenReturn(mockSubExecutor);
+        lenient().when(mockUnigramIndex.iterateFromFirst()).thenReturn(mockDBIterator);
+        lenient().when(mockDBIterator.isValid()).thenReturn(false);
     }
 
-    private void mockUnigramIndexForUniverse(List<Position> positionsInUniverse) throws Exception {
-        PositionListSoA universePositions = new PositionListSoA();
-        for (Position p : positionsInUniverse) {
-            universePositions.add(p);
+    private void mockUnigramIndexForUniverse(int[]... docSents) throws Exception {
+        Roaring64NavigableMap cells = new Roaring64NavigableMap();
+        for (int[] ds : docSents) {
+            cells.add(PostingList.packCellKey(ds[0], ds[1]));
         }
-        byte[] universeBlob = universePositions.serializeToCompositeBlob();
+        PostingList pl = PostingList.fromCells(cells, (byte) 0);
+        byte[] universeBlob = pl.serialize();
 
-        if (positionsInUniverse.isEmpty()) {
+        if (docSents.length == 0) {
             when(mockDBIterator.isValid()).thenReturn(false);
         } else {
             when(mockDBIterator.isValid()).thenReturn(true, false);
@@ -91,43 +89,47 @@ public class NotConditionExecutorTest {
     @Test
     void testExecute_subConditionReturnsEmpty() throws Exception {
         Not notCondition = new Not(subCondition);
-        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class), any()))
-            .thenReturn(emptySubResult);
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName),
+                any(AttributeRequirements.class), any()))
+                .thenReturn(emptySubResult);
 
-        mockUnigramIndexForUniverse(List.of(new Position(100, 0, 0, 1)));
+        mockUnigramIndexForUniverse(new int[][] { { 100, 0 } });
 
-        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements, Optional.empty());
+        CellResult finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName,
+                new AttributeRequirements(), Optional.empty());
 
         assertNotNull(finalResult);
-        assertEquals(1, finalResult.size());
-        assertEquals(100, finalResult.getDocumentIdAt(0));
+        assertEquals(1, finalResult.cellCount());
+        assertEquals(100, PostingList.docIdFromCellKey(finalResult.cells().first()));
     }
 
     @Test
     void testExecute_subConditionReturnsMatch_universeExcludesMatch() throws Exception {
         Not notCondition = new Not(subCondition);
-        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class), any()))
-            .thenReturn(nonEmptySubResult);
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName),
+                any(AttributeRequirements.class), any()))
+                .thenReturn(nonEmptySubResult);
 
-        mockUnigramIndexForUniverse(List.of(new Position(1, 0, 0, 1), new Position(2, 0, 0, 1)));
+        mockUnigramIndexForUniverse(new int[][] { { 1, 0 }, { 2, 0 } });
 
-        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements, Optional.empty());
+        CellResult finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName,
+                new AttributeRequirements(), Optional.empty());
 
         assertNotNull(finalResult);
-        assertEquals(1, finalResult.size());
-        assertEquals(2, finalResult.getDocumentIdAt(0));
+        assertEquals(1, finalResult.cellCount());
+        assertEquals(2, PostingList.docIdFromCellKey(finalResult.cells().first()));
     }
 
     @Test
     void testExecute_subConditionReturnsAll_emptyUniverseLeadsToError() throws Exception {
         Not notCondition = new Not(subCondition);
-        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class), any()))
-            .thenReturn(nonEmptySubResult);
-
-        when(mockDBIterator.isValid()).thenReturn(false);
+        lenient().when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName),
+                any(AttributeRequirements.class), any()))
+                .thenReturn(nonEmptySubResult);
 
         QueryExecutionException exception = assertThrows(QueryExecutionException.class, () -> {
-            notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, defaultTestRequirements, Optional.empty());
+            notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, new AttributeRequirements(),
+                    Optional.empty());
         });
         assertEquals(QueryExecutionException.ErrorType.MISSING_INDEX, exception.getErrorType());
     }
@@ -135,34 +137,31 @@ public class NotConditionExecutorTest {
     @Test
     void testExecute_sentenceGranularity() throws Exception {
         granularity = Query.Granularity.SENTENCE;
-        AttributeRequirements sentenceGranularityRequirements = new AttributeRequirements();
-        sentenceGranularityRequirements.needsConceptualRowIds = true;
-        sentenceGranularityRequirements.needsSentenceId = true;
-        sentenceGranularityRequirements.needsDocumentId = true;
 
-        emptySubResult = new QueryResultSoA(granularity, 0, sentenceGranularityRequirements);
-        nonEmptySubResult = new QueryResultSoA(granularity, 0, sentenceGranularityRequirements);
-        nonEmptySubResult.add("test", ValueType.TERM, null, 1, 1, 0, 4, -1, 0);
+        emptySubResult = CellResult.empty(granularity);
+        Roaring64NavigableMap sentNonEmptyCells = new Roaring64NavigableMap();
+        sentNonEmptyCells.add(PostingList.packCellKey(1, 1));
+        nonEmptySubResult = CellResult.of(sentNonEmptyCells, granularity);
 
         Not notCondition = new Not(subCondition);
 
-        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName), any(AttributeRequirements.class), any()))
-            .thenReturn(nonEmptySubResult);
+        when(mockSubExecutor.execute(eq(subCondition), any(), eq(granularity), anyInt(), eq(corpusName),
+                any(AttributeRequirements.class), any()))
+                .thenReturn(nonEmptySubResult);
 
-        mockUnigramIndexForUniverse(List.of(
-            new Position(1, 1, 0, 1),
-            new Position(1, 2, 0, 1),
-            new Position(2, 1, 0, 1)
-        ));
+        mockUnigramIndexForUniverse(new int[][] { { 1, 1 }, { 1, 2 }, { 2, 1 } });
 
-        QueryResultSoA finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName, sentenceGranularityRequirements, Optional.empty());
+        CellResult finalResult = notExecutor.execute(notCondition, indexes, granularity, 0, corpusName,
+                new AttributeRequirements(), Optional.empty());
 
         assertNotNull(finalResult);
-        assertEquals(2, finalResult.size());
+        assertEquals(2, finalResult.cellCount());
         Set<String> remainingSentenceKeys = new HashSet<>();
-        for (int i = 0; i < finalResult.size(); i++) {
-            remainingSentenceKeys.add(finalResult.getDocumentIdAt(i) + ":" + finalResult.getSentenceIdAt(i));
-    }
+        var iter = finalResult.cells().getLongIterator();
+        while (iter.hasNext()) {
+            long ck = iter.next();
+            remainingSentenceKeys.add(PostingList.docIdFromCellKey(ck) + ":" + PostingList.sentIdFromCellKey(ck));
+        }
         assertTrue(remainingSentenceKeys.contains("1:2"));
         assertTrue(remainingSentenceKeys.contains("2:1"));
         assertFalse(remainingSentenceKeys.contains("1:1"));

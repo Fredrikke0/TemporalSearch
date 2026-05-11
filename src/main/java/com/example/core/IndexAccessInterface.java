@@ -14,13 +14,13 @@ import org.rocksdb.Options;
 public interface IndexAccessInterface extends AutoCloseable {
 
     // Delimiter constants moved from IndexAccess class
-    char DELIMITER = '\0';  // Null byte delimiter used for n-grams
+    char DELIMITER = '\0'; // Null byte delimiter used for n-grams
 
     /**
      * Retrieves positions for a given key.
-     * Deserializes the stored byte[] value into a PositionListSoA.
+     * Deserializes the stored byte[] value into a PostingList.
      */
-    Optional<PositionListSoA> get(byte[] key) throws IndexAccessException;
+    Optional<PostingList> get(byte[] key) throws IndexAccessException;
 
     /**
      * Retrieves the raw byte[] value for a given key.
@@ -30,9 +30,12 @@ public interface IndexAccessInterface extends AutoCloseable {
     /**
      * Creates a new iterator positioned at or after the specified key.
      * If the key is null or empty, or if seeking before the first key,
-     * the behavior might depend on the underlying implementation (e.g., start from first).
-     * If the key is past the end of the data, the returned iterator's {@code isValid()}
-     * method should return {@code false} (RocksIterator uses isValid(), not hasNext() for this check).
+     * the behavior might depend on the underlying implementation (e.g., start from
+     * first).
+     * If the key is past the end of the data, the returned iterator's
+     * {@code isValid()}
+     * method should return {@code false} (RocksIterator uses isValid(), not
+     * hasNext() for this check).
      * The caller is responsible for closing the iterator.
      *
      * @param key The key to seek to.
@@ -42,10 +45,12 @@ public interface IndexAccessInterface extends AutoCloseable {
     RocksIterator seek(byte[] key) throws IndexAccessException;
 
     /**
-     * Creates a new iterator positioned at or after the specified prefix, stopping at upperBoundExclusive.
+     * Creates a new iterator positioned at or after the specified prefix, stopping
+     * at upperBoundExclusive.
      * Implementations may ignore bounds and readahead by default.
      */
-    default RocksIterator seekWithBounds(byte[] prefix, byte[] upperBoundExclusive, long readaheadBytes) throws IndexAccessException {
+    default RocksIterator seekWithBounds(byte[] prefix, byte[] upperBoundExclusive, long readaheadBytes)
+            throws IndexAccessException {
         return seek(prefix);
     }
 
@@ -84,7 +89,8 @@ public interface IndexAccessInterface extends AutoCloseable {
 
     /**
      * Ingests external SST files into the underlying RocksDB instance.
-     * The files must be generated with a comparator compatible with the DB (default bytewise).
+     * The files must be generated with a comparator compatible with the DB (default
+     * bytewise).
      */
     void ingestExternalFiles(java.util.List<String> sstFilePaths) throws IndexAccessException;
 
@@ -94,7 +100,8 @@ public interface IndexAccessInterface extends AutoCloseable {
     void compactRange() throws IndexAccessException;
 
     /**
-     * Returns the RocksDB Options used to open the DB, for creating compatible SST writers.
+     * Returns the RocksDB Options used to open the DB, for creating compatible SST
+     * writers.
      * Caller must not close the returned Options.
      */
     Options getOptionsForSstWriter();
@@ -113,29 +120,22 @@ public interface IndexAccessInterface extends AutoCloseable {
      * Gets the root path of this index.
      * This can be used by components like SynonymManager to store auxiliary data
      * in a sub-directory relative to the main index data.
+     *
      * @return The Path to the index directory.
      */
     java.nio.file.Path getIndexPath();
 
     /**
-     * Retrieves all segments for a given base term, applies filtering and selective deserialization
-     * based on the provided context and attribute requirements, and merges them into a single PositionListSoA.
-     * If the term is not segmented, this method will retrieve that single entry and filter it.
+     * Retrieves a PostingList for the given exact key.
+     * The key is looked up directly — no segmentation or merging is performed.
      *
-     * @param baseTerm The base term to look up (e.g., "apple", "NOUN").
-     * @param context The FilteringContext to apply. If Optional.empty() or context is unrestricted,
-     *                filtering may be a no-op.
-     * @param requirements Attribute requirements used to selectively deserialize only the needed fields.
-     * @return An Optional containing the merged and filtered PositionListSoA for the term.
-     *         If the base term and no segments are found, or if filtering results in an empty list,
-     *         returns Optional.empty().
-     * @throws IOException If an I/O error occurs during deserialization or reading from the index.
-     * @throws IndexAccessException If an error occurs accessing the underlying index storage.
+     * @param key  the exact RocksDB key
+     * @param mode the deserialization mode (CELLS_ONLY or FULL)
+     * @return the PostingList, or empty if not found
+     * @throws IndexAccessException on storage error
      */
-    Optional<PositionListSoA> getMergedPositions(String baseTerm,
-                                                 Optional<com.example.query.executor.FilteringContext> context,
-                                                 com.example.query.executor.AttributeRequirements requirements)
-        throws IOException, IndexAccessException;
+    Optional<PostingList> getPostingList(byte[] key, PostingList.DeserializeMode mode)
+            throws IndexAccessException;
 
     /**
      * Closes the index access, releasing any underlying resources.

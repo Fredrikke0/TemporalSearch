@@ -15,7 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.core.PostingList;
 import com.example.core.index.MockIndexAccess; // For TestIndexGenerator
 import com.example.index.IndexEntry;
 import com.example.logging.ProgressTracker;
@@ -29,7 +29,8 @@ public class IndexGeneratorWriteTest extends BaseIndexTest { // Renamed class
 
     private static class TestIndexGenerator extends IndexGenerator<IndexEntry> {
 
-        protected TestIndexGenerator(IndexAccessInterface indexAccess, Connection sqliteConn, ProgressTracker progress, Path customTempDir) throws IOException {
+        protected TestIndexGenerator(IndexAccessInterface indexAccess, Connection sqliteConn, ProgressTracker progress,
+                Path customTempDir) throws IOException {
             super(indexAccess, null, sqliteConn, progress, 10, customTempDir);
         }
 
@@ -44,15 +45,29 @@ public class IndexGeneratorWriteTest extends BaseIndexTest { // Renamed class
         }
 
         @Override
-        protected String getTableName() { return "test_table"; }
+        protected String getTableName() {
+            return "test_table";
+        }
+
         @Override
-        public String getIndexName() { return "test-index"; } // Match indexAccess type if needed
+        public String getIndexName() {
+            return "test-index";
+        } // Match indexAccess type if needed
+
         @Override
-        protected List<IndexEntry> fetchBatch(IndexEntry lastEntry) { return Collections.emptyList(); }
+        protected List<IndexEntry> fetchBatch(IndexEntry lastEntry) {
+            return Collections.emptyList();
+        }
+
         @Override
-        protected ListMultimap<String, PositionListSoA> processBatch(List<IndexEntry> batch) { return null; }
+        protected ListMultimap<String, PostingList> processBatch(List<IndexEntry> batch) {
+            return null;
+        }
+
         @Override
-        public long getDocumentCountForIndex() { return 0; }
+        public long getDocumentCountForIndex() {
+            return 0;
+        }
 
         @Override
         public void writeToLevelDB(File sortedFile) throws IOException {
@@ -73,13 +88,14 @@ public class IndexGeneratorWriteTest extends BaseIndexTest { // Renamed class
 
         ProgressTracker mockProgressTracker = Mockito.mock(ProgressTracker.class);
         // Create MockIndexAccess for the TestIndexGenerator
-        // The indexType for MockIndexAccess should match what TestIndexGenerator.getIndexName() returns
+        // The indexType for MockIndexAccess should match what
+        // TestIndexGenerator.getIndexName() returns
         MockIndexAccess mockIndexAccess = new MockIndexAccess("test-index");
         testGenerator = new TestIndexGenerator(mockIndexAccess, sqliteConn, mockProgressTracker, generatorTempDir);
 
-        PositionListSoA emptyList = new PositionListSoA();
-        byte[] emptyBlob = emptyList.serializeToCompositeBlob();
-        logger.info("DIAGNOSTIC: Serialized empty PositionListSoA has size: {} bytes", emptyBlob.length);
+        PostingList emptyPl = PostingList.empty((byte) 0);
+        byte[] emptyBlob = emptyPl.serialize();
+        logger.info("DIAGNOSTIC: Serialized empty PostingList has size: {} bytes", emptyBlob.length);
     }
 
     @AfterEach

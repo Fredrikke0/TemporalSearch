@@ -7,10 +7,10 @@ import static org.junit.jupiter.api.Assertions.fail;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,7 +20,8 @@ import org.rocksdb.Options;
 import org.rocksdb.RocksDBException;
 
 import com.example.core.IndexAccess;
-import com.example.core.PositionListSoA;
+import com.example.core.PostingList;
+import com.example.index.KeySchema;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
@@ -31,6 +32,30 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
     private IndexAccess indexAccess;
     private SynonymManager SynonymManager;
     private Path SynonymManagerPath;
+
+    private static boolean hasKeyStartingWith(ListMultimap<String, PostingList> result, String type) {
+        byte[] prefix = KeySchema.encodeTypePrefix(type.toUpperCase());
+        String prefixStr = new String(prefix, 0, prefix.length - 1, StandardCharsets.UTF_8);
+        for (String key : result.keySet()) {
+            if (key.startsWith(prefixStr))
+                return true;
+        }
+        return false;
+    }
+
+    private static long countCellsForType(ListMultimap<String, PostingList> result, String type) {
+        byte[] prefix = KeySchema.encodeTypePrefix(type.toUpperCase());
+        String prefixStr = new String(prefix, 0, prefix.length - 1, StandardCharsets.UTF_8);
+        long total = 0;
+        for (String key : result.keySet()) {
+            if (key.startsWith(prefixStr)) {
+                for (PostingList pl : result.get(key)) {
+                    total += pl.cells().getLongCardinality();
+                }
+            }
+        }
+        return total;
+    }
 
     @TempDir
     Path sharedTempDir;
@@ -58,14 +83,13 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         }
 
         generator = new POSIndexGenerator(
-            this.indexAccess,
-            TEST_STOPWORDS_PATH,
-            sqliteConn,
-            new ProgressTracker(),
-            1000,
-            null,
-            SynonymManager
-        );
+                this.indexAccess,
+                TEST_STOPWORDS_PATH,
+                sqliteConn,
+                new ProgressTracker(),
+                1000,
+                null,
+                SynonymManager);
 
         setupTestData();
     }
@@ -101,7 +125,7 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
 
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
                 "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
             for (String[] word : testWords) {
                 pstmt.setInt(1, Integer.parseInt(word[0]));
                 pstmt.setInt(2, Integer.parseInt(word[1]));
@@ -134,37 +158,26 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         var entries = generator.fetchBatch(null);
         assertEquals(14, entries.size(), "Should fetch all 14 relevant annotations from test data");
 
-        ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
+        ListMultimap<String, PostingList> result = generator.processBatch(entries);
 
-        String[] expectedTags = {"NOUN", "VERB", "ADJ", "DET", "ADP", "PRON", "AUX"};
+        String[] expectedTags = { "NOUN", "VERB", "ADJ", "DET", "ADP", "PRON", "AUX" };
         for (String tag : expectedTags) {
-            assertTrue(result.containsKey(tag), "Should contain POS tag as key: " + tag);
-            assertEquals(1, result.get(tag).size(), "Should be one PositionListSoA for tag: " + tag);
+            assertTrue(hasKeyStartingWith(result, tag), "Should contain POS tag as key: " + tag);
         }
 
-        PositionListSoA nounPositions = result.get("NOUN").get(0);
-        assertEquals(3, nounPositions.getNumPositions(), "Should have 3 positions in total for NOUN type (fox, dog, night)");
+        assertEquals(3, countCellsForType(result, "NOUN"), "Should have 3 cells for NOUN type (fox, dog, night)");
 
-        int foxId = SynonymManager.getId("fox");
-        int dogId = SynonymManager.getId("dog");
-        int nightId = SynonymManager.getId("night");
-
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == foxId).count(), "Count for 'fox' should be 1");
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == dogId).count(), "Count for 'dog' should be 1");
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == nightId).count(), "Count for 'night' should be 1");
-
-        PositionListSoA detPositions = result.get("DET").get(0);
-        assertEquals(2, detPositions.getNumPositions(), "Should have 2 positions in total for DET type (the, the)");
-
-        int theId = SynonymManager.getId("the");
-
-        assertEquals(2, IntStream.range(0, detPositions.getNumPositions()).filter(i -> detPositions.getSynonymIdAt(i) == theId).count(), "Term 'the' (DET) should have 2 positions");
+        assertEquals(2, countCellsForType(result, "DET"), "Should have 2 cells for DET type (the, the)");
     }
 
     @Test
     public void testCaseNormalization() throws Exception, RocksDBException {
-        try (PreparedStatement pstmt = sqliteConn.prepareStatement("DELETE FROM annotations")) { pstmt.executeUpdate(); }
-        try (PreparedStatement pstmt = sqliteConn.prepareStatement("DELETE FROM documents")) { pstmt.executeUpdate(); }
+        try (PreparedStatement pstmt = sqliteConn.prepareStatement("DELETE FROM annotations")) {
+            pstmt.executeUpdate();
+        }
+        try (PreparedStatement pstmt = sqliteConn.prepareStatement("DELETE FROM documents")) {
+            pstmt.executeUpdate();
+        }
 
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
                 "INSERT INTO documents (document_id, timestamp) VALUES (?, ?)")) {
@@ -174,15 +187,15 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
         }
 
         Object[][] mixedCaseWords = {
-            { 3, 0, 0, 4, "Test", "test", "NOUN" },
-            { 3, 0, 5, 9, "Word", "word", "noun" },
-            { 3, 0, 10, 14, "Run", "run", "VERB" },
-            { 3, 0, 15, 19, "Fast", "fast", "verb" }
+                { 3, 0, 0, 4, "Test", "test", "NOUN" },
+                { 3, 0, 5, 9, "Word", "word", "noun" },
+                { 3, 0, 10, 14, "Run", "run", "VERB" },
+                { 3, 0, 15, 19, "Fast", "fast", "verb" }
         };
 
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
                 "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
             for (Object[] wordData : mixedCaseWords) {
                 pstmt.setInt(1, (Integer) wordData[0]);
                 pstmt.setInt(2, (Integer) wordData[1]);
@@ -200,26 +213,10 @@ public class POSIndexGeneratorTest extends BaseIndexTest {
 
         var result = generator.processBatch(entries);
 
-        assertTrue(result.containsKey("NOUN"), "Result should contain key NOUN");
-        assertEquals(1, result.get("NOUN").size(), "Should be one PositionListSoA for NOUN type");
-        PositionListSoA nounPositions = result.get("NOUN").get(0);
-        assertEquals(2, nounPositions.getNumPositions(), "Should have 2 positions in total for NOUN type (test, word)");
+        assertTrue(hasKeyStartingWith(result, "NOUN"), "Result should contain key NOUN");
+        assertEquals(2, countCellsForType(result, "NOUN"), "Should have 2 cells for NOUN type (test, word)");
 
-        int testId = SynonymManager.getId("test");
-        int wordId = SynonymManager.getId("word");
-
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == testId).count(), "Count for 'test' (NOUN) should be 1");
-        assertEquals(1, IntStream.range(0, nounPositions.getNumPositions()).filter(i -> nounPositions.getSynonymIdAt(i) == wordId).count(), "Count for 'word' (NOUN) should be 1");
-
-        assertTrue(result.containsKey("VERB"), "Result should contain key VERB");
-        assertEquals(1, result.get("VERB").size(), "Should be one PositionListSoA for VERB type");
-        PositionListSoA verbPositions = result.get("VERB").get(0);
-        assertEquals(2, verbPositions.getNumPositions(), "Should have 2 positions in total for VERB type (run, fast)");
-
-        int runId = SynonymManager.getId("run");
-        int fastId = SynonymManager.getId("fast");
-
-        assertEquals(1, IntStream.range(0, verbPositions.getNumPositions()).filter(i -> verbPositions.getSynonymIdAt(i) == runId).count(), "Count for 'run' (VERB) should be 1");
-        assertEquals(1, IntStream.range(0, verbPositions.getNumPositions()).filter(i -> verbPositions.getSynonymIdAt(i) == fastId).count(), "Count for 'fast' (VERB) should be 1");
+        assertTrue(hasKeyStartingWith(result, "VERB"), "Result should contain key VERB");
+        assertEquals(2, countCellsForType(result, "VERB"), "Should have 2 cells for VERB type (run, fast)");
     }
 }

@@ -15,12 +15,15 @@ import org.rocksdb.Options;
 
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.core.OccurrencesBlock;
+import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
 import com.example.index.RocksDBConfig;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
+
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 
 /**
  * Tests the memory buffering functionality in IndexGenerator to verify
@@ -36,13 +39,15 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
         private int mergeCount = 0;
 
         public TestIndexGenerator(IndexAccessInterface indexAccess, Connection sqliteConn,
-                                 ProgressTracker progress, Path customTempPath, int numBatches) throws IOException {
+                ProgressTracker progress, Path customTempPath, int numBatches) throws IOException {
             super(indexAccess, null, sqliteConn, progress, 1, customTempPath); // Batch size of 1 to create many files
             this.numBatchesToSimulate = numBatches;
         }
 
         @Override
-        protected String getTableName() { return "test_table"; }
+        protected String getTableName() {
+            return "test_table";
+        }
 
         @Override
         protected List<AnnotationEntry> fetchBatch(AnnotationEntry lastEntry) throws SQLException {
@@ -52,20 +57,22 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
             currentBatch++;
 
             // Simulate a batch with one entry
-            return List.of(new AnnotationEntry(currentBatch, currentBatch, currentBatch, currentBatch, currentBatch + 5, "token" + currentBatch, "NOUN", null, null));
+            return List.of(new AnnotationEntry(currentBatch, currentBatch, currentBatch, currentBatch, currentBatch + 5,
+                    "token" + currentBatch, "NOUN", null, null));
         }
 
         @Override
-        protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
-            ListMultimap<String, PositionListSoA> result = ArrayListMultimap.create();
+        protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
+            ListMultimap<String, PostingList> result = ArrayListMultimap.create();
             for (AnnotationEntry entry : batch) {
-                PositionListSoA positions = new PositionListSoA();
-                // Add a small number of positions to stay well under the 256MB buffer limit
-                for (int i = 0; i < 10; i++) {
-                    positions.add(entry.getDocumentId(), entry.getSentenceId(),
-                                entry.getBeginChar() + i, entry.getEndChar() + i);
-                }
-                result.put("term" + entry.getToken(), positions);
+                long cellKey = PostingList.packCellKey(entry.getDocumentId(), entry.getSentenceId());
+                Roaring64NavigableMap cells = new Roaring64NavigableMap();
+                cells.add(cellKey);
+                byte constantLength = (byte) Math.min(entry.getEndChar() - entry.getBeginChar(), 255);
+                OccurrencesBlock occ = OccurrencesBlock.fromUnsorted(
+                        new long[] { cellKey }, new byte[][] { { (byte) entry.getBeginChar() } }, constantLength);
+                PostingList pl = PostingList.fromCellsAndOccurrences(cells, constantLength, occ);
+                result.put("term" + entry.getToken(), pl);
             }
             return result;
         }
@@ -91,8 +98,8 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
             totalSizeAfter += sizeAfter;
 
             System.out.printf("Incremental merge #%d: %d files (%,d bytes) → %d files (%,d bytes) [%.1f%% reduction]%n",
-                mergeCount, tempFiles.size(), sizeBefore, result.size(), sizeAfter,
-                100.0 * (sizeBefore - sizeAfter) / sizeBefore);
+                    mergeCount, tempFiles.size(), sizeBefore, result.size(), sizeAfter,
+                    100.0 * (sizeBefore - sizeAfter) / sizeBefore);
 
             return result;
         }
@@ -113,8 +120,8 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
                 System.out.printf("Total storage before merges: %,d bytes%n", totalSizeBefore);
                 System.out.printf("Total storage after merges: %,d bytes%n", totalSizeAfter);
                 System.out.printf("Overall storage reduction: %,d bytes (%.1f%%)%n",
-                    totalSizeBefore - totalSizeAfter,
-                    100.0 * (totalSizeBefore - totalSizeAfter) / totalSizeBefore);
+                        totalSizeBefore - totalSizeAfter,
+                        100.0 * (totalSizeBefore - totalSizeAfter) / totalSizeBefore);
             }
         }
     }
@@ -125,8 +132,10 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
         Files.createDirectories(customTempPath);
 
         // Test with 2,500 small batches - this will trigger incremental merges
-        // Each batch creates 1 temp file, so without incremental merge we'd have 2.5k files
-        // With incremental merge every 1000 files, we should see 2 merges plus remainder
+        // Each batch creates 1 temp file, so without incremental merge we'd have 2.5k
+        // files
+        // With incremental merge every 1000 files, we should see 2 merges plus
+        // remainder
         int numBatches = 2500;
 
         // Create IndexAccess and ProgressTracker
@@ -134,9 +143,9 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
         Files.createDirectories(indexPath);
 
         try (Options options = RocksDBConfig.createOptimizedOptions();
-             IndexAccessInterface indexAccess = new IndexAccess(indexPath, "buffering-test", options, false);
-             TestIndexGenerator generator = new TestIndexGenerator(
-                 indexAccess, sqliteConn, new ProgressTracker(), customTempPath, numBatches)) {
+                IndexAccessInterface indexAccess = new IndexAccess(indexPath, "buffering-test", options, false);
+                TestIndexGenerator generator = new TestIndexGenerator(
+                        indexAccess, sqliteConn, new ProgressTracker(), customTempPath, numBatches)) {
 
             generator.generateIndex();
 
@@ -145,14 +154,14 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
             assertTrue(Files.exists(actualTempDir), "Temp directory should exist");
 
             long batchFileCount = Files.list(actualTempDir)
-                .filter(path -> path.getFileName().toString().startsWith("batch-"))
-                .filter(path -> path.getFileName().toString().endsWith(".tmp"))
-                .count();
+                    .filter(path -> path.getFileName().toString().startsWith("batch-"))
+                    .filter(path -> path.getFileName().toString().endsWith(".tmp"))
+                    .count();
 
             long mergedFileCount = Files.list(actualTempDir)
-                .filter(path -> path.getFileName().toString().startsWith("merged-"))
-                .filter(path -> path.getFileName().toString().endsWith(".tmp"))
-                .count();
+                    .filter(path -> path.getFileName().toString().startsWith("merged-"))
+                    .filter(path -> path.getFileName().toString().endsWith(".tmp"))
+                    .count();
 
             long totalTempFiles = batchFileCount + mergedFileCount;
 
@@ -164,17 +173,19 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
             // With incremental merge, we should never have more than 1000 batch files
             // plus some merged files (roughly numBatches/1000)
             assertTrue(batchFileCount < 1000,
-                "Should never have more than 1000 batch files due to incremental merge, but got " + batchFileCount);
+                    "Should never have more than 1000 batch files due to incremental merge, but got " + batchFileCount);
 
             // Total temp files should be dramatically less than the number of batches
             assertTrue(totalTempFiles < numBatches / 10,
-                "Incremental merge should reduce " + numBatches + " batches to much fewer temp files, but got " + totalTempFiles);
+                    "Incremental merge should reduce " + numBatches + " batches to much fewer temp files, but got "
+                            + totalTempFiles);
 
-                        // Print storage statistics
+            // Print storage statistics
             generator.printStorageStats();
 
             // The test passes if we successfully reduced the number of temp files
-            // At the end, temp files may be cleaned up, but the key success is that we never
+            // At the end, temp files may be cleaned up, but the key success is that we
+            // never
             // hit the original 2500 files and successfully performed incremental merges
             assertTrue(true, "Incremental merge test completed successfully");
         }
@@ -189,9 +200,9 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
         Files.createDirectories(indexPath);
 
         try (Options options = RocksDBConfig.createOptimizedOptions();
-             IndexAccessInterface indexAccess = new IndexAccess(indexPath, "empty-test", options, false);
-             TestIndexGenerator generator = new TestIndexGenerator(
-                 indexAccess, sqliteConn, new ProgressTracker(), customTempPath, 0)) {
+                IndexAccessInterface indexAccess = new IndexAccess(indexPath, "empty-test", options, false);
+                TestIndexGenerator generator = new TestIndexGenerator(
+                        indexAccess, sqliteConn, new ProgressTracker(), customTempPath, 0)) {
 
             // This should not create any temp files
             generator.generateIndex();
@@ -199,8 +210,8 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
             Path actualTempDir = generator.getActualTempDir();
             if (Files.exists(actualTempDir)) {
                 long tempFileCount = Files.list(actualTempDir)
-                    .filter(path -> path.getFileName().toString().startsWith("batch-"))
-                    .count();
+                        .filter(path -> path.getFileName().toString().startsWith("batch-"))
+                        .count();
 
                 assertEquals(0, tempFileCount, "No temp files should be created for empty data");
             }

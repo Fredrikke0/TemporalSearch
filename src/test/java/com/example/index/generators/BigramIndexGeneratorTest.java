@@ -18,14 +18,14 @@ import org.rocksdb.Options;
 
 import com.example.core.IndexAccess;
 import com.example.core.IndexAccessException;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
+import com.example.core.PostingList;
 import com.example.logging.ProgressTracker;
 
 public class BigramIndexGeneratorTest extends BaseIndexTest {
     private static final String TEST_STOPWORDS_PATH = "test-stopwords-bigram.txt";
     private File indexBaseDir;
-    // private IndexAccess indexAccess; // Field might be redundant if tests manage IA locally
+    // private IndexAccess indexAccess; // Field might be redundant if tests manage
+    // IA locally
 
     private static byte[] bytes(String str) {
         return str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -73,27 +73,27 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
         // Doc 2: "The black dog barks loudly."
         String[][] testWords = {
                 // Document 1, Sentence 1
-                { "1", "0", "0", "3", "The", "DET" },        // Removed "the"
-                { "1", "0", "4", "9", "black", "ADJ" },       // Removed "black"
-                { "1", "0", "10", "13", "cat", "NOUN" },      // Removed "cat"
-                { "1", "0", "14", "18", "sits", "VERB" },     // Removed "sit"
-                { "1", "0", "19", "26", "quietly", "ADV" },   // Removed "quietly"
+                { "1", "0", "0", "3", "The", "DET" }, // Removed "the"
+                { "1", "0", "4", "9", "black", "ADJ" }, // Removed "black"
+                { "1", "0", "10", "13", "cat", "NOUN" }, // Removed "cat"
+                { "1", "0", "14", "18", "sits", "VERB" }, // Removed "sit"
+                { "1", "0", "19", "26", "quietly", "ADV" }, // Removed "quietly"
                 // Document 1, Sentence 2
-                { "1", "1", "27", "29", "It", "PRON" },        // Removed "it"
-                { "1", "1", "30", "35", "purrs", "VERB" },     // Removed "purr"
-                { "1", "1", "36", "42", "softly", "ADV" },    // Removed "softly"
+                { "1", "1", "27", "29", "It", "PRON" }, // Removed "it"
+                { "1", "1", "30", "35", "purrs", "VERB" }, // Removed "purr"
+                { "1", "1", "36", "42", "softly", "ADV" }, // Removed "softly"
                 // Document 2, Sentence 1
-                { "2", "0", "0", "3", "The", "DET" },        // Removed "the"
-                { "2", "0", "4", "9", "black", "ADJ" },       // Removed "black"
-                { "2", "0", "10", "13", "dog", "NOUN" },      // Removed "dog"
-                { "2", "0", "14", "19", "barks", "VERB" },     // Removed "bark"
-                { "2", "0", "20", "26", "loudly", "ADV" }     // Removed "loudly"
+                { "2", "0", "0", "3", "The", "DET" }, // Removed "the"
+                { "2", "0", "4", "9", "black", "ADJ" }, // Removed "black"
+                { "2", "0", "10", "13", "dog", "NOUN" }, // Removed "dog"
+                { "2", "0", "14", "19", "barks", "VERB" }, // Removed "bark"
+                { "2", "0", "20", "26", "loudly", "ADV" } // Removed "loudly"
         };
 
         // Updated INSERT statement to exclude lemma
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
                 "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, pos) " +
-                "VALUES (?, ?, ?, ?, ?, ?) ")) {
+                        "VALUES (?, ?, ?, ?, ?, ?) ")) {
             for (String[] word : testWords) {
                 pstmt.setInt(1, Integer.parseInt(word[0]));
                 pstmt.setInt(2, Integer.parseInt(word[1]));
@@ -110,8 +110,9 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
     @Override
     protected void tearDown() throws Exception {
         super.tearDown();
-        // if (indexAccess != null) { // If field is removed, this is no longer needed or needs adjustment
-        //     indexAccess.close();
+        // if (indexAccess != null) { // If field is removed, this is no longer needed
+        // or needs adjustment
+        // indexAccess.close();
         // }
         new File(TEST_STOPWORDS_PATH).delete();
     }
@@ -133,15 +134,17 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
     public void testBasicIndexing() throws Exception {
         // Create IndexAccess instance first
         try (Options options = createTestOptions();
-             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "bigram", options, false)) {
+                IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "bigram", options, false)) {
             // Create and run bigram indexer, passing the IndexAccess instance
             try (BigramIndexGenerator indexer = new BigramIndexGenerator(
                     ia, TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
                 indexer.generateIndex();
             }
 
-            // Use the same IndexAccess instance for verification, no need to re-create 'options' or 'indexAccess'
-            // this.indexAccess = ia; // Assign to class field if verifyBigram uses it, or pass 'ia' directly - REMOVED
+            // Use the same IndexAccess instance for verification, no need to re-create
+            // 'options' or 'indexAccess'
+            // this.indexAccess = ia; // Assign to class field if verifyBigram uses it, or
+            // pass 'ia' directly - REMOVED
 
             // Test regular bigrams (stopwords are filtered out before bigram creation)
             // Doc 1, Sent 0: "black", "cat", "sits", "quietly"
@@ -149,19 +152,25 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
             verifyBigram(ia, "cat" + IndexGenerator.DELIMITER + "sits", 1, 0, 10, 18, 1);
             verifyBigram(ia, "sits" + IndexGenerator.DELIMITER + "quietly", 1, 0, 14, 26, 1);
 
-            // Doc 1, Sent 1: "purrs", "softly" (original "It purrs softly", "it" is a stopword)
-            // Stopwords file for test includes "a, is, the". Assuming "it" is NOT a stopword based on default stopwords.txt
-            // If "it" IS a stopword for this test's specific stopwords file, then "purrs" would be the first token.
+            // Doc 1, Sent 1: "purrs", "softly" (original "It purrs softly", "it" is a
+            // stopword)
+            // Stopwords file for test includes "a, is, the". Assuming "it" is NOT a
+            // stopword based on default stopwords.txt
+            // If "it" IS a stopword for this test's specific stopwords file, then "purrs"
+            // would be the first token.
             // Let's check the test stopwords file content in setUp.
-            // setUp creates TEST_STOPWORDS_PATH with "the", "a", "is". So "it" is NOT a stopword.
+            // setUp creates TEST_STOPWORDS_PATH with "the", "a", "is". So "it" is NOT a
+            // stopword.
             // Therefore, the sequence after filtering is "it", "purrs", "softly".
             // Expected bigrams: "it purrs", "purrs softly"
 
-            // The test data for annotations: { "1", "1", "27", "29", "It", "PRON" }, { "1", "1", "30", "35", "purrs", "VERB" }, { "1", "1", "36", "42", "softly", "ADV" }
+            // The test data for annotations: { "1", "1", "27", "29", "It", "PRON" }, { "1",
+            // "1", "30", "35", "purrs", "VERB" }, { "1", "1", "36", "42", "softly", "ADV" }
             // Tokens: "It", "purrs", "softly"
             // Lowercased: "it", "purrs", "softly"
             // None are in TEST_STOPWORDS_PATH ("the", "a", "is")
-            // Filtered (no letter/digit check will not remove these): "it", "purrs", "softly"
+            // Filtered (no letter/digit check will not remove these): "it", "purrs",
+            // "softly"
             // Bigrams: "it purrs", "purrs softly"
             verifyBigram(ia, "it" + IndexGenerator.DELIMITER + "purrs", 1, 1, 27, 35, 1);
             verifyBigram(ia, "purrs" + IndexGenerator.DELIMITER + "softly", 1, 1, 30, 42, 1);
@@ -177,7 +186,7 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
     public void testSentenceBoundaries() throws Exception {
         // Create IndexAccess instance first
         try (Options options = createTestOptions();
-             IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "bigram", options, false)) {
+                IndexAccess ia = new IndexAccess(indexBaseDir.toPath(), "bigram", options, false)) {
             // Create and run bigram indexer, passing the IndexAccess instance
             try (BigramIndexGenerator indexer = new BigramIndexGenerator(
                     ia, TEST_STOPWORDS_PATH, sqliteConn, new ProgressTracker(), 1000)) {
@@ -188,8 +197,8 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
             // this.indexAccess = ia; // REMOVED
 
             // Verify no bigrams cross sentence boundaries (using tokens)
-            Optional<PositionListSoA> quietly = ia.get(bytes("quietly" + IndexGenerator.DELIMITER + "it"));
-            Optional<PositionListSoA> softly = ia.get(bytes("softly" + IndexGenerator.DELIMITER + "the"));
+            Optional<PostingList> quietly = ia.get(bytes("quietly" + IndexGenerator.DELIMITER + "it"));
+            Optional<PostingList> softly = ia.get(bytes("softly" + IndexGenerator.DELIMITER + "the"));
             assertTrue(quietly.isEmpty(), "Bigram should not cross sentence boundary");
             assertTrue(softly.isEmpty(), "Bigram should not cross sentence boundary");
         }
@@ -198,17 +207,18 @@ public class BigramIndexGeneratorTest extends BaseIndexTest {
     private void verifyBigram(IndexAccess indexAccess, String bigram, int expectedDocId, int expectedSentenceId,
             int expectedBeginChar, int expectedEndChar, int expectedCount) throws IOException, IndexAccessException {
         // Ensure indexAccess is not null if it's used here and set in test methods
-        assertNotNull(indexAccess, "IndexAccess instance must be provided for verification."); // Updated assertion
-        Optional<PositionListSoA> positions = indexAccess.get(bytes(bigram)); // Use passed parameter
-        assertTrue(positions.isPresent(), "Bigram '" + bigram + "' should be indexed");
+        assertNotNull(indexAccess, "IndexAccess instance must be provided for verification.");
+        Optional<PostingList> plOpt = indexAccess.get(bytes(bigram));
+        assertTrue(plOpt.isPresent(), "Bigram '" + bigram + "' should be indexed");
 
-        assertEquals(expectedCount, positions.get().getNumPositions(),
+        PostingList pl = plOpt.get();
+        assertEquals(expectedCount, pl.cells().getLongCardinality(),
                 String.format("Bigram '%s' should appear %d time(s)", bigram, expectedCount));
 
-        Position pos = positions.get().getPositionAt(0);
-        assertEquals(expectedDocId, pos.getDocumentId());
-        assertEquals(expectedSentenceId, pos.getSentenceId());
-        assertEquals(expectedBeginChar, pos.getBeginPosition());
-        assertEquals(expectedEndChar, pos.getEndPosition());
+        // Verify first cell
+        long[] cellArr = pl.cells().toArray();
+        long firstCell = cellArr[0];
+        assertEquals(expectedDocId, PostingList.docIdFromCellKey(firstCell));
+        assertEquals(expectedSentenceId, PostingList.sentIdFromCellKey(firstCell));
     }
 }

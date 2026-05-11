@@ -2,6 +2,7 @@ package com.example.index.generators;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atLeastOnce;
@@ -31,6 +32,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccess;
+import com.example.core.OccurrencesView;
 import com.example.index.AnnotationEntry;
 import com.example.logging.ProgressTracker;
 
@@ -63,14 +65,18 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         }
 
         // Create IndexAccess instance first
-        // The UnigramIndexGenerator will use this IndexAccess to create its specific index directory if needed.
+        // The UnigramIndexGenerator will use this IndexAccess to create its specific
+        // index directory if needed.
         // BaseIndexTest ensures indexBaseDir (this.tempDir.resolve("indexes")) exists.
         // UnigramIndexGenerator will create indexBaseDir.resolve("unigram")
         try (Options options = createTestOptions()) {
-            // It seems the generator itself might be expecting to *receive* an IndexAccess instance
-            // that it will then use, rather than a path to create one. Let's check UnigramIndexGenerator constructor.
+            // It seems the generator itself might be expecting to *receive* an IndexAccess
+            // instance
+            // that it will then use, rather than a path to create one. Let's check
+            // UnigramIndexGenerator constructor.
             // Based on IndexGenerator superclass, it now takes IndexAccessInterface.
-            this.indexAccess = new IndexAccess(indexBaseDir, "unigram", options, false); // Create it here for the generator
+            this.indexAccess = new IndexAccess(indexBaseDir, "unigram", options, false); // Create it here for the
+                                                                                         // generator
         }
 
         // Create generator, passing the already created IndexAccess instance
@@ -80,8 +86,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
                 sqliteConn,
                 mockProgressTracker,
                 1000,
-                null
-        );
+                null);
         setupTestData();
     }
 
@@ -92,17 +97,18 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         if (indexAccess != null) {
             indexAccess.close();
         }
-        new File(TEST_STOPWORDS_PATH).delete(); //This might be redundant if super.tearDown deletes tempDir which contains this file.
-                                                //However, specific test stopwords file path is used in this class.
+        new File(TEST_STOPWORDS_PATH).delete(); // This might be redundant if super.tearDown deletes tempDir which
+                                                // contains this file.
+                                                // However, specific test stopwords file path is used in this class.
     }
 
     private void insertBasicTestData() throws SQLException {
         try (Statement stmt = sqliteConn.createStatement()) {
             stmt.execute("INSERT INTO documents (document_id, timestamp) VALUES (1, '2024-03-20')");
             stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token) " +
-                        "VALUES (1, 1, 0, 4, 'test')");
+                    "VALUES (1, 1, 0, 4, 'test')");
             stmt.execute("INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token) " +
-                        "VALUES (1, 1, 5, 9, 'word')");
+                    "VALUES (1, 1, 5, 9, 'word')");
         }
     }
 
@@ -136,9 +142,9 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
     void testProcessBatch() throws IOException {
         // Create test entries
         List<AnnotationEntry> batch = List.of(
-            new AnnotationEntry(1, 1, 1, 0, 4, "Test", null, null, null),
-            new AnnotationEntry(2, 1, 1, 5, 9, "word", null, null, null),
-            new AnnotationEntry(3, 1, 1, 10, 13, "the", null, null, null) // stopword
+                new AnnotationEntry(1, 1, 1, 0, 4, "Test", null, null, null),
+                new AnnotationEntry(2, 1, 1, 5, 9, "word", null, null, null),
+                new AnnotationEntry(3, 1, 1, 10, 13, "the", null, null, null) // stopword
         );
 
         // Process batch
@@ -150,56 +156,57 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         assertTrue(result.containsKey("word"));
         assertFalse(result.containsKey("the")); // stopword should be filtered
 
-        // Verify positions
-        var testPositions = result.get("test").get(0);
-        assertEquals(1, testPositions.getNumPositions());
-        assertEquals(0, testPositions.getPositionAt(0).getBeginPosition());
-        assertEquals(4, testPositions.getPositionAt(0).getEndPosition());
+        // Verify cell counts
+        var testPl = result.get("test").get(0);
+        assertEquals(1, testPl.cells().getLongCardinality(), "Expected one cell for 'test'");
 
-        var wordPositions = result.get("word").get(0);
-        assertEquals(1, wordPositions.getNumPositions());
-        assertEquals(5, wordPositions.getPositionAt(0).getBeginPosition());
-        assertEquals(9, wordPositions.getPositionAt(0).getEndPosition());
+        var wordPl = result.get("word").get(0);
+        assertEquals(1, wordPl.cells().getLongCardinality(), "Expected one cell for 'word'");
     }
 
     @Test
     void testProcessBatchWithOverlaps() throws IOException {
         // Create test entries with overlapping and adjacent positions
         List<AnnotationEntry> batch = List.of(
-            new AnnotationEntry(1, 1, 1, 0, 4, "test", null, null, null),
-            new AnnotationEntry(2, 1, 1, 2, 6, "test", null, null, null), // overlaps first "test"
-            new AnnotationEntry(3, 1, 1, 10, 14, "word", null, null, null),
-            new AnnotationEntry(4, 1, 1, 15, 19, "word", null, null, null), // adjacent to first "word"
-            new AnnotationEntry(5, 1, 1, 20, 26, "repeat", null, null, null),
-            new AnnotationEntry(6, 1, 1, 20, 26, "repeat", null, null, null) // exact match with previous
+                new AnnotationEntry(1, 1, 1, 0, 4, "test", null, null, null),
+                new AnnotationEntry(2, 1, 1, 2, 6, "test", null, null, null), // overlaps first "test"
+                new AnnotationEntry(3, 1, 1, 10, 14, "word", null, null, null),
+                new AnnotationEntry(4, 1, 1, 15, 19, "word", null, null, null), // adjacent to first "word"
+                new AnnotationEntry(5, 1, 1, 20, 26, "repeat", null, null, null),
+                new AnnotationEntry(6, 1, 1, 22, 28, "repeat", null, null, null) // same cell, different offset
         );
 
         // Process batch
         var result = generator.processBatch(batch);
 
-        // Verify overlapping positions for "test"
-        var testPositions = result.get("test").get(0);
-        assertEquals(2, testPositions.getNumPositions(), "Expected two distinct positions for overlapping 'test' entries");
-        assertEquals(0, testPositions.getPositionAt(0).getBeginPosition());
-        assertEquals(4, testPositions.getPositionAt(0).getEndPosition());
-        assertEquals(2, testPositions.getPositionAt(1).getBeginPosition());
-        assertEquals(6, testPositions.getPositionAt(1).getEndPosition());
+        // Verify overlapping positions for "test" — one cell with two occurrence
+        // offsets
+        var testPl = result.get("test").get(0);
+        assertEquals(1, testPl.cells().getLongCardinality(), "Expected one cell for overlapping 'test' entries");
+        assertNotNull(testPl.occurrences());
+        OccurrencesView testOv = testPl.occurrences().occurrences(0);
+        assertEquals(2, testOv.size(), "Expected two occurrence offsets for overlapping 'test'");
+        assertEquals(0, testOv.begin(0));
+        assertEquals(2, testOv.begin(1));
 
-        // Verify adjacent positions for "word"
-        var wordPositions = result.get("word").get(0);
-        assertEquals(2, wordPositions.getNumPositions(), "Expected two positions for adjacent 'word' entries");
-        assertEquals(10, wordPositions.getPositionAt(0).getBeginPosition());
-        assertEquals(14, wordPositions.getPositionAt(0).getEndPosition());
-        assertEquals(15, wordPositions.getPositionAt(1).getBeginPosition());
-        assertEquals(19, wordPositions.getPositionAt(1).getEndPosition());
+        // Verify adjacent positions for "word" — one cell with two occurrence offsets
+        var wordPl = result.get("word").get(0);
+        assertEquals(1, wordPl.cells().getLongCardinality(), "Expected one cell for adjacent 'word' entries");
+        assertNotNull(wordPl.occurrences());
+        OccurrencesView wordOv = wordPl.occurrences().occurrences(0);
+        assertEquals(2, wordOv.size(), "Expected two occurrence offsets for adjacent 'word'");
+        assertEquals(10, wordOv.begin(0));
+        assertEquals(15, wordOv.begin(1));
 
-        // Verify deduplication of exact matches for "repeat"
-        var repeatPositions = result.get("repeat").get(0);
-        assertEquals(2, repeatPositions.getNumPositions(), "Expected two positions for 'repeat' as they are separate entries");
-        assertEquals(20, repeatPositions.getPositionAt(0).getBeginPosition());
-        assertEquals(26, repeatPositions.getPositionAt(0).getEndPosition());
-        assertEquals(20, repeatPositions.getPositionAt(1).getBeginPosition());
-        assertEquals(26, repeatPositions.getPositionAt(1).getEndPosition());
+        // Verify deduplication of exact matches for "repeat" — one cell with two
+        // occurrence offsets
+        var repeatPl = result.get("repeat").get(0);
+        assertEquals(1, repeatPl.cells().getLongCardinality(), "Expected one cell for 'repeat' entries");
+        assertNotNull(repeatPl.occurrences());
+        OccurrencesView repeatOv = repeatPl.occurrences().occurrences(0);
+        assertEquals(2, repeatOv.size(), "Expected two occurrence offsets for 'repeat'");
+        assertEquals(20, repeatOv.begin(0));
+        assertEquals(22, repeatOv.begin(1));
     }
 
     @Test
@@ -221,26 +228,30 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
             this.indexAccess.close();
         }
 
-        // For verification, we need a *new* IndexAccess instance for the *same path* as the original one.
-        // The original this.indexAccess was created with baseDir=this.indexBaseDir and indexName="unigram".
+        // For verification, we need a *new* IndexAccess instance for the *same path* as
+        // the original one.
+        // The original this.indexAccess was created with baseDir=this.indexBaseDir and
+        // indexName="unigram".
         // So the database is at this.indexBaseDir.resolve("unigram").
         // We need to open this exact path.
-        // The IndexAccess constructor IndexAccess(Path baseDir, String indexName, Options options)
+        // The IndexAccess constructor IndexAccess(Path baseDir, String indexName,
+        // Options options)
         // creates the DB at baseDir.resolve(indexName).
         // So, to open the existing DB at this.indexBaseDir.resolve("unigram"),
-        // we should use this.indexBaseDir as the baseDir argument and "unigram" as the indexName argument.
+        // we should use this.indexBaseDir as the baseDir argument and "unigram" as the
+        // indexName argument.
 
         try (Options options = createTestOptions();
-             // Update to include readOnly=false
-             IndexAccess verificationIA = new IndexAccess(this.indexBaseDir, "unigram", options, false)) {
+                // Update to include readOnly=false
+                IndexAccess verificationIA = new IndexAccess(this.indexBaseDir, "unigram", options, false)) {
             // Verify index contents
-            var testPositions = verificationIA.get("test".getBytes());
-            assertTrue(testPositions.isPresent(), "Expected positions for 'test'");
-            assertEquals(1, testPositions.get().getNumPositions());
+            var testPl = verificationIA.get("test".getBytes());
+            assertTrue(testPl.isPresent(), "Expected posting list for 'test'");
+            assertEquals(1, testPl.get().cells().getLongCardinality());
 
-            var wordPositions = verificationIA.get("word".getBytes());
-            assertTrue(wordPositions.isPresent(), "Expected positions for 'word'");
-            assertEquals(1, wordPositions.get().getNumPositions());
+            var wordPl = verificationIA.get("word".getBytes());
+            assertTrue(wordPl.isPresent(), "Expected posting list for 'word'");
+            assertEquals(1, wordPl.get().cells().getLongCardinality());
         }
 
         // Verify progress tracking
@@ -275,7 +286,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         entries.add(new AnnotationEntry(6, 2, 1, 5, 8, "dogs", null, null, null));
         // Stopword and punctuation
         entries.add(new AnnotationEntry(7, 3, 1, 0, 2, "in", null, null, null)); // stopword
-        entries.add(new AnnotationEntry(8, 3, 1, 3, 4, ".", null, null, null));   // punctuation
+        entries.add(new AnnotationEntry(8, 3, 1, 3, 4, ".", null, null, null)); // punctuation
         return entries;
     }
 

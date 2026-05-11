@@ -1,26 +1,20 @@
 package com.example.query.executor;
 
-import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.query.binding.ValueType;
+import com.example.core.OccurrencesBlock;
 import com.example.query.model.JoinCondition;
 import com.example.query.model.Query;
 import com.example.query.model.TemporalPredicate;
 
 /**
- * Handles the execution of JOIN operations between subquery QueryResultSoA objects.
- * Produces a new, unified QueryResultSoA as the result of the join.
+ * Handles JOIN operations between CellResult objects.
+ * For INNER joins, cells are intersected via bitmap AND.
+ * For value-based equality, bindings are matched within joined cells.
  */
 public class JoinHandler {
     private static final Logger logger = LoggerFactory.getLogger(JoinHandler.class);
@@ -29,208 +23,283 @@ public class JoinHandler {
     }
 
     /**
-     * Performs a binary join between two QueryResultSoA objects based on the provided condition and type.
-     *
-     * @param lhsSoA The QueryResultSoA for the left-hand side of the join.
-     * @param lhsAlias The alias for the left-hand side.
-     * @param rhsSoA The QueryResultSoA for the right-hand side of the join.
-     * @param rhsAlias The alias for the right-hand side.
-     * @param condition The JoinCondition specifying how to join.
-     * @param joinType The type of join (INNER, LEFT, etc.).
-     * @param outputGranularity The granularity for the output QueryResultSoA.
-     * @param outputGranularitySize The granularity size for the output.
-     * @param outputRequirements The attribute requirements for the output SoA.
-     * @return A new QueryResultSoA representing the result of the binary join.
-     * @throws QueryExecutionException If an error occurs during join processing.
+     * Performs a binary join between two CellResult objects.
      */
-    public QueryResultSoA performBinaryJoin(
-            QueryResultSoA lhsSoA,
+    public CellResult performBinaryJoin(
+            CellResult lhsResult,
             String lhsAlias,
-            QueryResultSoA rhsSoA,
+            CellResult rhsResult,
             String rhsAlias,
             JoinCondition condition,
             JoinCondition.JoinType joinType,
             Query.Granularity outputGranularity,
             int outputGranularitySize,
-            AttributeRequirements outputRequirements
-    ) throws QueryExecutionException {
-        if (lhsSoA == null) {
+            AttributeRequirements outputRequirements)
+            throws QueryExecutionException {
+
+        if (lhsResult == null) {
             throw new QueryExecutionException(
-                String.format("LHS QueryResultSoA for alias '%s' is null in performBinaryJoin.", lhsAlias),
-                "join", QueryExecutionException.ErrorType.INTERNAL_ERROR);
+                    "LHS CellResult for alias '" + lhsAlias + "' is null in performBinaryJoin.",
+                    "join", QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
-        if (rhsSoA == null) {
+        if (rhsResult == null) {
             throw new QueryExecutionException(
-                String.format("RHS QueryResultSoA for alias '%s' is null in performBinaryJoin.", rhsAlias),
-                "join", QueryExecutionException.ErrorType.INTERNAL_ERROR);
+                    "RHS CellResult for alias '" + rhsAlias + "' is null in performBinaryJoin.",
+                    "join", QueryExecutionException.ErrorType.INTERNAL_ERROR);
         }
 
-        logger.debug("Performing binary {} JOIN between LHS ('{}', {} entries) and RHS ('{}', {} entries) ON {}",
-                     joinType, lhsAlias, lhsSoA.size(), rhsAlias, rhsSoA.size(), condition);
-
-        // Ensure input SoAs have conceptualRowIds if required by their own internal state/needs
-        // The outputRequirements passed in should already reflect that the output needs conceptualRowIds.
-        if (!lhsSoA.getRequirements().needsConceptualRowIds || !rhsSoA.getRequirements().needsConceptualRowIds) {
-             logger.warn("CRITICAL: One or both input QueryResultSoA for JOIN are missing conceptualRowIds. Left: {}, Right: {}. This might impact join accuracy if optimizer relies on them internally, though buildConceptualIdToRowIndicesMap handles it.",
-                lhsSoA.getRequirements().needsConceptualRowIds, rhsSoA.getRequirements().needsConceptualRowIds);
-        }
-
-        // Base keys for result construction logic later
-        String leftKey = extractKeyFromColumnName(condition.leftColumn());
-        String rightKey = extractKeyFromColumnName(condition.rightColumn());
-
-        // Qualified keys for SoAJoinOptimizer
-        String qualifiedLeftKey = condition.leftColumn();
-        String qualifiedRightKey = condition.rightColumn();
+        logger.debug("Performing binary {} JOIN between LHS ('{}', {} cells) and RHS ('{}', {} cells) ON {}",
+                joinType, lhsAlias, lhsResult.cellCount(), rhsAlias, rhsResult.cellCount(), condition);
 
         JoinCondition.JoinOperatorType operatorType = condition.operatorType();
         Optional<TemporalPredicate> temporalPredicateOpt = condition.temporalPredicate();
 
-        List<SoAJoinOptimizer.SoAJoinKeyMatch> matchingConceptualIdPairs = Collections.emptyList();
-
-        // SoAJoinOptimizer is for INNER joins.
         if (joinType == JoinCondition.JoinType.INNER) {
             if (operatorType == JoinCondition.JoinOperatorType.EQUALITY) {
-                logger.debug("Invoking SoAOptimizer for INNER EQUALITY JOIN on keys: {} == {}",
-                             qualifiedLeftKey, qualifiedRightKey);
-                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedHashJoin(
-                    lhsSoA, rhsSoA, qualifiedLeftKey, qualifiedRightKey); // Use qualified keys
+                return performEqualityJoin(lhsResult, rhsResult, condition, outputGranularity);
             } else if (operatorType == JoinCondition.JoinOperatorType.TEMPORAL) {
-                TemporalPredicate predicate = temporalPredicateOpt.orElseThrow(() ->
-                    new QueryExecutionException("Temporal predicate is required for TEMPORAL join type",
-                            "join", QueryExecutionException.ErrorType.INTERNAL_ERROR));
-                logger.debug("Invoking SoAOptimizer for INNER TEMPORAL JOIN with predicate {} on keys: {} {} {}",
-                             predicate, qualifiedLeftKey, predicate, qualifiedRightKey); // Use qualified keys
-                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedTemporalJoin(
-                    lhsSoA, rhsSoA, qualifiedLeftKey, qualifiedRightKey, predicate.toString()); // Use qualified keys
+                TemporalPredicate predicate = temporalPredicateOpt
+                        .orElseThrow(() -> new QueryExecutionException("Temporal predicate required for TEMPORAL join",
+                                "join", QueryExecutionException.ErrorType.INTERNAL_ERROR));
+                return performTemporalJoin(lhsResult, rhsResult, condition, predicate, outputGranularity);
             } else {
-                logger.error("Unhandled JoinOperatorType for INNER JOIN: {}. Returning empty result.", operatorType);
-                // matchingConceptualIdPairs remains empty
+                throw new QueryExecutionException("Unsupported join operator: " + operatorType,
+                        "join", QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
             }
         } else {
-             logger.warn("Join type {} not yet fully implemented in performBinaryJoin. Defaulting to INNER join behavior or empty if optimizer doesn't support. Optimizer might only produce INNER results.", joinType);
-             if (operatorType == JoinCondition.JoinOperatorType.EQUALITY) {
-                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedHashJoin(lhsSoA, rhsSoA, qualifiedLeftKey, qualifiedRightKey); // Use qualified keys
-             } else if (operatorType == JoinCondition.JoinOperatorType.TEMPORAL && temporalPredicateOpt.isPresent()){
-                matchingConceptualIdPairs = SoAJoinOptimizer.performOptimizedTemporalJoin(lhsSoA, rhsSoA, qualifiedLeftKey, qualifiedRightKey, temporalPredicateOpt.get().toString()); // Use qualified keys
-             } else {
-                 logger.error("Cannot attempt non-INNER join for operator type {} or missing temporal predicate. Returning empty.", operatorType);
-             }
+            throw new QueryExecutionException("Unsupported join type: " + joinType,
+                    "join", QueryExecutionException.ErrorType.UNSUPPORTED_OPERATION);
         }
-
-        logger.debug("SoAJoinOptimizer returned {} matching conceptual ID pairs.", matchingConceptualIdPairs.size());
-
-        QueryResultSoA finalJoinedResultSoA = new QueryResultSoA(outputGranularity, outputGranularitySize, outputRequirements);
-        int nextOutputConceptualId = 0;
-
-        Map<Integer, List<Integer>> leftConceptualIdToIndices = buildConceptualIdToRowIndicesMap(lhsSoA);
-        Map<Integer, List<Integer>> rightConceptualIdToIndices = buildConceptualIdToRowIndicesMap(rhsSoA);
-
-        for (SoAJoinOptimizer.SoAJoinKeyMatch pair : matchingConceptualIdPairs) {
-            int currentOutputConceptualId = nextOutputConceptualId++;
-            Set<String> addedVariablesInCurrentOutputRow = new HashSet<>();
-
-            List<Integer> leftIndices = leftConceptualIdToIndices.getOrDefault(pair.leftConceptualRowId(), Collections.emptyList());
-            for (int leftIdx : leftIndices) {
-                addBindingFromSource(lhsSoA, leftIdx, finalJoinedResultSoA,
-                                     currentOutputConceptualId, addedVariablesInCurrentOutputRow,
-                                     operatorType, lhsAlias, leftKey, pair.joinKeyValue());
-            }
-
-            List<Integer> rightIndices = rightConceptualIdToIndices.getOrDefault(pair.rightConceptualRowId(), Collections.emptyList());
-            for (int rightIdx : rightIndices) {
-                addBindingFromSource(rhsSoA, rightIdx, finalJoinedResultSoA,
-                                     currentOutputConceptualId, addedVariablesInCurrentOutputRow,
-                                     operatorType, rhsAlias, rightKey, pair.joinKeyValue());
-            }
-        }
-
-        logger.info("Binary join processed. Output QueryResultSoA has {} entries, representing {} conceptual output rows.",
-                    finalJoinedResultSoA.size(), nextOutputConceptualId);
-        return finalJoinedResultSoA;
-    }
-
-    private Map<Integer, List<Integer>> buildConceptualIdToRowIndicesMap(QueryResultSoA soa) {
-        Map<Integer, List<Integer>> map = new HashMap<>();
-        if (soa == null || !soa.getRequirements().needsConceptualRowIds) {
-            logger.warn("Cannot build conceptualId to row indices map: SoA is null or lacks conceptualRowIds.");
-            return map;
-        }
-        for (int i = 0; i < soa.size(); i++) {
-            map.computeIfAbsent(soa.getConceptualRowIdAt(i), k -> new ArrayList<>()).add(i);
-        }
-        return map;
-    }
-
-    public static String extractAliasFromColumnName(String columnName) throws QueryExecutionException {
-        if (columnName == null || !columnName.contains(".")) {
-            // If there's no dot, it might be a direct structural key or an unaliased variable from the main query.
-            // For join purposes, if it's unaliased in a subquery context, the subquery itself is the implicit alias.
-            // This part of the logic might need refinement based on how aliases are consistently handled.
-            logger.trace("Column name '{}' does not contain '.', returning empty alias for join key extraction.", columnName);
-            return ""; // Or throw error if alias is strictly expected for subquery vars
-        }
-        return columnName.substring(0, columnName.indexOf('.'));
-    }
-
-    public static String extractKeyFromColumnName(String columnName) throws QueryExecutionException {
-        if (columnName == null) {
-            throw new QueryExecutionException("Column name for key extraction cannot be null", "join key extraction", QueryExecutionException.ErrorType.INTERNAL_ERROR);
-        }
-        if (!columnName.contains(".")) {
-            return columnName; // Assume it's a direct key if no alias part
-        }
-        return columnName.substring(columnName.indexOf('.') + 1);
     }
 
     /**
-     * Adds a single binding from a source SoA row into the output SoA, respecting join semantics
-     * and ensuring each variable is only added once per conceptual output row.
+     * Equality join: match bindings by value across all cells from both sides.
+     * If neither side has bindings, falls back to cell-level intersection.
+     * For INNER joins, if either side has empty cells, the result is empty.
      */
-    private void addBindingFromSource(
-            QueryResultSoA sourceSoA,
-            int sourceIndex,
-            QueryResultSoA outputSoA,
-            int outputConceptualRowId,
-            Set<String> addedVariablesInCurrentOutputRow,
-            JoinCondition.JoinOperatorType operatorType,
-            String sourceAlias,
-            String sourceKey,
-            Object joinKeyValue
-    ) {
-        String variableName = sourceSoA.getVariableNameAt(sourceIndex);
-        if (variableName == null || addedVariablesInCurrentOutputRow.contains(variableName)) {
-            return;
+    private CellResult performEqualityJoin(CellResult lhs, CellResult rhs,
+            JoinCondition condition, Query.Granularity granularity) {
+
+        // INNER join: if either side is empty, result is empty
+        if (lhs.isEmpty() || rhs.isEmpty()) {
+            return CellResult.empty(granularity);
         }
 
-        Object valueToAdd = sourceSoA.getValueAt(sourceIndex);
-        ValueType typeToAdd = sourceSoA.getValueTypeAt(sourceIndex);
+        Bindings lhsBindings = lhs.bindings();
+        Bindings rhsBindings = rhs.bindings();
 
-        if (operatorType == JoinCondition.JoinOperatorType.EQUALITY && variableName.equals(sourceAlias + "." + sourceKey)) {
-            valueToAdd = joinKeyValue;
-            typeToAdd = inferValueType(joinKeyValue, typeToAdd);
+        // If neither has bindings, fall back to cell-level intersection
+        if (lhsBindings == null && rhsBindings == null) {
+            Roaring64NavigableMap joinedCells = lhs.cells().clone();
+            joinedCells.and(rhs.cells());
+            if (joinedCells.isEmpty()) {
+                return CellResult.empty(granularity);
+            }
+            OccurrencesBlock joinedOcc = null;
+            if (lhs.occurrences() != null) {
+                joinedOcc = lhs.occurrences().intersect(joinedCells);
+            }
+            return CellResult.of(joinedCells, joinedOcc, null, granularity);
         }
 
-        outputSoA.add(
-                valueToAdd,
-                typeToAdd,
-                variableName,
-                sourceSoA.getDocumentIdAt(sourceIndex),
-                sourceSoA.getRequirements().needsSentenceId ? sourceSoA.getSentenceIdAt(sourceIndex) : -1,
-                sourceSoA.getRequirements().needsPositions ? sourceSoA.getBeginCharAt(sourceIndex) : -1,
-                sourceSoA.getRequirements().needsPositions ? sourceSoA.getEndCharAt(sourceIndex) : -1,
-                sourceSoA.getRequirements().needsSynonymIds ? sourceSoA.getSynonymIdAt(sourceIndex) : -1,
-                outputConceptualRowId
-        );
-        addedVariablesInCurrentOutputRow.add(variableName);
+        // If one side lacks bindings, we can still do cell-level cross-product
+        // of the side that has bindings with the cells of the other side
+        if (lhsBindings == null || rhsBindings == null) {
+            long[] lhsCellKeys = extractCellKeys(lhs.cells());
+            long[] rhsCellKeys = extractCellKeys(rhs.cells());
+            Bindings mergedBindings = CsrIntersectHelper.mergeBindings(
+                    lhsBindings, lhsCellKeys, rhsBindings, rhsCellKeys);
+            return CellResult.of(lhs.cells(), null, mergedBindings, granularity);
+        }
+
+        // Both sides have bindings: match by value across ALL cells
+        // Use full column name (alias.key) to match variable names in bindings
+        String leftCol = condition.leftColumn();
+        String rightCol = condition.rightColumn();
+        long[] lhsCellKeys = extractCellKeys(lhs.cells());
+        long[] rhsCellKeys = extractCellKeys(rhs.cells());
+
+        Bindings mergedBindings;
+        if (hasMatchingKey(lhsBindings, leftCol) && hasMatchingKey(rhsBindings, rightCol)) {
+            mergedBindings = matchBindingsByValue(lhsBindings, leftCol, lhsCellKeys,
+                    rhsBindings, rightCol, rhsCellKeys);
+        } else {
+            mergedBindings = CsrIntersectHelper.mergeBindings(
+                    lhsBindings, lhsCellKeys, rhsBindings, rhsCellKeys);
+        }
+
+        return CellResult.of(lhs.cells(), null, mergedBindings, granularity);
     }
 
     /**
-     * Infers a ValueType from a Java value, falling back to a provided default when not recognized.
+     * Temporal join: cross-product bindings from both sides and evaluate
+     * the temporal predicate on date values to filter matching rows.
+     * For INNER joins, if either side has empty cells, the result is empty.
      */
-    private static ValueType inferValueType(Object value, ValueType fallback) {
-        if (value instanceof LocalDate) return ValueType.DATE;
-        if (value instanceof String || value instanceof Number) return ValueType.TERM;
-        return fallback;
+    private CellResult performTemporalJoin(CellResult lhs, CellResult rhs,
+            JoinCondition condition, TemporalPredicate predicate,
+            Query.Granularity granularity) {
+
+        // INNER join: if either side is empty, result is empty
+        if (lhs.isEmpty() || rhs.isEmpty()) {
+            return CellResult.empty(granularity);
+        }
+
+        Bindings lhsBindings = lhs.bindings();
+        Bindings rhsBindings = rhs.bindings();
+
+        // If neither has bindings, fall back to cell intersection with
+        // generic cross-product merge
+        if (lhsBindings == null && rhsBindings == null) {
+            Roaring64NavigableMap joinedCells = lhs.cells().clone();
+            joinedCells.and(rhs.cells());
+            if (joinedCells.isEmpty()) {
+                return CellResult.empty(granularity);
+            }
+            return CellResult.of(joinedCells, null, null, granularity);
+        }
+
+        // Use full column name (alias.key) to match variable names in bindings
+        String leftCol = condition.leftColumn();
+        String rightCol = condition.rightColumn();
+        long[] lhsCellKeys = extractCellKeys(lhs.cells());
+        long[] rhsCellKeys = extractCellKeys(rhs.cells());
+
+        Bindings mergedBindings;
+        if (lhsBindings != null && rhsBindings != null
+                && hasMatchingKey(lhsBindings, leftCol)
+                && hasMatchingKey(rhsBindings, rightCol)) {
+            mergedBindings = matchBindingsByTemporal(lhsBindings, leftCol, lhsCellKeys,
+                    rhsBindings, rightCol, rhsCellKeys, predicate);
+        } else {
+            // One side lacks bindings or lacks the join key:
+            // fall back to generic cross-product merge
+            mergedBindings = CsrIntersectHelper.mergeBindings(
+                    lhsBindings, lhsCellKeys, rhsBindings, rhsCellKeys);
+        }
+
+        return CellResult.of(lhs.cells(), null, mergedBindings, granularity);
+    }
+
+    private static long[] extractCellKeys(Roaring64NavigableMap cells) {
+        long[] keys = new long[(int) cells.getLongCardinality()];
+        int i = 0;
+        var iter = cells.getLongIterator();
+        while (iter.hasNext()) {
+            keys[i++] = iter.next();
+        }
+        return keys;
+    }
+
+    private static boolean hasMatchingKey(Bindings bindings, String key) {
+        for (int i = 0; i < bindings.size(); i++) {
+            String varName = bindings.variableNameAt(i);
+            if (varName != null && varName.equals(key))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Matches bindings from two sides where the join key values are equal.
+     * Cross-products all rows from both sides regardless of cell membership.
+     * Produces a merged binding with both sides' values.
+     */
+    private static Bindings matchBindingsByValue(
+            Bindings left, String leftKey, long[] leftCellKeys,
+            Bindings right, String rightKey, long[] rightCellKeys) {
+
+        Bindings.Builder builder = Bindings.builder();
+
+        for (int li = 0; li < left.size(); li++) {
+            if (!leftKey.equals(left.variableNameAt(li)))
+                continue;
+            Object leftVal = left.valueAt(li);
+
+            for (int ri = 0; ri < right.size(); ri++) {
+                if (!rightKey.equals(right.variableNameAt(ri)))
+                    continue;
+                Object rightVal = right.valueAt(ri);
+
+                if (java.util.Objects.equals(leftVal, rightVal)) {
+                    addAllBindings(builder, left, li);
+                    addAllBindings(builder, right, ri);
+                }
+            }
+        }
+
+        return builder.isEmpty() ? null : builder.build();
+    }
+
+    /**
+     * Matches bindings from two sides by evaluating a temporal predicate
+     * on date values. Cross-products all rows from both sides.
+     */
+    private static Bindings matchBindingsByTemporal(
+            Bindings left, String leftKey, long[] leftCellKeys,
+            Bindings right, String rightKey, long[] rightCellKeys,
+            TemporalPredicate predicate) {
+
+        Bindings.Builder builder = Bindings.builder();
+
+        for (int li = 0; li < left.size(); li++) {
+            if (!leftKey.equals(left.variableNameAt(li)))
+                continue;
+            Object leftVal = left.valueAt(li);
+            if (!(leftVal instanceof java.time.LocalDate))
+                continue;
+            java.time.LocalDate leftDate = (java.time.LocalDate) leftVal;
+
+            for (int ri = 0; ri < right.size(); ri++) {
+                if (!rightKey.equals(right.variableNameAt(ri)))
+                    continue;
+                Object rightVal = right.valueAt(ri);
+                if (!(rightVal instanceof java.time.LocalDate))
+                    continue;
+                java.time.LocalDate rightDate = (java.time.LocalDate) rightVal;
+
+                if (evaluateTemporalPredicate(leftDate, rightDate, predicate)) {
+                    addAllBindings(builder, left, li);
+                    addAllBindings(builder, right, ri);
+                }
+            }
+        }
+
+        return builder.isEmpty() ? null : builder.build();
+    }
+
+    /**
+     * Evaluates a temporal predicate between two LocalDates.
+     */
+    private static boolean evaluateTemporalPredicate(
+            java.time.LocalDate left, java.time.LocalDate right,
+            TemporalPredicate predicate) {
+        return switch (predicate) {
+            case BEFORE -> left.isBefore(right);
+            case AFTER -> left.isAfter(right);
+            case BEFORE_EQUAL -> !left.isAfter(right);
+            case AFTER_EQUAL -> !left.isBefore(right);
+            case EQUAL -> left.isEqual(right);
+            default -> false;
+        };
+    }
+
+    private static void addAllBindings(Bindings.Builder builder, Bindings bindings, int row) {
+        builder.add(bindings.valueAt(row), bindings.valueTypeAt(row), bindings.variableNameAt(row));
+    }
+
+    // --- Column name utilities (kept from original) ---
+    public static String extractAliasFromColumnName(String qualifiedColumnName) {
+        if (qualifiedColumnName == null)
+            return null;
+        int dotIndex = qualifiedColumnName.lastIndexOf('.');
+        return dotIndex >= 0 ? qualifiedColumnName.substring(0, dotIndex) : qualifiedColumnName;
+    }
+
+    public static String extractKeyFromColumnName(String qualifiedColumnName) {
+        if (qualifiedColumnName == null)
+            return null;
+        int dotIndex = qualifiedColumnName.lastIndexOf('.');
+        return dotIndex >= 0 ? qualifiedColumnName.substring(dotIndex + 1) : qualifiedColumnName;
     }
 }

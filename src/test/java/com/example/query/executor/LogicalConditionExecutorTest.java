@@ -10,15 +10,10 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
-import java.util.TreeSet;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -28,8 +23,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 
 import com.example.core.IndexAccessInterface;
+import com.example.core.PostingList;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Contains;
@@ -38,27 +35,33 @@ import com.example.query.model.condition.Logical;
 @ExtendWith(MockitoExtension.class)
 public class LogicalConditionExecutorTest {
 
-    @Mock private ConditionExecutorFactory mockFactory;
-    @Mock private ContainsExecutor mockSubExecutor1;
-    @Mock private ContainsExecutor mockSubExecutor2;
-    @Mock private ContainsExecutor mockSubExecutor3;
+    @Mock
+    private ConditionExecutorFactory mockFactory;
+    @Mock
+    private ContainsExecutor mockSubExecutor1;
+    @Mock
+    private ContainsExecutor mockSubExecutor2;
+    @Mock
+    private ContainsExecutor mockSubExecutor3;
 
     private LogicalExecutor logicalExecutor;
     private Map<String, IndexAccessInterface> indexes;
 
-    private Query.Granularity testGranularity; // Default set in setUp
+    private Query.Granularity testGranularity;
     private int testGranularitySize;
     private String corpusName = "test_corpus";
     private Contains condition1_term1;
     private Contains condition2_term2;
     private Contains condition3_term3;
-    private AttributeRequirements defaultTestRequirements; // Default set in setUp
+    private AttributeRequirements defaultTestRequirements;
 
     @Captor
-    private ArgumentCaptor<Optional<FilteringContext>> contextCaptor;
+    private ArgumentCaptor<Optional<Roaring64NavigableMap>> allowedCellsCaptor;
 
     // Helper record for test data
-    record TestDataEntry(Object value, ValueType type, String varName, int docId, int sentId, int begin, int end, int synId, int conceptualRowId) {}
+    record TestDataEntry(Object value, ValueType type, String varName, int docId, int sentId,
+            int begin, int end, int synId, int conceptualRowId) {
+    }
 
     @BeforeEach
     void setUp() {
@@ -72,526 +75,565 @@ public class LogicalConditionExecutorTest {
 
         logicalExecutor = new LogicalExecutor(mockFactory, "optimized", Query.Granularity.SENTENCE);
         indexes = Collections.emptyMap();
-        testGranularity = Query.Granularity.DOCUMENT; // Default for most existing tests
+        testGranularity = Query.Granularity.DOCUMENT;
         testGranularitySize = 0;
 
         defaultTestRequirements = new AttributeRequirements();
         defaultTestRequirements.needsDocumentId = true;
-        defaultTestRequirements.needsSentenceId = false; // Default to document-level context behavior
+        defaultTestRequirements.needsSentenceId = false;
         defaultTestRequirements.needsPositions = true;
         defaultTestRequirements.needsConceptualRowIds = true;
         defaultTestRequirements.needsSynonymIds = true;
     }
 
-    // Base helper to create QueryResultSoA for testing.
-    // The `reqs` parameter's `needsSentenceId` field determines how FilteringContext.intersect behaves.
-    private QueryResultSoA createMockQueryResultSoA(List<TestDataEntry> entries, Query.Granularity gran, int granSize, AttributeRequirements reqs) {
-        QueryResultSoA soaResult = new QueryResultSoA(gran, granSize, reqs);
+    // --- CellResult helpers ---
+
+    /**
+     * Creates a CellResult with cells and bindings from test data entries.
+     * Each entry contributes a cell key (packed docId+sentId) and one binding row.
+     */
+    private CellResult createMockCellResult(List<TestDataEntry> entries, Query.Granularity gran) {
+        Roaring64NavigableMap cells = new Roaring64NavigableMap();
+        Bindings.Builder bindingsBuilder = Bindings.builder();
         for (TestDataEntry entry : entries) {
-            soaResult.add(
-                entry.value(), entry.type(), entry.varName(),
-                entry.docId(), entry.sentId(),
-                entry.begin(), entry.end(), entry.synId(),
-                entry.conceptualRowId()
-            );
+            long cellKey = PostingList.packCellKey(entry.docId(), entry.sentId());
+            cells.add(cellKey);
+            bindingsBuilder.add(entry.value(), entry.type(), entry.varName());
         }
-        return soaResult;
+        Bindings bindings = bindingsBuilder.isEmpty() ? null : bindingsBuilder.build();
+        return CellResult.of(cells, bindings, gran);
     }
 
-    // Overload using default test granularity and size from setUp, with specified requirements
-    private QueryResultSoA createMockQueryResultSoA(List<TestDataEntry> entries, AttributeRequirements customReqs) {
-        return createMockQueryResultSoA(entries, this.testGranularity, this.testGranularitySize, customReqs);
+    private CellResult createMockCellResult(List<TestDataEntry> entries) {
+        return createMockCellResult(entries, this.testGranularity);
     }
 
-    // Overload using all default test settings from setUp (default granularity, size, and requirements)
-    private QueryResultSoA createMockQueryResultSoA(List<TestDataEntry> entries) {
-        return createMockQueryResultSoA(entries, this.testGranularity, this.testGranularitySize, this.defaultTestRequirements);
-    }
-
-    private List<Map<String, Object>> getBindingsForConceptualId(QueryResultSoA soa, int conceptualId) {
-        List<Map<String, Object>> bindings = new ArrayList<>();
-        for (int i = 0; i < soa.size(); i++) {
-            if (soa.getConceptualRowIdAt(i) == conceptualId) {
-                Map<String, Object> binding = new HashMap<>();
-                binding.put("value", soa.getValueAt(i));
-                binding.put("type", soa.getValueTypeAt(i));
-                binding.put("variableName", soa.getVariableNameAt(i));
-                binding.put("docId", soa.getDocumentIdAt(i));
-                if (soa.getRequirements().needsSentenceId) {
-                binding.put("sentId", soa.getSentenceIdAt(i));
-                } else {
-                    binding.put("sentId", -1); // Placeholder if sentence ID is not available/required
-                }
-                bindings.add(binding);
-            }
-        }
-        return bindings;
-    }
-
-    private long countUniqueConceptualRows(QueryResultSoA soa) {
-        if (soa.isEmpty()) return 0;
-        Set<Integer> uniqueIds = new HashSet<>();
-        for (int i = 0; i < soa.size(); i++) {
-            uniqueIds.add(soa.getConceptualRowIdAt(i));
-        }
-        return uniqueIds.size();
-    }
+    // ================================================================
+    // AND tests
+    // ================================================================
 
     @Test
     void testExecuteAnd_twoConditions_bothReturnResults() throws QueryExecutionException {
-        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
-        // Using defaultTestRequirements (document granularity, needsSentenceId=false)
-        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)
-        ));
-        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 5, 9, -1, 0)
-        ));
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                List.of(condition1_term1, condition2_term2));
 
-        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result1SoA);
-        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result2SoA);
+        CellResult result1 = createMockCellResult(List.of(
+                new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)));
+        CellResult result2 = createMockCellResult(List.of(
+                new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 5, 9, -1, 0)));
 
-        QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result1);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result2);
+
+        CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
 
         assertNotNull(finalResult);
-        assertEquals(1, countUniqueConceptualRows(finalResult));
-        assertEquals(2, finalResult.size());
-        List<Map<String, Object>> conceptualRowBindings = getBindingsForConceptualId(finalResult, finalResult.getConceptualRowIdAt(0));
-        assertEquals(2, conceptualRowBindings.size());
-        boolean foundTerm1 = false;
-        boolean foundTerm2 = false;
-        for (Map<String, Object> binding : conceptualRowBindings) {
-            assertEquals(1, binding.get("docId"));
-            assertEquals(-1, binding.get("sentId"));
-            if ("term1".equals(binding.get("value")) && "v1".equals(binding.get("variableName"))) {
-                foundTerm1 = true;
-            } else if ("term2".equals(binding.get("value")) && "v2".equals(binding.get("variableName"))) {
-                foundTerm2 = true;
-            }
-        }
-        assertTrue(foundTerm1);
-        assertTrue(foundTerm2);
+        assertFalse(finalResult.isEmpty());
+        // Both conditions share cell (1,1) → intersection should have exactly 1 cell
+        assertEquals(1, finalResult.cellCount());
+        long expectedCell = PostingList.packCellKey(1, 1);
+        assertTrue(finalResult.cells().contains(expectedCell));
+        // Bindings should be present (merged from both sides)
+        assertNotNull(finalResult.bindings());
     }
 
     @Test
     void testExecuteAnd_firstConditionEmpty() throws QueryExecutionException {
-        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
-        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
-        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 0, 4, -1, 0)
-        ));
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                List.of(condition1_term1, condition2_term2));
 
-        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(emptyResultSoA);
-        lenient().when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result2SoA);
+        CellResult emptyResult = CellResult.empty(testGranularity);
+        CellResult result2 = createMockCellResult(List.of(
+                new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 0, 4, -1, 0)));
 
-        QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(emptyResult);
+        lenient().when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result2);
+
+        CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
 
         assertTrue(finalResult.isEmpty());
-        assertEquals(0, countUniqueConceptualRows(finalResult));
+        assertEquals(0, finalResult.cellCount());
     }
 
     @Test
     void testExecuteAnd_secondConditionEmpty() throws QueryExecutionException {
-        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
-        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)
-        ));
-        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                List.of(condition1_term1, condition2_term2));
 
-        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result1SoA);
-        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(emptyResultSoA);
+        CellResult result1 = createMockCellResult(List.of(
+                new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)));
+        CellResult emptyResult = CellResult.empty(testGranularity);
 
-        QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result1);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(emptyResult);
+
+        CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
 
         assertTrue(finalResult.isEmpty());
-        assertEquals(0, countUniqueConceptualRows(finalResult));
+        assertEquals(0, finalResult.cellCount());
     }
 
     @Test
     void testExecuteOr_twoConditions_bothReturnResults() throws QueryExecutionException {
-        Logical orCondition = new Logical(Logical.LogicalOperator.OR, List.of(condition1_term1, condition2_term2));
-        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)
-        ));
-        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term2", ValueType.TERM, "v2", 2, 1, 0, 4, -1, 0)
-        ));
+        Logical orCondition = new Logical(Logical.LogicalOperator.OR,
+                List.of(condition1_term1, condition2_term2));
 
-        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result1SoA);
-        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result2SoA);
+        CellResult result1 = createMockCellResult(List.of(
+                new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)));
+        CellResult result2 = createMockCellResult(List.of(
+                new TestDataEntry("term2", ValueType.TERM, "v2", 2, 1, 0, 4, -1, 0)));
 
-        QueryResultSoA finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result1);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result2);
 
-        assertEquals(2, finalResult.size());
-        assertEquals(2, countUniqueConceptualRows(finalResult));
-        Set<Object> values = new HashSet<>();
-        Set<Integer> conceptualIds = new HashSet<>();
-        for(int i=0; i < finalResult.size(); i++) {
-            values.add(finalResult.getValueAt(i));
-            conceptualIds.add(finalResult.getConceptualRowIdAt(i));
-        }
-        assertTrue(values.contains("term1"));
-        assertTrue(values.contains("term2"));
-        assertEquals(2, conceptualIds.size());
+        CellResult finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity,
+                testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+
+        assertEquals(2, finalResult.cellCount());
+        long cell1 = PostingList.packCellKey(1, 1);
+        long cell2 = PostingList.packCellKey(2, 1);
+        assertTrue(finalResult.cells().contains(cell1));
+        assertTrue(finalResult.cells().contains(cell2));
+        // Bindings should be present from the union
+        assertNotNull(finalResult.bindings());
     }
 
     @Test
     void testExecuteOr_firstConditionEmpty() throws QueryExecutionException {
-        Logical orCondition = new Logical(Logical.LogicalOperator.OR, List.of(condition1_term1, condition2_term2));
-        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
-        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 0, 4, -1, 0)
-        ));
+        Logical orCondition = new Logical(Logical.LogicalOperator.OR,
+                List.of(condition1_term1, condition2_term2));
 
-        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(emptyResultSoA);
-        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result2SoA);
+        CellResult emptyResult = CellResult.empty(testGranularity);
+        CellResult result2 = createMockCellResult(List.of(
+                new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 0, 4, -1, 0)));
 
-        QueryResultSoA finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(emptyResult);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result2);
+
+        CellResult finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity,
+                testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
 
         assertFalse(finalResult.isEmpty());
-        assertEquals(result2SoA.size(), finalResult.size());
-        assertEquals(1, countUniqueConceptualRows(finalResult));
-        assertEquals("term2", finalResult.getValueAt(0));
-        assertEquals(0, finalResult.getConceptualRowIdAt(0));
+        assertEquals(1, finalResult.cellCount());
+        long expectedCell = PostingList.packCellKey(1, 1);
+        assertTrue(finalResult.cells().contains(expectedCell));
+        assertNotNull(finalResult.bindings());
+        assertEquals("term2", finalResult.bindings().valueAt(0));
     }
 
     @Test
     void testExecuteOr_secondConditionEmpty() throws QueryExecutionException {
-        Logical orCondition = new Logical(Logical.LogicalOperator.OR, List.of(condition1_term1, condition2_term2));
-        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)
-        ));
-        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
+        Logical orCondition = new Logical(Logical.LogicalOperator.OR,
+                List.of(condition1_term1, condition2_term2));
 
-        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result1SoA);
-        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(emptyResultSoA);
+        CellResult result1 = createMockCellResult(List.of(
+                new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)));
+        CellResult emptyResult = CellResult.empty(testGranularity);
 
-        QueryResultSoA finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result1);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(emptyResult);
+
+        CellResult finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity,
+                testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
 
         assertFalse(finalResult.isEmpty());
-        assertEquals(result1SoA.size(), finalResult.size());
-        assertEquals(1, countUniqueConceptualRows(finalResult));
-        assertEquals("term1", finalResult.getValueAt(0));
-        assertEquals(0, finalResult.getConceptualRowIdAt(0));
+        assertEquals(1, finalResult.cellCount());
+        long expectedCell = PostingList.packCellKey(1, 1);
+        assertTrue(finalResult.cells().contains(expectedCell));
+        assertNotNull(finalResult.bindings());
+        assertEquals("term1", finalResult.bindings().valueAt(0));
     }
 
     @Test
     void testExecuteAnd_threeConditions_middleIsEmpty() throws QueryExecutionException {
-        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2, condition3_term3));
-        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)));
-        QueryResultSoA emptyResultSoA = createMockQueryResultSoA(Collections.emptyList());
-        QueryResultSoA result3SoA = createMockQueryResultSoA(List.of(new TestDataEntry("term3", ValueType.TERM, "v3", 1, 1, 0, 4, -1, 0)));
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                List.of(condition1_term1, condition2_term2, condition3_term3));
 
-        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result1SoA);
-        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(emptyResultSoA);
-        lenient().when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result3SoA);
+        CellResult result1 = createMockCellResult(List.of(
+                new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)));
+        CellResult emptyResult = CellResult.empty(testGranularity);
+        CellResult result3 = createMockCellResult(List.of(
+                new TestDataEntry("term3", ValueType.TERM, "v3", 1, 1, 0, 4, -1, 0)));
 
-        QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result1);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(emptyResult);
+        lenient().when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result3);
+
+        CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
 
         assertTrue(finalResult.isEmpty());
-        assertEquals(0, countUniqueConceptualRows(finalResult));
+        assertEquals(0, finalResult.cellCount());
     }
 
     @Test
     void testExecuteOr_threeConditions_middleHasUnique() throws QueryExecutionException {
-        Logical orCondition = new Logical(Logical.LogicalOperator.OR, List.of(condition1_term1, condition2_term2, condition3_term3));
-        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)
-        ));
-        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term2", ValueType.TERM, "v2", 2, 1, 0, 4, -1, 1)
-        ));
-        QueryResultSoA result3SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term3", ValueType.TERM, "v3", 1, 1, 5, 9, -1, 2)
-        ));
+        Logical orCondition = new Logical(Logical.LogicalOperator.OR,
+                List.of(condition1_term1, condition2_term2, condition3_term3));
 
-        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result1SoA);
-        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result2SoA);
-        when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(testGranularity), eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any())).thenReturn(result3SoA);
+        CellResult result1 = createMockCellResult(List.of(
+                new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0)));
+        CellResult result2 = createMockCellResult(List.of(
+                new TestDataEntry("term2", ValueType.TERM, "v2", 2, 1, 0, 4, -1, 0)));
+        CellResult result3 = createMockCellResult(List.of(
+                new TestDataEntry("term3", ValueType.TERM, "v3", 1, 1, 5, 9, -1, 0)));
 
-        QueryResultSoA finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity, testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result1);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result2);
+        when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(testGranularity),
+                eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result3);
 
-        assertEquals(3, finalResult.size());
-        assertEquals(3, countUniqueConceptualRows(finalResult));
-        Set<Object> values = new HashSet<>();
-        for(int i=0; i < finalResult.size(); i++) {
-            values.add(finalResult.getValueAt(i));
-        }
-        assertTrue(values.containsAll(Set.of("term1", "term2", "term3")));
-        Set<Integer> finalConceptualIds = new HashSet<>();
-        for (int i = 0; i < finalResult.size(); i++) {
-            finalConceptualIds.add(finalResult.getConceptualRowIdAt(i));
-        }
-        assertEquals(3, finalConceptualIds.size());
-        boolean term1Found = false;
-        for(int i=0; i<finalResult.size(); i++){
-            if("term1".equals(finalResult.getValueAt(i))) {
-                assertTrue(finalConceptualIds.contains(finalResult.getConceptualRowIdAt(i)));
-                term1Found = true;
-            }
-        }
-        assertTrue(term1Found);
+        CellResult finalResult = logicalExecutor.execute(orCondition, indexes, testGranularity,
+                testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+
+        // Result1: cell(1,1), Result2: cell(2,1), Result3: cell(1,1) — union = 2 unique
+        // cells
+        assertEquals(2, finalResult.cellCount());
+        long cell1_1 = PostingList.packCellKey(1, 1);
+        long cell2_1 = PostingList.packCellKey(2, 1);
+        assertTrue(finalResult.cells().contains(cell1_1));
+        assertTrue(finalResult.cells().contains(cell2_1));
+        assertNotNull(finalResult.bindings());
     }
 
     @Test
     void testMergeJoinBasic() throws QueryExecutionException {
-        Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
+        Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                List.of(condition1_term1, condition2_term2));
 
-        AttributeRequirements docGranularityReqs = new AttributeRequirements();
-        docGranularityReqs.needsDocumentId = true;
-        docGranularityReqs.needsSentenceId = false; // Explicitly document level for this test
-        docGranularityReqs.needsPositions = true;
-        docGranularityReqs.needsConceptualRowIds = true;
+        CellResult result1 = createMockCellResult(List.of(
+                new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0),
+                new TestDataEntry("term1", ValueType.TERM, "v1", 3, 1, 0, 4, -1, 1)),
+                Query.Granularity.DOCUMENT);
+        CellResult result2 = createMockCellResult(List.of(
+                new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 5, 9, -1, 0),
+                new TestDataEntry("term2", ValueType.TERM, "v2", 3, 1, 5, 9, -1, 1)),
+                Query.Granularity.DOCUMENT);
 
-        QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term1", ValueType.TERM, "v1", 1, 1, 0, 4, -1, 0),
-            new TestDataEntry("term1", ValueType.TERM, "v1", 3, 1, 0, 4, -1, 1)
-        ), Query.Granularity.DOCUMENT, 0, docGranularityReqs);
-        QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
-            new TestDataEntry("term2", ValueType.TERM, "v2", 1, 1, 5, 9, -1, 0),
-            new TestDataEntry("term2", ValueType.TERM, "v2", 3, 1, 5, 9, -1, 1)
-        ), Query.Granularity.DOCUMENT, 0, docGranularityReqs);
+        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(Query.Granularity.DOCUMENT),
+                eq(0), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result1);
+        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(Query.Granularity.DOCUMENT),
+                eq(0), anyString(), eq(defaultTestRequirements), any()))
+                .thenReturn(result2);
 
-        when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(Query.Granularity.DOCUMENT), eq(0), anyString(), eq(docGranularityReqs), any())).thenReturn(result1SoA);
-        when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(Query.Granularity.DOCUMENT), eq(0), anyString(), eq(docGranularityReqs), any())).thenReturn(result2SoA);
+        CellResult result = logicalExecutor.execute(andCondition, indexes, Query.Granularity.DOCUMENT,
+                0, "test_corpus", defaultTestRequirements, Optional.empty());
 
-        QueryResultSoA result = logicalExecutor.execute(andCondition, indexes, Query.Granularity.DOCUMENT, 0, "test_corpus", docGranularityReqs, Optional.empty());
-
-        assertEquals(4, result.size());
-        assertEquals(2, countUniqueConceptualRows(result));
-        Set<Integer> actualDocIds = new HashSet<>();
-        for (int i = 0; i < result.size(); i++) {
-            actualDocIds.add(result.getDocumentIdAt(i));
-        }
-        assertTrue(actualDocIds.contains(1));
-        assertTrue(actualDocIds.contains(3));
-        assertEquals(2, actualDocIds.size());
+        // Both share cells (1,1) and (3,1) → intersection = 2 cells
+        assertEquals(2, result.cellCount());
+        long cell1 = PostingList.packCellKey(1, 1);
+        long cell3 = PostingList.packCellKey(3, 1);
+        assertTrue(result.cells().contains(cell1));
+        assertTrue(result.cells().contains(cell3));
+        assertNotNull(result.bindings());
     }
 
-    // --- Predicate Pushdown Tests ---
+    // ================================================================
+    // Allowed-cells filtering tests (replaces old context pushdown tests)
+    // ================================================================
     @Nested
-    class PredicatePushdownTests {
-
-        private AttributeRequirements docReqs;
-        private AttributeRequirements sentenceReqs;
+    class AllowedCellsFilteringTests {
 
         @BeforeEach
         void nestedSetUp() {
-            docReqs = new AttributeRequirements();
-            docReqs.needsDocumentId = true;
-            docReqs.needsSentenceId = false; // For document level context
-            docReqs.needsPositions = true;
-            docReqs.needsConceptualRowIds = true;
-
-            sentenceReqs = new AttributeRequirements();
-            sentenceReqs.needsDocumentId = true;
-            sentenceReqs.needsSentenceId = true; // For sentence level context
-            sentenceReqs.needsPositions = true;
-            sentenceReqs.needsConceptualRowIds = true;
+            // Use default setup from outer class
         }
 
         @Test
-        void testAndPushdown_initialContextIsPassedToFirstCondition() throws QueryExecutionException {
-            Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1));
-            Query.Granularity currentTestGranularity = Query.Granularity.DOCUMENT;
-            QueryResultSoA mockResult = createMockQueryResultSoA(List.of(new TestDataEntry("term1", ValueType.TERM, null, 1, 1, 0, 0, -1, 0)), currentTestGranularity, 0, docReqs);
+        void testAllowedCellsFilter_restrictsFinalResult() throws QueryExecutionException {
+            Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                    List.of(condition1_term1));
 
-            FilteringContext initialFilteringContext = FilteringContext.unrestricted(currentTestGranularity);
+            CellResult mockResult = createMockCellResult(List.of(
+                    new TestDataEntry("term1", ValueType.TERM, null, 1, 1, 0, 0, -1, 0),
+                    new TestDataEntry("term1", ValueType.TERM, null, 2, 1, 0, 0, -1, 0)));
 
-            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(mockResult);
+            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(mockResult);
 
-            logicalExecutor.execute(andCondition, indexes, currentTestGranularity, testGranularitySize, corpusName, docReqs, Optional.of(initialFilteringContext));
+            // allowedCells restricts to only docId=1
+            Roaring64NavigableMap allowed = new Roaring64NavigableMap();
+            allowed.add(PostingList.packCellKey(1, 1));
 
-            assertEquals(1, contextCaptor.getAllValues().size());
-            Optional<FilteringContext> capturedContext = contextCaptor.getValue();
-            assertTrue(capturedContext.isPresent());
-            assertEquals(initialFilteringContext, capturedContext.get());
+            CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                    testGranularitySize, corpusName, defaultTestRequirements, Optional.of(allowed));
+
+            assertNotNull(finalResult);
+            assertFalse(finalResult.isEmpty());
+            assertEquals(1, finalResult.cellCount());
+            assertTrue(finalResult.cells().contains(PostingList.packCellKey(1, 1)));
+            assertFalse(finalResult.cells().contains(PostingList.packCellKey(2, 1)));
         }
 
         @Test
-        void testAndPushdown_firstConditionResultShapesContextForSecond_DocGranularity() throws QueryExecutionException {
-            Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
-            Query.Granularity currentTestGranularity = Query.Granularity.DOCUMENT;
+        void testAllowedCellsFilter_noOverlap_resultsInEmpty() throws QueryExecutionException {
+            Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                    List.of(condition1_term1));
 
-            QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-                new TestDataEntry("term1", ValueType.TERM, null, 1, -1, 0, 0, -1, 0),
-                new TestDataEntry("term1", ValueType.TERM, null, 2, -1, 0, 0, -1, 1)
-            ), currentTestGranularity, 0, docReqs);
+            CellResult mockResult = createMockCellResult(List.of(
+                    new TestDataEntry("term1", ValueType.TERM, null, 1, 1, 0, 0, -1, 0)));
 
-            QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
-                new TestDataEntry("term2", ValueType.TERM, null, 2, -1, 0, 0, -1, 0),
-                new TestDataEntry("term2", ValueType.TERM, null, 3, -1, 0, 0, -1, 1)
-            ), currentTestGranularity, 0, docReqs);
+            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(mockResult);
 
-            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), any())).thenReturn(result1SoA);
-            when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(result2SoA);
+            // allowedCells has no overlap with the result
+            Roaring64NavigableMap allowed = new Roaring64NavigableMap();
+            allowed.add(PostingList.packCellKey(99, 1));
 
-            logicalExecutor.execute(andCondition, indexes, currentTestGranularity, testGranularitySize, corpusName, docReqs, Optional.empty());
+            CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                    testGranularitySize, corpusName, defaultTestRequirements, Optional.of(allowed));
 
-            assertEquals(1, contextCaptor.getAllValues().size());
-            Optional<FilteringContext> capturedContextForSecond = contextCaptor.getValue();
-            assertTrue(capturedContextForSecond.isPresent());
-            FilteringContext fc = capturedContextForSecond.get();
-            assertFalse(fc.isUnrestricted());
-            assertTrue(fc.allowedDocumentIds().isPresent());
-            assertEquals(new TreeSet<>(Set.of(1, 2)), fc.allowedDocumentIds().get());
-            assertFalse(fc.allowedDocumentSentenceIds().isPresent());
-        }
-
-        @Test
-        void testAndPushdown_firstConditionResultShapesContextForSecond_SentenceGranularity() throws QueryExecutionException {
-            Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
-            Query.Granularity currentTestGranularity = Query.Granularity.SENTENCE;
-
-            QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-                new TestDataEntry("term1", ValueType.TERM, null, 1, 10, 0, 0, -1, 0),
-                new TestDataEntry("term1", ValueType.TERM, null, 1, 11, 0, 0, -1, 1),
-                new TestDataEntry("term1", ValueType.TERM, null, 2, 20, 0, 0, -1, 2)
-            ), currentTestGranularity, 0, sentenceReqs);
-
-            QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
-                new TestDataEntry("term2", ValueType.TERM, null, 1, 11, 0,0,-1,0)
-            ), currentTestGranularity, 0, sentenceReqs);
-
-            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(sentenceReqs), any())).thenReturn(result1SoA);
-            when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(sentenceReqs), contextCaptor.capture())).thenReturn(result2SoA);
-
-            logicalExecutor.execute(andCondition, indexes, currentTestGranularity, testGranularitySize, corpusName, sentenceReqs, Optional.empty());
-
-            assertEquals(1, contextCaptor.getAllValues().size());
-            Optional<FilteringContext> capturedContextForSecond = contextCaptor.getValue();
-            assertTrue(capturedContextForSecond.isPresent());
-            FilteringContext fc = capturedContextForSecond.get();
-
-            assertFalse(fc.isUnrestricted());
-            assertTrue(fc.allowedDocumentIds().isPresent());
-            assertEquals(new TreeSet<>(Set.of(1, 2)), fc.allowedDocumentIds().get());
-
-            assertTrue(fc.allowedDocumentSentenceIds().isPresent());
-            Map<Integer, Set<Integer>> expectedSentIds = Map.of(
-                1, Set.of(10, 11),
-                2, Set.of(20)
-            );
-            assertEquals(expectedSentIds, fc.allowedDocumentSentenceIds().get());
-        }
-
-        @Test
-        void testAndPushdown_emptyResultFromFirstCondition_FinalResultEmpty() throws QueryExecutionException {
-            Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2));
-            Query.Granularity currentTestGranularity = Query.Granularity.DOCUMENT;
-
-            QueryResultSoA emptyResult1SoA = createMockQueryResultSoA(Collections.emptyList(), currentTestGranularity, 0, docReqs);
-            QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(new TestDataEntry("term2", ValueType.TERM, null, 1, -1, 0,0,-1,0)), currentTestGranularity, 0, docReqs);
-
-            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), any())).thenReturn(emptyResult1SoA);
-            lenient().when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(result2SoA);
-
-            QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, currentTestGranularity, testGranularitySize, corpusName, docReqs, Optional.empty());
             assertTrue(finalResult.isEmpty());
+            assertEquals(0, finalResult.cellCount());
         }
 
         @Test
-        void testAndPushdown_initialEmptyContext_leadsToUnrestrictedContextForFirstCondition() throws QueryExecutionException {
-            Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1));
-            Query.Granularity currentTestGranularity = Query.Granularity.DOCUMENT;
-            QueryResultSoA mockResult = createMockQueryResultSoA(List.of(new TestDataEntry("term1", ValueType.TERM, null, 1, 1, 0, 0, -1, 0)), currentTestGranularity, 0, docReqs);
+        void testAllowedCellsFilter_emptyAllowedCells_noFiltering() throws QueryExecutionException {
+            Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                    List.of(condition1_term1));
 
-            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(mockResult);
+            CellResult mockResult = createMockCellResult(List.of(
+                    new TestDataEntry("term1", ValueType.TERM, null, 1, 1, 0, 0, -1, 0)));
 
-            logicalExecutor.execute(andCondition, indexes, currentTestGranularity, testGranularitySize, corpusName, docReqs, Optional.empty());
+            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(mockResult);
 
-            assertEquals(1, contextCaptor.getAllValues().size());
-            Optional<FilteringContext> capturedContext = contextCaptor.getValue();
-            assertTrue(capturedContext.isPresent());
-            assertTrue(capturedContext.get().isUnrestricted(), "Expected an unrestricted context for the first condition when initial context is empty.");
-            assertEquals(currentTestGranularity, capturedContext.get().granularity(), "Context granularity should match query granularity.");
+            CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                    testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+
+            // No filtering → result unchanged
+            assertEquals(1, finalResult.cellCount());
+            assertTrue(finalResult.cells().contains(PostingList.packCellKey(1, 1)));
         }
 
         @Test
-        void testAndPushdown_threeConditions_contextChaining_DocGranularity() throws QueryExecutionException {
-            Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2, condition3_term3));
-            Query.Granularity currentTestGranularity = Query.Granularity.DOCUMENT;
+        void testAnd_cellIntersection_viaCellResultAnd() throws QueryExecutionException {
+            Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                    List.of(condition1_term1, condition2_term2));
 
-            QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-                new TestDataEntry("term1", ValueType.TERM, "c1", 1, -1, 0, 0, -1, 0),
-                new TestDataEntry("term1", ValueType.TERM, "c1", 2, -1, 0, 0, -1, 1)
-            ), currentTestGranularity, 0, docReqs);
+            // Result1: cells (1,1) and (2,1)
+            CellResult result1 = createMockCellResult(List.of(
+                    new TestDataEntry("term1", ValueType.TERM, null, 1, 1, 0, 0, -1, 0),
+                    new TestDataEntry("term1", ValueType.TERM, null, 2, 1, 0, 0, -1, 1)));
 
-            QueryResultSoA result2SoA = createMockQueryResultSoA(List.of(
-                new TestDataEntry("term2", ValueType.TERM, "c2", 2, -1, 0, 0, -1, 0),
-                new TestDataEntry("term2", ValueType.TERM, "c2", 3, -1, 0, 0, -1, 1)
-            ), currentTestGranularity, 0, docReqs);
+            // Result2: cells (2,1) and (3,1) — only (2,1) intersects with result1
+            CellResult result2 = createMockCellResult(List.of(
+                    new TestDataEntry("term2", ValueType.TERM, null, 2, 1, 0, 0, -1, 0),
+                    new TestDataEntry("term2", ValueType.TERM, null, 3, 1, 0, 0, -1, 1)));
 
-             QueryResultSoA result3SoA = createMockQueryResultSoA(List.of(
-                new TestDataEntry("term3", ValueType.TERM, "c3", 1, -1, 0, 0, -1, 0),
-                new TestDataEntry("term3", ValueType.TERM, "c3", 2, -1, 0, 0, -1, 1),
-                new TestDataEntry("term3", ValueType.TERM, "c3", 4, -1, 0, 0, -1, 2)
-            ), currentTestGranularity, 0, docReqs);
+            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(result1);
+            when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(result2);
 
-            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(result1SoA);
-            when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(result2SoA);
-            when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(result3SoA);
+            CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                    testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
 
-            logicalExecutor.execute(andCondition, indexes, currentTestGranularity, testGranularitySize, corpusName, docReqs, Optional.empty());
-
-            List<Optional<FilteringContext>> allCapturedContexts = contextCaptor.getAllValues();
-            assertEquals(3, allCapturedContexts.size(), "Expected context to be captured for all three sub-conditions.");
-
-            Optional<FilteringContext> contextForC1 = allCapturedContexts.get(0);
-            assertTrue(contextForC1.isPresent());
-            assertTrue(contextForC1.get().isUnrestricted());
-            assertEquals(currentTestGranularity, contextForC1.get().granularity());
-
-            Optional<FilteringContext> contextForC2 = allCapturedContexts.get(1);
-            assertTrue(contextForC2.isPresent());
-            assertFalse(contextForC2.get().isUnrestricted());
-            assertTrue(contextForC2.get().allowedDocumentIds().isPresent());
-            assertEquals(new TreeSet<>(Set.of(1, 2)), contextForC2.get().allowedDocumentIds().get());
-            assertFalse(contextForC2.get().allowedDocumentSentenceIds().isPresent());
-
-            Optional<FilteringContext> contextForC3 = allCapturedContexts.get(2);
-            assertTrue(contextForC3.isPresent());
-            assertFalse(contextForC3.get().isUnrestricted());
-            assertTrue(contextForC3.get().allowedDocumentIds().isPresent());
-            assertEquals(new TreeSet<>(Set.of(2)), contextForC3.get().allowedDocumentIds().get(), "Context for C3 should be intersection of C1's output and C2's output filtered by C1 context.");
-            assertFalse(contextForC3.get().allowedDocumentSentenceIds().isPresent());
+            assertEquals(1, finalResult.cellCount(),
+                    "Only cell (2,1) should be in the intersection");
+            assertTrue(finalResult.cells().contains(PostingList.packCellKey(2, 1)));
+            assertFalse(finalResult.cells().contains(PostingList.packCellKey(1, 1)));
+            assertFalse(finalResult.cells().contains(PostingList.packCellKey(3, 1)));
         }
 
         @Test
-        void testAndPushdown_emptyResultFromMiddleCondition_stopsChainAndPropagatesEmptyContext() throws QueryExecutionException {
-            Logical andCondition = new Logical(Logical.LogicalOperator.AND, List.of(condition1_term1, condition2_term2, condition3_term3));
-            Query.Granularity currentTestGranularity = Query.Granularity.DOCUMENT;
+        void testAnd_cellIntersection_sentenceGranularity() throws QueryExecutionException {
+            Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                    List.of(condition1_term1, condition2_term2));
+            Query.Granularity sentGran = Query.Granularity.SENTENCE;
 
-            QueryResultSoA result1SoA = createMockQueryResultSoA(List.of(
-                new TestDataEntry("term1", ValueType.TERM, "c1", 1, -1, 0, 0, -1, 0),
-                new TestDataEntry("term1", ValueType.TERM, "c1", 2, -1, 0, 0, -1, 1)
-            ), currentTestGranularity, 0, docReqs);
+            // Result1: (1,10), (1,11), (2,20)
+            CellResult result1 = createMockCellResult(List.of(
+                    new TestDataEntry("term1", ValueType.TERM, null, 1, 10, 0, 0, -1, 0),
+                    new TestDataEntry("term1", ValueType.TERM, null, 1, 11, 0, 0, -1, 1),
+                    new TestDataEntry("term1", ValueType.TERM, null, 2, 20, 0, 0, -1, 2)),
+                    sentGran);
 
-            QueryResultSoA emptyResult2SoA = createMockQueryResultSoA(Collections.emptyList(), currentTestGranularity, 0, docReqs);
+            // Result2: (1,11) only
+            CellResult result2 = createMockCellResult(List.of(
+                    new TestDataEntry("term2", ValueType.TERM, null, 1, 11, 0, 0, -1, 0)),
+                    sentGran);
 
-            QueryResultSoA result3SoA = createMockQueryResultSoA(List.of(
-                new TestDataEntry("term3", ValueType.TERM, "c3", 2, -1, 0, 0, -1, 0)
-            ), currentTestGranularity, 0, docReqs);
+            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(sentGran),
+                    eq(testGranularitySize), anyString(), any(), any())).thenReturn(result1);
+            when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(sentGran),
+                    eq(testGranularitySize), anyString(), any(), any())).thenReturn(result2);
 
-            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(result1SoA);
-            when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(emptyResult2SoA);
-            lenient().when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(currentTestGranularity), eq(testGranularitySize), anyString(), eq(docReqs), contextCaptor.capture())).thenReturn(result3SoA);
+            CellResult finalResult = logicalExecutor.execute(andCondition, indexes, sentGran,
+                    testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
 
-            QueryResultSoA finalResult = logicalExecutor.execute(andCondition, indexes, currentTestGranularity, testGranularitySize, corpusName, docReqs, Optional.empty());
+            assertEquals(1, finalResult.cellCount(),
+                    "Only cell (1,11) should be in the intersection");
+            assertTrue(finalResult.cells().contains(PostingList.packCellKey(1, 11)));
+        }
 
-            assertTrue(finalResult.isEmpty(), "Final result should be empty if a middle condition is empty.");
+        @Test
+        void testAnd_emptyResultFromFirstCondition_finalResultEmpty() throws QueryExecutionException {
+            Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                    List.of(condition1_term1, condition2_term2));
 
-            List<Optional<FilteringContext>> allCapturedContexts = contextCaptor.getAllValues();
-            assertEquals(2, allCapturedContexts.size(), "Expected context to be captured for C1 and C2 only.");
+            CellResult emptyResult1 = CellResult.empty(testGranularity);
+            CellResult result2 = createMockCellResult(List.of(
+                    new TestDataEntry("term2", ValueType.TERM, null, 1, 1, 0, 0, -1, 0)));
 
-            Optional<FilteringContext> contextForC1 = allCapturedContexts.get(0);
-            assertTrue(contextForC1.isPresent() && contextForC1.get().isUnrestricted());
+            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(emptyResult1);
+            lenient().when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(result2);
 
-            Optional<FilteringContext> contextForC2 = allCapturedContexts.get(1);
-            assertTrue(contextForC2.isPresent());
-            assertFalse(contextForC2.get().isUnrestricted());
-            assertTrue(contextForC2.get().allowedDocumentIds().isPresent());
-            assertEquals(new TreeSet<>(Set.of(1, 2)), contextForC2.get().allowedDocumentIds().get());
+            CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                    testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+
+            assertTrue(finalResult.isEmpty());
+            assertEquals(0, finalResult.cellCount());
+        }
+
+        @Test
+        void testAnd_threeConditions_chainedIntersection() throws QueryExecutionException {
+            Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                    List.of(condition1_term1, condition2_term2, condition3_term3));
+
+            // Result1: cells (1,1) and (2,1)
+            CellResult result1 = createMockCellResult(List.of(
+                    new TestDataEntry("term1", ValueType.TERM, "c1", 1, 1, 0, 0, -1, 0),
+                    new TestDataEntry("term1", ValueType.TERM, "c1", 2, 1, 0, 0, -1, 1)));
+
+            // Result2: cells (2,1) and (3,1)
+            CellResult result2 = createMockCellResult(List.of(
+                    new TestDataEntry("term2", ValueType.TERM, "c2", 2, 1, 0, 0, -1, 0),
+                    new TestDataEntry("term2", ValueType.TERM, "c2", 3, 1, 0, 0, -1, 1)));
+
+            // Result3: cells (1,1), (2,1), (4,1)
+            CellResult result3 = createMockCellResult(List.of(
+                    new TestDataEntry("term3", ValueType.TERM, "c3", 1, 1, 0, 0, -1, 0),
+                    new TestDataEntry("term3", ValueType.TERM, "c3", 2, 1, 0, 0, -1, 1),
+                    new TestDataEntry("term3", ValueType.TERM, "c3", 4, 1, 0, 0, -1, 2)));
+
+            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(result1);
+            when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(result2);
+            when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(result3);
+
+            CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                    testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+
+            // result1 ∩ result2 = {2,1}, then {2,1} ∩ result3 = {2,1}
+            assertEquals(1, finalResult.cellCount(),
+                    "Only cell (2,1) should survive all three ANDs");
+            assertTrue(finalResult.cells().contains(PostingList.packCellKey(2, 1)));
+            assertFalse(finalResult.cells().contains(PostingList.packCellKey(1, 1)));
+        }
+
+        @Test
+        void testAnd_emptyResultFromMiddleCondition_stopsChain() throws QueryExecutionException {
+            Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                    List.of(condition1_term1, condition2_term2, condition3_term3));
+
+            CellResult result1 = createMockCellResult(List.of(
+                    new TestDataEntry("term1", ValueType.TERM, "c1", 1, 1, 0, 0, -1, 0),
+                    new TestDataEntry("term1", ValueType.TERM, "c1", 2, 1, 0, 0, -1, 1)));
+
+            CellResult emptyResult2 = CellResult.empty(testGranularity);
+
+            CellResult result3 = createMockCellResult(List.of(
+                    new TestDataEntry("term3", ValueType.TERM, "c3", 2, 1, 0, 0, -1, 0)));
+
+            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(result1);
+            when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(emptyResult2);
+            lenient().when(mockSubExecutor3.execute(eq(condition3_term3), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements), any()))
+                    .thenReturn(result3);
+
+            CellResult finalResult = logicalExecutor.execute(andCondition, indexes, testGranularity,
+                    testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+
+            assertTrue(finalResult.isEmpty(),
+                    "Final result should be empty if a middle condition is empty");
+            assertEquals(0, finalResult.cellCount());
+        }
+
+        @Test
+        void testAnd_subConditions_receiveEmptyAllowedCells() throws QueryExecutionException {
+            Logical andCondition = new Logical(Logical.LogicalOperator.AND,
+                    List.of(condition1_term1, condition2_term2));
+
+            CellResult result1 = createMockCellResult(List.of(
+                    new TestDataEntry("term1", ValueType.TERM, null, 1, 1, 0, 0, -1, 0)));
+            CellResult result2 = createMockCellResult(List.of(
+                    new TestDataEntry("term2", ValueType.TERM, null, 2, 1, 0, 0, -1, 0)));
+
+            when(mockSubExecutor1.execute(eq(condition1_term1), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements),
+                    allowedCellsCaptor.capture())).thenReturn(result1);
+            when(mockSubExecutor2.execute(eq(condition2_term2), any(), eq(testGranularity),
+                    eq(testGranularitySize), anyString(), eq(defaultTestRequirements),
+                    allowedCellsCaptor.capture())).thenReturn(result2);
+
+            logicalExecutor.execute(andCondition, indexes, testGranularity,
+                    testGranularitySize, corpusName, defaultTestRequirements, Optional.empty());
+
+            List<Optional<Roaring64NavigableMap>> captured = allowedCellsCaptor.getAllValues();
+            // Both sub-conditions should receive Optional.empty() since context
+            // chaining has been replaced by CellResult.and()
+            for (Optional<Roaring64NavigableMap> capturedAllowed : captured) {
+                assertTrue(capturedAllowed.isEmpty(),
+                        "Sub-conditions should receive empty allowedCells");
+            }
         }
     }
 }

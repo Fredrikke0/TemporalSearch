@@ -15,6 +15,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 import org.rocksdb.Options;
 import org.rocksdb.RocksIterator;
 import org.rocksdb.WriteBatch;
@@ -61,98 +62,89 @@ public class IndexAccessTest {
         }
     }
 
+    /** Helper to build a simple PostingList with a single cell and occurrence. */
+    private static PostingList makePostingList(int docId, int sentId, int begin, int end) throws IOException {
+        long cellKey = PostingList.packCellKey(docId, sentId);
+        Roaring64NavigableMap cells = new Roaring64NavigableMap();
+        cells.add(cellKey);
+        byte constantLength = (byte) Math.min(end - begin, 255);
+        OccurrencesBlock occ = OccurrencesBlock.fromUnsorted(
+                new long[] { cellKey }, new byte[][] { { (byte) begin } }, constantLength);
+        return PostingList.fromCellsAndOccurrences(cells, constantLength, occ);
+    }
+
     @Test
     void testBasicOperations() throws Exception {
-        // Create test data
-        Position pos1 = new Position(1, 1, 0, 5);
-        Position pos2 = new Position(1, 2, 6, 10);
-        PositionListSoA positions = new PositionListSoA();
-        positions.add(pos1);
-        positions.add(pos2);
+        // Create test data: two cells in a single PostingList
+        PostingList pl = PostingList.empty((byte) 5);
+        pl = pl.merge(makePostingList(1, 1, 0, 5));
+        pl = pl.merge(makePostingList(1, 2, 6, 10));
 
         // Test put and get
         byte[] key = "test-key".getBytes();
-        indexAccess.put(key, positions.serializeToCompositeBlob());
+        indexAccess.put(key, pl.serialize());
 
-        Optional<PositionListSoA> retrieved = indexAccess.get(key);
-        assertTrue(retrieved.isPresent(), "Should retrieve stored positions");
-        assertEquals(2, retrieved.get().getNumPositions(), "Should have correct number of positions");
-
-        // Verify position details
-        Position retrievedPos = retrieved.get().getPositionAt(0);
-        assertEquals(pos1.getDocumentId(), retrievedPos.getDocumentId());
-        assertEquals(pos1.getSentenceId(), retrievedPos.getSentenceId());
-        assertEquals(pos1.getBeginPosition(), retrievedPos.getBeginPosition());
-        assertEquals(pos1.getEndPosition(), retrievedPos.getEndPosition());
+        Optional<PostingList> retrieved = indexAccess.get(key);
+        assertTrue(retrieved.isPresent(), "Should retrieve stored posting list");
+        assertEquals(2, retrieved.get().cells().getLongCardinality(), "Should have correct number of cells");
     }
 
     @Test
     void testBatchOperations() throws Exception {
         // Create test data
-        Map<String, PositionListSoA> entries = new HashMap<>();
+        Map<String, PostingList> entries = new HashMap<>();
         for (int i = 0; i < 5; i++) {
-            Position pos = new Position(i, 1, 0, 5);
-            PositionListSoA positions = new PositionListSoA();
-            positions.add(pos);
-            entries.put("key" + i, positions);
+            entries.put("key" + i, makePostingList(i, 1, 0, 5));
         }
 
         // Write batch
         try (WriteBatch batch = indexAccess.createWriteBatch()) {
-            for (Map.Entry<String, PositionListSoA> entry : entries.entrySet()) {
+            for (Map.Entry<String, PostingList> entry : entries.entrySet()) {
                 batch.put(
-                    entry.getKey().getBytes(),
-                    entry.getValue().serializeToCompositeBlob()
-                );
+                        entry.getKey().getBytes(),
+                        entry.getValue().serialize());
             }
             indexAccess.write(batch);
         }
 
         // Verify entries
         for (String key : entries.keySet()) {
-            Optional<PositionListSoA> retrieved = indexAccess.get(key.getBytes());
+            Optional<PostingList> retrieved = indexAccess.get(key.getBytes());
             assertTrue(retrieved.isPresent(), "Should retrieve entry for key: " + key);
-            assertEquals(1, retrieved.get().getNumPositions(),
-                "Should have correct number of positions for key: " + key);
+            assertEquals(1, retrieved.get().cells().getLongCardinality(),
+                    "Should have correct number of cells for key: " + key);
         }
     }
 
     @Test
-    void testMergePositions() throws Exception {
+    void testMergePostingLists() throws Exception {
         byte[] key = "merge-test".getBytes();
 
-        // Create first position list
-        Position pos1 = new Position(1, 1, 0, 5);
-        PositionListSoA positions1 = new PositionListSoA();
-        positions1.add(pos1);
-        indexAccess.put(key, positions1.serializeToCompositeBlob());
+        // Create first posting list
+        PostingList pl1 = makePostingList(1, 1, 0, 5);
+        indexAccess.put(key, pl1.serialize());
 
-        // Create second position list
-        Position pos2 = new Position(1, 2, 6, 10);
-        PositionListSoA positions2 = new PositionListSoA();
-        positions2.add(pos2);
+        // Create second posting list
+        PostingList pl2 = makePostingList(1, 2, 6, 10);
 
         // Simulate merge: get existing, deserialize, merge, serialize, then put
-        Optional<PositionListSoA> existingListOpt = indexAccess.get(key);
-        assertTrue(existingListOpt.isPresent(), "Existing list should be present for merge");
-        PositionListSoA mergedList = existingListOpt.get();
-        mergedList.merge(positions2);
-        indexAccess.put(key, mergedList.serializeToCompositeBlob());
+        Optional<PostingList> existingOpt = indexAccess.get(key);
+        assertTrue(existingOpt.isPresent(), "Existing list should be present for merge");
+        PostingList mergedPl = existingOpt.get().merge(pl2);
+        indexAccess.put(key, mergedPl.serialize());
 
         // Verify merge
-        Optional<PositionListSoA> mergedResult = indexAccess.get(key);
-        assertTrue(mergedResult.isPresent(), "Should retrieve merged positions");
-        assertEquals(2, mergedResult.get().getNumPositions(), "Should contain all positions");
+        Optional<PostingList> mergedResult = indexAccess.get(key);
+        assertTrue(mergedResult.isPresent(), "Should retrieve merged posting list");
+        assertEquals(2, mergedResult.get().cells().getLongCardinality(), "Should contain all cells");
     }
 
     @Test
     void testIterator() throws Exception {
         // Create test data
         for (int i = 0; i < 5; i++) {
-            Position pos = new Position(i, 1, 0, 5);
-            PositionListSoA positions = new PositionListSoA();
-            positions.add(pos);
-            indexAccess.put(("key" + i).getBytes(), positions.serializeToCompositeBlob());
+            PostingList pl = makePostingList(i, 1, 0, 5);
+            indexAccess.put(("key" + i).getBytes(), pl.serialize());
         }
 
         // Test iteration
@@ -164,9 +156,9 @@ public class IndexAccessTest {
                 assertNotNull(key, "Key should not be null");
                 assertNotNull(value, "Value should not be null");
 
-                PositionListSoA positions = PositionListSoA.deserializeFromCompositeBlob(value);
-                assertEquals(1, positions.getNumPositions(),
-                    "Should have correct number of positions");
+                PostingList pl = PostingList.deserialize(value, PostingList.DeserializeMode.FULL);
+                assertEquals(1, pl.cells().getLongCardinality(),
+                        "Should have correct number of cells");
                 count++;
             }
         }
@@ -175,19 +167,19 @@ public class IndexAccessTest {
 
     // @Test
     // void testClosedOperations() throws Exception {
-    //     indexAccess.close();
-    //     PositionListSoA positions = new PositionListSoA();
+    // indexAccess.close();
+    // PostingList pl = PostingList.empty((byte) 0);
 
-    //     // Verify operations throw appropriate exceptions
-    //     assertThrows(RocksDBException.class, () ->
-    //         indexAccess.put("test".getBytes(), positions.serializeToCompositeBlob()));
-    //     assertThrows(RocksDBException.class, () ->
-    //         indexAccess.get("test".getBytes()));
-    //     assertThrows(RocksDBException.class, () -> indexAccess.createWriteBatch());
-    //     assertThrows(RocksDBException.class, () ->
-    //         indexAccess.iterateFromFirst());
-    //     assertThrows(RocksDBException.class, () ->
-    //         indexAccess.seek("anykey".getBytes()));
+    // // Verify operations throw appropriate exceptions
+    // assertThrows(RocksDBException.class, () ->
+    // indexAccess.put("test".getBytes(), pl.serialize()));
+    // assertThrows(RocksDBException.class, () ->
+    // indexAccess.get("test".getBytes()));
+    // assertThrows(RocksDBException.class, () -> indexAccess.createWriteBatch());
+    // assertThrows(RocksDBException.class, () ->
+    // indexAccess.iterateFromFirst());
+    // assertThrows(RocksDBException.class, () ->
+    // indexAccess.seek("anykey".getBytes()));
     // }
 
     private void deleteDirectory(File directory) throws IOException {

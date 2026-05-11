@@ -27,7 +27,7 @@ import com.example.core.IndexAccessInterface;
 import com.example.index.RocksDBConfig;
 import com.example.index.generators.BigramIndexGenerator;
 import com.example.index.generators.DependencyIndexGenerator;
-import com.example.index.generators.HypernymIndexGenerator;
+
 import com.example.index.generators.NerDateIndexGenerator;
 import com.example.index.generators.NerIndexGenerator;
 import com.example.index.generators.POSIndexGenerator;
@@ -58,30 +58,32 @@ public class IndexRunner {
     private static final String GLOBAL_VALUE_LOOKUP_DB_NAME = "global_values_lookup.db";
 
     private static final List<String> ALL_STITCH_INDEX_TYPES = List.of(
-        UnigramDateStitchGenerator.MY_INDEX_NAME,
-        UnigramNerStitchGenerator.MY_INDEX_NAME,
-        //UnigramPosStitchIndexGenerator.MY_INDEX_NAME,
-        BigramDateStitchGenerator.MY_INDEX_NAME,
-        BigramNerStitchGenerator.MY_INDEX_NAME,
-        //BigramPosStitchGenerator.MY_INDEX_NAME,
-        TrigramDateStitchGenerator.MY_INDEX_NAME,
-        TrigramNerStitchGenerator.MY_INDEX_NAME
-        //TrigramPosStitchGenerator.MY_INDEX_NAME
+            UnigramDateStitchGenerator.MY_INDEX_NAME,
+            UnigramNerStitchGenerator.MY_INDEX_NAME,
+            // UnigramPosStitchIndexGenerator.MY_INDEX_NAME,
+            BigramDateStitchGenerator.MY_INDEX_NAME,
+            BigramNerStitchGenerator.MY_INDEX_NAME,
+            // BigramPosStitchGenerator.MY_INDEX_NAME,
+            TrigramDateStitchGenerator.MY_INDEX_NAME,
+            TrigramNerStitchGenerator.MY_INDEX_NAME
+    // TrigramPosStitchGenerator.MY_INDEX_NAME
     );
 
     private static final List<String> ALL_NON_STITCH_INDEX_TYPES = List.of(
-        "unigram", "bigram", "trigram", "dependency",
-        "ner_date", "pos", "ner"
-    );
+            "unigram", "bigram", "trigram", "dependency",
+            "ner_date", "pos", "ner");
 
     public static void main(String[] args) {
         ArgumentParser parser = ArgumentParsers.newFor("IndexRunner").build()
                 .defaultHelp(true)
                 .description("Create indexes from annotated database");
         parser.addArgument("-d", "--db").required(true).help("SQLite database file path");
-        parser.addArgument("--index-dir").setDefault("indexes").help("Directory for storing indexes (default: 'indexes')");
-        parser.addArgument("--stopwords").setDefault("stopwords.txt").help("Path to stopwords file (default: stopwords.txt)");
-        parser.addArgument("--batch-size").setDefault(1000).type(Integer.class).help("Batch size for processing (default: 1000)");
+        parser.addArgument("--index-dir").setDefault("indexes")
+                .help("Directory for storing indexes (default: 'indexes')");
+        parser.addArgument("--stopwords").setDefault("stopwords.txt")
+                .help("Path to stopwords file (default: stopwords.txt)");
+        parser.addArgument("--batch-size").setDefault(1000).type(Integer.class)
+                .help("Batch size for processing (default: 1000)");
 
         List<String> allPossibleTypes = new ArrayList<>();
         allPossibleTypes.add("all");
@@ -94,22 +96,22 @@ public class IndexRunner {
                 .setDefault(List.of("all"))
                 .nargs("+")
                 .help("Type of index to generate (can specify multiple, space-separated). " +
-                      "'all' processes all known types. " +
-                      "'stitches' processes all stitch-combination types.");
+                        "'all' processes all known types. " +
+                        "'stitches' processes all stitch-combination types.");
         parser.addArgument("--custom-temp-dir").dest("custom_temp_dir").type(String.class).required(false)
                 .help("Path to a custom directory for temporary files during index generation.");
-        parser.addArgument("--force").action(Arguments.storeTrue()).help("Force re-generation of indexes, overwriting existing ones.");
+        parser.addArgument("--force").action(Arguments.storeTrue())
+                .help("Force re-generation of indexes, overwriting existing ones.");
         try {
             Namespace ns = parser.parseArgs(args);
             runIndexing(
-                ns.getString("db"),
-                ns.getString("index_dir"),
-                ns.getString("stopwords"),
-                ns.getInt("batch_size"),
-                ns.getList("type"),
-                ns.getString("custom_temp_dir"),
-                ns.getBoolean("force")
-            );
+                    ns.getString("db"),
+                    ns.getString("index_dir"),
+                    ns.getString("stopwords"),
+                    ns.getInt("batch_size"),
+                    ns.getList("type"),
+                    ns.getString("custom_temp_dir"),
+                    ns.getBoolean("force"));
         } catch (ArgumentParserException e) {
             parser.handleError(e);
             System.exit(1);
@@ -120,11 +122,14 @@ public class IndexRunner {
     }
 
     public static void runIndexing(String dbPath, String indexDir, String stopwordsPath,
-            int batchSize, List<String> cliRequestedIndexTypes, String customTempDirStr, boolean force) throws Exception {
+            int batchSize, List<String> cliRequestedIndexTypes, String customTempDirStr, boolean force)
+            throws Exception {
 
-        Path customTempPath = (customTempDirStr != null && !customTempDirStr.isBlank()) ? Path.of(customTempDirStr) : null;
+        Path customTempPath = (customTempDirStr != null && !customTempDirStr.isBlank()) ? Path.of(customTempDirStr)
+                : null;
         if (customTempPath != null) {
-            if (!Files.exists(customTempPath)) Files.createDirectories(customTempPath);
+            if (!Files.exists(customTempPath))
+                Files.createDirectories(customTempPath);
             logger.debug("Using custom temporary directory for ExternalSort: {}", customTempPath.toAbsolutePath());
         }
 
@@ -154,8 +159,8 @@ public class IndexRunner {
         }
 
         Set<String> indexTypesToProcess = typesBeingBuilt.stream()
-                                              .map(String::toLowerCase)
-                                              .collect(Collectors.toCollection(LinkedHashSet::new));
+                .map(String::toLowerCase)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
 
         logger.info("Effective index types to process by IndexRunner: {}", indexTypesToProcess);
         setupIndexDirectories(indexDir, new ArrayList<>(indexTypesToProcess), force);
@@ -181,15 +186,20 @@ public class IndexRunner {
                     if (!force && Files.exists(specificIndexDir) && Files.isDirectory(specificIndexDir)) {
                         try (Stream<Path> stream = Files.list(specificIndexDir)) {
                             if (stream.findAny().isPresent()) {
-                                logger.info("Index for type '{}' already exists at '{}' and --force is false. Skipping generation.", type, specificIndexDir.toAbsolutePath());
+                                logger.info(
+                                        "Index for type '{}' already exists at '{}' and --force is false. Skipping generation.",
+                                        type, specificIndexDir.toAbsolutePath());
                                 generateThisIndex = false;
                             } else {
-                                logger.debug("Index directory for type '{}' exists but is empty: '{}'. Proceeding with generation.", type, specificIndexDir.toAbsolutePath());
+                                logger.debug(
+                                        "Index directory for type '{}' exists but is empty: '{}'. Proceeding with generation.",
+                                        type, specificIndexDir.toAbsolutePath());
                             }
                         }
                     } else if (force && Files.exists(specificIndexDir)) {
                         ensureDirectoryExists(specificIndexDir, true);
-                        if (!Files.exists(specificIndexDir)) Files.createDirectories(specificIndexDir);
+                        if (!Files.exists(specificIndexDir))
+                            Files.createDirectories(specificIndexDir);
                     }
 
                     if (!generateThisIndex) {
@@ -197,7 +207,8 @@ public class IndexRunner {
                     }
 
                     try (Options options = RocksDBConfig.createOptimizedOptions();
-                         IndexAccessInterface indexAccess = new IndexAccess(specificIndexDir, type, options, false)) {
+                            IndexAccessInterface indexAccess = new IndexAccess(specificIndexDir, type, options,
+                                    false)) {
 
                         if (type.equals("unigram")) {
                             metrics.startIndexProcessing(type);
@@ -214,7 +225,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
                         if (type.equals("bigram")) {
@@ -232,7 +244,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -251,7 +264,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -270,7 +284,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -289,7 +304,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -309,7 +325,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -329,26 +346,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
-                            }
-                        }
-
-                        if (type.equals("hypernym")) {
-                            metrics.startIndexProcessing(type);
-                            HypernymIndexGenerator gen = null;
-                            long itemsWritten = -1;
-                            try {
-                                gen = new HypernymIndexGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath);
-                                progress.startIndex(type, gen.getDocumentCountForIndex());
-                                gen.generateIndex();
-                                itemsWritten = gen.getTotalTermsWrittenToIndex();
-                            } catch (Exception e) {
-                                logger.error("Error generating hypernym index: {}", e.getMessage(), e);
-                            } finally {
-                                metrics.endIndexProcessing(type, itemsWritten);
-                                progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -358,7 +357,8 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new UnigramDateStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -367,7 +367,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -377,7 +378,8 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new UnigramNerStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -386,7 +388,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -396,7 +399,8 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new UnigramPosStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -405,7 +409,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -415,7 +420,8 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new BigramPosStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -424,7 +430,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
                         if (type.equals(TrigramPosStitchGenerator.MY_INDEX_NAME)) {
@@ -433,7 +440,8 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new TrigramPosStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -442,7 +450,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -452,7 +461,8 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new BigramNerStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -461,7 +471,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
                         if (type.equals(TrigramNerStitchGenerator.MY_INDEX_NAME)) {
@@ -470,7 +481,8 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new TrigramNerStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -479,7 +491,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -489,7 +502,8 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new BigramDateStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -498,7 +512,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
                         if (type.equals(TrigramDateStitchGenerator.MY_INDEX_NAME)) {
@@ -507,7 +522,8 @@ public class IndexRunner {
                             long itemsWritten = -1;
                             try {
                                 gen = new TrigramDateStitchGenerator(
-                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath, sharedSynonymManager);
+                                        indexAccess, stopwordsPath, conn, progress, batchSize, customTempPath,
+                                        sharedSynonymManager);
                                 progress.startIndex(type, gen.getDocumentCountForIndex());
                                 gen.generateIndex();
                                 itemsWritten = gen.getTotalTermsWrittenToIndex();
@@ -516,7 +532,8 @@ public class IndexRunner {
                             } finally {
                                 metrics.endIndexProcessing(type, itemsWritten);
                                 progress.completeIndex();
-                                if (gen != null) gen.close();
+                                if (gen != null)
+                                    gen.close();
                             }
                         }
 
@@ -548,7 +565,8 @@ public class IndexRunner {
         logger.info("Indexing process completed. Total time: {}s", totalTime.stop().elapsed(TimeUnit.SECONDS));
     }
 
-    private static void setupIndexDirectories(String indexBaseDirStr, List<String> indexTypesToEnsure, boolean force) throws IOException {
+    private static void setupIndexDirectories(String indexBaseDirStr, List<String> indexTypesToEnsure, boolean force)
+            throws IOException {
         Path baseDir = Path.of(indexBaseDirStr);
         if (!Files.exists(baseDir)) {
             Files.createDirectories(baseDir);
@@ -567,26 +585,34 @@ public class IndexRunner {
             logger.debug("--force: Cleaning up existing directory: {}", dirPath.toAbsolutePath());
             try (Stream<Path> walk = Files.walk(dirPath)) {
                 walk.sorted(Comparator.reverseOrder())
-                    .map(Path::toFile)
-                    .forEach(file -> {
-                        try {
-                            if (!file.delete()) {
-                                if (file.exists()) {
-                                    logger.warn("Could not delete file/directory during force cleanup: {}", file.getAbsolutePath());
+                        .map(Path::toFile)
+                        .forEach(file -> {
+                            try {
+                                if (!file.delete()) {
+                                    if (file.exists()) {
+                                        logger.warn("Could not delete file/directory during force cleanup: {}",
+                                                file.getAbsolutePath());
+                                    }
                                 }
+                            } catch (SecurityException se) {
+                                logger.warn(
+                                        "SecurityException while trying to delete file/directory during force cleanup: {}. Error: {}",
+                                        file.getAbsolutePath(), se.getMessage());
                             }
-                        } catch (SecurityException se) {
-                             logger.warn("SecurityException while trying to delete file/directory during force cleanup: {}. Error: {}", file.getAbsolutePath(), se.getMessage());
-                        }
-                    });
+                        });
             } catch (IOException e) {
-                logger.warn("Failed to walk directory {} during force cleanup: {}. Attempting to delete directory root.", dirPath.toAbsolutePath(), e.getMessage());
+                logger.warn(
+                        "Failed to walk directory {} during force cleanup: {}. Attempting to delete directory root.",
+                        dirPath.toAbsolutePath(), e.getMessage());
             }
             if (Files.exists(dirPath)) {
                 if (!Files.deleteIfExists(dirPath)) {
-                     logger.warn("Could not delete directory {} itself after attempting to delete its contents during force cleanup.", dirPath.toAbsolutePath());
+                    logger.warn(
+                            "Could not delete directory {} itself after attempting to delete its contents during force cleanup.",
+                            dirPath.toAbsolutePath());
                 } else {
-                    logger.debug("Successfully deleted directory root {} after content cleanup.", dirPath.toAbsolutePath());
+                    logger.debug("Successfully deleted directory root {} after content cleanup.",
+                            dirPath.toAbsolutePath());
                 }
             }
         }

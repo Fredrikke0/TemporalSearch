@@ -339,6 +339,138 @@ public class OccurrencesBlock {
         return new OccurrencesBlock(newKeys, newOffsets, newBegins, constantLength, true);
     }
 
+    // ---------- merge ----------
+
+    /**
+     * Merges two OccurrencesBlocks by performing a sorted merge of their cell
+     * keys and concatenating the begins arrays. Cells that appear in both are
+     * merged by concatenating their begins (with dedup). Both must have the
+     * same constantLength.
+     *
+     * @param a first block
+     * @param b second block
+     * @return a merged OccurrencesBlock
+     */
+    public static OccurrencesBlock merge(OccurrencesBlock a, OccurrencesBlock b) {
+        if (a == null || a.numCells() == 0)
+            return b;
+        if (b == null || b.numCells() == 0)
+            return a;
+
+        // Two-pointer merge of sorted cell key arrays
+        int totalCells = a.numCells() + b.numCells();
+        long[] mergedKeys = new long[totalCells];
+        int[] mergedOffsets = new int[totalCells + 1];
+
+        // For the begins, we need to track per-cell data
+        java.util.List<byte[]> mergedSegments = new java.util.ArrayList<>(totalCells);
+
+        int i = 0, j = 0;
+        int totalBegins = 0;
+        int outIdx = 0;
+
+        while (i < a.numCells() || j < b.numCells()) {
+            long cellKey;
+            byte[] segment;
+
+            if (i < a.numCells() && j < b.numCells()) {
+                long ka = a.cellKey(i);
+                long kb = b.cellKey(j);
+                if (ka < kb) {
+                    cellKey = ka;
+                    segment = extractSegment(a, i);
+                    i++;
+                } else if (kb < ka) {
+                    cellKey = kb;
+                    segment = extractSegment(b, j);
+                    j++;
+                } else {
+                    // Same cell: merge segments (dedup by begin offset)
+                    cellKey = ka;
+                    segment = mergeCellSegments(
+                            extractSegment(a, i),
+                            extractSegment(b, j));
+                    i++;
+                    j++;
+                }
+            } else if (i < a.numCells()) {
+                cellKey = a.cellKey(i);
+                segment = extractSegment(a, i);
+                i++;
+            } else {
+                cellKey = b.cellKey(j);
+                segment = extractSegment(b, j);
+                j++;
+            }
+
+            mergedKeys[outIdx] = cellKey;
+            mergedOffsets[outIdx] = totalBegins;
+            mergedSegments.add(segment);
+            totalBegins += segment.length;
+            outIdx++;
+        }
+        mergedOffsets[outIdx] = totalBegins;
+
+        // Trim arrays if there were merged cells
+        if (outIdx < totalCells) {
+            long[] trimmedKeys = new long[outIdx];
+            System.arraycopy(mergedKeys, 0, trimmedKeys, 0, outIdx);
+            mergedKeys = trimmedKeys;
+            int[] trimmedOffsets = new int[outIdx + 1];
+            System.arraycopy(mergedOffsets, 0, trimmedOffsets, 0, outIdx + 1);
+            mergedOffsets = trimmedOffsets;
+        }
+
+        // Flatten begins
+        byte[] flatBegins = new byte[totalBegins];
+        int dest = 0;
+        for (byte[] seg : mergedSegments) {
+            System.arraycopy(seg, 0, flatBegins, dest, seg.length);
+            dest += seg.length;
+        }
+
+        byte cl = a.constantLength != 0 ? a.constantLength : b.constantLength;
+        return new OccurrencesBlock(mergedKeys, mergedOffsets, flatBegins, cl, true);
+    }
+
+    private static byte[] extractSegment(OccurrencesBlock block, int cellIdx) {
+        int start = block.cellOffsets[cellIdx];
+        int end = block.cellOffsets[cellIdx + 1];
+        int len = end - start;
+        byte[] seg = new byte[len];
+        System.arraycopy(block.begins, start, seg, 0, len);
+        return seg;
+    }
+
+    private static byte[] mergeCellSegments(byte[] s1, byte[] s2) {
+        // Both are already sorted; merge and dedup
+        int total = s1.length + s2.length;
+        byte[] merged = new byte[total];
+        int i = 0, j = 0, k = 0;
+        while (i < s1.length && j < s2.length) {
+            int v1 = Byte.toUnsignedInt(s1[i]);
+            int v2 = Byte.toUnsignedInt(s2[j]);
+            if (v1 < v2) {
+                merged[k++] = s1[i++];
+            } else if (v2 < v1) {
+                merged[k++] = s2[j++];
+            } else {
+                merged[k++] = s1[i++]; // dedup
+                j++;
+            }
+        }
+        while (i < s1.length)
+            merged[k++] = s1[i++];
+        while (j < s2.length)
+            merged[k++] = s2[j++];
+        if (k < total) {
+            byte[] trimmed = new byte[k];
+            System.arraycopy(merged, 0, trimmed, 0, k);
+            return trimmed;
+        }
+        return merged;
+    }
+
     // ---------- static factory: fromUnsorted ----------
 
     /**

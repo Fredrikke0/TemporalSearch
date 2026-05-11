@@ -9,17 +9,15 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.query.model.SubquerySpec;
-
 /**
  * Maintains the execution context for subqueries, including
- * intermediate results as QueryResultSoA objects.
+ * intermediate results as CellResult objects.
  * This class serves as a container for subquery results during
  * the recursive execution of queries with subqueries.
  */
 public class SubqueryContext {
     private static final Logger logger = LoggerFactory.getLogger(SubqueryContext.class);
-    private final Map<String, QueryResultSoA> queryResults;
+    private final Map<String, CellResult> queryResults;
 
     /**
      * Creates an empty subquery context.
@@ -29,43 +27,28 @@ public class SubqueryContext {
     }
 
     /**
-     * Adds the QueryResultSoA for a subquery.
-     *
-     * @param subquery The subquery specification
-     * @param result The QueryResultSoA object containing match details.
-     */
-    public void addQueryResult(SubquerySpec subquery, QueryResultSoA result) {
-        Objects.requireNonNull(subquery, "Subquery cannot be null");
-        Objects.requireNonNull(result, "QueryResultSoA cannot be null");
-
-        queryResults.put(subquery.alias(), result);
-    }
-
-    /**
      * Adds a query result directly using an alias.
      * Used for storing the result of the main query part when handling joins.
      *
-     * @param alias The alias to associate with the result.
-     * @param result The QueryResultSoA.
+     * @param alias  The alias to associate with the result.
+     * @param result The CellResult.
      */
-    public void addQueryResult(String alias, QueryResultSoA result) {
+    public void addQueryResult(String alias, CellResult result) {
         Objects.requireNonNull(alias, "alias cannot be null");
-        Objects.requireNonNull(result, "QueryResultSoA cannot be null");
+        Objects.requireNonNull(result, "CellResult cannot be null");
         if (queryResults.containsKey(alias)) {
-            // Decide on behavior: overwrite or throw? For now, overwrite might be okay for implicit main query.
-            logger.debug("Overwriting existing QueryResultSoA for alias: {}", alias);
+            logger.debug("Overwriting existing CellResult for alias: {}", alias);
         }
         queryResults.put(alias, result);
-        // Note: aliasToSpecMap will not have an entry for aliases added this way.
     }
 
     /**
-     * Gets the QueryResultSoA for a subquery by its alias.
+     * Gets the CellResult for a subquery by its alias.
      *
      * @param alias The subquery alias
-     * @return The QueryResultSoA object, or null if not found
+     * @return The CellResult object, or null if not found
      */
-    public QueryResultSoA getQueryResult(String alias) {
+    public CellResult getQueryResult(String alias) {
         return queryResults.get(alias);
     }
 
@@ -73,7 +56,7 @@ public class SubqueryContext {
      * Checks if a subquery has results stored.
      *
      * @param alias The subquery alias
-     * @return true if the subquery has a QueryResultSoA stored, false otherwise
+     * @return true if the subquery has a CellResult stored, false otherwise
      */
     public boolean hasResults(String alias) {
         return queryResults.containsKey(alias);
@@ -82,7 +65,7 @@ public class SubqueryContext {
     /**
      * Gets the set of all subquery aliases with results.
      *
-     * @return The set of subquery aliases that have QueryResultSoA stored
+     * @return The set of subquery aliases that have CellResult stored
      */
     public Set<String> getAliases() {
         return new HashSet<>(queryResults.keySet());
@@ -91,7 +74,7 @@ public class SubqueryContext {
     /**
      * Creates a join variable name in the format expected by the TemporalExecutor.
      *
-     * @param leftAlias The left subquery alias
+     * @param leftAlias  The left subquery alias
      * @param rightAlias The right subquery alias
      * @return A variable name in the format "join.leftAlias.rightAlias"
      */

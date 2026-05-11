@@ -11,7 +11,9 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 
+import com.example.core.PostingList;
 import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.SubquerySpec;
@@ -21,8 +23,8 @@ class SubqueryContextTest {
     private SubqueryContext context;
     private SubquerySpec subquery1;
     private SubquerySpec subquery2;
-    private QueryResultSoA results1;
-    private QueryResultSoA results2;
+    private CellResult results1;
+    private CellResult results2;
 
     @BeforeEach
     void setUp() {
@@ -33,25 +35,31 @@ class SubqueryContextTest {
         subquery1 = new SubquerySpec(baseQuery1, "sq1");
         subquery2 = new SubquerySpec(baseQuery2, "sq2", Optional.of(List.of("col1", "col2")));
 
-        AttributeRequirements requirements = new AttributeRequirements();
-        requirements.needsConceptualRowIds = true;
+        Roaring64NavigableMap cells1 = new Roaring64NavigableMap();
+        cells1.add(PostingList.packCellKey(1, 1));
+        cells1.add(PostingList.packCellKey(2, 2));
+        Bindings bindings1 = Bindings.builder()
+                .add("source1", ValueType.TERM, null)
+                .add("source1", ValueType.TERM, null)
+                .build();
+        results1 = CellResult.of(cells1, bindings1, Query.Granularity.SENTENCE);
 
-        results1 = new QueryResultSoA(Query.Granularity.SENTENCE, requirements);
-        results1.add("source1", ValueType.TERM, null, 1, 1, 0, 7, -1, 0);
-        results1.add("source1", ValueType.TERM, null, 2, 2, 0, 7, -1, 0);
-
-        results2 = new QueryResultSoA(Query.Granularity.DOCUMENT, requirements);
-        results2.add("source2", ValueType.TERM, null, 3, -1, 0, 7, -1, 0);
+        Roaring64NavigableMap cells2 = new Roaring64NavigableMap();
+        cells2.add(PostingList.packCellKey(3, 0));
+        Bindings bindings2 = Bindings.builder()
+                .add("source2", ValueType.TERM, null)
+                .build();
+        results2 = CellResult.of(cells2, bindings2, Query.Granularity.DOCUMENT);
     }
 
     @Test
     void testAddAndGetQueryResult() {
-        context.addQueryResult(subquery1, results1);
+        context.addQueryResult(subquery1.alias(), results1);
 
         assertEquals(results1, context.getQueryResult("sq1"));
         assertNull(context.getQueryResult("sq2"));
 
-        context.addQueryResult(subquery2, results2);
+        context.addQueryResult(subquery2.alias(), results2);
 
         assertEquals(results1, context.getQueryResult("sq1"));
         assertEquals(results2, context.getQueryResult("sq2"));
@@ -62,11 +70,11 @@ class SubqueryContextTest {
         assertFalse(context.hasResults("sq1"));
         assertFalse(context.hasResults("sq2"));
 
-        context.addQueryResult(subquery1, results1);
+        context.addQueryResult(subquery1.alias(), results1);
         assertTrue(context.hasResults("sq1"));
         assertFalse(context.hasResults("sq2"));
 
-        context.addQueryResult(subquery2, results2);
+        context.addQueryResult(subquery2.alias(), results2);
         assertTrue(context.hasResults("sq1"));
         assertTrue(context.hasResults("sq2"));
     }
@@ -75,8 +83,8 @@ class SubqueryContextTest {
     void testGetAliases() {
         assertTrue(context.getAliases().isEmpty());
 
-        context.addQueryResult(subquery1, results1);
-        context.addQueryResult(subquery2, results2);
+        context.addQueryResult(subquery1.alias(), results1);
+        context.addQueryResult(subquery2.alias(), results2);
 
         assertEquals(2, context.getAliases().size());
         assertTrue(context.getAliases().contains("sq1"));
@@ -85,7 +93,7 @@ class SubqueryContextTest {
 
     @Test
     void testNullParameters() {
-        assertThrows(NullPointerException.class, () -> context.addQueryResult((SubquerySpec) null, results1));
-        assertThrows(NullPointerException.class, () -> context.addQueryResult(subquery1, null));
+        assertThrows(NullPointerException.class, () -> context.addQueryResult((String) null, results1));
+        assertThrows(NullPointerException.class, () -> context.addQueryResult(subquery1.alias(), null));
     }
 }

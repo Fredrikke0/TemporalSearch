@@ -17,15 +17,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.core.OccurrencesBlock;
+import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 /**
  * Generates a streaming bigram index from annotation entries.
- * Each entry maps a pair of consecutive tokens to their positions in the corpus.
+ * Each entry maps a pair of consecutive tokens to their positions in the
+ * corpus.
  * Uses streaming processing and external sorting for efficient memory usage.
  *
  * This implementation is now RocksDB-based (see IndexGenerator).
@@ -75,16 +79,15 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                     String token = (rawToken != null) ? rawToken.trim() : null;
 
                     AnnotationEntry entry = new AnnotationEntry(
-                        rs.getLong("annotation_id"),
-                        rs.getInt("document_id"),
-                        rs.getInt("sentence_id"),
-                        rs.getInt("begin_char"),
-                        rs.getInt("end_char"),
-                        token,
-                        null,
-                        null,
-                        null
-                    );
+                            rs.getLong("annotation_id"),
+                            rs.getInt("document_id"),
+                            rs.getInt("sentence_id"),
+                            rs.getInt("begin_char"),
+                            rs.getInt("end_char"),
+                            token,
+                            null,
+                            null,
+                            null);
                     batch.add(entry);
                 }
             }
@@ -93,7 +96,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
     }
 
     @Override
-    protected ListMultimap<String, PositionListSoA> processBatch(List<AnnotationEntry> batch) {
+    protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
         // Augment the current batch with the tail of the previous batch so that
         // bigrams that span the boundary are generated in this call.
         List<AnnotationEntry> augmented = new ArrayList<>(batch.size() + 1);
@@ -103,18 +106,19 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
         augmented.addAll(batch);
 
         augmented.sort(Comparator.comparingInt(AnnotationEntry::getDocumentId)
-            .thenComparingInt(AnnotationEntry::getSentenceId)
-            .thenComparingInt(AnnotationEntry::getBeginChar));
+                .thenComparingInt(AnnotationEntry::getSentenceId)
+                .thenComparingInt(AnnotationEntry::getBeginChar));
 
-        ListMultimap<String, PositionListSoA> index = ArrayListMultimap.create();
-        Map<String, PositionListSoA> positionLists = new HashMap<>();
+        ListMultimap<String, PostingList> index = ArrayListMultimap.create();
+        Map<String, Map<Long, IntArrayList>> termCellMap = new HashMap<>();
+        Map<String, Byte> termConstLen = new HashMap<>();
 
         for (int i = 0; i < augmented.size() - 1; i++) {
             AnnotationEntry firstEntry = augmented.get(i);
             AnnotationEntry secondEntry = augmented.get(i + 1);
 
             if (firstEntry.getDocumentId() != secondEntry.getDocumentId() ||
-                firstEntry.getSentenceId() != secondEntry.getSentenceId()) {
+                    firstEntry.getSentenceId() != secondEntry.getSentenceId()) {
                 continue; // Moved to a new sentence or document
             }
 
@@ -138,17 +142,49 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
             }
 
             String key = String.format("%s%s%s",
-                firstTokenLower,
-                DELIMITER,
-                secondTokenLower);
+                    firstTokenLower,
+                    DELIMITER,
+                    secondTokenLower);
 
-            PositionListSoA posList = positionLists.computeIfAbsent(key, k -> new PositionListSoA());
-            posList.add(secondEntry.getDocumentId(), secondEntry.getSentenceId(),
-                firstEntry.getBeginChar(), secondEntry.getEndChar());
+            long cellKey = PostingList.packCellKey(secondEntry.getDocumentId(), secondEntry.getSentenceId());
+            Map<Long, IntArrayList> cellMap = termCellMap.computeIfAbsent(key, k -> new java.util.LinkedHashMap<>());
+            cellMap.computeIfAbsent(cellKey, k -> new IntArrayList()).add(firstEntry.getBeginChar());
+
+            // Compute constant length for the bigram span
+            int len = secondEntry.getEndChar() - firstEntry.getBeginChar();
+            byte cl = (byte) Math.min(len, 255);
+            termConstLen.putIfAbsent(key, cl);
         }
 
-        for (Map.Entry<String, PositionListSoA> entry : positionLists.entrySet()) {
-            index.put(entry.getKey(), entry.getValue());
+        // Build PostingList for each bigram key
+        for (Map.Entry<String, Map<Long, IntArrayList>> termEntry : termCellMap.entrySet()) {
+            String key = termEntry.getKey();
+            Map<Long, IntArrayList> cellMap = termEntry.getValue();
+
+            Roaring64NavigableMap cells = new Roaring64NavigableMap();
+            for (long ck : cellMap.keySet()) {
+                cells.add(ck);
+            }
+
+            int numCells = cellMap.size();
+            long[] cellKeysArr = new long[numCells];
+            byte[][] beginsArr = new byte[numCells][];
+            int idx = 0;
+            for (Map.Entry<Long, IntArrayList> e : cellMap.entrySet()) {
+                cellKeysArr[idx] = e.getKey();
+                IntArrayList bl = e.getValue();
+                byte[] b = new byte[bl.size()];
+                for (int j = 0; j < bl.size(); j++) {
+                    b[j] = (byte) bl.getInt(j);
+                }
+                beginsArr[idx] = b;
+                idx++;
+            }
+
+            byte constantLength = termConstLen.getOrDefault(key, (byte) 0);
+            OccurrencesBlock occ = OccurrencesBlock.fromUnsorted(cellKeysArr, beginsArr, constantLength);
+            PostingList pl = PostingList.fromCellsAndOccurrences(cells, constantLength, occ);
+            index.put(key, pl);
         }
 
         // Keep only the last token to bridge with the next batch.
@@ -166,7 +202,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
         // Rough estimate, but fast.
         String countSql = "SELECT MAX(annotation_id) FROM annotations";
         try (PreparedStatement stmt = sqliteConn.prepareStatement(countSql);
-             ResultSet rs = stmt.executeQuery()) {
+                ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {
                 return rs.getLong(1);
             }

@@ -1,297 +1,264 @@
 package com.example.query.executor;
 
-import java.io.IOException;
-// import java.util.ArrayList; // Not directly needed now
-// import java.util.Collections; // Not directly needed now
-// import java.util.List; // Not directly needed now
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
-// import java.util.Objects; // Not directly needed now
-// import java.util.stream.Collectors; // Not directly needed now
 
 import org.rocksdb.RocksIterator;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
-// import com.example.query.binding.MatchDetail; // Removed
-import com.example.query.binding.ValueType;
+import com.example.core.PostingList;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Dependency;
 
 /**
- * Executor for DEPENDENCY conditions.
+ * Executor for DEPENDENCY conditions using the CellResult-based interface.
+ *
+ * <p>
+ * Looks up dependency triples (governor, relation, dependent) in the
+ * dependency index. For exact matches, a direct key lookup is performed.
+ * For wildcard/variable searches, a prefix scan iterates matching keys and
+ * ORs their CellResults together.
+ *
+ * <p>
+ * The index key format is:
+ * {@code governor \0 relation \0 dependent}
  */
 public final class DependencyExecutor implements ConditionExecutor<Dependency> {
     private static final Logger logger = LoggerFactory.getLogger(DependencyExecutor.class);
     private static final String DEPENDENCY_INDEX_NAME = "dependency";
 
-    public DependencyExecutor() {}
+    public DependencyExecutor() {
+    }
 
     @Override
-    public QueryResultSoA execute(Dependency condition, Map<String, IndexAccessInterface> indexes,
-                               Query.Granularity granularity,
-                               int granularitySize,
-                               String corpusName,
-                               AttributeRequirements requirements,
-                               Optional<FilteringContext> context)
-        throws QueryExecutionException {
+    public CellResult execute(Dependency condition, Map<String, IndexAccessInterface> indexes,
+            Query.Granularity granularity,
+            int granularitySize,
+            String corpusName,
+            AttributeRequirements requirements,
+            Optional<Roaring64NavigableMap> allowedCells)
+            throws QueryExecutionException {
 
-        logger.debug(">>> Executing DependencyExecutor");
-        logger.debug("Executing DEPENDENCY condition with AttributeRequirements: {}, FilteringContext isPresent: {}",
-                     requirements.getRequiredSoAAttributes(), context.isPresent());
+        logger.debug(">>> Executing DependencyExecutor (granularity={}, allowedCellsPresent={})",
+                granularity, allowedCells.isPresent());
 
         if (!indexes.containsKey(DEPENDENCY_INDEX_NAME)) {
             throw new QueryExecutionException(
-                "Missing required dependency index",
-                condition.toString(),
-                QueryExecutionException.ErrorType.MISSING_INDEX
-            );
+                    "Missing required dependency index",
+                    condition.toString(),
+                    QueryExecutionException.ErrorType.MISSING_INDEX);
         }
 
         IndexAccessInterface index = indexes.get(DEPENDENCY_INDEX_NAME);
         if (index == null) {
             throw new QueryExecutionException(
-                "Required index not found: " + DEPENDENCY_INDEX_NAME,
-                condition.toString(),
-                QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR
-            );
+                    "Required index not found: " + DEPENDENCY_INDEX_NAME,
+                    condition.toString(),
+                    QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
         }
 
-        QueryResultSoA resultSoA = new QueryResultSoA(granularity, granularitySize, requirements);
-        int conceptualRowIdCounter = 0; // Initialize conceptual row ID counter
+        PostingList.DeserializeMode mode = requirements.toDeserializeMode();
 
         try {
             String governor = condition.governor();
             String dependent = condition.dependent();
             String relation = condition.relation();
-            boolean isVariableBinding = condition.isVariable(); // True if BIND clause is used
+            boolean isVariableBinding = condition.isVariable();
 
-            // Determine if any part is a variable placeholder (e.g., "?gov"), a literal wildcard "*",
-            // or if a BIND clause is active (which implies iterative search for binding).
-            // A field is considered "specific literal" if it's not null, not a variable placeholder, and not a wildcard.
-            boolean govIsSpecificLiteral = (governor != null && !"*".equals(governor));
-            boolean relIsSpecificLiteral = (relation != null && !"*".equals(relation));
-            boolean depIsSpecificLiteral = (dependent != null && !"*".equals(dependent));
+            // Determine which fields are specific literals
+            boolean govIsSpecific = (governor != null && !"*".equals(governor));
+            boolean relIsSpecific = (relation != null && !"*".equals(relation));
+            boolean depIsSpecific = (dependent != null && !"*".equals(dependent));
 
-            if (govIsSpecificLiteral && relIsSpecificLiteral && depIsSpecificLiteral && !isVariableBinding) {
-                // All parts are specific literals, and no BINDing is happening.
-                // This is the only case for the direct specific search.
-                conceptualRowIdCounter = executeSpecificSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
+            CellResult result;
+            if (govIsSpecific && relIsSpecific && depIsSpecific && !isVariableBinding) {
+                // All parts specific — exact key lookup
+                result = executeSpecificSearch(condition, index, granularity, mode);
             } else {
-                 conceptualRowIdCounter = executeVariableSearchOptimized(condition, index, resultSoA, conceptualRowIdCounter, requirements, context);
+                // At least one wildcard or variable — prefix scan
+                result = executeVariableSearch(condition, index, granularity, mode);
             }
 
-            logger.debug("DEPENDENCY condition execution produced {} entries in QueryResultSoA ({} conceptual rows)", resultSoA.size(), conceptualRowIdCounter);
+            // Apply allowedCells filtering at the end
+            if (allowedCells.isPresent() && !result.isEmpty()) {
+                Roaring64NavigableMap filtered = result.cells().clone();
+                filtered.and(allowedCells.get());
+                result = CellResult.of(filtered, granularity);
+                logger.debug("Applied allowedCells filter: {} cells remain", filtered.getLongCardinality());
+            }
 
-            // Sorting is centralized by QueryExecutor
-            return resultSoA;
+            logger.debug("DEPENDENCY result: {} cells", result.cellCount());
+            return result;
 
-        } catch (IndexAccessException | IOException e) { // Catch specific IO/Index exceptions from helpers
-             throw new QueryExecutionException(
-                "Error accessing index or deserializing data for DEPENDENCY condition: " + e.getMessage(),
-                e,
-                condition.toString(),
-                QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR // Or a more general internal error
-            );
-        } catch (Exception e) {
+        } catch (IndexAccessException e) {
             throw new QueryExecutionException(
-                "Error executing DEPENDENCY condition: " + e.getMessage(),
-                e,
-                condition.toString(),
-                QueryExecutionException.ErrorType.INTERNAL_ERROR
-            );
+                    "Error accessing index for DEPENDENCY condition: " + e.getMessage(),
+                    e,
+                    condition.toString(),
+                    QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
         }
     }
 
-    private int executeSpecificSearchOptimized(Dependency condition, IndexAccessInterface index,
-                                                QueryResultSoA resultSoA, int currentConceptualRowId,
-                                                AttributeRequirements requirements,
-                                                Optional<FilteringContext> context)
-        throws IndexAccessException, IOException {
+    /**
+     * Performs an exact key lookup when all three parts of the dependency
+     * triple are specific literals and no variable binding is active.
+     */
+    private CellResult executeSpecificSearch(Dependency condition, IndexAccessInterface index,
+            Query.Granularity granularity,
+            PostingList.DeserializeMode mode)
+            throws IndexAccessException {
 
         String normalizedGovernor = condition.governor().toLowerCase();
         String normalizedDependent = condition.dependent().toLowerCase();
         String normalizedRelation = condition.relation().toLowerCase();
 
-        String searchKey = normalizedGovernor + String.valueOf(IndexAccessInterface.DELIMITER) +
-                           normalizedRelation + String.valueOf(IndexAccessInterface.DELIMITER) +
-                           normalizedDependent;
-        // Using merged lookup below; direct raw key bytes not required
+        String searchKey = normalizedGovernor + IndexAccessInterface.DELIMITER
+                + normalizedRelation + IndexAccessInterface.DELIMITER
+                + normalizedDependent;
 
-        logger.debug("Searching for specific dependency relation: {} (into QueryResultSoA)", searchKey);
-        Optional<PositionListSoA> mergedPositionsOpt = index.getMergedPositions(searchKey, context, requirements);
-        int conceptualRowsAdded = 0;
+        logger.debug("Searching for specific dependency key: '{}'", searchKey);
 
-        if (mergedPositionsOpt.isPresent() && !mergedPositionsOpt.get().isEmpty()) {
-            PositionListSoA positions = mergedPositionsOpt.get();
+        byte[] keyBytes = searchKey.getBytes(StandardCharsets.UTF_8);
+        Optional<PostingList> plOpt = index.getPostingList(keyBytes, mode);
 
-            if (positions.isEmpty()) {
-                logger.debug("No positions for dependency relation '{}' after applying context filters.", searchKey);
-                return currentConceptualRowId;
-            }
-            int numPositions = positions.getNumPositions();
-            logger.debug("Found {} positions for dependency relation '{}' after context filtering.", numPositions, searchKey);
-
-            String value = String.join(":", normalizedGovernor, normalizedRelation, normalizedDependent);
-            String variableNameToUse = condition.isVariable() ? condition.variableName() : null;
-
-            for (int i = 0; i < numPositions; i++) {
-                resultSoA.add(
-                    value,
-                    ValueType.DEPENDENCY,
-                    variableNameToUse,
-                    positions.getDocIdAt(i),
-                    requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                    requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                    requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                    requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                    resultSoA.getNextConceptualRowId()
-                );
-                conceptualRowsAdded++;
-            }
-            logger.debug("Added {} bindings for dependency '{}', creating {} conceptual rows.", numPositions, searchKey, conceptualRowsAdded);
-        } else {
-            logger.debug("No positions found for dependency relation: '{}' (including segments)", searchKey);
+        if (plOpt.isEmpty() || plOpt.get().isEmpty()) {
+            logger.debug("No positions found for dependency key: '{}'", searchKey);
+            return CellResult.empty(granularity);
         }
-        return currentConceptualRowId + conceptualRowsAdded;
+
+        PostingList pl = plOpt.get();
+        logger.debug("Found {} cells for dependency key '{}'", pl.cells().getLongCardinality(), searchKey);
+
+        if (mode == PostingList.DeserializeMode.FULL) {
+            return CellResult.fromPostingListWithOccurrences(pl, granularity);
+        } else {
+            return CellResult.fromPostingList(pl, granularity);
+        }
     }
 
-    private int executeVariableSearchOptimized(Dependency condition, IndexAccessInterface index,
-                                               QueryResultSoA resultSoA, int currentConceptualRowId,
-                                               AttributeRequirements requirements,
-                                               Optional<FilteringContext> context)
-        throws IndexAccessException, IOException {
+    /**
+     * Performs a prefix scan when at least one part of the dependency triple
+     * is a wildcard or variable binding is active.
+     */
+    private CellResult executeVariableSearch(Dependency condition, IndexAccessInterface index,
+            Query.Granularity granularity,
+            PostingList.DeserializeMode mode)
+            throws IndexAccessException {
 
-        String variableName = condition.isVariable() ? condition.variableName() : null;
+        logger.debug("Executing variable/wildcard search for dependency");
 
-        // Relation filter must be present for BIND, but can be '*' for non-BIND wildcard searches.
-        // Initialize filters to handle literals, '?' (which results in null here after model building), or '*'.
         String governorFilterLower = (condition.governor() != null && !"*".equals(condition.governor()))
-                                     ? condition.governor().toLowerCase() : null;
+                ? condition.governor().toLowerCase()
+                : null;
         String relationFilterLower = (condition.relation() != null && !"*".equals(condition.relation()))
-                                     ? condition.relation().toLowerCase() : null;
+                ? condition.relation().toLowerCase()
+                : null;
         String dependentFilterLower = (condition.dependent() != null && !"*".equals(condition.dependent()))
-                                      ? condition.dependent().toLowerCase() : null;
+                ? condition.dependent().toLowerCase()
+                : null;
 
-        logger.debug("Executing variable search for dependency relations with gov filter: '{}', rel filter: '{}', dep filter: '{}', binding to var: {}",
-            governorFilterLower, relationFilterLower, dependentFilterLower, variableName);
-
-        if (index == null) {
-            logger.error("IndexAccessInterface is null in DependencyExecutor.executeVariableSearchOptimized");
-            throw new IndexAccessException("IndexAccessInterface cannot be null", null, null);
+        // Build prefix from known parts
+        StringBuilder prefixBuilder = new StringBuilder();
+        if (governorFilterLower != null) {
+            prefixBuilder.append(governorFilterLower).append(IndexAccessInterface.DELIMITER);
+            if (relationFilterLower != null) {
+                prefixBuilder.append(relationFilterLower).append(IndexAccessInterface.DELIMITER);
+            }
         }
+        String prefix = prefixBuilder.length() > 0 ? prefixBuilder.toString() : null;
 
-        try (RocksIterator iterator = getIteratorForVariableSearch(index, governorFilterLower, relationFilterLower)) {
+        CellResult result = CellResult.empty(granularity);
+
+        try (RocksIterator iterator = getIteratorForSearch(index, governorFilterLower, relationFilterLower)) {
             if (iterator == null) {
-                 logger.warn("RocksIterator was not initialized in DependencyExecutor.executeVariableSearchOptimized. Returning empty results.");
-                 return currentConceptualRowId;
+                logger.warn("RocksIterator was not initialized. Returning empty result.");
+                return result;
             }
 
-            String prefix = null;
-            StringBuilder prefixBuilder = new StringBuilder();
-            if (governorFilterLower != null && !"*".equals(governorFilterLower)) {
-                prefixBuilder.append(governorFilterLower).append(IndexAccessInterface.DELIMITER);
-                if (relationFilterLower != null && !"*".equals(relationFilterLower)) {
-                    prefixBuilder.append(relationFilterLower).append(IndexAccessInterface.DELIMITER);
-                }
-            }
-            if (prefixBuilder.length() > 0) {
-                prefix = prefixBuilder.toString();
-            }
-
+            int keysMatched = 0;
             while (iterator.isValid()) {
                 byte[] keyBytes = iterator.key();
-                byte[] valueBytes = iterator.value();
-                String key = new String(keyBytes, java.nio.charset.StandardCharsets.UTF_8);
+                String key = new String(keyBytes, StandardCharsets.UTF_8);
 
+                // Stop if we've moved beyond the prefix
                 if (prefix != null && !key.startsWith(prefix)) {
                     break;
                 }
 
+                // Parse the key and apply filters
                 String[] parts = key.split(String.valueOf(IndexAccessInterface.DELIMITER));
                 if (parts.length == 3) {
                     String currentGovernor = parts[0];
                     String currentRelation = parts[1];
                     String currentDependent = parts[2];
 
-                    // Apply filters: if a filter is null or "*", it's a wildcard for that part.
-                    if (governorFilterLower != null && !"*".equals(governorFilterLower) && !currentGovernor.equals(governorFilterLower)) {
+                    // Apply per-field filters
+                    if (governorFilterLower != null && !currentGovernor.equals(governorFilterLower)) {
                         iterator.next();
                         continue;
                     }
-                    if (relationFilterLower != null && !"*".equals(relationFilterLower) && !currentRelation.equals(relationFilterLower)) {
+                    if (relationFilterLower != null && !currentRelation.equals(relationFilterLower)) {
                         iterator.next();
                         continue;
                     }
-                    if (dependentFilterLower != null && !"*".equals(dependentFilterLower) && !currentDependent.equals(dependentFilterLower)) {
+                    if (dependentFilterLower != null && !currentDependent.equals(dependentFilterLower)) {
                         iterator.next();
                         continue;
                     }
 
-                    String valueToBind = String.join(":", currentGovernor, currentRelation, currentDependent);
-                    PositionListSoA positions = PositionListSoA.deserializeWithFilters(valueBytes, context, requirements);
-
-                    if (positions.isEmpty()) {
-                        iterator.next();
-                        continue;
+                    Optional<PostingList> plOpt = index.getPostingList(keyBytes, mode);
+                    if (plOpt.isPresent() && !plOpt.get().isEmpty()) {
+                        PostingList pl = plOpt.get();
+                        CellResult keyResult = (mode == PostingList.DeserializeMode.FULL)
+                                ? CellResult.fromPostingListWithOccurrences(pl, granularity)
+                                : CellResult.fromPostingList(pl, granularity);
+                        result = result.or(keyResult);
+                        keysMatched++;
                     }
-                    int numPositions = positions.getNumPositions();
-                    int conceptualRowsAdded = 0;
-
-                    for (int i = 0; i < numPositions; i++) {
-                        resultSoA.add(
-                            valueToBind,
-                            ValueType.DEPENDENCY,
-                            variableName,
-                            positions.getDocIdAt(i),
-                            requirements.needsSentenceId ? positions.getSentenceIdAt(i) : -1,
-                            requirements.needsPositions ? positions.getBeginCharAt(i) : -1,
-                            requirements.needsPositions ? positions.getEndCharAt(i) : -1,
-                            requirements.needsSynonymIds ? positions.getSynonymIdAt(i) : -1,
-                            resultSoA.getNextConceptualRowId()
-                        );
-                        conceptualRowsAdded++;
-                    }
-                    currentConceptualRowId += conceptualRowsAdded;
-                    // logger.debug("Added {} bindings for dependency variable '{}' (key: '{}'), creating {} new conceptual rows.",
-                    //              numPositions, variableName != null ? variableName : "<N/A>", key, conceptualRowsAdded);
                 } else {
                     logger.warn("Skipping invalid key format in dependency index: {}", key);
                 }
                 iterator.next();
             }
+            logger.debug("Variable search for dependency matched {} keys, result has {} cells",
+                    keysMatched, result.cellCount());
         }
 
-        logger.debug("Variable search for dependency produced {} conceptual rows into QueryResultSoA", currentConceptualRowId);
-        return currentConceptualRowId;
+        return result;
     }
 
     /**
-     * Helper method to create and position a RocksIterator based on filters.
-     * This consolidates the iterator creation logic.
+     * Creates and positions a RocksIterator based on the governor and relation
+     * filters. If both are present, a bounded prefix seek is used.
      */
-    private RocksIterator getIteratorForVariableSearch(IndexAccessInterface index, String governorFilterLower, String relationFilterLower) throws IndexAccessException {
+    private RocksIterator getIteratorForSearch(IndexAccessInterface index,
+            String governorFilterLower,
+            String relationFilterLower)
+            throws IndexAccessException {
+
         StringBuilder prefixBuilder = new StringBuilder();
-        if (governorFilterLower != null && !"*".equals(governorFilterLower)) {
+        if (governorFilterLower != null) {
             prefixBuilder.append(governorFilterLower).append(IndexAccessInterface.DELIMITER);
-            if (relationFilterLower != null && !"*".equals(relationFilterLower)) {
+            if (relationFilterLower != null) {
                 prefixBuilder.append(relationFilterLower).append(IndexAccessInterface.DELIMITER);
             }
         }
 
         if (prefixBuilder.length() > 0) {
             String prefix = prefixBuilder.toString();
-            logger.debug("Using bounded prefix seek for RocksIterator: {}", prefix);
-            byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            byte[] upperBound = java.util.Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
-            upperBound[upperBound.length - 1] = (byte)0xFF; // exclusive upper bound beyond all keys with the prefix
-            // Modest readahead for sequential scan of a prefix range
+            logger.debug("Using bounded prefix seek for dependency: '{}'", prefix);
+            byte[] prefixBytes = prefix.getBytes(StandardCharsets.UTF_8);
+            byte[] upperBound = Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
+            upperBound[upperBound.length - 1] = (byte) 0xFF;
             return index.seekWithBounds(prefixBytes, upperBound, 256 * 1024);
         } else {
-            logger.debug("No specific prefix possible (due to wildcards or missing governor), creating RocksIterator from first.");
+            logger.debug("No prefix possible (wildcards or missing governor), iterating from first.");
             return index.iterateFromFirst();
         }
     }

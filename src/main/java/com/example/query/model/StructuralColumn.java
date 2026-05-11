@@ -5,12 +5,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
-
-import com.example.query.executor.QueryResultSoA;
+import com.example.core.PostingList;
+import com.example.query.executor.Bindings;
+import com.example.query.executor.CellResult;
 import com.example.query.sqlite.SqliteAccessor;
 
 import tech.tablesaw.api.DateColumn;
@@ -26,7 +28,7 @@ public class StructuralColumn implements SelectColumn {
     private static final Logger logger = LoggerFactory.getLogger(StructuralColumn.class);
 
     private final String alias;
-    private final String fieldName; // e.g., TITLE, TIMESTAMP, DOCUMENT_ID, SENTENCE_ID
+    private final String fieldName;
 
     public StructuralColumn(String alias, String fieldName) {
         this.alias = Objects.requireNonNull(alias, "alias cannot be null");
@@ -36,11 +38,9 @@ public class StructuralColumn implements SelectColumn {
 
     @Override
     public String getColumnName() {
-        // Column name in the final table will be alias.fieldName
         return alias + "." + fieldName;
     }
 
-    // --- Add Getters ---
     public String getAlias() {
         return alias;
     }
@@ -48,12 +48,9 @@ public class StructuralColumn implements SelectColumn {
     public String getFieldName() {
         return fieldName;
     }
-    // --- End Getters ---
 
     @Override
     public Column<?> createColumn() {
-        // Determine column type based on field name
-        // Log the field name being switched on
         String upperFieldName = fieldName.toUpperCase();
         logger.debug("Switching on upperFieldName: '{}'", upperFieldName);
 
@@ -61,79 +58,89 @@ public class StructuralColumn implements SelectColumn {
             case "TITLE" -> StringColumn.create(getColumnName());
             case "TIMESTAMP" -> DateColumn.create(getColumnName());
             case "DOCUMENT_ID" -> {
-                 logger.debug("Creating IntColumn for {}", getColumnName());
-                 yield IntColumn.create(getColumnName());
+                logger.debug("Creating IntColumn for {}", getColumnName());
+                yield IntColumn.create(getColumnName());
             }
             case "SENTENCE_ID" -> IntColumn.create(getColumnName());
             case "BEGIN" -> IntColumn.create(getColumnName());
             case "END" -> IntColumn.create(getColumnName());
             default -> {
-                 logger.warn("Unknown structural field '{}' for alias '{}'. Defaulting to StringColumn.", fieldName, alias);
-                 yield StringColumn.create(getColumnName()); // Default to String
+                logger.warn("Unknown structural field '{}' for alias '{}'. Defaulting to StringColumn.", fieldName,
+                        alias);
+                yield StringColumn.create(getColumnName());
             }
         };
-       return createdCol;
+        return createdCol;
     }
 
     @Override
     public void populateColumn(Table table, int rowIndex,
-                               QueryResultSoA resultSoA, List<Integer> indicesInSoA,
-                               String source,
-                               Map<String, IndexAccessInterface> indexes,
-                               Query query,
-                               Map<String, Object> contextCache) {
-        if (indicesInSoA == null || indicesInSoA.isEmpty()) {
-            logger.warn("StructuralColumn populateColumn received null or empty SoA indices for alias {}. Row: {}. Setting missing.", alias, rowIndex);
+            CellResult result, List<Integer> bindingIndices,
+            String source,
+            Map<String, IndexAccessInterface> indexes,
+            Query query,
+            Map<String, Object> contextCache) {
+        if (bindingIndices == null || bindingIndices.isEmpty()) {
+            logger.warn(
+                    "StructuralColumn populateColumn received null or empty binding indices for alias {}. Row: {}. Setting missing.",
+                    alias, rowIndex);
             table.column(getColumnName()).setMissing(rowIndex);
             return;
         }
 
-        Integer docIdForAlias = null;
-        Integer sentenceIdForAlias = null;
-        Integer beginCharForAlias = null;
-        Integer endCharForAlias = null;
+        // Extract doc/sent from contextCache (set by TableResultService)
+        // or fall back to the first cell in the CellResult.
+        int effectiveDocId = -1;
+        int effectiveSentenceId = -1;
+        Long cellKeyFromContext = (Long) contextCache.get("_cellKey");
+        if (cellKeyFromContext != null) {
+            effectiveDocId = PostingList.docIdFromCellKey(cellKeyFromContext);
+            effectiveSentenceId = (int) (cellKeyFromContext & 0xFFFF_FFFFL);
+        } else {
+            Roaring64NavigableMap cells = result.cells();
+            if (cells != null && !cells.isEmpty()) {
+                long firstCell = cells.first();
+                effectiveDocId = PostingList.docIdFromCellKey(firstCell);
+                effectiveSentenceId = (int) (firstCell & 0xFFFF_FFFFL);
+            }
+        }
+
         boolean foundRelevantEntry = false;
+        Bindings bindings = result.bindings();
+        if (bindings != null) {
+            for (int bindingIdx : bindingIndices) {
+                String entryVarName = bindings.variableNameAt(bindingIdx);
+                String determinedEntryAlias;
 
-        for (int soaIndex : indicesInSoA) {
-            String entryVarName = resultSoA.getVariableNameAt(soaIndex);
-            String determinedEntryAlias;
-
-            if (entryVarName != null && entryVarName.contains(".")) {
-                determinedEntryAlias = entryVarName.substring(0, entryVarName.indexOf('.'));
-            } else {
-                // If no explicit alias qualification (no '.'), or varName is null (e.g. for a raw condition match),
-                // it implies the entry belongs to the default main alias of the conceptual row component it originated from.
-                // In a joined SoA, QueryExecutor/JoinHandler are responsible for ensuring variable names are qualified if they came from a sub-alias.
-                // So, if it's not qualified here, it's effectively part of the "main" context of this conceptual row segment.
-                determinedEntryAlias = com.example.query.parser.QueryModelBuilder.DEFAULT_MAIN_ALIAS;
-            }
-
-            if (this.alias.equals(determinedEntryAlias)) {
-                docIdForAlias = resultSoA.getDocumentIdAt(soaIndex);
-                if (resultSoA.getRequirements().needsSentenceId) {
-                    sentenceIdForAlias = resultSoA.getSentenceIdAt(soaIndex);
+                if (entryVarName != null && entryVarName.contains(".")) {
+                    determinedEntryAlias = entryVarName.substring(0, entryVarName.indexOf('.'));
+                } else {
+                    determinedEntryAlias = com.example.query.parser.QueryModelBuilder.DEFAULT_MAIN_ALIAS;
                 }
-                if (resultSoA.getRequirements().needsPositions) {
-                    beginCharForAlias = resultSoA.getBeginCharAt(soaIndex);
-                    endCharForAlias = resultSoA.getEndCharAt(soaIndex);
+
+                if (this.alias.equals(determinedEntryAlias)) {
+                    foundRelevantEntry = true;
+                    logger.trace(
+                            "Found relevant entry for StructuralColumn {}.{} at bindingIdx {}: docId={}, sentenceId={}",
+                            this.alias, this.fieldName, bindingIdx, effectiveDocId, effectiveSentenceId);
+                    break;
                 }
-                foundRelevantEntry = true;
-                logger.trace("Found relevant entry for StructuralColumn {}.{} at soaIndex {}: docId={}, sentenceId={}, begin={}, end={}",
-                             this.alias, this.fieldName, soaIndex, docIdForAlias, sentenceIdForAlias, beginCharForAlias, endCharForAlias);
-                break;
             }
         }
 
-        if (!foundRelevantEntry) {
-            logger.warn("StructuralColumn {}.{} did not find a matching entry for its alias '{}' within the provided SoA indices for conceptual row. Row: {}. Setting missing.",
-                        this.alias, this.fieldName, this.alias, rowIndex);
+        if (!foundRelevantEntry && effectiveDocId < 0) {
+            logger.warn(
+                    "StructuralColumn {}.{} did not find a matching entry for its alias '{}'. Row: {}. Setting missing.",
+                    this.alias, this.fieldName, this.alias, rowIndex);
             table.column(getColumnName()).setMissing(rowIndex);
             return;
         }
 
-        final int effectiveDocId = docIdForAlias;
+        final int docId = effectiveDocId;
+        final int sentId = effectiveSentenceId;
 
-        logger.trace("Populating StructuralColumn {}.{} at row {} using effectiveDocId {}", this.alias, this.fieldName, rowIndex, effectiveDocId);
+        logger.trace("Populating StructuralColumn {}.{} at row {} using docId {}", this.alias, this.fieldName, rowIndex,
+                docId);
 
         Column<?> column = table.column(getColumnName());
 
@@ -141,118 +148,82 @@ public class StructuralColumn implements SelectColumn {
             switch (fieldName.toUpperCase()) {
                 case "TITLE":
                     if (column instanceof StringColumn strCol) {
-                        String cacheKey = "title_" + effectiveDocId;
+                        String cacheKey = "title_" + docId;
                         String title = (String) contextCache.get(cacheKey);
                         if (title == null) {
-                            title = SqliteAccessor.getInstance().getMetadata(source, effectiveDocId, "title");
+                            title = SqliteAccessor.getInstance().getMetadata(source, docId, "title");
                             title = (title != null) ? title : "";
                             contextCache.put(cacheKey, title);
-                            logger.trace("Fetched and cached TITLE '{}' for docId {}", title, effectiveDocId);
-                        } else {
-                            logger.trace("Retrieved TITLE '{}' from cache for docId {}", title, effectiveDocId);
                         }
                         strCol.set(rowIndex, title);
-                        logger.trace("Set TITLE '{}' for {}.{} at row {}", title, this.alias, this.fieldName, rowIndex);
                     } else {
-                         logger.error("Expected StringColumn for TITLE but got {} for column {}", column.type(), getColumnName());
-                         column.setMissing(rowIndex);
+                        column.setMissing(rowIndex);
                     }
                     break;
                 case "TIMESTAMP":
-                     if (column instanceof DateColumn dateCol) {
-                         String cacheKey = "timestamp_" + effectiveDocId;
-                         LocalDate docTimestamp = (LocalDate) contextCache.get(cacheKey);
-                         if (docTimestamp == null) {
-                             String timestampStr = SqliteAccessor.getInstance().getMetadata(source, effectiveDocId, "timestamp");
-                             if (timestampStr != null && !timestampStr.isEmpty()) {
-                                 try {
-                                     docTimestamp = java.time.LocalDateTime.parse(timestampStr).toLocalDate();
-                                 } catch (java.time.format.DateTimeParseException e) {
-                                     logger.warn("Failed to parse timestamp string '{}' for docId {}. Setting missing.", timestampStr, effectiveDocId, e);
-                                     docTimestamp = null;
-                                 }
-                             }
-                             if (docTimestamp != null) {
+                    if (column instanceof DateColumn dateCol) {
+                        String cacheKey = "timestamp_" + docId;
+                        LocalDate docTimestamp = (LocalDate) contextCache.get(cacheKey);
+                        if (docTimestamp == null) {
+                            String timestampStr = SqliteAccessor.getInstance().getMetadata(source, docId,
+                                    "timestamp");
+                            if (timestampStr != null && !timestampStr.isEmpty()) {
+                                try {
+                                    docTimestamp = java.time.LocalDateTime.parse(timestampStr).toLocalDate();
+                                } catch (java.time.format.DateTimeParseException e) {
+                                    logger.warn("Failed to parse timestamp string '{}' for docId {}.", timestampStr,
+                                            docId, e);
+                                    docTimestamp = null;
+                                }
+                            }
+                            if (docTimestamp != null) {
                                 contextCache.put(cacheKey, docTimestamp);
-                                logger.trace("Fetched and cached TIMESTAMP '{}' for docId {}", docTimestamp, effectiveDocId);
-                             } else {
-                                logger.trace("Timestamp was null or unparseable for docId {}. Not caching.", effectiveDocId);
-                             }
-                         } else {
-                             logger.trace("Retrieved TIMESTAMP '{}' from cache for docId {}", docTimestamp, effectiveDocId);
-                         }
-
-                         if (docTimestamp != null) {
+                            }
+                        }
+                        if (docTimestamp != null) {
                             dateCol.set(rowIndex, docTimestamp);
-                            logger.trace("Set TIMESTAMP '{}' for {}.{} at row {}", docTimestamp, this.alias, this.fieldName, rowIndex);
-                         } else {
+                        } else {
                             dateCol.setMissing(rowIndex);
-                            logger.trace("Set TIMESTAMP to missing for {}.{} at row {} due to null/unparseable date", this.alias, this.fieldName, rowIndex);
-                         }
-                     } else {
-                         logger.error("Expected DateColumn for TIMESTAMP but got {} for column {}", column.type(), getColumnName());
-                         column.setMissing(rowIndex);
-                     }
+                        }
+                    } else {
+                        column.setMissing(rowIndex);
+                    }
                     break;
                 case "DOCUMENT_ID":
-                     if (column instanceof IntColumn intCol) {
-                         intCol.set(rowIndex, effectiveDocId);
-                          logger.trace("Set DOCUMENT_ID '{}' for {}.{} at row {}", effectiveDocId, this.alias, this.fieldName, rowIndex);
-                     } else {
-                         logger.error("Expected IntColumn for DOCUMENT_ID but got {} for column {}", column.type(), getColumnName());
-                         column.setMissing(rowIndex);
-                     }
+                    if (column instanceof IntColumn intCol) {
+                        intCol.set(rowIndex, docId);
+                    } else {
+                        column.setMissing(rowIndex);
+                    }
                     break;
                 case "SENTENCE_ID":
                     if (column instanceof IntColumn intCol) {
-                         if (sentenceIdForAlias != null) {
-                            intCol.set(rowIndex, sentenceIdForAlias);
-                            logger.trace("Set SENTENCE_ID '{}' for {}.{} at row {}", sentenceIdForAlias, this.alias, this.fieldName, rowIndex);
-                         } else {
-                            logger.trace("Sentence ID for {}.{} at row {} is not available or not applicable (sentenceIdForAlias is null). Setting missing.", this.alias, this.fieldName, rowIndex);
+                        if (sentId >= 0) {
+                            intCol.set(rowIndex, sentId);
+                        } else {
                             intCol.setMissing(rowIndex);
-                         }
-                     } else {
-                         logger.error("Expected IntColumn for SENTENCE_ID but got {} for column {}", column.type(), getColumnName());
-                         column.setMissing(rowIndex);
-                     }
+                        }
+                    } else {
+                        column.setMissing(rowIndex);
+                    }
                     break;
                 case "BEGIN":
-                    if (column instanceof IntColumn intCol) {
-                        if (beginCharForAlias != null) {
-                            intCol.set(rowIndex, beginCharForAlias);
-                            logger.trace("Set BEGIN '{}' for {}.{} at row {}", beginCharForAlias, this.alias, this.fieldName, rowIndex);
-                        } else {
-                            logger.trace("Begin char for {}.{} at row {} is not available. Setting missing.", this.alias, this.fieldName, rowIndex);
-                            intCol.setMissing(rowIndex);
-                        }
-                    } else {
-                         logger.error("Expected IntColumn for BEGIN but got {} for column {}", column.type(), getColumnName());
-                         column.setMissing(rowIndex);
-                    }
-                    break;
                 case "END":
-                    if (column instanceof IntColumn intCol) {
-                        if (endCharForAlias != null) {
-                            intCol.set(rowIndex, endCharForAlias);
-                            logger.trace("Set END '{}' for {}.{} at row {}", endCharForAlias, this.alias, this.fieldName, rowIndex);
-                        } else {
-                            logger.trace("End char for {}.{} at row {} is not available. Setting missing.", this.alias, this.fieldName, rowIndex);
-                            intCol.setMissing(rowIndex);
-                        }
-                    } else {
-                         logger.error("Expected IntColumn for END but got {} for column {}", column.type(), getColumnName());
-                         column.setMissing(rowIndex);
-                    }
+                    // Not available in CellResult bindings
+                    if (column != null)
+                        column.setMissing(rowIndex);
                     break;
                 default:
-                    logger.warn("Unhandled structural field '{}' in populateColumn. Setting missing for column {}.", fieldName, getColumnName());
+                    logger.warn("Unhandled structural field '{}' in populateColumn. Setting missing for column {}.",
+                            fieldName, getColumnName());
                     column.setMissing(rowIndex);
                     break;
             }
         } catch (Exception e) {
-             logger.error("Error populating StructuralColumn {}.{} at row {}: {}", alias, fieldName, rowIndex, e.getMessage(), e);
-             if (column != null) column.setMissing(rowIndex);
+            logger.error("Error populating StructuralColumn {}.{} at row {}: {}", alias, fieldName, rowIndex,
+                    e.getMessage(), e);
+            if (column != null)
+                column.setMissing(rowIndex);
         }
     }
 

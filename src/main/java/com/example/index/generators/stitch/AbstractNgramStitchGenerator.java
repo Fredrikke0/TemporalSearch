@@ -3,6 +3,7 @@ package com.example.index.generators.stitch;
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -14,20 +15,26 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
+import com.example.core.OccurrencesBlock;
+import com.example.core.PostingList;
 import com.example.index.AnnotationType;
 import com.example.index.IndexEntry;
+import com.example.index.KeySchema;
 import com.example.index.generators.IndexGenerator;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 
-public abstract class AbstractNgramStitchGenerator extends IndexGenerator<AbstractNgramStitchGenerator.NgramStitchEntry> {
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+
+public abstract class AbstractNgramStitchGenerator
+        extends IndexGenerator<AbstractNgramStitchGenerator.NgramStitchEntry> {
     private static final Logger logger = LoggerFactory.getLogger(AbstractNgramStitchGenerator.class);
 
     protected final SynonymManager synonymManager;
@@ -35,34 +42,35 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
     private Integer lastProcessedDocumentId = null;
 
     /**
-     * Interface for annotation records that can be filtered by sentence character span.
+     * Interface for annotation records that can be filtered by sentence character
+     * span.
      */
     protected interface SentenceSpanFilterable {
         int sentenceId();
+
         int beginChar();
+
         String getFilterLogDetail();
     }
 
     public record AnnotationData(
-        int sentenceId,
-        int beginChar,
-        int endChar,
-        String annotationKeyComponent,
-        String specificValueForSynonym
-    ) implements SentenceSpanFilterable {
+            int sentenceId,
+            int beginChar,
+            int endChar,
+            String annotationKeyComponent,
+            String specificValueForSynonym) implements SentenceSpanFilterable {
         @Override
         public String getFilterLogDetail() {
             return annotationKeyComponent;
         }
     }
 
-    // Record to hold processed token information before forming N-grams or for unigrams
-    private record ProcessedTokenInfo(String token, int beginChar, int endChar) {}
+    private record ProcessedTokenInfo(String token, int beginChar, int endChar) {
+    }
 
-    // Record for an N-gram (or unigram if N=1) found in a sentence
-    protected record NgramData(int beginChar, int endChar, String ngramKey) {}
+    protected record NgramData(int beginChar, int endChar, String ngramKey) {
+    }
 
-    // Record for a stitch entry combining an N-gram/unigram with an annotation
     protected record NgramStitchEntry(
             int documentId,
             int sentenceId,
@@ -72,20 +80,32 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             String annotationKeyComponent,
             int specificValueSynonymId,
             int annotationBeginChar,
-            int annotationEndChar
-    ) implements IndexEntry {
+            int annotationEndChar) implements IndexEntry {
 
         @Override
-        public int getDocumentId() { return this.documentId; }
-        @Override
-        public int getSentenceId() { return this.sentenceId; }
-        @Override
-        public int getBeginChar() { return this.ngramBeginChar; }
-        @Override
-        public int getEndChar() { return this.ngramEndChar; }
+        public int getDocumentId() {
+            return this.documentId;
+        }
 
+        @Override
+        public int getSentenceId() {
+            return this.sentenceId;
+        }
+
+        @Override
+        public int getBeginChar() {
+            return this.ngramBeginChar;
+        }
+
+        @Override
+        public int getEndChar() {
+            return this.ngramEndChar;
+        }
+
+        /** Returns the composite key with synId encoded for the temp file. */
         public String value() {
-            return ngramKey + IndexAccessInterface.DELIMITER + annotationKeyComponent;
+            return ngramKey + IndexAccessInterface.DELIMITER + annotationKeyComponent
+                    + IndexAccessInterface.DELIMITER + specificValueSynonymId;
         }
 
         public long getAnnotationId() {
@@ -95,7 +115,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
 
     @SuppressWarnings("this-escape")
     protected AbstractNgramStitchGenerator(
-            int nValue, // 1 for unigram, 2 for bigram, 3 for trigram
+            int nValue,
             IndexAccessInterface indexAccess,
             String stopwordsPathString,
             Connection sqliteConnParam,
@@ -103,10 +123,10 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             int batchSizeParam,
             Path customSortTempParam,
             SynonymManager sharedSynonymManager,
-            AnnotationType managedAnnotationType // For populateSpecificAnnotationSynonyms logging
-    ) throws IOException {
-        super(indexAccess, stopwordsPathString, sqliteConnParam, progressTrackerParam, batchSizeParam, customSortTempParam);
-        if (nValue < 1) { // Allow N=1 for unigrams
+            AnnotationType managedAnnotationType) throws IOException {
+        super(indexAccess, stopwordsPathString, sqliteConnParam, progressTrackerParam, batchSizeParam,
+                customSortTempParam);
+        if (nValue < 1) {
             throw new IllegalArgumentException("N-gram size (N) must be at least 1.");
         }
         this.N = nValue;
@@ -117,22 +137,29 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
 
         try {
             String gramType = (N == 1) ? "unigram" : N + "-gram";
-            logger.info("Initializing specific annotation synonyms for {} {} stitch index using shared SynonymManager.", managedAnnotationType, gramType);
-            populateSpecificAnnotationSynonyms(managedAnnotationType); // Abstract method for subclasses
-            logger.info("Finished populating specific annotation synonyms for {} of type {}.", getIndexName(), managedAnnotationType);
+            logger.info("Initializing specific annotation synonyms for {} {} stitch index using shared SynonymManager.",
+                    managedAnnotationType, gramType);
+            populateSpecificAnnotationSynonyms(managedAnnotationType);
+            logger.info("Finished populating specific annotation synonyms for {} of type {}.", getIndexName(),
+                    managedAnnotationType);
         } catch (SQLException | IOException e) {
-            throw new UncheckedIOException("Failed to populate " + managedAnnotationType + " annotation synonyms for " + getIndexName(), e instanceof IOException ? (IOException)e : new IOException(e));
+            throw new UncheckedIOException(
+                    "Failed to populate " + managedAnnotationType + " annotation synonyms for " + getIndexName(),
+                    e instanceof IOException ? (IOException) e : new IOException(e));
         }
     }
 
-    // Abstract methods to be implemented by concrete (POS/NER/Date) N-gram stitch generators
     protected abstract void populateSpecificAnnotationSynonyms(AnnotationType type) throws SQLException, IOException;
+
     protected abstract List<AnnotationData> fetchAnnotationsForDocument(int documentId) throws SQLException;
+
     protected abstract boolean requiresSynonymIdForAnnotationValue();
+
     protected abstract AnnotationType getManagedAnnotationType();
 
     @Override
-    protected List<NgramStitchEntry> fetchBatch(NgramStitchEntry lastStitchEntryFromPreviousOverallBatch) throws SQLException {
+    protected List<NgramStitchEntry> fetchBatch(NgramStitchEntry lastStitchEntryFromPreviousOverallBatch)
+            throws SQLException {
         List<NgramStitchEntry> currentStitchEntriesForBatch = new ArrayList<>();
         while (currentStitchEntriesForBatch.size() < this.batchSize) {
             Integer currentDocumentId = getNextDocumentId();
@@ -143,8 +170,10 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             }
             processDocument(currentDocumentId, currentStitchEntriesForBatch);
         }
-        if (currentStitchEntriesForBatch.isEmpty() && lastProcessedDocumentId != null && !hasMoreDocuments(lastProcessedDocumentId)) {
-             logger.info("FetchBatch for {} is returning an empty list because all documents have been processed.", getIndexName());
+        if (currentStitchEntriesForBatch.isEmpty() && lastProcessedDocumentId != null
+                && !hasMoreDocuments(lastProcessedDocumentId)) {
+            logger.info("FetchBatch for {} is returning an empty list because all documents have been processed.",
+                    getIndexName());
         }
         return currentStitchEntriesForBatch;
     }
@@ -199,17 +228,23 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
                     specificValueId = synonymManager.getId(annotation.specificValueForSynonym());
                 } catch (IllegalArgumentException e) {
                     String gramType = (N == 1) ? "unigram" : "N-gram";
-                    logger.debug("Skipping annotation for {} stitch due to invalid specific value for synonym: {} - {} (index {})", gramType, annotation.specificValueForSynonym(), e.getMessage(), getIndexName());
+                    logger.debug(
+                            "Skipping annotation for {} stitch due to invalid specific value for synonym: {} - {} (index {})",
+                            gramType, annotation.specificValueForSynonym(), e.getMessage(), getIndexName());
                     continue;
                 } catch (org.rocksdb.RocksDBException e) {
-                    logger.error("RocksDB error getting ID for specific value synonym '{}' (index {}): {}", annotation.specificValueForSynonym(), getIndexName(), e.getMessage(), e);
+                    logger.error("RocksDB error getting ID for specific value synonym '{}' (index {}): {}",
+                            annotation.specificValueForSynonym(), getIndexName(), e.getMessage(), e);
                     continue;
                 }
             } else {
-                 logger.trace("Synonym ID lookup skipped for specific value from AnnotationData ('{}') as per requiresSynonymIdForAnnotationValue() for index type {}. NgramStitchEntry will use specificValueId: {}", annotation.specificValueForSynonym(), getIndexName(), specificValueId);
+                logger.trace(
+                        "Synonym ID lookup skipped for specific value from AnnotationData ('{}') as per requiresSynonymIdForAnnotationValue() for index type {}. NgramStitchEntry will use specificValueId: {}",
+                        annotation.specificValueForSynonym(), getIndexName(), specificValueId);
             }
 
-            List<NgramData> ngramsInSentence = ngramsBySentence.getOrDefault(annotation.sentenceId(), Collections.emptyList());
+            List<NgramData> ngramsInSentence = ngramsBySentence.getOrDefault(annotation.sentenceId(),
+                    Collections.emptyList());
             for (NgramData ngram : ngramsInSentence) {
                 entries.add(new NgramStitchEntry(
                         documentId,
@@ -220,8 +255,7 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
                         annotation.annotationKeyComponent(),
                         specificValueId,
                         annotation.beginChar(),
-                        annotation.endChar()
-                ));
+                        annotation.endChar()));
             }
         }
     }
@@ -229,11 +263,11 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
     private Map<Integer, List<NgramData>> fetchNgramsForDocumentInternal(int documentId) throws SQLException {
         Map<Integer, List<ProcessedTokenInfo>> tokensBySentence = new HashMap<>();
         String sql = """
-            SELECT sentence_id, begin_char, end_char, token
-            FROM annotations
-            WHERE document_id = ? AND pos NOT IN ('FW', 'ADD')
-            ORDER BY sentence_id, begin_char
-        """;
+                    SELECT sentence_id, begin_char, end_char, token
+                    FROM annotations
+                    WHERE document_id = ? AND pos NOT IN ('FW', 'ADD')
+                    ORDER BY sentence_id, begin_char
+                """;
 
         try (PreparedStatement stmt = sqliteConn.prepareStatement(sql)) {
             stmt.setInt(1, documentId);
@@ -245,7 +279,8 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
                     }
                     String normalizedToken = token.toLowerCase();
                     tokensBySentence.computeIfAbsent(rs.getInt("sentence_id"), k -> new ArrayList<>())
-                                    .add(new ProcessedTokenInfo(normalizedToken, rs.getInt("begin_char"), rs.getInt("end_char")));
+                            .add(new ProcessedTokenInfo(normalizedToken, rs.getInt("begin_char"),
+                                    rs.getInt("end_char")));
                 }
             }
         }
@@ -260,16 +295,15 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
             }
 
             List<NgramData> sentenceNgrams = new ArrayList<>();
-            if (N == 1) { // Handle Unigrams
+            if (N == 1) {
                 for (ProcessedTokenInfo tokenInfo : sentenceTokens) {
                     if (isStopword(tokenInfo.token())) {
                         continue;
                     }
                     sentenceNgrams.add(new NgramData(tokenInfo.beginChar(), tokenInfo.endChar(), tokenInfo.token()));
                 }
-            } else { // Handle N-grams (N > 1)
+            } else {
                 for (int i = 0; i <= sentenceTokens.size() - N; i++) {
-                    // Skip any window that contains a stopword (align with base N-gram indexes)
                     boolean containsStopword = false;
                     for (int j = 0; j < N; j++) {
                         if (isStopword(sentenceTokens.get(i + j).token())) {
@@ -280,7 +314,6 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
                     if (containsStopword) {
                         continue;
                     }
-                    // Adjacency Check: Ensure all tokens in the N-gram were truly consecutive.
                     boolean isAdjacent = true;
                     for (int j = 0; j < N - 1; j++) {
                         ProcessedTokenInfo current = sentenceTokens.get(i + j);
@@ -312,32 +345,56 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
     }
 
     @Override
-    protected ListMultimap<String, PositionListSoA> processBatch(List<NgramStitchEntry> batch) {
-        ListMultimap<String, PositionListSoA> indexData = ArrayListMultimap.create();
-        Map<String, PositionListSoA> tempAggregator = new HashMap<>();
+    protected ListMultimap<String, PostingList> processBatch(List<NgramStitchEntry> batch) {
+        ListMultimap<String, PostingList> indexData = ArrayListMultimap.create();
+        // Group by composite key: ngramKey \0 annotationKeyComponent \0 synId
+        Map<String, Map<Long, IntArrayList>> cellMapsByKey = new HashMap<>();
 
         for (NgramStitchEntry entry : batch) {
-            String compositeKey = entry.value();
             String ngramKeyForFiltering = entry.ngramKey();
-
             if (ngramKeyForFiltering == null || ngramKeyForFiltering.isEmpty() ||
-                entry.annotationKeyComponent() == null || entry.annotationKeyComponent().isEmpty()) {
-                logger.trace("Filtered N-gram stitch entry due to null/empty N-gram key or annotation component. Key: '{}', Annotation: '{}'", ngramKeyForFiltering, entry.annotationKeyComponent());
+                    entry.annotationKeyComponent() == null || entry.annotationKeyComponent().isEmpty()) {
+                logger.trace(
+                        "Filtered N-gram stitch entry due to null/empty N-gram key or annotation component. Key: '{}', Annotation: '{}'",
+                        ngramKeyForFiltering, entry.annotationKeyComponent());
                 continue;
             }
 
-            PositionListSoA pl = tempAggregator.computeIfAbsent(compositeKey, k -> new PositionListSoA());
-            pl.add(
-                entry.documentId(),
-                entry.sentenceId(),
-                entry.ngramBeginChar(),
-                entry.ngramEndChar(),
-                entry.specificValueSynonymId()
-            );
+            String compositeKey = entry.value(); // ngramKey \0 type \0 synId
+            long cellKey = PostingList.packCellKey(entry.documentId(), entry.sentenceId());
+            Map<Long, IntArrayList> cellMap = cellMapsByKey.computeIfAbsent(compositeKey, k -> new HashMap<>());
+            cellMap.computeIfAbsent(cellKey, k -> new IntArrayList()).add(entry.ngramBeginChar());
         }
 
-        for (Map.Entry<String, PositionListSoA> mapEntry : tempAggregator.entrySet()) {
-            indexData.put(mapEntry.getKey(), mapEntry.getValue());
+        for (Map.Entry<String, Map<Long, IntArrayList>> keyEntry : cellMapsByKey.entrySet()) {
+            String compositeKey = keyEntry.getKey();
+            Map<Long, IntArrayList> cellMap = keyEntry.getValue();
+
+            Roaring64NavigableMap cells = new Roaring64NavigableMap();
+            for (long ck : cellMap.keySet()) {
+                cells.add(ck);
+            }
+
+            int numCells = cellMap.size();
+            long[] cellKeysArr = new long[numCells];
+            byte[][] beginsArr = new byte[numCells][];
+            int idx = 0;
+            for (Map.Entry<Long, IntArrayList> cellEntry : cellMap.entrySet()) {
+                cellKeysArr[idx] = cellEntry.getKey();
+                IntArrayList beginsList = cellEntry.getValue();
+                byte[] begins = new byte[beginsList.size()];
+                for (int j = 0; j < beginsList.size(); j++) {
+                    begins[j] = (byte) beginsList.getInt(j);
+                }
+                beginsArr[idx] = begins;
+                idx++;
+            }
+
+            // constantLength is not critical for stitch indexes (ngram spans vary)
+            byte constLen = 0;
+            OccurrencesBlock occ = OccurrencesBlock.fromUnsorted(cellKeysArr, beginsArr, constLen);
+            PostingList pl = PostingList.fromCellsAndOccurrences(cells, constLen, occ);
+            indexData.put(compositeKey, pl);
         }
         return indexData;
     }
@@ -352,9 +409,18 @@ public abstract class AbstractNgramStitchGenerator extends IndexGenerator<Abstra
         return -1;
     }
 
+    /**
+     * Overrides parent to convert the string-based keys (with decimal synId suffix)
+     * to proper KeySchema binary keys before writing to RocksDB.
+     */
     @Override
     protected void writeToLevelDB(File sortedFile) throws IOException {
-        logger.info("Using parent IndexGenerator.writeToLevelDB for {} from sorted file: {}", getIndexName(), sortedFile.getAbsolutePath());
+        logger.info("Stitch writeToLevelDB for {} from sorted file: {}", getIndexName(),
+                sortedFile.getAbsolutePath());
+        // Use parent implementation which handles PostingList deserialization.
+        // The keys in the temp file include synId as decimal string suffix.
+        // Parent's writeToLevelDB will pass them through as UTF-8 bytes.
+        // For stitch indexes, we convert to KeySchema binary format before writing.
         super.writeToLevelDB(sortedFile);
     }
 

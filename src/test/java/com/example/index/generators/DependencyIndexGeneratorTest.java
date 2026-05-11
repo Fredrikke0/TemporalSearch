@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.rocksdb.Options;
 
 import com.example.core.IndexAccess;
-import com.example.core.PositionListSoA;
+import com.example.core.PostingList;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 
@@ -42,12 +42,11 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
 
         // Create generator
         generator = new DependencyIndexGenerator(
-            this.indexAccess,
-            TEST_STOPWORDS_PATH,
-            sqliteConn,
-            new ProgressTracker(),
-            1000
-        );
+                this.indexAccess,
+                TEST_STOPWORDS_PATH,
+                sqliteConn,
+                new ProgressTracker(),
+                1000);
 
         // Insert test data
         setupTestData();
@@ -64,22 +63,24 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
 
         // Insert test sentences with dependencies
         String[][] testWords = {
-            // "The quick brown fox jumps over the lazy dog"
-            // Format: document_id, sentence_id, begin_char, end_char, head_token, dependent_token, relation
-            { "1", "0", "0", "3", "fox", "The", "det" },
-            { "1", "0", "4", "9", "fox", "quick", "amod" },
-            { "1", "0", "10", "15", "fox", "brown", "amod" },
-            { "1", "0", "16", "25", "fox", "jumps", "nsubj" },
-            { "1", "0", "20", "25", "ROOT", "jumps", "root" },
-            { "1", "0", "26", "30", "jumps", "over", "prep" },
-            { "1", "0", "31", "34", "dog", "the", "det" },
-            { "1", "0", "35", "39", "dog", "lazy", "amod" },
-            { "1", "0", "40", "43", "over", "dog", "pobj" }
+                // "The quick brown fox jumps over the lazy dog"
+                // Format: document_id, sentence_id, begin_char, end_char, head_token,
+                // dependent_token, relation
+                { "1", "0", "0", "3", "fox", "The", "det" },
+                { "1", "0", "4", "9", "fox", "quick", "amod" },
+                { "1", "0", "10", "15", "fox", "brown", "amod" },
+                { "1", "0", "16", "25", "fox", "jumps", "nsubj" },
+                { "1", "0", "20", "25", "ROOT", "jumps", "root" },
+                { "1", "0", "26", "30", "jumps", "over", "prep" },
+                { "1", "0", "31", "34", "dog", "the", "det" },
+                { "1", "0", "35", "39", "dog", "lazy", "amod" },
+                { "1", "0", "40", "43", "over", "dog", "pobj" }
         };
 
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO dependencies (document_id, sentence_id, begin_char, end_char, head_token, dependent_token, relation) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO dependencies (document_id, sentence_id, begin_char, end_char, head_token, dependent_token, relation) "
+                        +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
             for (String[] word : testWords) {
                 pstmt.setInt(1, Integer.parseInt(word[0]));
                 pstmt.setInt(2, Integer.parseInt(word[1]));
@@ -109,19 +110,19 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
         var entries = generator.fetchBatch(null);
 
         // Process batch and verify results
-        ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
+        ListMultimap<String, PostingList> result = generator.processBatch(entries);
 
         // Verify subject-verb dependency
         String key1 = "fox" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "jumps";
         assertTrue(result.containsKey(key1), "Should contain subject-verb dependency");
-        assertEquals(1, result.get(key1).get(0).getNumPositions(),
-            "Should have one position for subject-verb dependency");
+        assertEquals(1, result.get(key1).get(0).cells().getLongCardinality(),
+                "Should have one cell for subject-verb dependency");
 
         // Verify verb-object dependency
         String key2 = "jumps" + IndexGenerator.DELIMITER + "prep" + IndexGenerator.DELIMITER + "over";
         assertTrue(result.containsKey(key2), "Should contain verb-object dependency");
-        assertEquals(1, result.get(key2).get(0).getNumPositions(),
-            "Should have one position for verb-object dependency");
+        assertEquals(1, result.get(key2).get(0).cells().getLongCardinality(),
+                "Should have one cell for verb-object dependency");
     }
 
     @Test
@@ -135,15 +136,17 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
         }
 
         String[][] mixedCaseWords = {
-            // Format: document_id, sentence_id, begin_char, end_char, head_token, dependent_token, relation
-            { "2", "0", "0", "3", "Cat", "Chases", "nsubj" },
-            { "2", "0", "4", "10", "ROOT", "Chases", "root" },
-            { "2", "0", "11", "16", "Chases", "Mouse", "dobj" }
+                // Format: document_id, sentence_id, begin_char, end_char, head_token,
+                // dependent_token, relation
+                { "2", "0", "0", "3", "Cat", "Chases", "nsubj" },
+                { "2", "0", "4", "10", "ROOT", "Chases", "root" },
+                { "2", "0", "11", "16", "Chases", "Mouse", "dobj" }
         };
 
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO dependencies (document_id, sentence_id, begin_char, end_char, head_token, dependent_token, relation) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO dependencies (document_id, sentence_id, begin_char, end_char, head_token, dependent_token, relation) "
+                        +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
             for (String[] word : mixedCaseWords) {
                 pstmt.setInt(1, Integer.parseInt(word[0]));
                 pstmt.setInt(2, Integer.parseInt(word[1]));
@@ -163,7 +166,7 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
         // Verify case normalization
         String key3 = "cat" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "chases";
         assertTrue(result.containsKey(key3), "Should contain normalized subject-verb dependency");
-        assertEquals(1, result.get(key3).get(0).getNumPositions(),
-            "Should have one position for normalized subject-verb dependency");
+        assertEquals(1, result.get(key3).get(0).cells().getLongCardinality(),
+                "Should have one cell for normalized subject-verb dependency");
     }
 }

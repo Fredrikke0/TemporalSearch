@@ -14,7 +14,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <stanford.nlp.version>4.5.9</stanford.nlp.version>
         <jackson.version>2.19.0</jackson.version>
-        <mockito.version>5.17.0</mockito.version>
+        <mockito.version>5.23.0</mockito.version>
     </properties>
 
     <dependencies>
@@ -114,13 +114,6 @@
             <groupId>org.codehaus.janino</groupId>
             <artifactId>janino</artifactId>
             <version>3.1.12</version>
-        </dependency>
-
-        <!-- Compression -->
-        <dependency>
-            <groupId>me.lemire.integercompression</groupId>
-            <artifactId>JavaFastPFOR</artifactId>
-            <version>0.2.1</version>
         </dependency>
 
         <!-- External sorting -->

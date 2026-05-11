@@ -16,14 +16,15 @@ import com.example.query.model.condition.Pos;
 import com.example.query.model.condition.Temporal;
 
 /**
- * Analyzes queries to determine which SoA attributes are required for execution.
- * This enables selective deserialization to optimize memory usage and performance.
+ * Analyzes queries to determine which attributes are required for execution.
+ * In the new Roaring64-backed format, the primary decision is whether
+ * occurrence-level detail (char offsets) is needed.
  */
 public class QueryAttributeAnalyzer {
     private static final Logger logger = LoggerFactory.getLogger(QueryAttributeAnalyzer.class);
 
     /**
-     * Analyzes a query to determine which SoA attributes are required.
+     * Analyzes a query to determine which attributes are required.
      *
      * @param query The query to analyze
      * @return AttributeRequirements specifying which attributes are needed
@@ -33,17 +34,18 @@ public class QueryAttributeAnalyzer {
     }
 
     /**
-     * Analyzes a query to determine which SoA attributes are required, considering parent requirements.
+     * Analyzes a query to determine which attributes are required, considering
+     * parent requirements.
      *
-     * @param query The query to analyze
-     * @param parentRequirements Requirements from the parent query (may be null for root queries)
+     * @param query              The query to analyze
+     * @param parentRequirements Requirements from the parent query (may be null for
+     *                           root queries)
      * @return AttributeRequirements specifying which attributes are needed
      */
     public static AttributeRequirements analyze(Query query, AttributeRequirements parentRequirements) {
         AttributeRequirements requirements = new AttributeRequirements();
 
         logger.trace("Analyzing query for attribute requirements: {}", query.toString());
-        requirements.needsDocumentId = true;
 
         // Analyze SELECT clause
         analyzeSelectColumns(query.selectColumns(), requirements);
@@ -54,7 +56,8 @@ public class QueryAttributeAnalyzer {
         // Analyze conditions to determine attribute requirements
         analyzeConditions(query.conditions(), requirements);
 
-        // Analyze subqueries recursively from JoinSteps, propagating parent requirements
+        // Analyze subqueries recursively from JoinSteps, propagating parent
+        // requirements
         for (com.example.query.model.JoinStep step : query.joinSteps()) {
             // Create combined requirements for subquery analysis
             AttributeRequirements subqueryParentRequirements = new AttributeRequirements();
@@ -69,15 +72,16 @@ public class QueryAttributeAnalyzer {
 
         // Inherit critical requirements from parent if present
         if (parentRequirements != null) {
-            // If parent needs sentence IDs (e.g., for GRANULARITY SENTENCE), subqueries must provide them
+            // If parent needs sentence IDs (e.g., for GRANULARITY SENTENCE), subqueries
+            // must provide them
             if (parentRequirements.needsSentenceId) {
                 logger.trace("Inheriting sentence ID requirement from parent query");
                 requirements.needsSentenceId = true;
             }
-            // Conceptual row IDs are often needed for joins
-            if (parentRequirements.needsConceptualRowIds) {
-                logger.trace("Inheriting conceptual row ID requirement from parent query");
-                requirements.needsConceptualRowIds = true;
+            // Propagate occurrence requirement from parent
+            if (parentRequirements.needsOccurrences()) {
+                logger.trace("Inheriting occurrence requirement from parent query");
+                requirements.setNeedsOccurrences(true);
             }
         }
 
@@ -87,13 +91,12 @@ public class QueryAttributeAnalyzer {
 
     /**
      * Analyzes SELECT columns to determine attribute requirements.
-     * Conceptual row IDs are required to assemble output rows and for joins.
      */
     private static void analyzeSelectColumns(List<SelectColumn> selectColumns, AttributeRequirements requirements) {
-        requirements.needsConceptualRowIds = true;
         for (SelectColumn column : selectColumns) {
             if (column instanceof SnippetColumn) {
-                logger.trace("Found SNIPPET column, requiring position offsets");
+                logger.trace("Found SNIPPET column, requiring occurrences and positions");
+                requirements.setNeedsOccurrences(true);
                 requirements.needsPositions = true;
             } else if (column instanceof StructuralColumn structCol) {
                 String fieldName = structCol.getFieldName();
@@ -101,7 +104,8 @@ public class QueryAttributeAnalyzer {
                     logger.trace("Found SENTENCE_ID column, requiring sentence IDs");
                     requirements.needsSentenceId = true;
                 } else if ("BEGIN".equals(fieldName) || "END".equals(fieldName)) {
-                    logger.trace("Found position column ({}), requiring position offsets", fieldName);
+                    logger.trace("Found position column ({}), requiring occurrences and positions", fieldName);
+                    requirements.setNeedsOccurrences(true);
                     requirements.needsPositions = true;
                 }
             }
@@ -136,22 +140,28 @@ public class QueryAttributeAnalyzer {
         if (condition instanceof Ner ner && (ner.isVariable() || ner.target() != null)) {
             logger.debug("[QueryAttributeAnalyzer.analyzeCondition] Analyzing NER condition: {}", ner);
             boolean isNerVariableOrHasTarget = ner.isVariable() || ner.target() != null;
-            logger.debug("[QueryAttributeAnalyzer.analyzeCondition] NER check: ner.isVariable() -> {}, ner.target() -> '{}', (ner.isVariable() || ner.target() != null) -> {}", ner.isVariable(), ner.target(), isNerVariableOrHasTarget);
+            logger.debug(
+                    "[QueryAttributeAnalyzer.analyzeCondition] NER check: ner.isVariable() -> {}, ner.target() -> '{}', (ner.isVariable() || ner.target() != null) -> {}",
+                    ner.isVariable(), ner.target(), isNerVariableOrHasTarget);
             if (isNerVariableOrHasTarget) {
-                logger.trace("Found NER condition with variable or target, requiring synonym IDs");
+                logger.trace("Found NER condition with variable or target, requiring occurrences");
+                requirements.setNeedsOccurrences(true);
                 requirements.needsSynonymIds = true;
+                requirements.needsConceptualRowIds = true;
             } else {
-                logger.debug("[QueryAttributeAnalyzer.analyzeCondition] NER condition '{}' does NOT meet criteria for needing synonym IDs (isVariable: {}, target: '{}')", ner, ner.isVariable(), ner.target());
+                logger.debug(
+                        "[QueryAttributeAnalyzer.analyzeCondition] NER condition '{}' does NOT meet criteria for needing occurrences (isVariable: {}, target: '{}')",
+                        ner, ner.isVariable(), ner.target());
             }
-            logger.debug("[QueryAttributeAnalyzer.analyzeCondition] After NER check, requirements.needsSynonymIds: {}", requirements.needsSynonymIds);
+            logger.debug("[QueryAttributeAnalyzer.analyzeCondition] After NER check, requirements.needsOccurrences: {}",
+                    requirements.needsOccurrences());
         } else if (condition instanceof Pos pos && (pos.isVariable() || pos.term() != null)) {
-            logger.trace("Found POS condition with variable or target, requiring synonym IDs");
-            requirements.needsSynonymIds = true;
+            logger.trace("Found POS condition with variable or target, requiring occurrences");
+            requirements.setNeedsOccurrences(true);
+            requirements.needsConceptualRowIds = true;
         } else if (condition instanceof Temporal) {
-            logger.trace("Found Temporal condition, requiring synonym IDs, position offsets, and sentence IDs");
-            requirements.needsSynonymIds = true;
-            requirements.needsPositions = true;
-            requirements.needsSentenceId = true;
+            logger.trace("Found Temporal condition, requiring occurrences");
+            requirements.setNeedsOccurrences(true);
         } else if (condition instanceof Logical logical) {
             // Recursively analyze logical conditions
             analyzeConditions(logical.conditions(), requirements);

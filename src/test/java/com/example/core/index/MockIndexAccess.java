@@ -29,9 +29,11 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessException;
 // Implement the interface
 import com.example.core.IndexAccessInterface;
-import com.example.core.Position;
-import com.example.core.PositionListSoA;
+import com.example.core.OccurrencesBlock;
+import com.example.core.PostingList;
 import com.example.query.executor.FilteringContext;
+
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
 
 /**
  * A mock implementation providing an IndexAccess-like API for testing purposes.
@@ -101,7 +103,8 @@ public class MockIndexAccess implements IndexAccessInterface {
             operations.add(new DeleteOperation(key));
         }
 
-        // Other WriteBatch methods (e.g., merge, putCF, deleteCF, clear) could be implemented if needed
+        // Other WriteBatch methods (e.g., merge, putCF, deleteCF, clear) could be
+        // implemented if needed
         // For now, we'll keep it simple for the existing test failures.
 
         List<WriteOperation> getOperations() {
@@ -139,71 +142,77 @@ public class MockIndexAccess implements IndexAccessInterface {
 
     /**
      * Helper method to add test data.
-     * Converts the string key to bytes and creates/serializes a PositionListSoA.
+     * Builds a PostingList for a single (docId, sentId) cell with one occurrence.
      */
     public void addTestData(String key, int docId, int sentenceId, int begin, int end) throws IOException {
-        if (closed) throw new IllegalStateException("Index is closed");
+        if (closed)
+            throw new IllegalStateException("Index is closed");
         logger.debug("MockIndexAccess [{}]: addTestData for key='{}'", indexType, key);
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
-        Position pos = new Position(docId, sentenceId, begin, end);
 
-        PositionListSoA list;
+        // Build a PostingList directly: one cell with one occurrence
+        long cellKey = PostingList.packCellKey(docId, sentenceId);
+        Roaring64NavigableMap cells = new Roaring64NavigableMap();
+        cells.add(cellKey);
+
+        byte constantLength = (byte) Math.min(end - begin, 255);
+        long[] cellKeysArr = { cellKey };
+        byte[][] beginsArr = { { (byte) begin } };
+        OccurrencesBlock occ = OccurrencesBlock.fromUnsorted(cellKeysArr, beginsArr, constantLength);
+        PostingList newPl = PostingList.fromCellsAndOccurrences(cells, constantLength, occ);
+
         byte[] existingValue = dataStore.get(wrappedKey);
-        int positionsBefore = 0;
         if (existingValue != null) {
-            list = PositionListSoA.deserializeFromCompositeBlob(existingValue);
-            positionsBefore = list.getNumPositions();
-            logger.debug("MockIndexAccess [{}]: Key='{}' existed. Positions before add: {}", indexType, key, positionsBefore);
+            PostingList existingPl = PostingList.deserialize(existingValue, PostingList.DeserializeMode.FULL);
+            logger.debug("MockIndexAccess [{}]: Key='{}' existed. Merging.", indexType, key);
+            newPl = existingPl.merge(newPl);
         } else {
-            list = new PositionListSoA();
             logger.debug("MockIndexAccess [{}]: Key='{}' is new.", indexType, key);
         }
-        list.add(pos);
-        // Sort to mimic real index behavior where data is sorted by document ID
-        list.sort();
-        int positionsAfter = list.getNumPositions();
-        byte[] serializedValue = list.serializeToCompositeBlob();
+
+        byte[] serializedValue = newPl.serialize();
         dataStore.put(wrappedKey, serializedValue);
-        logger.debug("MockIndexAccess [{}]: Key='{}', Positions after add: {}, Serialized size: {} bytes", indexType, key, positionsAfter, serializedValue.length);
+        logger.debug("MockIndexAccess [{}]: Key='{}', Serialized size: {} bytes", indexType,
+                key, serializedValue.length);
     }
 
     /**
-     * Helper method to add pre-serialized test data.
-     * If the key already exists, the new positions are merged with the existing ones.
+     * Helper method to add a pre-built PostingList.
+     * If the key already exists, the new posting list is merged with the existing
+     * one.
      */
-    public void addTestData(String key, PositionListSoA newPositions) throws IOException {
-        if (closed) throw new IllegalStateException("Index is closed");
-        logger.debug("MockIndexAccess [{}]: addTestData (pre-serialized) for key='{}', newPositions count: {}", indexType, key, newPositions.getNumPositions());
+    public void addTestData(String key, PostingList newPl) throws IOException {
+        if (closed)
+            throw new IllegalStateException("Index is closed");
+        logger.debug("MockIndexAccess [{}]: addTestData (PostingList) for key='{}', cells: {}",
+                indexType, key, newPl.cells().getLongCardinality());
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key.getBytes(StandardCharsets.UTF_8));
 
-        PositionListSoA mergedList;
         byte[] existingValue = dataStore.get(wrappedKey);
-        int positionsBefore = 0;
         if (existingValue != null) {
-            mergedList = PositionListSoA.deserializeFromCompositeBlob(existingValue);
-            positionsBefore = mergedList.getNumPositions();
-            logger.debug("MockIndexAccess [{}]: Key='{}' existed (pre-serialized). Positions before merge: {}", indexType, key, positionsBefore);
-            mergedList.addAll(newPositions);
-            // Sort to mimic real index behavior where data is sorted by document ID
-            mergedList.sort();
+            PostingList existingPl = PostingList.deserialize(existingValue, PostingList.DeserializeMode.FULL);
+            logger.debug("MockIndexAccess [{}]: Key='{}' existed. Merging.", indexType, key);
+            newPl = existingPl.merge(newPl);
         } else {
-            mergedList = newPositions;
-            // Sort to mimic real index behavior where data is sorted by document ID
-            mergedList.sort();
-            logger.debug("MockIndexAccess [{}]: Key='{}' is new (pre-serialized).", indexType, key);
+            logger.debug("MockIndexAccess [{}]: Key='{}' is new (PostingList).", indexType, key);
         }
-        byte[] serializedValue = mergedList.serializeToCompositeBlob();
+
+        byte[] serializedValue = newPl.serialize();
         dataStore.put(wrappedKey, serializedValue);
-        logger.debug("MockIndexAccess [{}]: Key='{}' (pre-serialized), Positions after merge: {}, Serialized size: {} bytes", indexType, key, mergedList.getNumPositions(), serializedValue.length);
+        logger.debug(
+                "MockIndexAccess [{}]: Key='{}', Serialized size: {} bytes",
+                indexType, key, serializedValue.length);
     }
 
-     /**
+    /**
      * Helper method to add pre-serialized test data with byte key.
      * Renamed from addTestData to addRawTestData.
      */
     public void addRawTestData(byte[] key, byte[] value) {
-        if (closed) throw new IllegalStateException("Index is closed");
-        logger.debug("MockIndexAccess [{}]: addRawTestData for key (length {}), value size: {} bytes", indexType, key.length, value.length);
+        if (closed)
+            throw new IllegalStateException("Index is closed");
+        logger.debug("MockIndexAccess [{}]: addRawTestData for key (length {}), value size: {} bytes", indexType,
+                key.length, value.length);
         dataStore.put(new ByteArrayWrapper(key), value);
     }
 
@@ -211,14 +220,17 @@ public class MockIndexAccess implements IndexAccessInterface {
      * Clears all data from the mock index.
      */
     public void clearAllData() {
-        if (closed) throw new IllegalStateException("Index is closed. Cannot clear data.");
+        if (closed)
+            throw new IllegalStateException("Index is closed. Cannot clear data.");
         dataStore.clear();
         System.out.println("MockIndexAccess [" + indexType + "] data cleared.");
     }
 
     @Override
-    public Optional<PositionListSoA> get(byte[] key) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+    public Optional<PostingList> get(byte[] key) throws IndexAccessException {
+        if (closed)
+            throw new IndexAccessException("Index is closed: " + indexType, indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key);
         String keyHex = Hex.encodeHexString(key);
         logger.debug("MockIndexAccess [{}]: get() called for key (hex): {}", indexType, keyHex);
@@ -227,30 +239,65 @@ public class MockIndexAccess implements IndexAccessInterface {
             logger.debug("MockIndexAccess [{}]: get() key (hex): {} NOT FOUND", indexType, keyHex);
             return Optional.empty();
         }
-        logger.debug("MockIndexAccess [{}]: get() key (hex): {} FOUND, value length: {}", indexType, keyHex, value.length);
+        logger.debug("MockIndexAccess [{}]: get() key (hex): {} FOUND, value length: {}", indexType, keyHex,
+                value.length);
         try {
-            // Deserialize to PositionListSoA
-            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(value));
+            // Deserialize to PostingList
+            return Optional.of(PostingList.deserialize(value, PostingList.DeserializeMode.FULL));
         } catch (IOException e) {
             throw new IndexAccessException(
-                "Failed to deserialize PositionListSoA due to IO error for key",
-                indexType,
-                IndexAccessException.ErrorType.READ_ERROR,
-                e
-            );
+                    "Failed to deserialize PostingList due to IO error for key",
+                    indexType,
+                    IndexAccessException.ErrorType.READ_ERROR,
+                    e);
         } catch (RuntimeException e) {
             throw new IndexAccessException(
-                "Failed to deserialize PositionListSoA for key",
-                indexType,
-                IndexAccessException.ErrorType.READ_ERROR,
-                e
-            );
+                    "Failed to deserialize PostingList for key",
+                    indexType,
+                    IndexAccessException.ErrorType.READ_ERROR,
+                    e);
+        }
+    }
+
+    @Override
+    public Optional<PostingList> getPostingList(byte[] key, PostingList.DeserializeMode mode)
+            throws IndexAccessException {
+        if (closed)
+            throw new IndexAccessException("Index is closed: " + indexType, indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
+        ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key);
+        String keyHex = Hex.encodeHexString(key);
+        logger.debug("MockIndexAccess [{}]: getPostingList() called for key (hex): {}, mode: {}", indexType, keyHex,
+                mode);
+        byte[] value = dataStore.get(wrappedKey);
+        if (value == null) {
+            logger.debug("MockIndexAccess [{}]: getPostingList() key (hex): {} NOT FOUND", indexType, keyHex);
+            return Optional.empty();
+        }
+        logger.debug("MockIndexAccess [{}]: getPostingList() key (hex): {} FOUND, value length: {}", indexType,
+                keyHex, value.length);
+        try {
+            return Optional.of(PostingList.deserialize(value, mode));
+        } catch (IOException e) {
+            throw new IndexAccessException(
+                    "Failed to deserialize PostingList due to IO error for key",
+                    indexType,
+                    IndexAccessException.ErrorType.READ_ERROR,
+                    e);
+        } catch (RuntimeException e) {
+            throw new IndexAccessException(
+                    "Failed to deserialize PostingList for key",
+                    indexType,
+                    IndexAccessException.ErrorType.READ_ERROR,
+                    e);
         }
     }
 
     @Override
     public Optional<byte[]> getRaw(byte[] key) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed)
+            throw new IndexAccessException("Index is closed: " + indexType, indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
         ByteArrayWrapper wrappedKey = new ByteArrayWrapper(key);
         String keyHex = Hex.encodeHexString(key);
         logger.debug("MockIndexAccess [{}]: getRaw() called for key (hex): {}", indexType, keyHex);
@@ -259,48 +306,63 @@ public class MockIndexAccess implements IndexAccessInterface {
             logger.debug("MockIndexAccess [{}]: getRaw() key (hex): {} NOT FOUND", indexType, keyHex);
             return Optional.empty();
         }
-        logger.debug("MockIndexAccess [{}]: getRaw() key (hex): {} FOUND, value length: {}", indexType, keyHex, value.length);
+        logger.debug("MockIndexAccess [{}]: getRaw() key (hex): {} FOUND, value length: {}", indexType, keyHex,
+                value.length);
         return Optional.of(value);
     }
 
     @Override
     public RocksIterator seek(byte[] key) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed)
+            throw new IndexAccessException("Index is closed: " + indexType, indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
         logger.debug("MockIndexAccess [{}]: seek() called for key (hex): {}", indexType, Hex.encodeHexString(key));
         return new MockRocksIterator(this.mockRocksDbInstance, dataStore, key, false, this.indexType);
     }
 
     @Override
     public RocksIterator iterateFromFirst() throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed)
+            throw new IndexAccessException("Index is closed: " + indexType, indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
         logger.debug("MockIndexAccess [{}]: iterateFromFirst() called", indexType);
         return new MockRocksIterator(this.mockRocksDbInstance, dataStore, null, true, this.indexType);
     }
 
     @Override
     public void put(byte[] key, byte[] value) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed)
+            throw new IndexAccessException("Index is closed: " + indexType, indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
         dataStore.put(new ByteArrayWrapper(key), value);
     }
 
     @Override
     public void delete(byte[] key) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed)
+            throw new IndexAccessException("Index is closed: " + indexType, indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
         dataStore.remove(new ByteArrayWrapper(key));
     }
 
     @Override
     public WriteBatch createWriteBatch() throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
+        if (closed)
+            throw new IndexAccessException("Index is closed: " + indexType, indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
         // WriteBatch operations are complex to mock properly, throw unsupported for now
-        // throw new UnsupportedOperationException("WriteBatch not supported by MockIndexAccess");
+        // throw new UnsupportedOperationException("WriteBatch not supported by
+        // MockIndexAccess");
         return new MockRocksWriteBatch();
     }
 
     @Override
     public void write(WriteBatch batch) throws IndexAccessException {
-        if (closed) throw new IndexAccessException("Index is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
-        // throw new UnsupportedOperationException("WriteBatch not supported by MockIndexAccess");
+        if (closed)
+            throw new IndexAccessException("Index is closed: " + indexType, indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
+        // throw new UnsupportedOperationException("WriteBatch not supported by
+        // MockIndexAccess");
         if (!(batch instanceof MockRocksWriteBatch)) {
             throw new IllegalArgumentException("Provided WriteBatch is not a MockRocksWriteBatch instance.");
         }
@@ -308,10 +370,13 @@ public class MockIndexAccess implements IndexAccessInterface {
         for (WriteOperation op : mockBatch.getOperations()) {
             op.apply(this.dataStore);
         }
-        // According to RocksDB JNI, WriteBatch is often single-use and should be closed by the caller.
-        // However, if the batch is managed by this class (e.g., if createWriteBatch always returned
+        // According to RocksDB JNI, WriteBatch is often single-use and should be closed
+        // by the caller.
+        // However, if the batch is managed by this class (e.g., if createWriteBatch
+        // always returned
         // the same instance or a reusable one), then this class might also close it.
-        // For now, we assume the caller manages the lifecycle of the batch passed to write().
+        // For now, we assume the caller manages the lifecycle of the batch passed to
+        // write().
     }
 
     @Override
@@ -338,12 +403,14 @@ public class MockIndexAccess implements IndexAccessInterface {
                 try {
                     // Recursively delete the temp directory
                     Files.walk(mockRocksDbPath)
-                         .sorted(Comparator.reverseOrder())
-                         .map(Path::toFile)
-                         .forEach(File::delete);
-                    logger.info("MockIndexAccess [{}]: Deleted dummy RocksDB directory {}", indexType, mockRocksDbPath.toString());
+                            .sorted(Comparator.reverseOrder())
+                            .map(Path::toFile)
+                            .forEach(File::delete);
+                    logger.info("MockIndexAccess [{}]: Deleted dummy RocksDB directory {}", indexType,
+                            mockRocksDbPath.toString());
                 } catch (IOException e) {
-                    logger.warn("MockIndexAccess [{}]: Failed to delete dummy RocksDB directory {}: {}", indexType, mockRocksDbPath.toString(), e.getMessage());
+                    logger.warn("MockIndexAccess [{}]: Failed to delete dummy RocksDB directory {}: {}", indexType,
+                            mockRocksDbPath.toString(), e.getMessage());
                 }
             }
         }
@@ -360,7 +427,8 @@ public class MockIndexAccess implements IndexAccessInterface {
 
     @Override
     public void ingestExternalFiles(List<String> sstFilePaths) throws IndexAccessException {
-        // No-op in mock: simulate successful ingestion by reading any SSTs if needed (skipped here)
+        // No-op in mock: simulate successful ingestion by reading any SSTs if needed
+        // (skipped here)
     }
 
     @Override
@@ -372,37 +440,6 @@ public class MockIndexAccess implements IndexAccessInterface {
     public Options getOptionsForSstWriter() {
         // Return a default Options for compatibility; not used in mock
         return new Options();
-    }
-
-    @Override
-    public Optional<PositionListSoA> getMergedPositions(String baseTerm, Optional<FilteringContext> context,
-                                                        com.example.query.executor.AttributeRequirements requirements) throws IOException, IndexAccessException {
-        if (closed) {
-            throw new IndexAccessException("MockIndexAccess is closed: " + indexType, indexType, IndexAccessException.ErrorType.RESOURCE_ERROR);
-        }
-        logger.debug("MockIndexAccess [{}]: getMergedPositions for baseTerm='{}', with context: {}", indexType, baseTerm, context.isPresent());
-
-        byte[] baseTermBytes = baseTerm.getBytes(StandardCharsets.UTF_8);
-        ByteArrayWrapper baseKeyWrapper = new ByteArrayWrapper(baseTermBytes);
-
-        byte[] blob = dataStore.get(baseKeyWrapper);
-
-        if (blob != null) { // Base term exists
-            if (blob.length == 0) {
-                logger.warn("Base term key '{}' found in MockIndexAccess but has empty data.", baseTerm);
-                return Optional.empty(); // Or an empty PositionListSoA if context is present
-            }
-            try {
-                PositionListSoA resultSoa = PositionListSoA.deserializeWithFilters(blob, context, requirements);
-                // resultSoa could be empty after filtering
-                return resultSoa.isEmpty() ? Optional.empty() : Optional.of(resultSoa);
-            } catch (IOException e) {
-                throw new IndexAccessException("Failed to deserialize base term with filters: " + baseTerm, indexType, IndexAccessException.ErrorType.READ_ERROR, e);
-            }
-        }
-
-        // Base term missing: writers no longer produce "term#0". Return empty.
-        return Optional.empty();
     }
 
     // --- Inner Mock Iterator Class ---
@@ -417,13 +454,15 @@ public class MockIndexAccess implements IndexAccessInterface {
         private final RocksDB parentRocksDbInstance; // Store the parent DB for the iterator
         private final String parentIndexType; // Store parent's index type for logging
 
-        MockRocksIterator(RocksDB parentDb, NavigableMap<ByteArrayWrapper, byte[]> map, byte[] seekKey, boolean iterateAll, String parentIndexType) {
+        MockRocksIterator(RocksDB parentDb, NavigableMap<ByteArrayWrapper, byte[]> map, byte[] seekKey,
+                boolean iterateAll, String parentIndexType) {
             super(parentDb, 0L); // Call super constructor with actual parentDb and a dummy handle
             this.parentRocksDbInstance = parentDb;
             this.parentIndexType = parentIndexType;
             this.originalMapRef = map;
             this.entryList = new ArrayList<>(map.entrySet());
-            iterLogger.debug("MockRocksIterator: Initialized with {} entries. IterateAll: {}", entryList.size(), iterateAll);
+            iterLogger.debug("MockRocksIterator: Initialized with {} entries. IterateAll: {}", entryList.size(),
+                    iterateAll);
 
             if (iterateAll || seekKey == null) {
                 seekToFirstInternal();
@@ -443,13 +482,16 @@ public class MockIndexAccess implements IndexAccessInterface {
                 if (wrappedTarget.compareTo(entry.getKey()) <= 0) {
                     valid = true;
                     String foundKeyHex = Hex.encodeHexString(entry.getKey().getData());
-                    iterLogger.debug("Iterator for [{}]: performSeek found entry at index {}. Seek target (hex): {}, Found key (hex): {}", parentIndexType, currentIndex, targetKeyHex, foundKeyHex);
+                    iterLogger.debug(
+                            "Iterator for [{}]: performSeek found entry at index {}. Seek target (hex): {}, Found key (hex): {}",
+                            parentIndexType, currentIndex, targetKeyHex, foundKeyHex);
                     return;
                 }
                 currentIndex++;
             }
             // If loop finishes, no key >= target was found
-            iterLogger.debug("Iterator for [{}]: performSeek target (hex): {} NOT FOUND (or beyond end of list)", parentIndexType, targetKeyHex);
+            iterLogger.debug("Iterator for [{}]: performSeek target (hex): {} NOT FOUND (or beyond end of list)",
+                    parentIndexType, targetKeyHex);
             valid = false; // No valid entry found or reached end
         }
 
@@ -516,7 +558,8 @@ public class MockIndexAccess implements IndexAccessInterface {
             } else {
                 valid = true; // Still valid
                 String currentKeyHex = Hex.encodeHexString(entryList.get(currentIndex).getKey().getData());
-                iterLogger.debug("Iterator for [{}]: next() moved to index {}, key (hex): {}", parentIndexType, currentIndex, currentKeyHex);
+                iterLogger.debug("Iterator for [{}]: next() moved to index {}, key (hex): {}", parentIndexType,
+                        currentIndex, currentKeyHex);
             }
         }
 
@@ -538,7 +581,8 @@ public class MockIndexAccess implements IndexAccessInterface {
                 throw new NoSuchElementException("Iterator is not valid or past the end.");
             }
             byte[] keyBytes = entryList.get(currentIndex).getKey().getData();
-            iterLogger.debug("MockRocksIterator: key() called. currentIndex={}, key (length {}): '{}'", currentIndex, keyBytes.length, new String(keyBytes, StandardCharsets.UTF_8));
+            iterLogger.debug("MockRocksIterator: key() called. currentIndex={}, key (length {}): '{}'", currentIndex,
+                    keyBytes.length, new String(keyBytes, StandardCharsets.UTF_8));
             return keyBytes;
         }
 
@@ -548,7 +592,8 @@ public class MockIndexAccess implements IndexAccessInterface {
                 throw new NoSuchElementException("Iterator is not valid or past the end.");
             }
             byte[] valueBytes = entryList.get(currentIndex).getValue();
-            iterLogger.debug("MockRocksIterator: value() called. currentIndex={}, value size: {}", currentIndex, valueBytes.length);
+            iterLogger.debug("MockRocksIterator: value() called. currentIndex={}, value size: {}", currentIndex,
+                    valueBytes.length);
             return valueBytes;
         }
 

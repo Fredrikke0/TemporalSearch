@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.rocksdb.Options;
 
 import com.example.core.IndexAccess;
-import com.example.core.PositionListSoA;
+import com.example.core.PostingList;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 
@@ -42,12 +42,11 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
 
         // Create generator
         generator = new NerDateIndexGenerator(
-            this.indexAccess,
-            TEST_STOPWORDS_PATH,
-            sqliteConn,
-            new ProgressTracker(),
-            1000
-        );
+                this.indexAccess,
+                TEST_STOPWORDS_PATH,
+                sqliteConn,
+                new ProgressTracker(),
+                1000);
 
         // Insert test data
         setupTestData();
@@ -64,22 +63,23 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
 
         // Insert test sentences with dates
         String[][] testWords = {
-            // "The meeting is on January 15, 2024"
-            { "1", "0", "0", "3", "The", "the", "DET", null, null },
-            { "1", "0", "4", "11", "meeting", "meeting", "NOUN", null, null },
-            { "1", "0", "12", "14", "is", "be", "VERB", null, null },
-            { "1", "0", "15", "17", "on", "on", "ADP", null, null },
-            { "1", "0", "18", "33", "January 15, 2024", "2024-01-15", "DATE", "2024-01-15", "DATE" },
-            // "The deadline is February 1st, 2024"
-            { "1", "1", "34", "37", "The", "the", "DET", null, null },
-            { "1", "1", "38", "46", "deadline", "deadline", "NOUN", null, null },
-            { "1", "1", "47", "49", "is", "be", "VERB", null, null },
-            { "1", "1", "50", "67", "February 1st, 2024", "2024-02-01", "DATE", "2024-02-01", "DATE" }
+                // "The meeting is on January 15, 2024"
+                { "1", "0", "0", "3", "The", "the", "DET", null, null },
+                { "1", "0", "4", "11", "meeting", "meeting", "NOUN", null, null },
+                { "1", "0", "12", "14", "is", "be", "VERB", null, null },
+                { "1", "0", "15", "17", "on", "on", "ADP", null, null },
+                { "1", "0", "18", "33", "January 15, 2024", "2024-01-15", "DATE", "2024-01-15", "DATE" },
+                // "The deadline is February 1st, 2024"
+                { "1", "1", "34", "37", "The", "the", "DET", null, null },
+                { "1", "1", "38", "46", "deadline", "deadline", "NOUN", null, null },
+                { "1", "1", "47", "49", "is", "be", "VERB", null, null },
+                { "1", "1", "50", "67", "February 1st, 2024", "2024-02-01", "DATE", "2024-02-01", "DATE" }
         };
 
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos, normalized_ner, ner) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos, normalized_ner, ner) "
+                        +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             for (String[] word : testWords) {
                 pstmt.setInt(1, Integer.parseInt(word[0]));
                 pstmt.setInt(2, Integer.parseInt(word[1]));
@@ -111,19 +111,19 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
         var entries = generator.fetchBatch(null);
 
         // Process batch and verify results
-        ListMultimap<String, PositionListSoA> result = generator.processBatch(entries);
+        ListMultimap<String, PostingList> result = generator.processBatch(entries);
 
         // Verify January date
         String key1 = "20240115";
         assertTrue(result.containsKey(key1), "Should contain January date");
-        assertEquals(1, result.get(key1).get(0).getNumPositions(),
-            "Should have one position for January date");
+        assertEquals(1, result.get(key1).get(0).cells().getLongCardinality(),
+                "Should have one cell for January date");
 
         // Verify February date
         String key2 = "20240201";
         assertTrue(result.containsKey(key2), "Should contain February date");
-        assertEquals(1, result.get(key2).get(0).getNumPositions(),
-            "Should have one position for February date");
+        assertEquals(1, result.get(key2).get(0).cells().getLongCardinality(),
+                "Should have one cell for February date");
     }
 
     @Test
@@ -137,15 +137,16 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
         }
 
         String[][] mixedDateWords = {
-            // Different formats for January 15, 2024
-            { "2", "0", "0", "15", "Jan 15, 2024", "2024-01-15", "DATE", "2024-01-15", "DATE" },
-            { "2", "0", "16", "31", "January 15 2024", "2024-01-15", "DATE", "2024-01-15", "DATE" },
-            { "2", "0", "32", "42", "01/15/2024", "2024-01-15", "DATE", "2024-01-15", "DATE" }
+                // Different formats for January 15, 2024
+                { "2", "0", "0", "15", "Jan 15, 2024", "2024-01-15", "DATE", "2024-01-15", "DATE" },
+                { "2", "0", "16", "31", "January 15 2024", "2024-01-15", "DATE", "2024-01-15", "DATE" },
+                { "2", "0", "32", "42", "01/15/2024", "2024-01-15", "DATE", "2024-01-15", "DATE" }
         };
 
         try (PreparedStatement pstmt = sqliteConn.prepareStatement(
-                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos, normalized_ner, ner) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                "INSERT INTO annotations (document_id, sentence_id, begin_char, end_char, token, lemma, pos, normalized_ner, ner) "
+                        +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             for (String[] word : mixedDateWords) {
                 pstmt.setInt(1, Integer.parseInt(word[0]));
                 pstmt.setInt(2, Integer.parseInt(word[1]));
@@ -167,15 +168,15 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
         // Verify date normalization
         String key3 = "20240115"; // Corresponds to "2024-01-15"
         assertTrue(result.containsKey(key3),
-            "Should contain normalized January date key '20240115'. Actual keys: " + result.keySet());
+                "Should contain normalized January date key '20240115'. Actual keys: " + result.keySet());
 
-        // processBatch should produce one PositionList for this key within this batch
+        // processBatch should produce one PostingList for this key within this batch
         assertEquals(1, result.get(key3).size(),
-            "Should be one PositionList for the key '" + key3 + "' in the batch result.");
+                "Should be one PostingList for the key '" + key3 + "' in the batch result.");
 
-        // That one PositionListSoA should contain all 4 occurrences from doc1 and doc2
-        PositionListSoA positionsForDate = result.get(key3).get(0);
-        assertEquals(2, positionsForDate.getNumPositions(),
-            "Should have collected 2 positions for date '2024-01-15' (1 from doc1, 1 merged from doc2) in the batch.");
+        // That one PostingList should contain 2 cells from doc1 and doc2
+        PostingList plForDate = result.get(key3).get(0);
+        assertEquals(2, plForDate.cells().getLongCardinality(),
+                "Should have collected 2 cells for date '2024-01-15' (1 from doc1, 1 merged from doc2) in the batch.");
     }
 }

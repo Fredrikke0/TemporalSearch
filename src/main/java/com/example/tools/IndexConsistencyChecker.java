@@ -18,8 +18,7 @@ import org.rocksdb.RocksIterator;
 import org.rocksdb.Slice;
 
 import com.example.core.IndexAccessInterface;
-import com.example.core.PositionListSoA;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
+import com.example.core.PostingList;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 
 /**
@@ -29,14 +28,14 @@ import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
  * annotation count, and compare with the actual count in the stitch index.
  *
  * Usage: java com.example.tools.IndexConsistencyChecker <index_root_dir>
- * Exit code 0 on success; 1 if any inconsistencies are found or on fatal errors.
+ * Exit code 0 on success; 1 if any inconsistencies are found or on fatal
+ * errors.
  */
 public final class IndexConsistencyChecker {
 
     private static final List<String> STITCH_INDEXES = Arrays.asList(
-        "stitch_unigram_ner", "stitch_bigram_ner", "stitch_trigram_ner",
-        "stitch_unigram_date", "stitch_bigram_date", "stitch_trigram_date"
-    );
+            "stitch_unigram_ner", "stitch_bigram_ner", "stitch_trigram_ner",
+            "stitch_unigram_date", "stitch_bigram_date", "stitch_trigram_date");
 
     private static final String UNIGRAM = "unigram";
     private static final String BIGRAM = "bigram";
@@ -48,7 +47,8 @@ public final class IndexConsistencyChecker {
     // Reserved for potential future formatting helpers
     // private static final String DELIM_REGEX = "\\0";
 
-    // Removed annotation counts cache; fast-path streaming minimizes repeated heavy reads
+    // Removed annotation counts cache; fast-path streaming minimizes repeated heavy
+    // reads
 
     public static void main(String[] args) {
         if (args.length != 1) {
@@ -89,12 +89,13 @@ public final class IndexConsistencyChecker {
                 try (Options opt = new Options()) {
                     opt.setCreateIfMissing(false);
                     try (RocksDB stitchDb = RocksDB.openReadOnly(opt, stitchDir.toFile().getAbsolutePath());
-                         RocksDB ngramDb = RocksDB.openReadOnly(opt, ngramDir.toFile().getAbsolutePath());
-                         RocksDB annDb = RocksDB.openReadOnly(opt, annDir.toFile().getAbsolutePath())) {
+                            RocksDB ngramDb = RocksDB.openReadOnly(opt, ngramDir.toFile().getAbsolutePath());
+                            RocksDB annDb = RocksDB.openReadOnly(opt, annDir.toFile().getAbsolutePath())) {
 
                         VerificationSummary summary = verifyStitchIndex(stitchDb, ngramDb, annDb, type);
 
-                        System.out.printf("  Keys checked: %d, Failures: %d%n", summary.keysChecked, summary.keysFailed);
+                        System.out.printf("  Keys checked: %d, Failures: %d%n", summary.keysChecked,
+                                summary.keysFailed);
                         if (!summary.failDetails.isEmpty()) {
                             for (int i = 0; i < Math.min(10, summary.failDetails.size()); i++) {
                                 System.out.println("  " + summary.failDetails.get(i));
@@ -120,7 +121,8 @@ public final class IndexConsistencyChecker {
         }
     }
 
-    private static VerificationSummary verifyStitchIndex(RocksDB stitchDb, RocksDB ngramDb, RocksDB annDb, StitchType type) throws IOException {
+    private static VerificationSummary verifyStitchIndex(RocksDB stitchDb, RocksDB ngramDb, RocksDB annDb,
+            StitchType type) throws IOException {
         VerificationSummary summary = new VerificationSummary();
 
         try (RocksIterator it = stitchDb.newIterator()) {
@@ -133,11 +135,13 @@ public final class IndexConsistencyChecker {
                 String logicalKey = stripSegmentSuffix(rawKey);
                 summary.keysChecked++;
 
-                // Parse logical key into ngramKey and annotation component (split on last delimiter)
+                // Parse logical key into ngramKey and annotation component (split on last
+                // delimiter)
                 int lastDelimIdx = logicalKey.lastIndexOf(DELIM);
                 if (lastDelimIdx <= 0 || lastDelimIdx >= logicalKey.length() - 1) {
                     summary.keysFailed++;
-                    summary.failDetails.add(String.format("Key parse error (no delimiter) for stitch key '%s'", logicalKey));
+                    summary.failDetails
+                            .add(String.format("Key parse error (no delimiter) for stitch key '%s'", logicalKey));
                     it.next();
                     continue;
                 }
@@ -191,7 +195,8 @@ public final class IndexConsistencyChecker {
                             examples.add(String.format("(doc:%d,sent:%d) ngram=%d ann=%d expected=%d actual=%d",
                                     doc, sent, cn, ca, e2.getValue(), act));
                             shown++;
-                            if (shown >= 3) break;
+                            if (shown >= 3)
+                                break;
                         }
                     }
                     if (shown < 3) {
@@ -204,14 +209,15 @@ public final class IndexConsistencyChecker {
                                 examples.add(String.format("(doc:%d,sent:%d) ngram=%d ann=%d expected=%d actual=%d",
                                         doc, sent, cn, ca, 0, a2.getValue()));
                                 shown++;
-                                if (shown >= 3) break;
+                                if (shown >= 3)
+                                    break;
                             }
                         }
                     }
 
                     summary.failDetails.add(String.format(
-                        "Key '%s' FAILED: expected_total=%d actual_total=%d; examples: %s",
-                        logicalKey, expectedTotal, verify.actualTotal, examples));
+                            "Key '%s' FAILED: expected_total=%d actual_total=%d; examples: %s",
+                            logicalKey, expectedTotal, verify.actualTotal, examples));
                 }
 
                 // advance iterator to next logical key (skip segments for this key)
@@ -243,13 +249,15 @@ public final class IndexConsistencyChecker {
     }
 
     // Convenience overload used in heavy fallback path
-    private static Map<Long, Integer> readCountsByDocSentAcrossSegments(RocksDB db, String logicalKey) throws IOException {
+    private static Map<Long, Integer> readCountsByDocSentAcrossSegments(RocksDB db, String logicalKey)
+            throws IOException {
         Map<Long, Integer> counts = new HashMap<>();
         readCountsByDocSentAcrossSegments(db, logicalKey, counts);
         return counts;
     }
 
-    private static long readCountsByDocSentAcrossSegments(RocksDB db, String logicalKey, Map<Long, Integer> outCounts) throws IOException {
+    private static long readCountsByDocSentAcrossSegments(RocksDB db, String logicalKey, Map<Long, Integer> outCounts)
+            throws IOException {
         outCounts.clear();
         long total = 0L;
         String prefixWithHash = logicalKey + "#";
@@ -264,15 +272,21 @@ public final class IndexConsistencyChecker {
                     }
                     byte[] value = it.value();
                     if (value != null && value.length > 0) {
-                        // Use selective decompression to avoid Position object churn
-                        int numPositions = PositionListSoA.getNumPositionsFromBlob(value);
-                        IntArrayList docIds = PositionListSoA.decompressDocIds(value);
-                        IntArrayList sentIds = PositionListSoA.decompressSentenceIds(value);
-                        for (int i = 0; i < numPositions; i++) {
-                            long docSent = packDocSent(docIds.getInt(i), sentIds.getInt(i));
-                            outCounts.merge(docSent, 1, Integer::sum);
+                        try {
+                            PostingList pl = PostingList.deserialize(value, PostingList.DeserializeMode.CELLS_ONLY);
+                            int numCells = (int) pl.cells().getLongCardinality();
+                            var iter = pl.cells().getLongIterator();
+                            while (iter.hasNext()) {
+                                long cellKey = iter.next();
+                                int docId = PostingList.docIdFromCellKey(cellKey);
+                                int sentId = PostingList.sentIdFromCellKey(cellKey);
+                                long docSent = packDocSent(docId, sentId);
+                                outCounts.merge(docSent, 1, Integer::sum);
+                            }
+                            total += numCells;
+                        } catch (IOException e) {
+                            // skip malformed entry
                         }
-                        total += numPositions;
                     }
                     it.next();
                 }
@@ -296,7 +310,12 @@ public final class IndexConsistencyChecker {
                     }
                     byte[] value = it.value();
                     if (value != null && value.length > 0) {
-                        total += PositionListSoA.getNumPositionsFromBlob(value);
+                        try {
+                            PostingList pl = PostingList.deserialize(value, PostingList.DeserializeMode.CELLS_ONLY);
+                            total += pl.cells().getLongCardinality();
+                        } catch (IOException e) {
+                            // skip malformed entry
+                        }
                     }
                     it.next();
                 }
@@ -306,7 +325,8 @@ public final class IndexConsistencyChecker {
     }
 
     // Estimate smaller base with a capped sample to avoid full scans on huge keys
-    private static boolean estimateNgramIsSmaller(RocksDB ngramDb, String ngramKey, RocksDB annDb, String annKey) throws IOException {
+    private static boolean estimateNgramIsSmaller(RocksDB ngramDb, String ngramKey, RocksDB annDb, String annKey)
+            throws IOException {
         long ngramEstimate = estimateTotalPositionsWithCap(ngramDb, ngramKey, 1_000_000);
         long annEstimate = estimateTotalPositionsWithCap(annDb, annKey, 1_000_000);
         return ngramEstimate <= annEstimate;
@@ -322,16 +342,22 @@ public final class IndexConsistencyChecker {
                 it.seek(bytes(logicalKey));
                 while (it.isValid() && remaining > 0) {
                     String k = asString(it.key());
-                    if (!(k.equals(logicalKey) || k.startsWith(prefixWithHash))) break;
+                    if (!(k.equals(logicalKey) || k.startsWith(prefixWithHash)))
+                        break;
                     byte[] value = it.value();
                     if (value != null && value.length > 0) {
-                        int num = PositionListSoA.getNumPositionsFromBlob(value);
-                        if (num <= remaining) {
-                            total += num;
-                            remaining -= num;
-                        } else {
-                            total += remaining;
-                            remaining = 0;
+                        try {
+                            PostingList pl = PostingList.deserialize(value, PostingList.DeserializeMode.CELLS_ONLY);
+                            int num = (int) pl.cells().getLongCardinality();
+                            if (num <= remaining) {
+                                total += num;
+                                remaining -= num;
+                            } else {
+                                total += remaining;
+                                remaining = 0;
+                            }
+                        } catch (IOException e) {
+                            // skip malformed entry
                         }
                     }
                     it.next();
@@ -341,7 +367,8 @@ public final class IndexConsistencyChecker {
         return total;
     }
 
-    private static void buildDocSentCountsMapFast(RocksDB db, String logicalKey, Long2IntOpenHashMap out) throws IOException {
+    private static void buildDocSentCountsMapFast(RocksDB db, String logicalKey, Long2IntOpenHashMap out)
+            throws IOException {
         out.clear();
         String prefixWithHash = logicalKey + "#";
         try (ReadOptions ro = new ReadOptions(); Slice ub = new Slice(bytes(logicalKey + "$"))) {
@@ -355,14 +382,21 @@ public final class IndexConsistencyChecker {
                     }
                     byte[] value = it.value();
                     if (value != null && value.length > 0) {
-                        int num = PositionListSoA.getNumPositionsFromBlob(value);
-                        if (num > 0) {
-                            IntArrayList docIds = PositionListSoA.decompressDocIds(value);
-                            IntArrayList sentIds = PositionListSoA.decompressSentenceIds(value);
-                            for (int i = 0; i < num; i++) {
-                                long docSent = packDocSent(docIds.getInt(i), sentIds.getInt(i));
-                                out.addTo(docSent, 1);
+                        try {
+                            PostingList pl = PostingList.deserialize(value, PostingList.DeserializeMode.CELLS_ONLY);
+                            int num = (int) pl.cells().getLongCardinality();
+                            if (num > 0) {
+                                var iter = pl.cells().getLongIterator();
+                                while (iter.hasNext()) {
+                                    long cellKey = iter.next();
+                                    int docId = PostingList.docIdFromCellKey(cellKey);
+                                    int sentId = PostingList.sentIdFromCellKey(cellKey);
+                                    long docSent = packDocSent(docId, sentId);
+                                    out.addTo(docSent, 1);
+                                }
                             }
+                        } catch (IOException e) {
+                            // skip malformed entry
                         }
                     }
                     it.next();
@@ -371,7 +405,8 @@ public final class IndexConsistencyChecker {
         }
     }
 
-    private static long accumulateExpectedFromOtherBaseFast(RocksDB db, String logicalKey, Long2IntOpenHashMap smallBase, Long2IntOpenHashMap outExpected) throws IOException {
+    private static long accumulateExpectedFromOtherBaseFast(RocksDB db, String logicalKey,
+            Long2IntOpenHashMap smallBase, Long2IntOpenHashMap outExpected) throws IOException {
         outExpected.clear();
         long expectedTotal = 0L;
         String prefixWithHash = logicalKey + "#";
@@ -386,18 +421,25 @@ public final class IndexConsistencyChecker {
                     }
                     byte[] value = it.value();
                     if (value != null && value.length > 0) {
-                        int num = PositionListSoA.getNumPositionsFromBlob(value);
-                        if (num > 0) {
-                            IntArrayList docIds = PositionListSoA.decompressDocIds(value);
-                            IntArrayList sentIds = PositionListSoA.decompressSentenceIds(value);
-                            for (int i = 0; i < num; i++) {
-                                long docSent = packDocSent(docIds.getInt(i), sentIds.getInt(i));
-                                int c1 = smallBase.getOrDefault(docSent, 0);
-                                if (c1 > 0) {
-                                    outExpected.addTo(docSent, c1);
-                                    expectedTotal += c1;
+                        try {
+                            PostingList pl = PostingList.deserialize(value, PostingList.DeserializeMode.CELLS_ONLY);
+                            int num = (int) pl.cells().getLongCardinality();
+                            if (num > 0) {
+                                var iter = pl.cells().getLongIterator();
+                                while (iter.hasNext()) {
+                                    long cellKey = iter.next();
+                                    int docId = PostingList.docIdFromCellKey(cellKey);
+                                    int sentId = PostingList.sentIdFromCellKey(cellKey);
+                                    long docSent = packDocSent(docId, sentId);
+                                    int c1 = smallBase.getOrDefault(docSent, 0);
+                                    if (c1 > 0) {
+                                        outExpected.addTo(docSent, c1);
+                                        expectedTotal += c1;
+                                    }
                                 }
                             }
+                        } catch (IOException e) {
+                            // skip malformed entry
                         }
                     }
                     it.next();
@@ -407,7 +449,8 @@ public final class IndexConsistencyChecker {
         return expectedTotal;
     }
 
-    private static VerifyResult verifyActualAgainstExpectedFast(RocksDB stitchDb, String logicalKey, Long2IntOpenHashMap expected) throws IOException {
+    private static VerifyResult verifyActualAgainstExpectedFast(RocksDB stitchDb, String logicalKey,
+            Long2IntOpenHashMap expected) throws IOException {
         String prefixWithHash = logicalKey + "#";
         long actualTotal = 0L;
         try (ReadOptions ro = new ReadOptions(); Slice ub = new Slice(bytes(logicalKey + "$"))) {
@@ -421,17 +464,21 @@ public final class IndexConsistencyChecker {
                     }
                     byte[] value = it.value();
                     if (value != null && value.length > 0) {
-                        int num = PositionListSoA.getNumPositionsFromBlob(value);
+                        PostingList pl = PostingList.deserialize(value, PostingList.DeserializeMode.CELLS_ONLY);
+                        int num = (int) pl.cells().getLongCardinality();
                         actualTotal += num;
                         if (num > 0) {
-                            IntArrayList docIds = PositionListSoA.decompressDocIds(value);
-                            IntArrayList sentIds = PositionListSoA.decompressSentenceIds(value);
-                            for (int i = 0; i < num; i++) {
-                                long docSent = packDocSent(docIds.getInt(i), sentIds.getInt(i));
+                            var iter = pl.cells().getLongIterator();
+                            while (iter.hasNext()) {
+                                long cellKey = iter.next();
+                                int docId = PostingList.docIdFromCellKey(cellKey);
+                                int sentId = PostingList.sentIdFromCellKey(cellKey);
+                                long docSent = packDocSent(docId, sentId);
                                 int remaining = expected.addTo(docSent, -1);
                                 // addTo returns the old value; after decrement, value becomes old-1
                                 if (remaining <= 0) {
-                                    // if old value was 0, now -1 -> mismatch; if old was 1, now 0 ok; if >1, still >0
+                                    // if old value was 0, now -1 -> mismatch; if old was 1, now 0 ok; if >1, still
+                                    // >0
                                     if (remaining == 0) {
                                         // exactly consumed
                                     } else if (remaining < 0) {
@@ -447,7 +494,8 @@ public final class IndexConsistencyChecker {
         }
         // Ensure no leftovers in expected
         for (Long2IntOpenHashMap.Entry e : expected.long2IntEntrySet()) {
-            if (e.getIntValue() != 0) return new VerifyResult(false, actualTotal);
+            if (e.getIntValue() != 0)
+                return new VerifyResult(false, actualTotal);
         }
         return new VerifyResult(true, actualTotal);
     }
@@ -455,7 +503,11 @@ public final class IndexConsistencyChecker {
     private static final class VerifyResult {
         final boolean ok;
         final long actualTotal;
-        VerifyResult(boolean ok, long actualTotal) { this.ok = ok; this.actualTotal = actualTotal; }
+
+        VerifyResult(boolean ok, long actualTotal) {
+            this.ok = ok;
+            this.actualTotal = actualTotal;
+        }
     }
 
     private static String stripSegmentSuffix(String key) {
@@ -503,8 +555,13 @@ public final class IndexConsistencyChecker {
             this.isNer = isNer;
         }
 
-        String ngramIndexName() { return ngramIndex; }
-        String annotationIndexName() { return annotationIndex; }
+        String ngramIndexName() {
+            return ngramIndex;
+        }
+
+        String annotationIndexName() {
+            return annotationIndex;
+        }
         // boolean isNer() { return isNer; } // not used currently
 
         String annotationLookupKey(String annotationComponent) {
@@ -526,5 +583,3 @@ public final class IndexConsistencyChecker {
         }
     }
 }
-
-

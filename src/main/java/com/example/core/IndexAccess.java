@@ -6,6 +6,8 @@ import java.nio.file.Path;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.example.core.PostingList;
+
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
@@ -36,33 +38,31 @@ public class IndexAccess implements IndexAccessInterface {
      *
      * @param indexPath Full path to the index directory
      * @param indexType The type of index (e.g., "unigram", "bigram", "dependency")
-     * @param options RocksDB options for this index
-     * @param readOnly true to open in read-only mode, false for read-write
+     * @param options   RocksDB options for this index
+     * @param readOnly  true to open in read-only mode, false for read-write
      * @throws IndexAccessException if initialization fails
      */
-    public IndexAccess(Path indexPath, String indexType, Options options, boolean readOnly) throws IndexAccessException {
+    public IndexAccess(Path indexPath, String indexType, Options options, boolean readOnly)
+            throws IndexAccessException {
         this.indexType = indexType;
         this.indexPath = indexPath.toString();
         this.isOpen = new AtomicBoolean(true);
         this.options = options;
-
 
         try {
             File indexDir = new File(this.indexPath);
             if (!indexDir.exists()) {
                 if (readOnly) {
                     throw new IndexAccessException(
-                        "Index directory does not exist and cannot be created in read-only mode: " + this.indexPath,
-                        indexType,
-                        IndexAccessException.ErrorType.INITIALIZATION_ERROR
-                    );
+                            "Index directory does not exist and cannot be created in read-only mode: " + this.indexPath,
+                            indexType,
+                            IndexAccessException.ErrorType.INITIALIZATION_ERROR);
                 }
                 if (!indexDir.mkdirs()) {
                     throw new IndexAccessException(
-                        "Failed to create index directory: " + this.indexPath,
-                        indexType,
-                        IndexAccessException.ErrorType.INITIALIZATION_ERROR
-                    );
+                            "Failed to create index directory: " + this.indexPath,
+                            indexType,
+                            IndexAccessException.ErrorType.INITIALIZATION_ERROR);
                 }
             }
 
@@ -75,15 +75,14 @@ public class IndexAccess implements IndexAccessInterface {
             }
         } catch (RocksDBException e) {
             this.isOpen.set(false);
-            if(this.options != null) { // Attempt to close options if open failed
+            if (this.options != null) { // Attempt to close options if open failed
                 this.options.close();
             }
             throw new IndexAccessException(
-                "Failed to initialize RocksDB index: " + e.getMessage(),
-                indexType,
-                IndexAccessException.ErrorType.INITIALIZATION_ERROR,
-                e
-            );
+                    "Failed to initialize RocksDB index: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.INITIALIZATION_ERROR,
+                    e);
         }
     }
 
@@ -99,11 +98,10 @@ public class IndexAccess implements IndexAccessInterface {
             db.write(writeOptions, batch);
         } catch (RocksDBException e) {
             throw new IndexAccessException(
-                "Failed to write batch: " + e.getMessage(),
-                indexType,
-                IndexAccessException.ErrorType.WRITE_ERROR,
-                e
-            );
+                    "Failed to write batch: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.WRITE_ERROR,
+                    e);
         }
     }
 
@@ -118,11 +116,10 @@ public class IndexAccess implements IndexAccessInterface {
             db.ingestExternalFile(sstFilePaths, ifo);
         } catch (RocksDBException e) {
             throw new IndexAccessException(
-                "Failed to ingest external SST files: " + e.getMessage(),
-                indexType,
-                IndexAccessException.ErrorType.WRITE_ERROR,
-                e
-            );
+                    "Failed to ingest external SST files: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.WRITE_ERROR,
+                    e);
         }
     }
 
@@ -137,24 +134,42 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     /**
-     * Retrieves positions for a given key, deserializing to PositionListSoA.
+     * Retrieves a PostingList for a given key.
      */
     @Override
-    public Optional<PositionListSoA> get(byte[] key) throws IndexAccessException {
+    public Optional<PostingList> get(byte[] key) throws IndexAccessException {
         checkOpen();
         try {
             byte[] value = db.get(key);
             if (value == null) {
                 return Optional.empty();
             }
-            return Optional.of(PositionListSoA.deserializeFromCompositeBlob(value));
+            return Optional.of(PostingList.deserialize(value, PostingList.DeserializeMode.FULL));
         } catch (IOException | RocksDBException e) {
             throw new IndexAccessException(
-                "Failed to get entry: " + e.getMessage(),
-                indexType,
-                IndexAccessException.ErrorType.READ_ERROR,
-                e
-            );
+                    "Failed to get entry: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.READ_ERROR,
+                    e);
+        }
+    }
+
+    @Override
+    public Optional<PostingList> getPostingList(byte[] key, PostingList.DeserializeMode mode)
+            throws IndexAccessException {
+        checkOpen();
+        try {
+            byte[] value = db.get(key);
+            if (value == null) {
+                return Optional.empty();
+            }
+            return Optional.of(PostingList.deserialize(value, mode));
+        } catch (IOException | RocksDBException e) {
+            throw new IndexAccessException(
+                    "Failed to get posting list: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.READ_ERROR,
+                    e);
         }
     }
 
@@ -176,10 +191,12 @@ public class IndexAccess implements IndexAccessInterface {
     }
 
     /**
-     * Creates a new iterator positioned at or after the specified prefix and bounded by an upper bound.
+     * Creates a new iterator positioned at or after the specified prefix and
+     * bounded by an upper bound.
      * Optionally sets a readahead size for sequential scans.
      */
-    public RocksIterator seekWithBounds(byte[] prefix, byte[] upperBoundExclusive, long readaheadBytes) throws IndexAccessException {
+    public RocksIterator seekWithBounds(byte[] prefix, byte[] upperBoundExclusive, long readaheadBytes)
+            throws IndexAccessException {
         checkOpen();
         org.rocksdb.ReadOptions ro = new org.rocksdb.ReadOptions();
         if (upperBoundExclusive != null) {
@@ -202,12 +219,11 @@ public class IndexAccess implements IndexAccessInterface {
         try {
             return Optional.ofNullable(db.get(key));
         } catch (RocksDBException e) {
-             throw new IndexAccessException(
-                "Failed to get raw entry: " + e.getMessage(),
-                indexType,
-                IndexAccessException.ErrorType.READ_ERROR,
-                e
-            );
+            throw new IndexAccessException(
+                    "Failed to get raw entry: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.READ_ERROR,
+                    e);
         }
     }
 
@@ -233,11 +249,10 @@ public class IndexAccess implements IndexAccessInterface {
             db.put(key, value);
         } catch (RocksDBException e) {
             throw new IndexAccessException(
-                "Failed to put entry: " + e.getMessage(),
-                indexType,
-                IndexAccessException.ErrorType.WRITE_ERROR,
-                e
-            );
+                    "Failed to put entry: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.WRITE_ERROR,
+                    e);
         }
     }
 
@@ -251,11 +266,10 @@ public class IndexAccess implements IndexAccessInterface {
             db.delete(key);
         } catch (RocksDBException e) {
             throw new IndexAccessException(
-                "Failed to delete entry: " + e.getMessage(),
-                indexType,
-                IndexAccessException.ErrorType.WRITE_ERROR,
-                e
-            );
+                    "Failed to delete entry: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.WRITE_ERROR,
+                    e);
         }
     }
 
@@ -266,11 +280,10 @@ public class IndexAccess implements IndexAccessInterface {
             db.compactRange();
         } catch (RocksDBException e) {
             throw new IndexAccessException(
-                "Failed to compact range: " + e.getMessage(),
-                indexType,
-                IndexAccessException.ErrorType.WRITE_ERROR,
-                e
-            );
+                    "Failed to compact range: " + e.getMessage(),
+                    indexType,
+                    IndexAccessException.ErrorType.WRITE_ERROR,
+                    e);
         }
     }
 
@@ -281,8 +294,6 @@ public class IndexAccess implements IndexAccessInterface {
     public String getIndexType() {
         return indexType;
     }
-
-
 
     /**
      * Checks if the index is still open.
@@ -296,6 +307,7 @@ public class IndexAccess implements IndexAccessInterface {
     /**
      * Gets the root path of this index.
      * Implements the interface method.
+     *
      * @return The Path to the index directory.
      */
     @Override
@@ -308,74 +320,12 @@ public class IndexAccess implements IndexAccessInterface {
         return this.options;
     }
 
-    @Override
-    public Optional<PositionListSoA> getMergedPositions(String baseTerm,
-                                                        Optional<com.example.query.executor.FilteringContext> context,
-                                                        com.example.query.executor.AttributeRequirements requirements)
-            throws IOException, IndexAccessException {
-        checkOpen();
-        byte[] baseTermBytes = bytes(baseTerm);
-        Optional<byte[]> rawBaseData = getRaw(baseTermBytes);
-
-        // If base term exists, merge base + #1, #2, ...
-        if (rawBaseData.isPresent()) {
-            PositionListSoA merged = PositionListSoA.deserializeWithFilters(rawBaseData.get(), context, requirements);
-
-            // Batch segment fetch using MultiGet (segments are contiguous: #1, #2, ...)
-            final int batchSize = 16;
-            int nextSeg = 1;
-            try {
-                while (true) {
-                    java.util.ArrayList<byte[]> keys = new java.util.ArrayList<>(batchSize);
-                    for (int i = 0; i < batchSize; i++) {
-                        String segKey = baseTerm + "#" + (nextSeg + i);
-                        keys.add(bytes(segKey));
-                    }
-                    java.util.List<byte[]> values = db.multiGetAsList(keys);
-
-                    boolean anyFoundInBatch = false;
-                    for (int i = 0; i < values.size(); i++) {
-                        byte[] v = values.get(i);
-                        if (v == null) {
-                            // First miss implies no further segments (contiguous numbering)
-                            return (merged != null && !merged.isEmpty()) ? Optional.of(merged) : Optional.empty();
-                        }
-                        anyFoundInBatch = true;
-                        PositionListSoA segSoA = PositionListSoA.deserializeWithFilters(v, context, requirements);
-                        if (!segSoA.isEmpty()) {
-                            if (merged == null || merged.isEmpty()) {
-                                merged = segSoA;
-                            } else {
-                                merged.addAll(segSoA);
-                            }
-                        }
-                    }
-                    if (!anyFoundInBatch) {
-                        break;
-                    }
-                    nextSeg += batchSize;
-                }
-            } catch (org.rocksdb.RocksDBException e) {
-                throw new IndexAccessException(
-                    "MultiGet failed during merged segment fetch: " + e.getMessage(),
-                    indexType,
-                    IndexAccessException.ErrorType.READ_ERROR,
-                    e
-                );
-            }
-            return (merged != null && !merged.isEmpty()) ? Optional.of(merged) : Optional.empty();
-        }
-
-        return Optional.empty();
-    }
-
     private void checkOpen() throws IndexAccessException {
         if (!isOpen()) {
             throw new IndexAccessException(
-                "Index is closed or not properly initialized",
-                indexType,
-                IndexAccessException.ErrorType.RESOURCE_ERROR
-            );
+                    "Index is closed or not properly initialized",
+                    indexType,
+                    IndexAccessException.ErrorType.RESOURCE_ERROR);
         }
     }
 
@@ -394,7 +344,8 @@ public class IndexAccess implements IndexAccessInterface {
                 }
             }
         } else {
-            logger.warn("IndexAccess for type {} at {} was already closed or never fully opened.", indexType, indexPath);
+            logger.warn("IndexAccess for type {} at {} was already closed or never fully opened.", indexType,
+                    indexPath);
         }
     }
 
@@ -405,9 +356,5 @@ public class IndexAccess implements IndexAccessInterface {
         }
         return str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
-
-
-
-
 
 }

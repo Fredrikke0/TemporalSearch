@@ -22,7 +22,7 @@ import com.example.query.QuerySemanticValidator;
 import com.example.query.executor.ConditionExecutorFactory;
 import com.example.query.executor.PushdownStrategy;
 import com.example.query.executor.QueryExecutor;
-import com.example.query.executor.QueryResultSoA;
+import com.example.query.executor.CellResult;
 import com.example.query.index.IndexManager;
 import com.example.query.model.Query;
 import com.example.query.result.TableResultService;
@@ -71,15 +71,21 @@ public class QueryCLI implements AutoCloseable {
     /**
      * Creates a new QueryCLI instance.
      *
-     * @param dbFilePath The path to the project's SQLite database file.
-     * @param indexDirPath The path to the directory containing project indexes.
+     * @param dbFilePath              The path to the project's SQLite database
+     *                                file.
+     * @param indexDirPath            The path to the directory containing project
+     *                                indexes.
      * @param initialPushdownStrategy The initial pushdown strategy
-     * @param initialStitchStrategy The initial stitch execution strategy ("none" or "optimized")
-     * @param initialExportFormat Optional initial export format
-     * @param initialExportFilename Optional initial export filename
-     * @param interactiveMode True if running in interactive mode, false for single query execution.
+     * @param initialStitchStrategy   The initial stitch execution strategy ("none"
+     *                                or "optimized")
+     * @param initialExportFormat     Optional initial export format
+     * @param initialExportFilename   Optional initial export filename
+     * @param interactiveMode         True if running in interactive mode, false for
+     *                                single query execution.
      */
-    public QueryCLI(String dbFilePath, Path indexDirPath, PushdownStrategy initialPushdownStrategy, String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename, boolean interactiveMode) {
+    public QueryCLI(String dbFilePath, Path indexDirPath, PushdownStrategy initialPushdownStrategy,
+            String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename,
+            boolean interactiveMode) {
         this.dbFilePath = dbFilePath;
         this.indexRootDir = indexDirPath;
         this.parser = new QueryParser();
@@ -94,13 +100,19 @@ public class QueryCLI implements AutoCloseable {
         this.profileOptions = Optional.empty();
         this.profileAroundExecution = false;
 
-        logger.info("Initialized QueryCLI. DB file: {}, Index dir: {}. Interactive: {}", dbFilePath, indexDirPath, interactiveMode);
-        logger.info("Initial Strategies - Pushdown: {}, Stitch: {}", currentPushdownStrategy, currentStitchStrategyName);
-        initialExportFormat.ifPresent(format -> logger.info("Initial Export: {} to {}", format, initialExportFilename.orElse("N/A")));
+        logger.info("Initialized QueryCLI. DB file: {}, Index dir: {}. Interactive: {}", dbFilePath, indexDirPath,
+                interactiveMode);
+        logger.info("Initial Strategies - Pushdown: {}, Stitch: {}", currentPushdownStrategy,
+                currentStitchStrategyName);
+        initialExportFormat.ifPresent(
+                format -> logger.info("Initial Export: {} to {}", format, initialExportFilename.orElse("N/A")));
     }
 
-    public QueryCLI(String dbFilePath, Path indexDirPath, PushdownStrategy initialPushdownStrategy, String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename, boolean interactiveMode, Optional<String> profileOptions, boolean profileAroundExecution) {
-        this(dbFilePath, indexDirPath, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactiveMode);
+    public QueryCLI(String dbFilePath, Path indexDirPath, PushdownStrategy initialPushdownStrategy,
+            String initialStitchStrategy, Optional<String> initialExportFormat, Optional<String> initialExportFilename,
+            boolean interactiveMode, Optional<String> profileOptions, boolean profileAroundExecution) {
+        this(dbFilePath, indexDirPath, initialPushdownStrategy, initialStitchStrategy, initialExportFormat,
+                initialExportFilename, interactiveMode);
         this.profileOptions = profileOptions != null ? profileOptions : Optional.empty();
         this.profileAroundExecution = profileAroundExecution;
     }
@@ -120,8 +132,10 @@ public class QueryCLI implements AutoCloseable {
             cmd.append(",file=").append(file);
         }
         cmd.append(",event=").append(event);
-        if (interval != null) cmd.append(",interval=").append(interval);
-        if (duration != null) cmd.append(",duration=").append(duration);
+        if (interval != null)
+            cmd.append(",interval=").append(interval);
+        if (duration != null)
+            cmd.append(",duration=").append(duration);
         return cmd.toString();
     }
 
@@ -140,14 +154,17 @@ public class QueryCLI implements AutoCloseable {
         if (profileOptions != null && !profileOptions.isBlank()) {
             String normalized = profileOptions.replace(';', ',');
             for (String kv : normalized.split(",")) {
-                if (kv == null) continue;
+                if (kv == null)
+                    continue;
                 kv = kv.trim();
-                if (kv.isEmpty()) continue;
+                if (kv.isEmpty())
+                    continue;
                 int eq = kv.indexOf('=');
                 if (eq > 0 && eq < kv.length() - 1) {
                     String k = kv.substring(0, eq).trim().toLowerCase();
                     String v = kv.substring(eq + 1).trim();
-                    if (!v.isEmpty()) opts.put(k, v);
+                    if (!v.isEmpty())
+                        opts.put(k, v);
                 } else {
                     opts.put(kv.toLowerCase(), "true");
                 }
@@ -159,12 +176,10 @@ public class QueryCLI implements AutoCloseable {
     private static String expandProfilerFilename(String filePattern, String output) {
         String pattern = (filePattern == null || filePattern.isBlank()) ? "/tmp/querycli-%p." + output : filePattern;
         long pid = java.lang.ProcessHandle.current().pid();
-        String ts = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").format(java.time.LocalDateTime.now());
+        String ts = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
+                .format(java.time.LocalDateTime.now());
         return pattern.replace("%p", Long.toString(pid)).replace("%t", ts);
     }
-
-
-
 
     /**
      * Executes a query string using current strategy and output settings.
@@ -220,7 +235,9 @@ public class QueryCLI implements AutoCloseable {
                 currentIndexManagerToUse = projectIndexManagers.get(projectName);
                 if (currentIndexManagerToUse == null) {
                     // Build a maximal preload query to force all index types to open
-                    String preloadQueryStr = String.format("SELECT DOCUMENT_ID FROM %s WHERE CONTAINS('preload_x') AND NER(PERSON) AND POS(NN) AND DEPENDS('dep','rel','dep_rel') AND DATE(= 2000)", projectName);
+                    String preloadQueryStr = String.format(
+                            "SELECT DOCUMENT_ID FROM %s WHERE CONTAINS('preload_x') AND NER(PERSON) AND POS(NN) AND DEPENDS('dep','rel','dep_rel') AND DATE(= 2000)",
+                            projectName);
                     Query preloadQuery;
                     try {
                         preloadQuery = parser.parse(preloadQueryStr);
@@ -228,7 +245,8 @@ public class QueryCLI implements AutoCloseable {
                         // Fallback: use the actual query for required indexes only
                         preloadQuery = query;
                     }
-                    currentIndexManagerToUse = new IndexManager(projectIndexDir, projectName, preloadQuery, "optimized");
+                    currentIndexManagerToUse = new IndexManager(projectIndexDir, projectName, preloadQuery,
+                            "optimized");
                     projectIndexManagers.put(projectName, currentIndexManagerToUse);
 
                     // TableResultService per project (DB path may differ across projects)
@@ -241,33 +259,37 @@ public class QueryCLI implements AutoCloseable {
                 // Non-interactive: fresh components each query
                 SqliteAccessor.initialize(this.dbFilePath);
                 currentTableResultService = new TableResultService(this.dbFilePath);
-                localIndexManager = new IndexManager(projectIndexDir, projectName, query, this.currentStitchStrategyName);
+                localIndexManager = new IndexManager(projectIndexDir, projectName, query,
+                        this.currentStitchStrategyName);
                 currentIndexManagerToUse = localIndexManager;
                 currentSynonymManager = currentIndexManagerToUse.getSynonymManager();
             }
             logger.debug("Ready IndexManager and TableResultService for execution.");
             logger.info("Using database at: {}", this.dbFilePath); // Re-log for clarity if needed
 
-                // Add warning for stitch strategy and granularity mismatch
+            // Add warning for stitch strategy and granularity mismatch
             Query.Granularity queryGranularity = query.granularity();
-            if ("optimized".equalsIgnoreCase(this.currentStitchStrategyName) && queryGranularity != Query.Granularity.SENTENCE) {
+            if ("optimized".equalsIgnoreCase(this.currentStitchStrategyName)
+                    && queryGranularity != Query.Granularity.SENTENCE) {
                 String warningMessage = String.format(
-                    "Warning: Stitch optimization ('optimized') is active with strategy '%s', but it is primarily designed for SENTENCE granularity. Current query granularity is %s. Results might not be optimal.",
-                    this.currentStitchStrategyName, queryGranularity
-                );
-                    logger.warn(warningMessage);
-                    System.err.println(warningMessage);
-                }
+                        "Warning: Stitch optimization ('optimized') is active with strategy '%s', but it is primarily designed for SENTENCE granularity. Current query granularity is %s. Results might not be optimal.",
+                        this.currentStitchStrategyName, queryGranularity);
+                logger.warn(warningMessage);
+                System.err.println(warningMessage);
+            }
 
-            ConditionExecutorFactory factory = new ConditionExecutorFactory(currentSynonymManager, this.currentStitchStrategyName, queryGranularity);
-            logger.debug("ConditionExecutorFactory configured with S:{}, Granularity:{}", this.currentStitchStrategyName, queryGranularity);
+            ConditionExecutorFactory factory = new ConditionExecutorFactory(currentSynonymManager,
+                    this.currentStitchStrategyName, queryGranularity);
+            logger.debug("ConditionExecutorFactory configured with S:{}, Granularity:{}",
+                    this.currentStitchStrategyName, queryGranularity);
 
-            QueryExecutor queryExecutor = new QueryExecutor(currentTableResultService, this.currentStitchStrategyName, currentSynonymManager, factory);
+            QueryExecutor queryExecutor = new QueryExecutor(currentTableResultService, this.currentStitchStrategyName,
+                    currentSynonymManager, factory);
             queryExecutor.setPushdownStrategy(this.currentPushdownStrategy);
             logger.debug("QueryExecutor configured with P:{}", this.currentPushdownStrategy);
 
-                int windowSize = query.granularitySize().orElse(0);
-                logger.info("Query granularity: {} with size: {}", queryGranularity, windowSize);
+            int windowSize = query.granularitySize().orElse(0);
+            logger.info("Query granularity: {} with size: {}", queryGranularity, windowSize);
 
             if (profileAroundExecution && profileOptions.isPresent()) {
                 try {
@@ -281,47 +303,49 @@ public class QueryCLI implements AutoCloseable {
                 }
             }
 
-            QueryResultSoA execResult;
+            CellResult execResult;
             try {
                 execResult = queryExecutor.execute(query, currentIndexManagerToUse);
-            } finally { }
+            } finally {
+            }
 
-                Table resultTable;
-                int matchCount;
-                String matchUnit;
+            Table resultTable;
+            long matchCount;
+            String matchUnit;
 
-                if (execResult != null) {
-                    matchCount = execResult.size();
-                matchUnit = (query.joinSteps().isEmpty() ?
-                            (queryGranularity == Query.Granularity.DOCUMENT ? "documents" : "sentences") :
-                            "conceptual joined rows");
-                logger.info("Query executed, found {} matching {} (granularity: {})", matchCount, matchUnit, queryGranularity);
+            if (execResult != null) {
+                matchCount = execResult.cellCount();
+                matchUnit = (query.joinSteps().isEmpty()
+                        ? (queryGranularity == Query.Granularity.DOCUMENT ? "documents" : "sentences")
+                        : "conceptual joined rows");
+                logger.info("Query executed, found {} matching {} (granularity: {})", matchCount, matchUnit,
+                        queryGranularity);
 
                 Map<String, IndexAccessInterface> allIndexes = currentIndexManagerToUse.getAllIndexes();
                 resultTable = currentTableResultService.generateTable(query, execResult, allIndexes);
-                } else {
-                logger.error("Query execution returned a null QueryResultSoA for query: {}", queryStr);
-                    System.err.println("Error: Query execution resulted in an unexpected null result.");
+            } else {
+                logger.error("Query execution returned a null CellResult for query: {}", queryStr);
+                System.err.println("Error: Query execution resulted in an unexpected null result.");
                 resultTable = Table.create("Empty Result - Execution Error");
-                    matchCount = 0;
-                    matchUnit = "results";
-                }
+                matchCount = 0;
+                matchUnit = "results";
+            }
 
             // Use currentExportFormat and currentExportFilename from instance fields
             if (this.currentExportFormat.isPresent() && this.currentExportFilename.isPresent()) {
                 String format = this.currentExportFormat.get();
                 String filename = this.currentExportFilename.get();
-                    logger.info("Exporting results to {} format in file: {}", format, filename);
-                    try {
+                logger.info("Exporting results to {} format in file: {}", format, filename);
+                try {
                     currentTableResultService.exportTable(resultTable, format, filename);
-                        System.out.println("Results exported to " + filename);
-                    } catch (IOException e) {
-                        logger.error("Error exporting results: {}", e.getMessage());
-                        System.err.println("Error exporting results: " + e.getMessage());
-                    }
-                } else {
+                    System.out.println("Results exported to " + filename);
+                } catch (IOException e) {
+                    logger.error("Error exporting results: {}", e.getMessage());
+                    System.err.println("Error exporting results: " + e.getMessage());
+                }
+            } else {
                 String formattedResults = currentTableResultService.formatTable(resultTable);
-                    System.out.println(formattedResults);
+                System.out.println(formattedResults);
             }
 
         } catch (QueryParseException e) {
@@ -366,14 +390,30 @@ public class QueryCLI implements AutoCloseable {
     }
 
     // Setters for interactive mode
-    public void setCurrentPushdownStrategy(PushdownStrategy strategy) { this.currentPushdownStrategy = strategy; }
-    public void setCurrentStitchStrategyName(String name) { this.currentStitchStrategyName = name; }
-    public void setCurrentExportFormat(Optional<String> format) { this.currentExportFormat = format; }
-    public void setCurrentExportFilename(Optional<String> filename) { this.currentExportFilename = filename; }
+    public void setCurrentPushdownStrategy(PushdownStrategy strategy) {
+        this.currentPushdownStrategy = strategy;
+    }
+
+    public void setCurrentStitchStrategyName(String name) {
+        this.currentStitchStrategyName = name;
+    }
+
+    public void setCurrentExportFormat(Optional<String> format) {
+        this.currentExportFormat = format;
+    }
+
+    public void setCurrentExportFilename(Optional<String> filename) {
+        this.currentExportFilename = filename;
+    }
 
     // Getters for ACK messages
-    public PushdownStrategy getCurrentPushdownStrategy() { return currentPushdownStrategy; }
-    public String getCurrentStitchStrategyName() { return currentStitchStrategyName; }
+    public PushdownStrategy getCurrentPushdownStrategy() {
+        return currentPushdownStrategy;
+    }
+
+    public String getCurrentStitchStrategyName() {
+        return currentStitchStrategyName;
+    }
 
     @Override
     public void close() throws IndexAccessException {
@@ -399,8 +439,10 @@ public class QueryCLI implements AutoCloseable {
     public static void main(String[] args) {
         ArgumentParser cliArgParser = ArgumentParsers.newFor("QueryCLI").build()
                 .defaultHelp(true)
-                .description("Execute queries against indexed projects. Queries specify the project via the FROM clause.\n\n" +
-                             "Profiling example: --profile 'event=wall,output=html,file=/tmp/profile-%p.html,interval=1ms' --profile-around-execution");
+                .description(
+                        "Execute queries against indexed projects. Queries specify the project via the FROM clause.\n\n"
+                                +
+                                "Profiling example: --profile 'event=wall,output=html,file=/tmp/profile-%p.html,interval=1ms' --profile-around-execution");
 
         cliArgParser.addArgument("--db-file")
                 .required(false)
@@ -426,8 +468,8 @@ public class QueryCLI implements AutoCloseable {
         // Profiling options (async-profiler Java API)
         cliArgParser.addArgument("--profile")
                 .help("Enable async-profiler. Pass options as a single quoted, comma-separated string. " +
-                      "Example: 'event=wall,file=/tmp/profile-%p.html,interval=1ms'. " +
-                      "Keys: event, file, interval, duration. Output defaults to HTML.")
+                        "Example: 'event=wall,file=/tmp/profile-%p.html,interval=1ms'. " +
+                        "Keys: event, file, interval, duration. Output defaults to HTML.")
                 .required(false);
         cliArgParser.addArgument("--profile-around-execution")
                 .action(Arguments.storeTrue())
@@ -447,7 +489,8 @@ public class QueryCLI implements AutoCloseable {
             String initialStitchStrategy = ns.getString("stitch_strategy");
             String queryStr = ns.getString("query");
             String profileOptions = ns.getString("profile");
-            boolean profileAroundExecution = ns.getBoolean("profile_around_execution") != null && ns.getBoolean("profile_around_execution");
+            boolean profileAroundExecution = ns.getBoolean("profile_around_execution") != null
+                    && ns.getBoolean("profile_around_execution");
 
             Optional<String> initialExportFormat = Optional.empty();
             Optional<String> initialExportFilename = Optional.empty();
@@ -458,103 +501,113 @@ public class QueryCLI implements AutoCloseable {
                     initialExportFormat = Optional.of(parts[0].toLowerCase());
                     initialExportFilename = Optional.of(parts[1]);
                 } else {
-                    System.err.println("Invalid --export format. Use format:filename (e.g., csv:output.csv). Export disabled.");
+                    System.err.println(
+                            "Invalid --export format. Use format:filename (e.g., csv:output.csv). Export disabled.");
                 }
             }
 
             boolean interactive = (queryStr == null);
 
-            try (QueryCLI cli = new QueryCLI(dbFile, indexDir, initialPushdownStrategy, initialStitchStrategy, initialExportFormat, initialExportFilename, interactive, Optional.ofNullable(profileOptions), profileAroundExecution)) {
+            try (QueryCLI cli = new QueryCLI(dbFile, indexDir, initialPushdownStrategy, initialStitchStrategy,
+                    initialExportFormat, initialExportFilename, interactive, Optional.ofNullable(profileOptions),
+                    profileAroundExecution)) {
                 if (interactive) {
 
-                Scanner scanner = new Scanner(System.in);
+                    Scanner scanner = new Scanner(System.in);
                     System.out.println("QueryCLI Interactive Mode");
                     System.out.println("Type 'EXIT' or 'QUIT' to leave.");
                     System.out.println("Commands: SET STRATEGY pushdown=<val> stitch=<val>");
                     System.out.println("          SET OUTPUT <format> <filename> | SET OUTPUT NONE");
-                    System.out.println("Current strategies: P:" + cli.getCurrentPushdownStrategy().name().toLowerCase() +
-                                       " S:" + cli.getCurrentStitchStrategyName());
+                    System.out
+                            .println("Current strategies: P:" + cli.getCurrentPushdownStrategy().name().toLowerCase() +
+                                    " S:" + cli.getCurrentStitchStrategyName());
                     cli.currentExportFormat.ifPresentOrElse(
-                        f -> System.out.println("Current output: " + f + " to " + cli.currentExportFilename.orElse("N/A")),
-                        () -> System.out.println("Current output: Console")
-                    );
+                            f -> System.out
+                                    .println("Current output: " + f + " to " + cli.currentExportFilename.orElse("N/A")),
+                            () -> System.out.println("Current output: Console"));
 
-                while (true) {
-                    System.out.println(); // Ensures a blank line before the prompt
-                    System.out.print("Query>"); // Print the prompt text itself
-                    System.out.println();   // Crucially, print a newline *after* the prompt text
-                    System.out.flush();     // Ensure it's sent
+                    while (true) {
+                        System.out.println(); // Ensures a blank line before the prompt
+                        System.out.print("Query>"); // Print the prompt text itself
+                        System.out.println(); // Crucially, print a newline *after* the prompt text
+                        System.out.flush(); // Ensure it's sent
 
-                    String inputLine = scanner.nextLine().trim();
+                        String inputLine = scanner.nextLine().trim();
 
-                    if (inputLine.equalsIgnoreCase("EXIT") || inputLine.equalsIgnoreCase("QUIT")) {
-                        break;
-                    }
+                        if (inputLine.equalsIgnoreCase("EXIT") || inputLine.equalsIgnoreCase("QUIT")) {
+                            break;
+                        }
 
-                    if (inputLine.matches("(?i)^SET\\s+STRATEGY.*")) {
-                        Pattern pattern = Pattern.compile("(\\w+)=(\\S+)");
-                        Matcher matcher = pattern.matcher(inputLine);
-                        boolean strategyUpdated = false;
-                        while (matcher.find()) {
-                            String key = matcher.group(1).toLowerCase();
-                            String value = matcher.group(2);
-                            try {
-                                switch (key) {
-                                    case "pushdown":
-                                        cli.setCurrentPushdownStrategy(PushdownStrategy.fromString(value));
-                                        strategyUpdated = true;
-                                        break;
-                                    case "stitch":
-                                         if (Arrays.asList("none", "optimized").contains(value.toLowerCase())) {
-                                            cli.setCurrentStitchStrategyName(value.toLowerCase());
+                        if (inputLine.matches("(?i)^SET\\s+STRATEGY.*")) {
+                            Pattern pattern = Pattern.compile("(\\w+)=(\\S+)");
+                            Matcher matcher = pattern.matcher(inputLine);
+                            boolean strategyUpdated = false;
+                            while (matcher.find()) {
+                                String key = matcher.group(1).toLowerCase();
+                                String value = matcher.group(2);
+                                try {
+                                    switch (key) {
+                                        case "pushdown":
+                                            cli.setCurrentPushdownStrategy(PushdownStrategy.fromString(value));
                                             strategyUpdated = true;
-                                         } else {
-                                             System.err.println("Invalid stitch strategy value: " + value + ". Must be 'none' or 'optimized'.");
-                                         }
-                                        break;
-                                    default:
-                                        System.err.println("Unknown strategy key: " + key);
+                                            break;
+                                        case "stitch":
+                                            if (Arrays.asList("none", "optimized").contains(value.toLowerCase())) {
+                                                cli.setCurrentStitchStrategyName(value.toLowerCase());
+                                                strategyUpdated = true;
+                                            } else {
+                                                System.err.println("Invalid stitch strategy value: " + value
+                                                        + ". Must be 'none' or 'optimized'.");
+                                            }
+                                            break;
+                                        default:
+                                            System.err.println("Unknown strategy key: " + key);
+                                    }
+                                } catch (IllegalArgumentException e) {
+                                    System.err.println("Invalid value for strategy " + key + ": " + value + " ("
+                                            + e.getMessage() + ")");
                                 }
-                            } catch (IllegalArgumentException e) {
-                                 System.err.println("Invalid value for strategy " + key + ": " + value + " (" + e.getMessage() + ")");
                             }
-                        }
-                        if (strategyUpdated) {
-                        } else if (!inputLine.trim().equalsIgnoreCase("SET STRATEGY")) {
-                            System.err.println("No valid strategy key-value pairs found in SET STRATEGY command. Format: key=value ...");
-                        }
+                            if (strategyUpdated) {
+                            } else if (!inputLine.trim().equalsIgnoreCase("SET STRATEGY")) {
+                                System.err.println(
+                                        "No valid strategy key-value pairs found in SET STRATEGY command. Format: key=value ...");
+                            }
 
-                    } else if (inputLine.matches("(?i)^SET\\s+OUTPUT.*")) {
-                        String outputCmdArgs = inputLine.substring(inputLine.toLowerCase().indexOf("output") + "output".length()).trim();
-                        if (outputCmdArgs.equalsIgnoreCase("none")) {
-                            cli.setCurrentExportFormat(Optional.empty());
-                            cli.setCurrentExportFilename(Optional.empty());
-                        } else {
-                            String[] parts = outputCmdArgs.split("\\s+", 2);
-                            if (parts.length == 2 && !parts[0].isEmpty() && !parts[1].isEmpty()) {
-                                String format = parts[0].toLowerCase();
-                                if (!Arrays.asList("csv", "json", "html").contains(format)) {
-                                    System.err.println("Unsupported export format: " + format + ". Supported: csv, json, html.");
-                                } else {
-                                    cli.setCurrentExportFormat(Optional.of(format));
-                                    cli.setCurrentExportFilename(Optional.of(parts[1]));
-                                }
+                        } else if (inputLine.matches("(?i)^SET\\s+OUTPUT.*")) {
+                            String outputCmdArgs = inputLine
+                                    .substring(inputLine.toLowerCase().indexOf("output") + "output".length()).trim();
+                            if (outputCmdArgs.equalsIgnoreCase("none")) {
+                                cli.setCurrentExportFormat(Optional.empty());
+                                cli.setCurrentExportFilename(Optional.empty());
                             } else {
-                                System.err.println("Invalid SET OUTPUT command. Use 'SET OUTPUT <format> <filename>' or 'SET OUTPUT NONE'.");
+                                String[] parts = outputCmdArgs.split("\\s+", 2);
+                                if (parts.length == 2 && !parts[0].isEmpty() && !parts[1].isEmpty()) {
+                                    String format = parts[0].toLowerCase();
+                                    if (!Arrays.asList("csv", "json", "html").contains(format)) {
+                                        System.err.println("Unsupported export format: " + format
+                                                + ". Supported: csv, json, html.");
+                                    } else {
+                                        cli.setCurrentExportFormat(Optional.of(format));
+                                        cli.setCurrentExportFilename(Optional.of(parts[1]));
+                                    }
+                                } else {
+                                    System.err.println(
+                                            "Invalid SET OUTPUT command. Use 'SET OUTPUT <format> <filename>' or 'SET OUTPUT NONE'.");
+                                }
                             }
+
+                        } else if (!inputLine.isEmpty()) {
+                            cli.executeQuery(inputLine);
                         }
-
-                    } else if (!inputLine.isEmpty()) {
-                        cli.executeQuery(inputLine);
                     }
-                }
-                scanner.close();
-                System.out.println("Exiting QueryCLI interactive mode.");
+                    scanner.close();
+                    System.out.println("Exiting QueryCLI interactive mode.");
 
-            } else { // Single query mode
-                cli.executeQuery(queryStr);
+                } else { // Single query mode
+                    cli.executeQuery(queryStr);
+                }
             }
-        }
 
         } catch (ArgumentParserException e) {
             cliArgParser.handleError(e);
