@@ -1,5 +1,6 @@
 package com.example.annotation;
 
+import com.example.util.TextCompression;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -212,14 +213,19 @@ class AnnotationsTest {
                     "SELECT * FROM dependencies WHERE begin_char >= end_char");
             assertFalse(rs.next(), "begin_char should be less than end_char");
 
-            // Verify positions are within document bounds
+            // Verify positions are within document bounds (decompress text for length
+            // check)
             rs = stmt.executeQuery("""
                         SELECT a.*, d.text
                         FROM annotations a
                         JOIN documents d ON a.document_id = d.document_id
-                        WHERE a.begin_char < 0 OR a.end_char > length(d.text)
                     """);
-            assertFalse(rs.next(), "Character positions should be within document bounds");
+            while (rs.next()) {
+                String docText = TextCompression.decompress(rs.getBytes("text"));
+                int endChar = rs.getInt("end_char");
+                assertTrue(endChar <= docText.length(),
+                        "end_char should be within document bounds for annotation " + rs.getInt("annotation_id"));
+            }
 
             // Verify token positions match the text
             rs = stmt.executeQuery("""
@@ -227,17 +233,16 @@ class AnnotationsTest {
                         FROM annotations a
                         JOIN documents d ON a.document_id = d.document_id
                     """);
-
             while (rs.next()) {
                 String token = rs.getString("token");
-                String text = rs.getString("text");
+                String docText = TextCompression.decompress(rs.getBytes("text"));
                 int begin = rs.getInt("begin_char");
                 int end = rs.getInt("end_char");
-
-                String extractedToken = text.substring(begin, end);
+                String extractedToken = docText.substring(begin, end);
                 assertEquals(token, extractedToken.trim(),
                         "Token should match text at specified position");
             }
+
         }
     }
 
@@ -455,7 +460,7 @@ class AnnotationsTest {
 
             while (rs.next()) {
                 String token = rs.getString("token");
-                String text = rs.getString("text");
+                String text = TextCompression.decompress(rs.getBytes("text"));
                 int begin = rs.getInt("begin_char");
                 int end = rs.getInt("end_char");
 
@@ -521,7 +526,7 @@ class AnnotationsTest {
     private void insertTestDocument(String text) throws SQLException {
         String sql = "INSERT INTO documents (text) VALUES (?)";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, text);
+            pstmt.setBytes(1, TextCompression.compress(text));
             pstmt.executeUpdate();
         }
     }

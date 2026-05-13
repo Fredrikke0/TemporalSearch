@@ -1,5 +1,6 @@
 package com.example;
 
+import com.example.util.TextCompression;
 import static com.example.WikiJsonToSqlite.extractToSqlite;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -464,7 +465,9 @@ public class PipelineTest {
             rs = stmt.executeQuery("SELECT title, text FROM documents ORDER BY document_id LIMIT 1");
             assertTrue(rs.next());
             assertNotNull(rs.getString("title"), "Document title should not be null");
-            assertNotNull(rs.getString("text"), "Document text should not be null");
+            byte[] textBytes = rs.getBytes("text");
+            assertNotNull(textBytes, "Document text should not be null");
+            assertFalse(TextCompression.decompress(textBytes).isEmpty(), "Document text should not be empty");
         }
         logger.debug("Conversion stage verification completed");
     }

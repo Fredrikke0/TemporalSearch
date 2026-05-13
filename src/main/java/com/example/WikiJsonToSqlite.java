@@ -17,6 +17,7 @@ import java.sql.Statement;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.util.TextCompression;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -28,24 +29,35 @@ import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
 
 /**
- * Standalone tool to convert Wikipedia JSON dumps (in Elasticsearch bulk format)
- * into an SQLite database suitable for input into the NLP Pipeline (`Pipeline.java`).
+ * Standalone tool to convert Wikipedia JSON dumps (in Elasticsearch bulk
+ * format)
+ * into an SQLite database suitable for input into the NLP Pipeline
+ * (`Pipeline.java`).
  *
- * <p>This serves as an example converter. Users processing different data sources
- * should create similar dedicated converters.</p>
+ * <p>
+ * This serves as an example converter. Users processing different data sources
+ * should create similar dedicated converters.
+ * </p>
  *
- * <p>Input Format: Expects a JSON file where each line is a JSON object,
+ * <p>
+ * Input Format: Expects a JSON file where each line is a JSON object,
  * typically obtained from Wikimedia CirrusSearch dumps:
- * <a href="https://dumps.wikimedia.org/other/cirrussearch/">https://dumps.wikimedia.org/other/cirrussearch/</a>.
- * The tool extracts 'title', 'text', and 'timestamp' fields from objects containing text.</p>
+ * <a href=
+ * "https://dumps.wikimedia.org/other/cirrussearch/">https://dumps.wikimedia.org/other/cirrussearch/</a>.
+ * The tool extracts 'title', 'text', and 'timestamp' fields from objects
+ * containing text.
+ * </p>
  *
- * <p>Output Schema: Creates an SQLite database with a 'documents' table containing:
+ * <p>
+ * Output Schema: Creates an SQLite database with a 'documents' table
+ * containing:
  * <ul>
- *   <li>document_id INTEGER PRIMARY KEY</li>
- *   <li>title TEXT</li>
- *   <li>text TEXT</li>
- *   <li>timestamp TEXT</li>
- * </ul></p>
+ * <li>document_id INTEGER PRIMARY KEY</li>
+ * <li>title TEXT</li>
+ * <li>text TEXT</li>
+ * <li>timestamp TEXT</li>
+ * </ul>
+ * </p>
  */
 public class WikiJsonToSqlite {
     private static final Logger logger = LoggerFactory.getLogger(WikiJsonToSqlite.class);
@@ -63,15 +75,17 @@ public class WikiJsonToSqlite {
 
     /**
      * Extract Wikipedia JSON dump to SQLite database
-     * @param inputFile Path to input JSON file
+     *
+     * @param inputFile    Path to input JSON file
      * @param outputDbPath Output database path
-     * @param recreate Whether to recreate the table
-     * @param limit Maximum number of entries to extract
+     * @param recreate     Whether to recreate the table
+     * @param limit        Maximum number of entries to extract
      * @return Extraction result with output path and count
      * @throws SQLException If database operations fail
-     * @throws IOException If file reading fails
+     * @throws IOException  If file reading fails
      */
-    public static ExtractionResult extractToSqlite(Path inputFile, Path outputDbPath, boolean recreate, Integer limit) throws SQLException, IOException {
+    public static ExtractionResult extractToSqlite(Path inputFile, Path outputDbPath, boolean recreate, Integer limit)
+            throws SQLException, IOException {
         // Generate output database name based on input file if not specified
         Path outputDb = outputDbPath;
         if (outputDb == null) {
@@ -89,7 +103,7 @@ public class WikiJsonToSqlite {
         }
 
         logger.info("Starting conversion for input file {}{}", inputFile,
-            limit != null ? String.format(" (will process up to %d entries)", limit) : " (processing all entries)");
+                limit != null ? String.format(" (will process up to %d entries)", limit) : " (processing all entries)");
 
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + outputDb.toString())) {
             try (Statement pragma = conn.createStatement()) {
@@ -104,13 +118,13 @@ public class WikiJsonToSqlite {
                     stmt.execute("DROP TABLE IF EXISTS documents");
                 }
                 stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS documents (
-                        document_id INTEGER PRIMARY KEY,
-                        title TEXT,
-                        text TEXT,
-                        timestamp TEXT
-                    )
-                """);
+                            CREATE TABLE IF NOT EXISTS documents (
+                                document_id INTEGER PRIMARY KEY,
+                                title TEXT,
+                                text TEXT,
+                                timestamp TEXT
+                            )
+                        """);
             }
 
             conn.setAutoCommit(false);
@@ -120,13 +134,12 @@ public class WikiJsonToSqlite {
             String insertSql = "INSERT INTO documents (title, text, timestamp) VALUES (?, ?, ?)";
 
             try (PreparedStatement pstmt = conn.prepareStatement(insertSql);
-                 BufferedReader reader = new BufferedReader(
-                     new InputStreamReader(new FileInputStream(inputFile.toFile()), StandardCharsets.UTF_8));
-                 ProgressBar pb = new ProgressBarBuilder()
-                         .setTaskName("Converting Wiki Dump")
-                         .setInitialMax(limit != null ? (long)limit : -1)
-                         .build())
-            {
+                    BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(new FileInputStream(inputFile.toFile()), StandardCharsets.UTF_8));
+                    ProgressBar pb = new ProgressBarBuilder()
+                            .setTaskName("Converting Wiki Dump")
+                            .setInitialMax(limit != null ? (long) limit : -1)
+                            .build()) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     try {
@@ -138,7 +151,7 @@ public class WikiJsonToSqlite {
 
                         if (item.has("text")) {
                             pstmt.setString(1, getTextValue(item, "title"));
-                            pstmt.setString(2, getTextValue(item, "text"));
+                            pstmt.setBytes(2, TextCompression.compress(getTextValue(item, "text")));
                             pstmt.setString(3, getTextValue(item, "timestamp"));
                             pstmt.addBatch();
                             totalEntries++;

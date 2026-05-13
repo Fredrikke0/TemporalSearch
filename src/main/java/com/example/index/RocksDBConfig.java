@@ -11,8 +11,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Centralized configuration for RocksDB settings optimized for high-throughput index generation.
- * Provides consistent configuration across different index generator implementations.
+ * Centralized configuration for RocksDB settings optimized for high-throughput
+ * index generation.
+ * Provides consistent configuration across different index generator
+ * implementations.
  */
 public class RocksDBConfig {
     private static final Logger logger = LoggerFactory.getLogger(RocksDBConfig.class);
@@ -21,17 +23,24 @@ public class RocksDBConfig {
         RocksDB.loadLibrary();
     }
 
-    public static final long WRITE_BUFFER_SIZE = 256L * 1024 * 1024;
-    public static final long BLOCK_CACHE_SIZE = (long) (Runtime.getRuntime().maxMemory() * 0.3);
+    // Use a fixed, conservative block cache size instead of a percentage of max
+    // heap.
+    // With multiple indexes open simultaneously (e.g. during queries), a
+    // percentage-based
+    // cache multiplies quickly and exhausts system RAM on machines with < 32GB.
+    // 128MB per index × ~8 indexes = ~1GB, safe on 16GB laptops.
+    public static final long WRITE_BUFFER_SIZE = 128L * 1024 * 1024; // 128MB (down from 256MB)
+    public static final long BLOCK_CACHE_SIZE = 128L * 1024 * 1024; // 128MB fixed (was 30% of max heap)
     public static final int BLOOM_FILTER_BITS_PER_KEY = 10;
     public static final boolean BLOOM_FILTER_USE_BLOCK_BASED_BUILDER = false;
 
     private static final long MAX_MANIFEST_FILE_SIZE = 64L * 1024 * 1024; // 64MB
-    private static final long MAX_TOTAL_WAL_SIZE = 512L * 1024 * 1024; // 512MB
+    private static final long MAX_TOTAL_WAL_SIZE = 128L * 1024 * 1024; // 128MB (down from 512MB)
 
     /**
      * Creates an optimized Options instance for RocksDB configuration.
-     * Settings are tuned for high-throughput index generation with reduced write amplification.
+     * Settings are tuned for high-throughput index generation with reduced write
+     * amplification.
      *
      * @return Configured Options instance
      */
@@ -40,7 +49,8 @@ public class RocksDBConfig {
         options.setCreateIfMissing(true);
         options.setWriteBufferSize(WRITE_BUFFER_SIZE);
 
-        // DB Open Optimizations from https://github.com/facebook/rocksdb/wiki/Speed-Up-DB-Open
+        // DB Open Optimizations from
+        // https://github.com/facebook/rocksdb/wiki/Speed-Up-DB-Open
         options.setSkipStatsUpdateOnDbOpen(true);
         options.setMaxFileOpeningThreads(Runtime.getRuntime().availableProcessors());
         options.setMaxManifestFileSize(MAX_MANIFEST_FILE_SIZE);
@@ -53,7 +63,8 @@ public class RocksDBConfig {
         tableOptions.setBlockCache(cache);
 
         // Bloom Filter Configuration (+ partitioned index/filters)
-        org.rocksdb.Filter bloomFilter = new org.rocksdb.BloomFilter(BLOOM_FILTER_BITS_PER_KEY, BLOOM_FILTER_USE_BLOCK_BASED_BUILDER);
+        org.rocksdb.Filter bloomFilter = new org.rocksdb.BloomFilter(BLOOM_FILTER_BITS_PER_KEY,
+                BLOOM_FILTER_USE_BLOCK_BASED_BUILDER);
         tableOptions.setFilterPolicy(bloomFilter);
         tableOptions.setPartitionFilters(true);
         tableOptions.setIndexType(org.rocksdb.IndexType.kTwoLevelIndexSearch);
@@ -70,30 +81,31 @@ public class RocksDBConfig {
         options.setStatistics(new Statistics());
 
         logger.info("RocksDB configuration:" +
-                   "\n- Write buffer: {}MB" +
-                   "\n- Block cache: {}GB" +
-                   "\n- Compression: {}" +
-                   "\n- Statistics enabled: {}" +
-                   "\n- Skip stats update on DB open: {}" +
-                   "\n- Max file opening threads: {}" +
-                   "\n- Max manifest file size: {}MB" +
-                   "\n- Max total WAL size: {}MB" +
-                   "\n- Skip checking SST file sizes on DB open: {}",
-                   WRITE_BUFFER_SIZE / (1024 * 1024),
-                   BLOCK_CACHE_SIZE / (1024 * 1024 * 1024),
-                   options.compressionType(),
-                   options.statistics() != null,
-                   true,
-                   Runtime.getRuntime().availableProcessors(),
-                   MAX_MANIFEST_FILE_SIZE / (1024 * 1024),
-                   MAX_TOTAL_WAL_SIZE / (1024 * 1024),
-                   true);
+                "\n- Write buffer: {}MB" +
+                "\n- Block cache: {}GB" +
+                "\n- Compression: {}" +
+                "\n- Statistics enabled: {}" +
+                "\n- Skip stats update on DB open: {}" +
+                "\n- Max file opening threads: {}" +
+                "\n- Max manifest file size: {}MB" +
+                "\n- Max total WAL size: {}MB" +
+                "\n- Skip checking SST file sizes on DB open: {}",
+                WRITE_BUFFER_SIZE / (1024 * 1024),
+                BLOCK_CACHE_SIZE / (1024 * 1024 * 1024),
+                options.compressionType(),
+                options.statistics() != null,
+                true,
+                Runtime.getRuntime().availableProcessors(),
+                MAX_MANIFEST_FILE_SIZE / (1024 * 1024),
+                MAX_TOTAL_WAL_SIZE / (1024 * 1024),
+                true);
 
         return options;
     }
 
     /**
-     * Adjusts options for bulk load (disable auto compactions). Caller should re-enable post-ingest.
+     * Adjusts options for bulk load (disable auto compactions). Caller should
+     * re-enable post-ingest.
      */
     public static void configureForBulkLoad(Options options) {
         options.setDisableAutoCompactions(true);
@@ -109,7 +121,7 @@ public class RocksDBConfig {
     /**
      * Collects and logs RocksDB statistics for monitoring and debugging.
      *
-     * @param db The RocksDB database instance
+     * @param db         The RocksDB database instance
      * @param statistics The Statistics object associated with the DB options
      */
     public static void collectRocksDBStats(RocksDB db, Statistics statistics) {
