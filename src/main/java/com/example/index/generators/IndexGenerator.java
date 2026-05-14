@@ -250,7 +250,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             // sorted.
             List<Map.Entry<String, Collection<PostingList>>> sortedEntries = new ArrayList<>(
                     postings.asMap().entrySet());
-            sortedEntries.sort((e1, e2) -> compareKeysUtf8(e1.getKey(), e2.getKey()));
+            sortedEntries.sort((e1, e2) -> compareByteArrays(
+                    e1.getKey().getBytes(StandardCharsets.UTF_8),
+                    e2.getKey().getBytes(StandardCharsets.UTF_8)));
 
             for (Map.Entry<String, Collection<PostingList>> entry : sortedEntries) {
                 // Merge all posting lists for this term within this batch
@@ -260,8 +262,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 }
                 PostingList merged = PostingList.union(lists);
 
+                String b64Key = Base64.getEncoder().encodeToString(
+                        entry.getKey().getBytes(StandardCharsets.UTF_8));
                 String line = String.format("%s\t%s\n",
-                        entry.getKey(),
+                        b64Key,
                         Base64.getEncoder().encodeToString(merged.serialize()));
                 if (line.length() > 10 * 1024 * 1024) { // Log if a single line is very large (e.g. >10MB)
                     logger.warn("Very large line being written to temp file {} for key '{}'. Line length: {} bytes",
@@ -345,9 +349,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                         continue;
                     }
 
-                    String termFromFile = line.substring(0, tab);
-                    String b64 = line.substring(tab + 1);
-                    byte[] lineBlob = Base64.getDecoder().decode(b64);
+                    String b64Key = line.substring(0, tab);
+                    String b64Value = line.substring(tab + 1);
+                    String termFromFile = new String(Base64.getDecoder().decode(b64Key), StandardCharsets.UTF_8);
+                    byte[] lineBlob = Base64.getDecoder().decode(b64Value);
 
                     if (currentTerm == null) {
                         currentTerm = termFromFile;
@@ -612,20 +617,19 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             int tb = b.indexOf('\t');
             if (tb < 0)
                 tb = b.length();
-            String ka = a.substring(0, ta);
-            String kb = b.substring(0, tb);
-            return compareKeysUtf8(ka, kb);
+            // Keys are now base64-encoded in the temp file; decode before comparing
+            byte[] ka = Base64.getDecoder().decode(a.substring(0, ta));
+            byte[] kb = Base64.getDecoder().decode(b.substring(0, tb));
+            return compareByteArrays(ka, kb);
         }
     }
 
-    private static int compareKeysUtf8(String a, String b) {
-        byte[] ab = a.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] bb = b.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        int la = ab.length, lb = bb.length, i = 0;
+    private static int compareByteArrays(byte[] a, byte[] b) {
+        int la = a.length, lb = b.length, i = 0;
         int min = Math.min(la, lb);
         while (i < min) {
-            int va = ab[i] & 0xFF;
-            int vb = bb[i] & 0xFF;
+            int va = a[i] & 0xFF;
+            int vb = b[i] & 0xFF;
             if (va != vb)
                 return va - vb;
             i++;

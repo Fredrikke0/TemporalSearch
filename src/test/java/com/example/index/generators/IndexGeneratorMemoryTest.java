@@ -138,7 +138,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                         continue;
                     }
 
-                    String termFromFile = parts[0];
+                    String termFromFile = new String(Base64.getDecoder().decode(parts[0]), StandardCharsets.UTF_8);
 
                     if (currentTerm == null) {
                         currentTerm = termFromFile;
@@ -281,8 +281,9 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                 // Create multiple chunks for each term to test merging behavior
                 for (int chunkIndex = 0; chunkIndex < CHUNKS_PER_TERM; chunkIndex++) {
                     PostingList chunk = createLargePostingList(LARGE_ARRAY_SIZE / CHUNKS_PER_TERM);
+                    String b64Key = Base64.getEncoder().encodeToString(term.getBytes(StandardCharsets.UTF_8));
                     String chunkBlob = Base64.getEncoder().encodeToString(chunk.serialize());
-                    writer.write(term + "\t" + chunkBlob + "\n");
+                    writer.write(b64Key + "\t" + chunkBlob + "\n");
                 }
             }
         }
@@ -412,8 +413,9 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
             // Create many chunks for a single term
             for (int chunkIndex = 0; chunkIndex < singleTermChunks; chunkIndex++) {
                 PostingList chunk = createLargePostingList(positionsPerChunk);
+                String b64Key = Base64.getEncoder().encodeToString(term.getBytes(StandardCharsets.UTF_8));
                 String chunkBlob = Base64.getEncoder().encodeToString(chunk.serialize());
-                writer.write(term + "\t" + chunkBlob + "\n");
+                writer.write(b64Key + "\t" + chunkBlob + "\n");
             }
         }
 
@@ -448,11 +450,14 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(sortedFile, StandardCharsets.UTF_8))) {
             String emptyBlob = Base64.getEncoder().encodeToString(emptyPl.serialize());
             String normalBlob = Base64.getEncoder().encodeToString(normalPl.serialize());
+            String b64Term1 = Base64.getEncoder().encodeToString("term1".getBytes(StandardCharsets.UTF_8));
+            String b64Term2 = Base64.getEncoder().encodeToString("term2".getBytes(StandardCharsets.UTF_8));
+            String b64Term3 = Base64.getEncoder().encodeToString("term3".getBytes(StandardCharsets.UTF_8));
 
-            writer.write("term1\t" + emptyBlob + "\n");
-            writer.write("term1\t" + normalBlob + "\n");
-            writer.write("term2\t" + emptyBlob + "\n");
-            writer.write("term3\t" + normalBlob + "\n");
+            writer.write(b64Term1 + "\t" + emptyBlob + "\n");
+            writer.write(b64Term1 + "\t" + normalBlob + "\n");
+            writer.write(b64Term2 + "\t" + emptyBlob + "\n");
+            writer.write(b64Term3 + "\t" + normalBlob + "\n");
         }
 
         testGenerator.resetCounters();
