@@ -382,9 +382,21 @@ public abstract class AbstractNgramStitchGenerator
             for (Map.Entry<Long, IntArrayList> cellEntry : cellMap.entrySet()) {
                 cellKeysArr[idx] = cellEntry.getKey();
                 IntArrayList beginsList = cellEntry.getValue();
-                byte[] begins = new byte[beginsList.size()];
+                // Sort and deduplicate: overlapping annotations of same type/value
+                // can assign the same ngram beginChar multiple times within a cell.
+                beginsList.sort(null);
+                int uniqueCount = 0;
                 for (int j = 0; j < beginsList.size(); j++) {
-                    begins[j] = (byte) beginsList.getInt(j);
+                    if (j == 0 || beginsList.getInt(j) != beginsList.getInt(j - 1)) {
+                        uniqueCount++;
+                    }
+                }
+                byte[] begins = new byte[uniqueCount];
+                int outIdx = 0;
+                for (int j = 0; j < beginsList.size(); j++) {
+                    if (j == 0 || beginsList.getInt(j) != beginsList.getInt(j - 1)) {
+                        begins[outIdx++] = (byte) beginsList.getInt(j);
+                    }
                 }
                 beginsArr[idx] = begins;
                 idx++;

@@ -531,7 +531,31 @@ public class OccurrencesBlock {
             dest += src.length;
         }
 
+        // Assert begins are strictly ascending within each cell.
+        // With sentence-relative positions (Annotations.java stores values
+        // in [0, MAX_SENTENCE_LENGTH=150]) the byte truncation is a no-op
+        // and natural ordering is preserved. This assertion catches
+        // regressions during development; disabled by default at runtime.
+        assert checkBeginsSorted(begins, cellOffsets, n);
+
         return new OccurrencesBlock(sortedKeys, cellOffsets, begins, constantLength);
+    }
+
+    /**
+     * Returns true if begins are strictly ascending (unsigned) within every cell.
+     * Used only by {@code assert} statements — not part of the public API.
+     */
+    private static boolean checkBeginsSorted(byte[] begins, int[] cellOffsets, int numCells) {
+        for (int i = 0; i < numCells; i++) {
+            int start = cellOffsets[i];
+            int end = cellOffsets[i + 1];
+            for (int j = start + 1; j < end; j++) {
+                if (Byte.toUnsignedInt(begins[j]) <= Byte.toUnsignedInt(begins[j - 1])) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     // ---------- object methods ----------
