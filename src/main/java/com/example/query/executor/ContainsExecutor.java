@@ -1,5 +1,6 @@
 package com.example.query.executor;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
@@ -201,17 +202,20 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
 
     /**
      * Performs a prefix scan over the index using a bounded RocksIterator.
-     * Each matching key's PostingList is retrieved and OR-ed into the result.
+     * Uses the iterator's value directly (avoiding a separate db.get() per key)
+     * and ORs all bitmap data into a single accumulator to avoid O(n²) clone
+     * cost from repeated {@link CellResult#or(CellResult)} calls.
      */
     private CellResult executePrefixScan(String prefix, IndexAccessInterface index,
             Query.Granularity granularity,
             PostingList.DeserializeMode mode)
             throws IndexAccessException {
 
-        CellResult result = CellResult.empty(granularity);
         byte[] prefixBytes = prefix.getBytes(StandardCharsets.UTF_8);
         byte[] upperBound = Arrays.copyOf(prefixBytes, prefixBytes.length + 1);
         upperBound[upperBound.length - 1] = (byte) 0xFF;
+
+        Roaring64NavigableMap resultCells = new Roaring64NavigableMap();
 
         try (RocksIterator iterator = index.seekWithBounds(prefixBytes, upperBound, 256 * 1024)) {
             int keysMatched = 0;
@@ -222,20 +226,29 @@ public final class ContainsExecutor implements ConditionExecutor<Contains> {
                     break;
                 }
 
-                Optional<PostingList> plOpt = index.getPostingList(keyBytes, mode);
-                if (plOpt.isPresent() && !plOpt.get().isEmpty()) {
-                    PostingList pl = plOpt.get();
-                    CellResult keyResult = (mode == PostingList.DeserializeMode.FULL)
-                            ? CellResult.fromPostingListWithOccurrences(pl, granularity)
-                            : CellResult.fromPostingList(pl, granularity);
-                    result = result.or(keyResult);
-                    keysMatched++;
+                // Use iterator value directly instead of a separate db.get()
+                byte[] value = iterator.value();
+                if (value != null && value.length > 0) {
+                    try {
+                        PostingList pl = PostingList.deserialize(value, mode);
+                        if (!pl.isEmpty()) {
+                            resultCells.or(pl.cells());
+                            keysMatched++;
+                        }
+                    } catch (IOException e) {
+                        logger.warn("Failed to deserialize posting list for prefix key '{}': {}",
+                                currentKey, e.getMessage());
+                    }
                 }
                 iterator.next();
             }
             logger.debug("Prefix scan for '{}' matched {} keys, result has {} cells",
-                    prefix, keysMatched, result.cellCount());
+                    prefix, keysMatched, resultCells.getLongCardinality());
         }
-        return result;
+
+        if (resultCells.isEmpty()) {
+            return CellResult.empty(granularity);
+        }
+        return CellResult.of(resultCells, granularity);
     }
 }

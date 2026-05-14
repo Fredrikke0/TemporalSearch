@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
@@ -158,6 +159,16 @@ class NerExecutorTest {
         configureRocksIteratorMock(iterator, rawEntries);
 
         lenient().when(index.seek(argThat(k -> Arrays.equals(k, prefix))))
+                .thenAnswer(inv -> {
+                    iterator.seek(prefix);
+                    return iterator;
+                });
+
+        // Also mock seekWithBounds (used by the production code after the
+        // performance refactor). For tests we ignore the upper-bound and
+        // readahead args and delegate to the same iterator logic.
+        lenient().when(index.seekWithBounds(argThat(k -> Arrays.equals(k, prefix)),
+                any(byte[].class), anyLong()))
                 .thenAnswer(inv -> {
                     iterator.seek(prefix);
                     return iterator;

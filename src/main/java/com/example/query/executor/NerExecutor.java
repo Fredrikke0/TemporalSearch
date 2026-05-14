@@ -1,5 +1,7 @@
 package com.example.query.executor;
 
+import java.io.IOException;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -133,8 +135,11 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
      * Entity type only search (e.g. {@code NER(PERSON)} or
      * {@code NER(PERSON) BIND var}).
      * <p>
-     * Performs a prefix scan over {@code TYPE\0} in the NER index, fetches the
-     * posting list for each key, and ORs all results together.
+     * Performs a prefix scan over {@code TYPE\0} in the NER index. Instead of
+     * issuing a separate {@code db.get()} for every key (which would double the
+     * I/O), the iterator's own {@code value()} is deserialised directly.
+     * Bitmaps are accumulated and OR-ed into a single result bitmap to avoid
+     * the O(n²) clone cost of repeated {@link CellResult#or(CellResult)} calls.
      */
     private CellResult executeEntityTypeSearch(String type, IndexAccessInterface index,
             Query.Granularity granularity,
@@ -143,10 +148,15 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
         logger.debug("executeEntityTypeSearch: Prefix scan for type '{}'", type);
 
         byte[] prefix = KeySchema.encodeTypePrefix(type);
-        CellResult result = CellResult.empty(granularity);
+        // Build an upper bound one byte past the prefix for RocksDB iterate-upper-bound
+        byte[] upperBound = Arrays.copyOf(prefix, prefix.length + 1);
+        upperBound[upperBound.length - 1] = (byte) 0xFF;
 
-        try (RocksIterator iter = index.seek(prefix)) {
+        Roaring64NavigableMap resultCells = new Roaring64NavigableMap();
+
+        try (RocksIterator iter = index.seekWithBounds(prefix, upperBound, 256 * 1024)) {
             int keysExamined = 0;
+            int keysWithData = 0;
             while (iter.isValid()) {
                 byte[] key = iter.key();
                 if (!startsWith(key, prefix)) {
@@ -154,18 +164,36 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                 }
                 keysExamined++;
 
-                Optional<PostingList> plOpt = index.getPostingList(key, mode);
-                if (plOpt.isPresent() && !plOpt.get().isEmpty()) {
-                    CellResult cr = toCellResult(plOpt.get(), granularity, mode);
-                    result = result.or(cr);
+                // Use iterator value directly instead of a separate db.get()
+                byte[] value = iter.value();
+                if (value != null && value.length > 0) {
+                    try {
+                        PostingList pl = PostingList.deserialize(value, mode);
+                        if (!pl.isEmpty()) {
+                            resultCells.or(pl.cells());
+                            keysWithData++;
+                        }
+                    } catch (IOException e) {
+                        logger.warn("Failed to deserialize posting list for NER key: {}", e.getMessage());
+                    }
+                }
+
+                if (keysExamined % 5000 == 0) {
+                    logger.debug("executeEntityTypeSearch: Examined {} keys so far for type '{}',"
+                            + " {} with data, result has {} cells",
+                            keysExamined, type, keysWithData, resultCells.getLongCardinality());
                 }
                 iter.next();
             }
-            logger.debug("executeEntityTypeSearch: Examined {} keys for type '{}', result has {} cells",
-                    keysExamined, type, result.cellCount());
+            logger.debug("executeEntityTypeSearch: Examined {} keys for type '{}',"
+                    + " {} with data, result has {} cells",
+                    keysExamined, type, keysWithData, resultCells.getLongCardinality());
         }
 
-        return result;
+        if (resultCells.isEmpty()) {
+            return CellResult.empty(granularity);
+        }
+        return CellResult.of(resultCells, granularity);
     }
 
     /**
