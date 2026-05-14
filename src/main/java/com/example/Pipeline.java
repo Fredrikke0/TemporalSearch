@@ -136,6 +136,7 @@ public class Pipeline {
                 .choices(allPossibleIndexTypes.toArray(new String[0]))
                 .setDefault(java.util.List.of("all"))
                 .nargs("+")
+                .metavar("TYPE")
                 .help("Type of index to generate (can specify multiple, space-separated): " +
                         "unigram, bigram, trigram, dependency, ner_date, ner, pos, " +
                         "various stitch_* types (e.g., stitch_unigram_date), " +

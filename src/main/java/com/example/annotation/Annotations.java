@@ -262,24 +262,31 @@ public class Annotations {
             }
         }
 
-        AnnotationStatus currentStatus = getAnnotationStatus(projectDbPath);
         int startId;
-        boolean needsProcessing = currentStatus.needsProcessing;
+        boolean needsProcessing;
 
-        if (cliStartDocId != null) {
-            startId = cliStartDocId;
-            logger.trace("Using command-line specified --start-doc-id: {}", startId);
-            if (force) {
-                logger.trace(
-                        "--force is also active. Annotation will start from {} and overwrite existing annotations from this ID onwards.",
-                        startId);
+        if (force) {
+            // When force is active, skip the status check entirely to avoid misleading
+            // log messages about the "next document to annotate" before deletions occur.
+            if (cliStartDocId != null) {
+                startId = cliStartDocId;
+            } else {
+                startId = 1;
             }
-        } else if (force) {
-            startId = 1;
-            logger.trace("--force active, starting annotation from document_id 1.");
+            needsProcessing = true;
+            logger.trace("--force active, starting annotation from document_id {}.", startId);
         } else {
-            startId = currentStatus.startDocumentId;
-            logger.trace("Resuming annotation based on status, starting from document_id: {}", startId);
+            AnnotationStatus currentStatus = getAnnotationStatus(projectDbPath);
+            needsProcessing = currentStatus.needsProcessing;
+            if (cliStartDocId != null) {
+                startId = cliStartDocId;
+                logger.trace("Using command-line specified --start-doc-id: {}", startId);
+            } else {
+                startId = currentStatus.startDocumentId;
+                if (needsProcessing) {
+                    logger.trace("Resuming annotation based on status, starting from document_id: {}", startId);
+                }
+            }
         }
 
         if (force || needsProcessing) {
@@ -309,18 +316,28 @@ public class Annotations {
             conn.setAutoCommit(false);
             createTables(conn, false);
 
+            if (!CoreNLPConfig.DEPENDENCY_ENABLED) {
+                logger.info("Dependency parsing is disabled (DEPENDENCY_ENABLED=false). " +
+                        "Only token, POS, lemma, and NER annotations will be produced.");
+            }
+
             if (force) {
-                logger.info("Force flag is true. Deleting existing annotations and dependencies for document_id >= {}",
+                logger.info("Force flag is true. Deleting existing annotations{} for document_id >= {}",
+                        CoreNLPConfig.DEPENDENCY_ENABLED ? " and dependencies" : "",
                         startDocumentId);
-                try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id >= ?");
-                        PreparedStatement delDep = conn
-                                .prepareStatement("DELETE FROM dependencies WHERE document_id >= ?")) {
+                try (PreparedStatement delAnn = conn
+                        .prepareStatement("DELETE FROM annotations WHERE document_id >= ?")) {
 
                     delAnn.setInt(1, startDocumentId);
                     delAnn.executeUpdate();
 
-                    delDep.setInt(1, startDocumentId);
-                    delDep.executeUpdate();
+                    if (CoreNLPConfig.DEPENDENCY_ENABLED) {
+                        try (PreparedStatement delDep = conn
+                                .prepareStatement("DELETE FROM dependencies WHERE document_id >= ?")) {
+                            delDep.setInt(1, startDocumentId);
+                            delDep.executeUpdate();
+                        }
+                    }
 
                     conn.commit();
                 } catch (SQLException e) {
@@ -331,15 +348,19 @@ public class Annotations {
                 logger.info(
                         "Resuming or starting from specific ID (force=false). Performing cleanup for document_id: {}",
                         startDocumentId);
-                try (PreparedStatement delAnn = conn.prepareStatement("DELETE FROM annotations WHERE document_id = ?");
-                        PreparedStatement delDep = conn
-                                .prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
+                try (PreparedStatement delAnn = conn
+                        .prepareStatement("DELETE FROM annotations WHERE document_id = ?")) {
 
                     delAnn.setInt(1, startDocumentId);
                     delAnn.executeUpdate();
 
-                    delDep.setInt(1, startDocumentId);
-                    delDep.executeUpdate();
+                    if (CoreNLPConfig.DEPENDENCY_ENABLED) {
+                        try (PreparedStatement delDep = conn
+                                .prepareStatement("DELETE FROM dependencies WHERE document_id = ?")) {
+                            delDep.setInt(1, startDocumentId);
+                            delDep.executeUpdate();
+                        }
+                    }
 
                     conn.commit();
                 } catch (SQLException e) {
@@ -660,24 +681,26 @@ public class Annotations {
 
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_annotations_document_id ON annotations (document_id)");
 
-            stmt.execute("""
-                        CREATE TABLE IF NOT EXISTS dependencies (
-                            dependency_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            document_id INTEGER NOT NULL,
-                            sentence_id INTEGER,
-                            begin_char INTEGER,
-                            end_char INTEGER,
-                            head_token TEXT,
-                            dependent_token TEXT,
-                            relation TEXT,
-                            FOREIGN KEY (document_id) REFERENCES documents(document_id)
-                        )
-                    """);
+            if (CoreNLPConfig.DEPENDENCY_ENABLED) {
+                stmt.execute("""
+                            CREATE TABLE IF NOT EXISTS dependencies (
+                                dependency_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                document_id INTEGER NOT NULL,
+                                sentence_id INTEGER,
+                                begin_char INTEGER,
+                                end_char INTEGER,
+                                head_token TEXT,
+                                dependent_token TEXT,
+                                relation TEXT,
+                                FOREIGN KEY (document_id) REFERENCES documents(document_id)
+                            )
+                        """);
 
-            stmt.execute("CREATE INDEX IF NOT EXISTS idx_dependencies_document_id ON dependencies (document_id)");
-            stmt.execute("CREATE INDEX IF NOT EXISTS idx_dep_id ON dependencies (dependency_id)");
-            stmt.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_dep_relation_did_sid_tokens ON dependencies (relation, document_id, sentence_id, head_token, dependent_token)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_dependencies_document_id ON dependencies (document_id)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_dep_id ON dependencies (dependency_id)");
+                stmt.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_dep_relation_did_sid_tokens ON dependencies (relation, document_id, sentence_id, head_token, dependent_token)");
+            }
 
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_doc_id_timestamp ON documents (document_id, timestamp)");
         }
@@ -776,35 +799,37 @@ public class Annotations {
                 }
             }
 
-            // Process dependencies
-            SemanticGraph dependencies_graph = sentence.dependencyParse();
-            if (dependencies_graph != null) {
-                for (SemanticGraphEdge edge : dependencies_graph.edgeIterable()) {
-                    IndexedWord source = edge.getSource();
-                    IndexedWord target = edge.getTarget();
+            // Process dependencies (only if enabled in CoreNLPConfig)
+            if (CoreNLPConfig.DEPENDENCY_ENABLED) {
+                SemanticGraph dependencies_graph = sentence.dependencyParse();
+                if (dependencies_graph != null) {
+                    for (SemanticGraphEdge edge : dependencies_graph.edgeIterable()) {
+                        IndexedWord source = edge.getSource();
+                        IndexedWord target = edge.getTarget();
 
-                    // Filter out dependencies if either token was filtered out
-                    if (!keepToken(source.backingLabel()) || !keepToken(target.backingLabel())) {
-                        continue;
-                    }
+                        // Filter out dependencies if either token was filtered out
+                        if (!keepToken(source.backingLabel()) || !keepToken(target.backingLabel())) {
+                            continue;
+                        }
 
-                    if (source.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH &&
-                            target.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
+                        if (source.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH &&
+                                target.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
 
-                        int beginChar = Math.min(source.beginPosition(), target.beginPosition());
-                        int endChar = Math.max(source.endPosition(), target.endPosition());
+                            int beginChar = Math.min(source.beginPosition(), target.beginPosition());
+                            int endChar = Math.max(source.endPosition(), target.endPosition());
 
-                        if (endChar <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
-                            Map<String, Object> dependency = new HashMap<>();
-                            dependency.put("document_id", documentId);
-                            dependency.put("sentence_id", sentenceId);
-                            dependency.put("begin_char", beginChar);
-                            dependency.put("end_char", endChar);
-                            dependency.put("head_token", source.word());
-                            dependency.put("dependent_token", target.word());
-                            dependency.put("relation", edge.getRelation().toString());
+                            if (endChar <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
+                                Map<String, Object> dependency = new HashMap<>();
+                                dependency.put("document_id", documentId);
+                                dependency.put("sentence_id", sentenceId);
+                                dependency.put("begin_char", beginChar);
+                                dependency.put("end_char", endChar);
+                                dependency.put("head_token", source.word());
+                                dependency.put("dependent_token", target.word());
+                                dependency.put("relation", edge.getRelation().toString());
 
-                            dependencies.add(dependency);
+                                dependencies.add(dependency);
+                            }
                         }
                     }
                 }
@@ -831,8 +856,7 @@ public class Annotations {
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """;
 
-        try (PreparedStatement annotationStmt = conn.prepareStatement(annotationSQL);
-                PreparedStatement dependencyStmt = conn.prepareStatement(dependencySQL)) {
+        try (PreparedStatement annotationStmt = conn.prepareStatement(annotationSQL)) {
 
             for (Map<String, Object> annotation : annotations) {
                 annotationStmt.setInt(1, (Integer) annotation.get("document_id"));
@@ -847,19 +871,23 @@ public class Annotations {
                 annotationStmt.addBatch();
             }
             annotationStmt.executeBatch();
+        }
 
-            for (Map<String, Object> dependency : dependencies) {
-                dependencyStmt.setInt(1, (Integer) dependency.get("document_id"));
-                dependencyStmt.setInt(2, (Integer) dependency.get("sentence_id"));
-                dependencyStmt.setInt(3, (Integer) dependency.get("begin_char"));
-                dependencyStmt.setInt(4, (Integer) dependency.get("end_char"));
-                dependencyStmt.setString(5, (String) dependency.get("head_token"));
-                dependencyStmt.setString(6, (String) dependency.get("dependent_token"));
-                dependencyStmt.setString(7, (String) dependency.get("relation"));
+        if (!dependencies.isEmpty()) {
+            try (PreparedStatement dependencyStmt = conn.prepareStatement(dependencySQL)) {
+                for (Map<String, Object> dependency : dependencies) {
+                    dependencyStmt.setInt(1, (Integer) dependency.get("document_id"));
+                    dependencyStmt.setInt(2, (Integer) dependency.get("sentence_id"));
+                    dependencyStmt.setInt(3, (Integer) dependency.get("begin_char"));
+                    dependencyStmt.setInt(4, (Integer) dependency.get("end_char"));
+                    dependencyStmt.setString(5, (String) dependency.get("head_token"));
+                    dependencyStmt.setString(6, (String) dependency.get("dependent_token"));
+                    dependencyStmt.setString(7, (String) dependency.get("relation"));
 
-                dependencyStmt.addBatch();
+                    dependencyStmt.addBatch();
+                }
+                dependencyStmt.executeBatch();
             }
-            dependencyStmt.executeBatch();
         }
     }
 

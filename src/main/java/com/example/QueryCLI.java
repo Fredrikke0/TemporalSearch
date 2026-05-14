@@ -234,9 +234,12 @@ public class QueryCLI implements AutoCloseable {
                 // Reuse or create and cache IndexManager & TableResultService for this project
                 currentIndexManagerToUse = projectIndexManagers.get(projectName);
                 if (currentIndexManagerToUse == null) {
-                    // Build a maximal preload query to force all index types to open
+                    // Build a maximal preload query to force all index types to open.
+                    // Uses CONTAINS + NER + POS + DATE (4 diverse types) to reliably
+                    // trigger maximal preloading (threshold is >= 3). DEPENDS is omitted
+                    // because dependency parsing may be disabled system-wide.
                     String preloadQueryStr = String.format(
-                            "SELECT DOCUMENT_ID FROM %s WHERE CONTAINS('preload_x') AND NER(PERSON) AND POS(NN) AND DEPENDS('dep','rel','dep_rel') AND DATE(= 2000)",
+                            "SELECT DOCUMENT_ID FROM %s WHERE CONTAINS('preload_x') AND NER(PERSON) AND POS(NN) AND DATE(= 2000)",
                             projectName);
                     Query preloadQuery;
                     try {

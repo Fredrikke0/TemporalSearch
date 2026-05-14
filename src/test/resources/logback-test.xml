@@ -10,13 +10,8 @@
         </encoder>
     </appender>
 
-    <!-- Keep other com.example logging at WARN to reduce noise, unless overridden -->
-    <logger name="com.example" level="DEBUG" additivity="false">
-        <appender-ref ref="CONSOLE"/>
-    </logger>
-
-    <!-- Set QueryModelBuilder to ERROR level for tests to hide WARN messages -->
-    <logger name="com.example.query.parser.QueryModelBuilder" level="ERROR" additivity="false">
+    <!-- Set com.example to INFO in tests to keep output clean -->
+    <logger name="com.example" level="INFO" additivity="false">
         <appender-ref ref="CONSOLE"/>
     </logger>
 

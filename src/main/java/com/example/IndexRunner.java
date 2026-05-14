@@ -7,7 +7,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -270,6 +272,11 @@ public class IndexRunner {
                         }
 
                         if (type.equals("dependency")) {
+                            if (!tableExistsAndHasRows(conn, "dependencies")) {
+                                logger.warn(
+                                        "Dependencies table not found or empty in the database. Skipping dependency index generation. (Dependency parsing may be disabled in CoreNLPConfig)");
+                                continue;
+                            }
                             metrics.startIndexProcessing(type);
                             DependencyIndexGenerator gen = null;
                             long itemsWritten = -1;
@@ -620,5 +627,29 @@ public class IndexRunner {
             Files.createDirectories(dirPath);
             logger.debug("Created/ensured index directory exists: {}", dirPath.toAbsolutePath());
         }
+    }
+
+    /**
+     * Checks whether a table exists in the SQLite database and contains at least
+     * one row.
+     *
+     * @param conn      The database connection
+     * @param tableName The name of the table to check
+     * @return true if the table exists and has rows, false otherwise
+     */
+    private static boolean tableExistsAndHasRows(Connection conn, String tableName) {
+        try (Statement stmt = conn.createStatement();
+                ResultSet rs = stmt.executeQuery(
+                        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='" + tableName + "')")) {
+            if (rs.next() && rs.getInt(1) == 1) {
+                try (Statement countStmt = conn.createStatement();
+                        ResultSet countRs = countStmt.executeQuery("SELECT COUNT(*) FROM " + tableName)) {
+                    return countRs.next() && countRs.getInt(1) > 0;
+                }
+            }
+        } catch (SQLException e) {
+            logger.warn("Could not check for table {}: {}", tableName, e.getMessage());
+        }
+        return false;
     }
 }

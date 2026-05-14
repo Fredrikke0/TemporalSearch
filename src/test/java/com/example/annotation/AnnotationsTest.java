@@ -133,12 +133,14 @@ class AnnotationsTest {
             assertEquals(1, rs.getInt("document_id"));
             assertFalse(rs.next(), "Should only have one document ID");
 
-            // Check dependencies have valid document IDs
-            rs = stmt.executeQuery(
-                    "SELECT DISTINCT document_id FROM dependencies");
-            assertTrue(rs.next(), "Should have dependencies");
-            assertEquals(1, rs.getInt("document_id"));
-            assertFalse(rs.next(), "Should only have one document ID");
+            // Check dependencies have valid document IDs (only when enabled)
+            if (CoreNLPConfig.DEPENDENCY_ENABLED) {
+                rs = stmt.executeQuery(
+                        "SELECT DISTINCT document_id FROM dependencies");
+                assertTrue(rs.next(), "Should have dependencies");
+                assertEquals(1, rs.getInt("document_id"));
+                assertFalse(rs.next(), "Should only have one document ID");
+            }
 
             // Check for any orphaned annotations/dependencies
             rs = stmt.executeQuery("""
@@ -148,12 +150,14 @@ class AnnotationsTest {
                     """);
             assertEquals(0, rs.getInt("count"), "Should have no orphaned annotations");
 
-            rs = stmt.executeQuery("""
-                        SELECT COUNT(*) as count FROM dependencies d
-                        LEFT JOIN documents doc ON d.document_id = doc.document_id
-                        WHERE doc.document_id IS NULL
-                    """);
-            assertEquals(0, rs.getInt("count"), "Should have no orphaned dependencies");
+            if (CoreNLPConfig.DEPENDENCY_ENABLED) {
+                rs = stmt.executeQuery("""
+                            SELECT COUNT(*) as count FROM dependencies d
+                            LEFT JOIN documents doc ON d.document_id = doc.document_id
+                            WHERE doc.document_id IS NULL
+                        """);
+                assertEquals(0, rs.getInt("count"), "Should have no orphaned dependencies");
+            }
         }
     }
 
@@ -547,7 +551,9 @@ class AnnotationsTest {
     private void clearDatabase() throws SQLException {
         try (Statement stmt = conn.createStatement()) {
             stmt.execute("DELETE FROM annotations");
-            stmt.execute("DELETE FROM dependencies");
+            if (CoreNLPConfig.DEPENDENCY_ENABLED) {
+                stmt.execute("DELETE FROM dependencies");
+            }
             stmt.execute("DELETE FROM documents");
         }
     }

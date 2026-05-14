@@ -1,5 +1,6 @@
 package com.example;
 
+import com.example.annotation.CoreNLPConfig;
 import com.example.util.TextCompression;
 import static com.example.WikiJsonToSqlite.extractToSqlite;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -492,7 +493,11 @@ public class PipelineTest {
 
     private void verifyIndexingStage() {
         // Verify base index directories were created by -y all
-        String[] indexTypes = { "unigram", "bigram", "trigram", "ner", "ner_date", "pos" };
+        java.util.List<String> indexTypes = new java.util.ArrayList<>(
+                java.util.List.of("unigram", "bigram", "trigram", "ner", "ner_date", "pos"));
+        if (CoreNLPConfig.DEPENDENCY_ENABLED) {
+            indexTypes.add("dependency");
+        }
         for (String type : indexTypes) {
             Path indexPath = indexDir.resolve(type);
             assertTrue(indexPath.toFile().exists(),
