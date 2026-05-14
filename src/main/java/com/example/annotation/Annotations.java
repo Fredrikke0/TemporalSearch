@@ -759,12 +759,14 @@ public class Annotations {
                 if (!keepToken(token)) {
                     continue;
                 }
-                if (token.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
+                int relBegin = token.beginPosition() - firstTokenActualBeginChar;
+                int relEnd = token.endPosition() - firstTokenActualBeginChar;
+                if (relEnd <= CoreNLPConfig.MAX_SENTENCE_LENGTH) {
                     Map<String, Object> annotation = new HashMap<>();
                     annotation.put("document_id", documentId);
                     annotation.put("sentence_id", sentenceId);
-                    annotation.put("begin_char", token.beginPosition());
-                    annotation.put("end_char", token.endPosition());
+                    annotation.put("begin_char", relBegin);
+                    annotation.put("end_char", relEnd);
                     annotation.put("token", token.word());
                     annotation.put("pos", token.tag());
                     annotation.put("ner", token.ner());
@@ -812,18 +814,22 @@ public class Annotations {
                             continue;
                         }
 
-                        if (source.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH &&
-                                target.endPosition() <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
+                        int srcRelEnd = source.endPosition() - firstTokenActualBeginChar;
+                        int tgtRelEnd = target.endPosition() - firstTokenActualBeginChar;
+                        if (srcRelEnd <= CoreNLPConfig.MAX_SENTENCE_LENGTH &&
+                                tgtRelEnd <= CoreNLPConfig.MAX_SENTENCE_LENGTH) {
 
-                            int beginChar = Math.min(source.beginPosition(), target.beginPosition());
-                            int endChar = Math.max(source.endPosition(), target.endPosition());
+                            int relBegin = Math.min(source.beginPosition(), target.beginPosition())
+                                    - firstTokenActualBeginChar;
+                            int relEnd = Math.max(source.endPosition(), target.endPosition())
+                                    - firstTokenActualBeginChar;
 
-                            if (endChar <= firstTokenActualBeginChar + CoreNLPConfig.MAX_SENTENCE_LENGTH) {
+                            if (relEnd <= CoreNLPConfig.MAX_SENTENCE_LENGTH) {
                                 Map<String, Object> dependency = new HashMap<>();
                                 dependency.put("document_id", documentId);
                                 dependency.put("sentence_id", sentenceId);
-                                dependency.put("begin_char", beginChar);
-                                dependency.put("end_char", endChar);
+                                dependency.put("begin_char", relBegin);
+                                dependency.put("end_char", relEnd);
                                 dependency.put("head_token", source.word());
                                 dependency.put("dependent_token", target.word());
                                 dependency.put("relation", edge.getRelation().toString());

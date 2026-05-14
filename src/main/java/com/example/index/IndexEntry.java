@@ -2,7 +2,8 @@ package com.example.index;
 
 /**
  * Common interface for all index entries.
- * Provides access to position and temporal information that is shared across all entry types.
+ * Provides access to position and temporal information that is shared across
+ * all entry types.
  */
 public interface IndexEntry {
     /**
@@ -16,12 +17,16 @@ public interface IndexEntry {
     int getSentenceId();
 
     /**
-     * @return The character offset where this entry begins in the document
+     * @return The character offset where this entry begins within its sentence
+     *         (0-based, always in range [0,
+     *         {@code CoreNLPConfig.MAX_SENTENCE_LENGTH}])
      */
     int getBeginChar();
 
     /**
-     * @return The character offset where this entry ends in the document
+     * @return The character offset where this entry ends within its sentence
+     *         (0-based, always in range [0,
+     *         {@code CoreNLPConfig.MAX_SENTENCE_LENGTH}])
      */
     int getEndChar();
 }

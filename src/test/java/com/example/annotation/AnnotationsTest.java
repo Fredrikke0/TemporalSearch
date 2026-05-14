@@ -322,21 +322,23 @@ class AnnotationsTest {
                 // We should get close to that number
                 assertTrue(sentenceCount <= 350, "Expected fewer sentences than 350");
 
-                // Check for any sentences with overlapping boundaries, which shouldn't happen
+                // Verify positions are sentence-relative:
+                // - First token of each sentence should have begin_char = 0
+                // - All positions should be within [0, MAX_SENTENCE_LENGTH]
                 rs = stmt.executeQuery("""
-                            SELECT COUNT(*) FROM (
-                                SELECT a1.sentence_id
-                                FROM annotations a1
-                                JOIN annotations a2 ON a1.document_id = a2.document_id
-                                    AND a1.sentence_id != a2.sentence_id
-                                    AND a1.begin_char < a2.end_char
-                                    AND a1.end_char > a2.begin_char
-                                GROUP BY a1.sentence_id
-                            )
+                            SELECT sentence_id, MIN(begin_char) as min_begin,
+                                   MAX(end_char) as max_end
+                            FROM annotations
+                            GROUP BY sentence_id
                         """);
-                assertTrue(rs.next());
-                int overlappingSentences = rs.getInt(1);
-                assertEquals(0, overlappingSentences, "There should be no overlapping sentences");
+                while (rs.next()) {
+                    int minBegin = rs.getInt("min_begin");
+                    int maxEnd = rs.getInt("max_end");
+                    assertEquals(0, minBegin,
+                            "First token of each sentence should have begin_char = 0");
+                    assertTrue(maxEnd <= 150,
+                            "All positions should be within MAX_SENTENCE_LENGTH (150), got maxEnd=" + maxEnd);
+                }
             }
         } finally {
             clearDatabase();
@@ -388,7 +390,7 @@ class AnnotationsTest {
             ResultSet rs = stmt.executeQuery("""
                         SELECT sentence_id, token, begin_char, end_char
                         FROM annotations
-                        ORDER BY begin_char, sentence_id
+                        ORDER BY sentence_id, begin_char
                     """);
 
             int prevEnd = -1;
@@ -419,15 +421,14 @@ class AnnotationsTest {
             // Make sure we have a good number of tokens processed
             assertTrue(tokenCount > 100, "Should have processed at least 100 tokens");
 
-            // Check that sentences have reasonable character spans
+            // Check that sentences are within the sentence-relative bounds
             rs = stmt.executeQuery("""
                         SELECT sentence_id, MIN(begin_char) as sent_begin, MAX(end_char) as sent_end
                         FROM annotations
                         GROUP BY sentence_id
-                        ORDER BY sent_begin
+                        ORDER BY sentence_id
                     """);
 
-            int lastSentEnd = -1;
             while (rs.next()) {
                 int sentBegin = rs.getInt("sent_begin");
                 int sentEnd = rs.getInt("sent_end");
@@ -436,14 +437,11 @@ class AnnotationsTest {
                 assertTrue(sentBegin < sentEnd,
                         "Sentence begin should be less than sentence end");
 
-                // Verify that sentence positions generally increase
-                if (lastSentEnd != -1) {
-                    // Sentences should not overlap
-                    assertTrue(sentBegin >= lastSentEnd || sentBegin - lastSentEnd < 10,
-                            "Sentences should generally not overlap");
-                }
-
-                lastSentEnd = sentEnd;
+                // First token of each sentence should be at position 0
+                assertEquals(0, sentBegin,
+                        "Each sentence should start at begin_char = 0");
+                assertTrue(sentEnd <= 150,
+                        "Sentence span should be within MAX_SENTENCE_LENGTH (150), got " + sentEnd);
             }
         }
     }
@@ -464,13 +462,18 @@ class AnnotationsTest {
 
             while (rs.next()) {
                 String token = rs.getString("token");
-                String text = TextCompression.decompress(rs.getBytes("text"));
                 int begin = rs.getInt("begin_char");
                 int end = rs.getInt("end_char");
 
-                String extractedToken = text.substring(begin, end);
-                assertEquals(token.trim(), extractedToken.trim(),
-                        "Token should match text at position even with special characters");
+                // Positions are now sentence-relative, so verify they are within
+                // valid range rather than using them as document-level offsets.
+                assertTrue(begin >= 0,
+                        "begin_char should be non-negative for token: " + token);
+                assertTrue(end <= 150,
+                        "end_char should be within MAX_SENTENCE_LENGTH for token: " + token
+                                + ", got end=" + end);
+                assertEquals(token.length(), end - begin,
+                        "Token length should match end_char - begin_char for token: " + token);
             }
         }
     }
