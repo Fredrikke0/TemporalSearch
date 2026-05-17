@@ -195,7 +195,7 @@ public final class NerExecutor implements ConditionExecutor<Ner> {
                     }
                 }
 
-                if (keysExamined % 50000 == 0) {
+                if (keysExamined % 100000 == 0) {
                     logger.debug("executeEntityTypeSearch: Examined {} keys so far for type '{}',"
                             + " {} with data, result has {} cells",
                             keysExamined, type, keysWithData, resultCells.getLongCardinality());

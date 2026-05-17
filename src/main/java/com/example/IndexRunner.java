@@ -132,7 +132,7 @@ public class IndexRunner {
         if (customTempPath != null) {
             if (!Files.exists(customTempPath))
                 Files.createDirectories(customTempPath);
-            logger.debug("Using custom temporary directory for ExternalSort: {}", customTempPath.toAbsolutePath());
+            logger.debug("Using custom temporary directory for index generation: {}", customTempPath.toAbsolutePath());
         }
 
         Path dbFilePath = Path.of(dbPath);

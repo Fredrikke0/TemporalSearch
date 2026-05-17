@@ -42,6 +42,11 @@
         <appender-ref ref="PIPELINE_FILE"/>
     </logger>
 
+    <!-- Phase-level timing from IndexGenerator -->
+    <logger name="com.example.index.generators.IndexGenerator.command" level="INFO" additivity="false">
+        <appender-ref ref="PIPELINE_FILE"/>
+    </logger>
+
     <!-- Specific logger for metrics -->
     <logger name="com.example.logging.IndexingMetrics" level="INFO" additivity="false">
         <appender-ref ref="METRICS_FILE"/>

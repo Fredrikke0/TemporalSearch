@@ -116,13 +116,6 @@
             <version>3.1.12</version>
         </dependency>
 
-        <!-- External sorting -->
-        <dependency>
-            <groupId>com.google.code.externalsortinginjava</groupId>
-            <artifactId>externalsortinginjava</artifactId>
-            <version>0.6.2</version>
-        </dependency>
-
         <!-- JSON -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -363,21 +356,21 @@
                             </execution>
 
                             <!-- WikiJsonToSqlite JAR -->
-                                                        <execution>
-                                                            <id>wiki-converter-jar</id>
-                                                            <phase>package</phase>
-                                                            <goals>
-                                                                <goal>shade</goal>
-                                                            </goals>
-                                                            <configuration>
-                                                                <finalName>wiki-json-to-sqlite</finalName>
-                                                                <transformers>
-                                                                    <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                                                        <mainClass>com.example.WikiJsonToSqlite</mainClass>
-                                                                    </transformer>
-                                                                </transformers>
-                                                            </configuration>
-                                                        </execution>
+                                                        <!-- <execution> -->
+                                                            <!-- <id>wiki-converter-jar</id> -->
+                                                            <!-- <phase>package</phase> -->
+                                                            <!-- <goals> -->
+                                                                <!-- <goal>shade</goal> -->
+                                                            <!-- </goals> -->
+                                                            <!-- <configuration> -->
+                                                                <!-- <finalName>wiki-json-to-sqlite</finalName> -->
+                                                                <!-- <transformers> -->
+                                                                    <!-- <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"> -->
+                                                                        <!-- <mainClass>com.example.WikiJsonToSqlite</mainClass> -->
+                                                                    <!-- </transformer> -->
+                                                                <!-- </transformers> -->
+                                                            <!-- </configuration> -->
+                                                        <!-- </execution> -->
                             <!-- NytXmlToSqlite JAR -->
                             <!--
                             <execution>
