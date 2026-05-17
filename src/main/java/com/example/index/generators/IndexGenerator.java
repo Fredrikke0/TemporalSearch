@@ -1,25 +1,21 @@
 package com.example.index.generators;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -29,10 +25,10 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.PostingList;
+import com.example.index.BinarySortedFile;
 import com.example.index.IndexEntry;
 import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
-import com.google.code.externalsorting.ExternalSort;
 import com.google.common.collect.ListMultimap;
 
 /**
@@ -45,9 +41,16 @@ import com.google.common.collect.ListMultimap;
  */
 public abstract class IndexGenerator<T extends IndexEntry> implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(IndexGenerator.class);
+    private static final Logger commandLogger = LoggerFactory.getLogger(
+            IndexGenerator.class.getName() + ".command");
     public static final String DELIMITER = "\0";
     public static final char ESCAPE_CHAR = '\u001F';
-    private static final int MAX_TEMP_FILES_BEFORE_MERGE = 15_000; // Merge temp files when we hit this limit
+    // Merge temp files when we hit this limit.
+    // Kept high to minimise the number of incremental merges (each merge
+    // re-reads and re-writes all accumulated data, so fewer = less I/O).
+    // The merge implementation internally limits its fan-in to stay within
+    // file-descriptor limits, so this value only controls merge frequency.
+    private static final int MAX_TEMP_FILES_BEFORE_MERGE = 15_000;
 
     protected final IndexAccessInterface indexAccess;
     protected final Connection sqliteConn;
@@ -131,7 +134,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         this.tempDir = initializeInstanceTempDir(this.effectiveIndexName, customBaseTempDir);
 
         // tempFilePathForSorting is now always inside this specific generator's tempDir
-        this.tempFilePathForSorting = this.tempDir.resolve("sorted.tmp");
+        this.tempFilePathForSorting = this.tempDir.resolve(BinarySortedFile.DEFAULT_OUTPUT_FILENAME);
 
         try {
             long totalDocs = getDocumentCountForIndex();
@@ -243,10 +246,10 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @return The temporary file containing the sorted entries
      */
     protected File writeBatchToTempFile(ListMultimap<IndexKey, PostingList> postings) throws IOException {
-        File tempFile = Files.createTempFile(tempDir, "batch-", ".tmp").toFile();
+        File tempFile = Files.createTempFile(tempDir, "batch-", BinarySortedFile.EXTENSION).toFile();
 
-        long bytesWrittenToFile = 0;
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile, StandardCharsets.UTF_8))) {
+        try (BinarySortedFile.Writer writer = BinarySortedFile.writer(tempFile,
+                BinarySortedFile.SEQUENTIAL_BUFFER_BYTES)) {
             // Sort the entries by key (unsigned bytewise) before writing to ensure
             // each batch file is sorted.
             List<Map.Entry<IndexKey, Collection<PostingList>>> sortedEntries = new ArrayList<>(
@@ -260,25 +263,114 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     lists.add(pl);
                 }
                 PostingList merged = PostingList.union(lists);
-
-                String b64Key = entry.getKey().toBase64();
-                String line = String.format("%s\t%s\n",
-                        b64Key,
-                        Base64.getEncoder().encodeToString(merged.serialize()));
-                if (line.length() > 10 * 1024 * 1024) { // Log if a single line is very large (e.g. >10MB)
-                    logger.warn("Very large line being written to temp file {} for key '{}'. Line length: {} bytes",
-                            tempFile.getName(), entry.getKey(), line.length());
-                }
-                writer.write(line);
-                bytesWrittenToFile += line.getBytes(StandardCharsets.UTF_8).length; // Approximate byte count
+                writer.writeEntry(entry.getKey().bytes(), merged.serialize());
             }
         } catch (IOException e) {
-            logger.error(
-                    "IOException while writing to temp file {}. Bytes written before error (approx): {}. Error: {}",
-                    tempFile.getAbsolutePath(), bytesWrittenToFile, e.getMessage(), e);
-            throw e; // Re-throw the exception
+            logger.error("IOException while writing to temp file {}: {}",
+                    tempFile.getAbsolutePath(), e.getMessage(), e);
+            throw e;
         }
         return tempFile;
+    }
+
+    /**
+     * Context for managing SST file writing and rotation during bulk load.
+     */
+    private static class SstWriteContext implements AutoCloseable {
+        private final List<String> producedFiles = new ArrayList<>();
+        private final java.util.function.Supplier<org.rocksdb.SstFileWriter> sstFactory;
+        private final IndexAccessInterface indexAccess;
+        private org.rocksdb.SstFileWriter currentWriter;
+        private long currentSstBytes;
+
+        SstWriteContext(java.util.function.Supplier<org.rocksdb.SstFileWriter> sstFactory,
+                IndexAccessInterface indexAccess) {
+            this.sstFactory = sstFactory;
+            this.indexAccess = indexAccess;
+        }
+
+        void start() {
+            rotate(true);
+        }
+
+        void put(byte[] key, byte[] value) throws IOException {
+            try {
+                currentWriter.put(key, value);
+            } catch (org.rocksdb.RocksDBException e) {
+                throw new IOException("Failed to add key to SST", e);
+            }
+            currentSstBytes += key.length + value.length;
+            if (currentSstBytes >= TARGET_SST_BYTES) {
+                rotate(false);
+            }
+        }
+
+        void ingestAll() throws IndexAccessException {
+            indexAccess.ingestExternalFiles(producedFiles);
+        }
+
+        int producedFileCount() {
+            return producedFiles.size();
+        }
+
+        private void rotate(boolean force) {
+            try {
+                if (force || currentWriter == null || currentSstBytes >= TARGET_SST_BYTES) {
+                    if (currentWriter != null) {
+                        currentWriter.finish();
+                        currentWriter.close();
+                        currentWriter = null;
+                    }
+                    String sstPath = indexAccess.getIndexPath()
+                            .resolve("ingest-" + System.nanoTime() + ".sst").toString();
+                    currentWriter = sstFactory.get();
+                    currentWriter.open(sstPath);
+                    producedFiles.add(sstPath);
+                    currentSstBytes = 0L;
+                    logger.debug("Opened new SST file: {}", sstPath);
+                }
+            } catch (org.rocksdb.RocksDBException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        @Override
+        public void close() {
+            if (currentWriter != null) {
+                try {
+                    currentWriter.finish();
+                } catch (org.rocksdb.RocksDBException e) {
+                    logger.error("Failed to finish SST file", e);
+                }
+                currentWriter.close();
+                currentWriter = null;
+            }
+        }
+    }
+
+    /**
+     * Flushes the accumulated blobs for a single term: deserializes, merges, and
+     * writes to the SST.
+     *
+     * @param term  The current term
+     * @param blobs The accumulated serialized PostingList blobs
+     * @param ctx   The SST write context
+     * @return 1 if a term was flushed, 0 if blobs was empty
+     * @throws IOException if an I/O error occurs
+     */
+    private int flushTerm(IndexKey term, List<byte[]> blobs, SstWriteContext ctx) throws IOException {
+        if (blobs.isEmpty()) {
+            return 0;
+        }
+        List<PostingList> postings = new ArrayList<>(blobs.size());
+        for (byte[] blob : blobs) {
+            postings.add(PostingList.deserialize(blob));
+        }
+        PostingList merged = PostingList.union(postings);
+        byte[] payload = merged.serialize();
+        ctx.put(term.bytes(), payload);
+        blobs.clear();
+        return 1;
     }
 
     /**
@@ -292,12 +384,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         logger.info("Starting bulk load (SST ingestion) from sorted file: {}", sortedFile.getAbsolutePath());
         long totalTermsProcessedFromFile = 0;
 
-        IndexKey currentTerm = null;
-        List<byte[]> blobsForCurrentTerm = new ArrayList<>();
-
-        java.util.List<String> producedSstFiles = new java.util.ArrayList<>();
-        final org.rocksdb.SstFileWriter[] sstRef = new org.rocksdb.SstFileWriter[1];
-        final long[] currentSstBytesRef = new long[] { 0L };
         try (org.rocksdb.EnvOptions envOptions = new org.rocksdb.EnvOptions();
                 org.rocksdb.Options sstOptions = com.example.index.RocksDBConfig.createOptimizedOptions()) {
             // Attempt to disable auto-compactions during ingest (best-effort; safe to skip
@@ -311,126 +397,54 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             java.util.function.Supplier<org.rocksdb.SstFileWriter> sstFactory = () -> new org.rocksdb.SstFileWriter(
                     envOptions, sstOptions);
 
-            java.util.function.Consumer<Boolean> rotateSst = (force) -> {
-                try {
-                    if (force || sstRef[0] == null || currentSstBytesRef[0] >= TARGET_SST_BYTES) {
-                        if (sstRef[0] != null) {
-                            sstRef[0].finish();
-                            sstRef[0].close();
-                            sstRef[0] = null;
+            SstWriteContext ctx = new SstWriteContext(sstFactory, indexAccess);
+            try {
+                ctx.start();
+
+                IndexKey currentTerm = null;
+                List<byte[]> blobsForCurrentTerm = new ArrayList<>();
+
+                try (BinarySortedFile.Reader reader = BinarySortedFile.reader(sortedFile)) {
+                    while (reader.advance()) {
+                        byte[] keyBytes = reader.currentKey();
+                        byte[] valueBytes = reader.currentValue();
+                        IndexKey termFromFile = IndexKey.fromBytes(keyBytes);
+
+                        if (currentTerm == null) {
+                            currentTerm = termFromFile;
                         }
-                        String sstPath = indexAccess.getIndexPath().resolve("ingest-" + System.nanoTime() + ".sst")
-                                .toString();
-                        try {
-                            sstRef[0] = sstFactory.get();
-                            sstRef[0].open(sstPath);
-                            producedSstFiles.add(sstPath);
-                            currentSstBytesRef[0] = 0L;
-                            logger.debug("Opened new SST file: {}", sstPath);
-                        } catch (org.rocksdb.RocksDBException e) {
-                            throw new RuntimeException("Failed to open SST file: " + sstPath, e);
+
+                        if (!termFromFile.equals(currentTerm)) {
+                            totalTermsProcessedFromFile += flushTerm(currentTerm, blobsForCurrentTerm, ctx);
+                            currentTerm = termFromFile;
+                        }
+
+                        if (valueBytes != null && valueBytes.length > 0) {
+                            blobsForCurrentTerm.add(valueBytes);
                         }
                     }
-                } catch (org.rocksdb.RocksDBException e) {
-                    throw new RuntimeException(e);
                 }
-            };
 
-            rotateSst.accept(true); // open first
-
-            try (BufferedReader reader = new BufferedReader(new FileReader(sortedFile, StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    int tab = line.indexOf('\t');
-                    if (tab <= 0 || tab == line.length() - 1) {
-                        logger.warn("Skipping malformed line in sorted file: {}", line);
-                        continue;
-                    }
-
-                    String b64Key = line.substring(0, tab);
-                    String b64Value = line.substring(tab + 1);
-                    IndexKey termFromFile = IndexKey.fromBase64(b64Key);
-                    byte[] lineBlob = Base64.getDecoder().decode(b64Value);
-
-                    if (currentTerm == null) {
-                        currentTerm = termFromFile;
-                    }
-
-                    if (!termFromFile.equals(currentTerm)) {
-                        if (!blobsForCurrentTerm.isEmpty()) {
-                            // Deserialize all PostingList blobs and merge
-                            List<PostingList> postings = new ArrayList<>();
-                            for (byte[] blob : blobsForCurrentTerm) {
-                                postings.add(PostingList.deserialize(blob));
-                            }
-                            PostingList merged = PostingList.union(postings);
-                            byte[] payload = merged.serialize();
-
-                            try {
-                                sstRef[0].put(currentTerm.bytes(), payload);
-                            } catch (org.rocksdb.RocksDBException e) {
-                                throw new IOException("Failed to add key to SST: " + currentTerm, e);
-                            }
-                            currentSstBytesRef[0] += currentTerm.length() + payload.length;
-                            totalTermsProcessedFromFile++;
-
-                            blobsForCurrentTerm.clear();
-                            if (currentSstBytesRef[0] >= TARGET_SST_BYTES)
-                                rotateSst.accept(false);
-                        }
-                        currentTerm = termFromFile;
-                    }
-
-                    if (lineBlob != null && lineBlob.length > 0) {
-                        blobsForCurrentTerm.add(lineBlob);
-                    }
+                if (currentTerm != null) {
+                    totalTermsProcessedFromFile += flushTerm(currentTerm, blobsForCurrentTerm, ctx);
                 }
+
+                // Finish current writer and ingest
+                ctx.close();
+                ctx.ingestAll();
+                this.totalTermsWrittenToIndex = totalTermsProcessedFromFile;
+            } finally {
+                ctx.close();
             }
-
-            if (currentTerm != null && !blobsForCurrentTerm.isEmpty()) {
-                // Deserialize all PostingList blobs and merge
-                List<PostingList> postings = new ArrayList<>();
-                for (byte[] blob : blobsForCurrentTerm) {
-                    postings.add(PostingList.deserialize(blob));
-                }
-                PostingList merged = PostingList.union(postings);
-                byte[] payload = merged.serialize();
-
-                try {
-                    sstRef[0].put(currentTerm.bytes(), payload);
-                } catch (org.rocksdb.RocksDBException e) {
-                    throw new IOException("Failed to add key to SST: " + currentTerm, e);
-                }
-                currentSstBytesRef[0] += currentTerm.length() + payload.length;
-                totalTermsProcessedFromFile++;
-            }
-
-            // finalize current SST
-            if (sstRef[0] != null) {
-                try {
-                    sstRef[0].finish();
-                } catch (org.rocksdb.RocksDBException e) {
-                    throw new IOException("Failed to finish SST file", e);
-                }
-                sstRef[0].close();
-                sstRef[0] = null;
-            }
-
-            // Ingest all produced SSTs
-            logger.info("Ingesting {} SST files into RocksDB for index [{}]...", producedSstFiles.size(),
-                    getIndexName());
-            indexAccess.ingestExternalFiles(producedSstFiles);
-            this.totalTermsWrittenToIndex = totalTermsProcessedFromFile;
-
         } catch (IOException e) {
             logger.error(
-                    "IOException during SST bulk load. Last term processed: {}. Total unique terms processed from file: {}. Error: {}",
-                    currentTerm, totalTermsProcessedFromFile, e.getMessage(), e);
+                    "IOException during SST bulk load for index [{}]. Total unique terms processed from file: {}. Error: {}",
+                    getIndexName(), totalTermsProcessedFromFile, e.getMessage(), e);
             throw e;
         } catch (IndexAccessException e) {
             logger.error(
-                    "IndexAccessException during SST ingestion. Last term processed: {}. Total unique terms processed from file: {}. Error: {}",
-                    currentTerm, totalTermsProcessedFromFile, e.getMessage(), e);
+                    "IndexAccessException during SST ingestion for index [{}]. Total unique terms processed from file: {}. Error: {}",
+                    getIndexName(), totalTermsProcessedFromFile, e.getMessage(), e);
             throw new IOException("Database access error during SST ingestion: " + e.getMessage(), e);
         } finally {
             try {
@@ -495,10 +509,9 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             return tempFiles;
         }
 
-        File mergedFile = Files.createTempFile(tempDir, "merged-", ".tmp").toFile();
+        File mergedFile = Files.createTempFile(tempDir, "merged-", BinarySortedFile.EXTENSION).toFile();
 
-        ExternalSort.mergeSortedFiles(tempFiles, mergedFile, new PostingListComparator(),
-                Charset.defaultCharset(), false);
+        BinarySortedFile.merge(tempFiles, mergedFile);
 
         for (File file : tempFiles) {
             try {
@@ -515,6 +528,163 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
     }
 
     /**
+     * Streams entries from multiple sorted temp files through a k-way merge
+     * directly into RocksDB SST files, without writing an intermediate merged
+     * file to disk. Eliminates one full read+write cycle over the dataset.
+     */
+    private void streamMergeToSST(List<File> tempFiles, long totalEntries) throws IOException {
+        List<File> nonEmpty = new ArrayList<>();
+        for (File f : tempFiles) {
+            if (f.length() > 0) {
+                nonEmpty.add(f);
+            }
+        }
+
+        if (nonEmpty.isEmpty()) {
+            logger.info("No data to ingest for index [{}].", getIndexName());
+            return;
+        }
+
+        // If more files than safe to open at once, pre-merge via regular
+        // multi-pass merge first, then stream the single resulting file.
+        // In practice the incremental merge prevents hitting this path.
+        if (nonEmpty.size() > BinarySortedFile.MAX_MERGE_FAN_IN) {
+            logger.info("Too many temp files ({}) for direct streaming; pre-merging for index [{}]...",
+                    nonEmpty.size(), getIndexName());
+            File merged = Files.createTempFile(tempDir, "premerge-",
+                    BinarySortedFile.EXTENSION).toFile();
+            BinarySortedFile.merge(nonEmpty, merged);
+            nonEmpty.clear();
+            nonEmpty.add(merged);
+        }
+
+        logger.info("Streaming k-way merge of {} files directly to SST for index [{}]...",
+                nonEmpty.size(), getIndexName());
+        long totalTermsProcessed = 0;
+        long entriesProcessed = 0;
+        long mergeLoopMs = 0;
+        long ingestMs = 0;
+
+        progress.startRocksDBWrite(getIndexName(), totalEntries);
+
+        try (org.rocksdb.EnvOptions envOptions = new org.rocksdb.EnvOptions();
+                org.rocksdb.Options sstOptions = com.example.index.RocksDBConfig.createOptimizedOptions()) {
+            try {
+                com.example.index.RocksDBConfig.configureForBulkLoad(sstOptions);
+            } catch (Throwable t) {
+                logger.debug("Bulk load configuration on Options skipped: {}", t.getMessage());
+            }
+
+            java.util.function.Supplier<org.rocksdb.SstFileWriter> sstFactory = () -> new org.rocksdb.SstFileWriter(
+                    envOptions, sstOptions);
+
+            SstWriteContext ctx = new SstWriteContext(sstFactory, indexAccess);
+
+            List<BinarySortedFile.Reader> readers = new ArrayList<>(nonEmpty.size());
+            try {
+                for (File f : nonEmpty) {
+                    readers.add(BinarySortedFile.reader(f));
+                }
+
+                PriorityQueue<BinarySortedFile.Reader> heap = new PriorityQueue<>(
+                        (a, b) -> IndexKey.compareBytes(a.currentKey(), b.currentKey()));
+
+                for (BinarySortedFile.Reader r : readers) {
+                    if (r.advance()) {
+                        heap.add(r);
+                    } else {
+                        r.close();
+                    }
+                }
+
+                if (heap.isEmpty()) {
+                    progress.completeRocksDBWrite();
+                    return;
+                }
+
+                ctx.start();
+
+                long mergeStart = System.currentTimeMillis();
+
+                IndexKey currentTerm = null;
+                List<byte[]> blobsForCurrentTerm = new ArrayList<>();
+
+                while (!heap.isEmpty()) {
+                    BinarySortedFile.Reader r = heap.poll();
+                    byte[] keyBytes = r.currentKey();
+                    byte[] valueBytes = r.currentValue();
+                    IndexKey termFromFile = IndexKey.fromBytes(keyBytes);
+
+                    if (currentTerm == null) {
+                        currentTerm = termFromFile;
+                    }
+
+                    if (!termFromFile.equals(currentTerm)) {
+                        totalTermsProcessed += flushTerm(currentTerm, blobsForCurrentTerm, ctx);
+                        currentTerm = termFromFile;
+                    }
+
+                    if (valueBytes != null && valueBytes.length > 0) {
+                        blobsForCurrentTerm.add(valueBytes);
+                    }
+
+                    entriesProcessed++;
+                    progress.updateRocksDBWriteTo(entriesProcessed);
+
+                    if (r.advance()) {
+                        heap.add(r);
+                    } else {
+                        r.close();
+                    }
+                }
+
+                if (currentTerm != null) {
+                    totalTermsProcessed += flushTerm(currentTerm, blobsForCurrentTerm, ctx);
+                }
+
+                mergeLoopMs = System.currentTimeMillis() - mergeStart;
+
+                // Ensure progress bar reaches 100%
+                progress.updateRocksDBWriteTo(totalEntries);
+
+                long ingestStart = System.currentTimeMillis();
+                ctx.close();
+                ctx.ingestAll();
+                ingestMs = System.currentTimeMillis() - ingestStart;
+                this.totalTermsWrittenToIndex = totalTermsProcessed;
+
+            } finally {
+                for (BinarySortedFile.Reader r : readers) {
+                    try {
+                        r.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+                progress.completeRocksDBWrite();
+            }
+        } catch (IndexAccessException e) {
+            progress.completeRocksDBWrite();
+            logger.error(
+                    "IndexAccessException during streaming SST ingestion for index [{}]. Terms processed: {}. Error: {}",
+                    getIndexName(), totalTermsProcessed, e.getMessage(), e);
+            throw new IOException("Database access error during SST ingestion: " + e.getMessage(), e);
+        } finally {
+            long compactStart = System.currentTimeMillis();
+            try {
+                indexAccess.compactRange();
+            } catch (Exception ex) {
+                logger.warn("Post-ingestion compaction/config restore encountered an error: {}", ex.getMessage());
+            }
+            long compactMs = System.currentTimeMillis() - compactStart;
+
+            logger.info("Finished streaming SST bulk load for index [{}]. Total unique terms written: {}.",
+                    getIndexName(), this.totalTermsWrittenToIndex);
+            commandLogger.info("[sst:{}] mergeLoop={}ms ingest={}ms compact={}ms totalTerms={}",
+                    getIndexName(), mergeLoopMs, ingestMs, compactMs, totalTermsProcessed);
+        }
+    }
+
+    /**
      * Generates the index by processing documents in batches, sorting externally,
      * and merging to the final index store.
      */
@@ -524,11 +694,18 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         long totalRawEntriesFetched = 0;
         totalNGramsGenerated = 0;
 
+        long batchTimeMs = 0;
+        long mergeTimeMs = 0;
+        int mergeCount = 0;
+        long totalTempFileEntries = 0;
+
         try {
             long totalCountForProgressBar = getDocumentCountForIndex();
             progress.startIndex(getIndexName(), totalCountForProgressBar);
 
             while (true) {
+                long iterStart = System.currentTimeMillis();
+
                 List<T> batch = fetchBatch(lastProcessedEntry);
                 int rawEntriesInBatch = batch.size();
                 totalRawEntriesFetched += rawEntriesInBatch;
@@ -542,14 +719,21 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 if (!postings.isEmpty()) {
                     File tempFile = writeBatchToTempFile(postings);
                     tempFiles.add(tempFile);
+                    totalTempFileEntries += postings.asMap().size();
+                }
 
-                    if (tempFiles.size() >= MAX_TEMP_FILES_BEFORE_MERGE) {
-                        logger.info("Reached {} temp files for index [{}]. Performing incremental merge...",
-                                tempFiles.size(), getIndexName());
-                        tempFiles = performIncrementalMerge(tempFiles);
-                        logger.info("Incremental merge complete for index [{}]. Reduced to {} files.",
-                                getIndexName(), tempFiles.size());
-                    }
+                batchTimeMs += System.currentTimeMillis() - iterStart;
+
+                if (tempFiles.size() >= MAX_TEMP_FILES_BEFORE_MERGE) {
+                    long mergeStart = System.currentTimeMillis();
+                    logger.info("Reached {} temp files for index [{}]. Performing incremental merge...",
+                            tempFiles.size(), getIndexName());
+                    tempFiles = performIncrementalMerge(tempFiles);
+                    long mergeMs = System.currentTimeMillis() - mergeStart;
+                    mergeTimeMs += mergeMs;
+                    mergeCount++;
+                    logger.info("Incremental merge complete for index [{}]. Reduced to {} files in {} ms.",
+                            getIndexName(), tempFiles.size(), mergeMs);
                 }
 
                 if (!batch.isEmpty()) {
@@ -564,27 +748,34 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
             if (tempFiles.isEmpty()) {
                 logger.warn("No indexable entries found after filtering. Index [{}] will be empty.", getIndexName());
                 progress.completeIndex();
+                commandLogger.info("[phase:{}] batch={}ms", getIndexName(), batchTimeMs);
                 return;
             }
 
-            logger.info("Merging {} temporary files into {} for index [{}]...", tempFiles.size(),
-                    this.tempFilePathForSorting.toAbsolutePath(), getIndexName());
             long totalTempFilesSize = 0;
             for (File f : tempFiles) {
                 if (f.exists())
                     totalTempFilesSize += f.length();
             }
-            logger.info("Total size of {} temp files to be merged: {} MB for index [{}]", tempFiles.size(),
+            logger.info("Total size of {} temp files: {} MB for index [{}]", tempFiles.size(),
                     totalTempFilesSize / (1024 * 1024), getIndexName());
 
-            ExternalSort.mergeSortedFiles(tempFiles, this.tempFilePathForSorting.toFile(), new PostingListComparator(),
-                    Charset.defaultCharset(), false);
+            logger.info("Streaming merge of {} temp files directly to RocksDB SST for index [{}]...",
+                    tempFiles.size(), getIndexName());
 
-            logger.info("Writing merged entries from {} to RocksDB index [{}]...",
-                    this.tempFilePathForSorting.toAbsolutePath(), getIndexName());
-            progress.startIndex(getIndexName() + " - Writing to DB", 0);
-            writeToLevelDB(this.tempFilePathForSorting.toFile());
+            // Complete the batch-processing bar before starting the DB-write bar.
             progress.completeIndex();
+
+            long sstStart = System.currentTimeMillis();
+            streamMergeToSST(tempFiles, totalTempFileEntries);
+            long sstTimeMs = System.currentTimeMillis() - sstStart;
+
+            // streamMergeToSST manages its own progress bar (rocksDBWriteProgress),
+            // so no completeIndex() call is needed here.
+
+            commandLogger.info("[phase:{}] batch={}ms merge={}ms (x{}) sst={}ms total={}ms entries={}",
+                    getIndexName(), batchTimeMs, mergeTimeMs, mergeCount, sstTimeMs,
+                    batchTimeMs + mergeTimeMs + sstTimeMs, totalRawEntriesFetched);
 
         } finally {
             logger.debug("Cleaning up {} temporary batch files for index [{}] from directory {}...", tempFiles.size(),
@@ -601,38 +792,6 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     "Temporary batch file cleanup complete for index [{}]. Main sorted file and instance temp dir will be cleaned by close().",
                     getIndexName());
         }
-    }
-
-    /**
-     * Comparator for sorting posting list entries by key.
-     */
-    private static class PostingListComparator implements Comparator<String> {
-        @Override
-        public int compare(String a, String b) {
-            int ta = a.indexOf('\t');
-            if (ta < 0)
-                ta = a.length();
-            int tb = b.indexOf('\t');
-            if (tb < 0)
-                tb = b.length();
-            // Keys are now base64-encoded in the temp file; decode before comparing
-            byte[] ka = Base64.getDecoder().decode(a.substring(0, ta));
-            byte[] kb = Base64.getDecoder().decode(b.substring(0, tb));
-            return compareByteArrays(ka, kb);
-        }
-    }
-
-    private static int compareByteArrays(byte[] a, byte[] b) {
-        int la = a.length, lb = b.length, i = 0;
-        int min = Math.min(la, lb);
-        while (i < min) {
-            int va = a[i] & 0xFF;
-            int vb = b[i] & 0xFF;
-            if (va != vb)
-                return va - vb;
-            i++;
-        }
-        return la - lb;
     }
 
     /**
