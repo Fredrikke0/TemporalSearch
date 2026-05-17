@@ -328,7 +328,7 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
         base_run_ok = False
         try:
             # Set strategy
-            _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(base_temp_s, base_push_s, base_stitch_s)
+            _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(base_push_s, base_stitch_s)
             _abort_on_cli_error(strat_set_stderr, strat_set_stdout, f"SET STRATEGY base {original_query_id_str}", cli_process)
             if strat_set_stderr and args.verbose:
                 print(f"{progress_prefix_base} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
@@ -391,7 +391,7 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
             details = ""
 
             try:
-                _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
+                _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(push_s, stitch_s)
                 _abort_on_cli_error(strat_set_stderr, strat_set_stdout, f"SET STRATEGY cmp {original_query_id_str}", cli_process)
                 if strat_set_stderr and args.verbose:
                     print(f"{progress_prefix_other} WARNING: Stderr on set_strategy: {strat_set_stderr.strip()}", flush=True)
@@ -452,7 +452,7 @@ def run_verification_for_file(cli_process, queries_to_run, args, file_output_dir
 
 
 class QueryCLIInteractiveProcess:
-    def __init__(self, jar_path, db_file, index_root_dir, initial_temporal_strategy, initial_pushdown_strategy, initial_stitch_strategy, is_verbose=False):
+    def __init__(self, jar_path, db_file, index_root_dir, initial_pushdown_strategy, initial_stitch_strategy, is_verbose=False):
         print("[VERIFY.PY] Initializing QueryCLIInteractiveProcess...", flush=True)
         self.jar_path = jar_path
         self.db_file = db_file
@@ -482,7 +482,6 @@ class QueryCLIInteractiveProcess:
             command += ["--db-file", db_file]
         command += [
             "--index-root-dir", index_root_dir,
-            "--temporal-strategy", initial_temporal_strategy,
             "--pushdown-strategy", initial_pushdown_strategy,
             "--stitch-strategy", initial_stitch_strategy
         ]
@@ -624,8 +623,8 @@ class QueryCLIInteractiveProcess:
 
         return stdout_cycle, stderr_cycle
 
-    def set_strategy(self, temporal, pushdown, stitch):
-        cmd = f"SET STRATEGY temporal={temporal} pushdown={pushdown} stitch={stitch}"
+    def set_strategy(self, pushdown, stitch):
+        cmd = f"SET STRATEGY pushdown={pushdown} stitch={stitch}"
         stdout_cycle, stderr_cycle = self._send_and_await_prompt(cmd, PROMPT, COMMAND_ACK_TIMEOUT_SECONDS, "SET STRATEGY")
         return None, stdout_cycle, stderr_cycle
 
@@ -779,7 +778,7 @@ if __name__ == "__main__":
         try:
             cli_process = QueryCLIInteractiveProcess(
                 args.jar_path, args.db_file, args.index_root_dir,
-                "nash", "optimized", "optimized", # Hardcoded initial strategies
+                "optimized", "optimized", # Hardcoded initial strategies
                 is_verbose=args.verbose
             )
             file_results = run_verification_for_file(cli_process, queries_for_this_file, args, file_output_dir)

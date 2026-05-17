@@ -215,7 +215,6 @@ def main():
             args.jar_path,
             args.db_file,
             args.index_root_dir,
-            "nash",
             "optimized",
             "optimized",
             is_verbose=args.verbose,
@@ -238,7 +237,7 @@ def main():
                 # Base run
                 try:
                     # Ensure base strategy
-                    _, set_str_stdout, set_str_stderr = cli.set_strategy('naive', 'none', 'none')
+                    _, set_str_stdout, set_str_stderr = cli.set_strategy('none', 'none')
                     _abort_on_cli_error(set_str_stderr, set_str_stdout, f"SET STRATEGY base {q['id']+1}", cli)
                     _, set_out_stdout, set_out_err = cli.set_output('csv', base_fp)
                     _abort_on_cli_error(set_out_err, set_out_stdout, f"SET OUTPUT base {q['id']+1}", cli)
@@ -278,7 +277,7 @@ def main():
                     other_fp = os.path.join(subdir, f"{q['id']+1:04d}_{safe_q_part}_T{t_strat}_P{p_strat}_S{s_strat}.csv")
                     try:
                         # Set variant strategy
-                        _, var_str_stdout, var_str_stderr = cli.set_strategy(t_strat, p_strat, s_strat)
+                        _, var_str_stdout, var_str_stderr = cli.set_strategy(p_strat, s_strat)
                         _abort_on_cli_error(var_str_stderr, var_str_stdout, f"SET STRATEGY var {q['id']+1}", cli)
                         _, set_out_stdout2, set_out_err2 = cli.set_output('csv', other_fp)
                         _abort_on_cli_error(set_out_err2, set_out_stdout2, f"SET OUTPUT var {q['id']+1}", cli)
@@ -418,5 +417,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

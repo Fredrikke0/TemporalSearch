@@ -155,7 +155,7 @@ def run_warm_mode(cli_process, queries_to_run, args, all_run_results_accumulator
         try:
             first_q = queries_to_run[0]['text']
             # Base strategy is fine for preload
-            cli_process.set_strategy('naive', 'none', 'none')
+            cli_process.set_strategy('none', 'none')
             cli_process.execute_query(first_q)
             if args.verbose:
                 print("    (WarmMode) Preload run executed to open indexes.", flush=True)
@@ -192,7 +192,7 @@ def run_warm_mode(cli_process, queries_to_run, args, all_run_results_accumulator
             current_strategy_critical_failure = False
 
             try:
-                _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
+                _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(push_s, stitch_s)
                 _abort_on_cli_error(strat_set_stderr, strat_set_stdout, f"SET STRATEGY warm {original_query_id_str}", cli_process)
                 if strat_set_stderr: run_stderr_details += f"SET_STRATEGY_STDERR: {strat_set_stderr.strip()}\n"
             except (ConnectionAbortedError, TimeoutError, RuntimeError) as e_strat_set_critical:
@@ -360,7 +360,7 @@ def run_cold_mode(cli_process, queries_to_run, args, all_run_results_accumulator
     if queries_to_run:
         try:
             first_q = queries_to_run[0]['text']
-            cli_process.set_strategy('naive', 'none', 'none')
+            cli_process.set_strategy('none', 'none')
             cli_process.execute_query(first_q)
             if args.verbose:
                 print("    (ColdMode) Preload run executed to open indexes.", flush=True)
@@ -422,7 +422,7 @@ def run_cold_mode(cli_process, queries_to_run, args, all_run_results_accumulator
             pass_error_flag = False
 
             try:
-                _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(temp_s, push_s, stitch_s)
+                _, strat_set_stdout, strat_set_stderr = cli_process.set_strategy(push_s, stitch_s)
                 _abort_on_cli_error(strat_set_stderr, strat_set_stdout, f"SET STRATEGY cold {original_query_id_str}", cli_process)
                 if strat_set_stderr: pass_stderr += f"SET_STRATEGY_STDERR: {strat_set_stderr.strip()}\n"
 
@@ -555,7 +555,7 @@ def run_cold_mode(cli_process, queries_to_run, args, all_run_results_accumulator
         })
 
 class QueryCLIInteractiveProcess:
-    def __init__(self, jar_path, db_file, index_root_dir, initial_temporal_strategy, initial_pushdown_strategy, initial_stitch_strategy, is_verbose=False):
+    def __init__(self, jar_path, db_file, index_root_dir, initial_pushdown_strategy, initial_stitch_strategy, is_verbose=False):
         print("[BENCHMARK.PY] Initializing QueryCLIInteractiveProcess...", flush=True)
         self.jar_path = jar_path
         self.db_file = db_file
@@ -585,7 +585,6 @@ class QueryCLIInteractiveProcess:
             command += ["--db-file", db_file]
         command += [
             "--index-root-dir", index_root_dir,
-            "--temporal-strategy", initial_temporal_strategy,
             "--pushdown-strategy", initial_pushdown_strategy,
             "--stitch-strategy", initial_stitch_strategy
         ]
@@ -729,8 +728,8 @@ class QueryCLIInteractiveProcess:
 
         return stdout_cycle, stderr_cycle
 
-    def set_strategy(self, temporal, pushdown, stitch):
-        cmd = f"SET STRATEGY temporal={temporal} pushdown={pushdown} stitch={stitch}"
+    def set_strategy(self, pushdown, stitch):
+        cmd = f"SET STRATEGY pushdown={pushdown} stitch={stitch}"
         stdout_cycle, stderr_cycle = self._send_and_await_prompt(cmd, PROMPT, COMMAND_ACK_TIMEOUT_SECONDS, "SET STRATEGY")
         return None, stdout_cycle, stderr_cycle
 
@@ -926,7 +925,7 @@ if __name__ == "__main__":
             try:
                 cli_process_for_mode = QueryCLIInteractiveProcess(
                     args.jar_path, args.db_file, args.index_root_dir,
-                    "nash", "optimized", "optimized", # Hardcoded initial strategies
+                    "optimized", "optimized", # Hardcoded initial strategies
                     is_verbose=args.verbose
                 )
                 print(f"\n[BENCHMARK.PY] QueryCLI process initialized for '{cache_mode}' mode on file: {current_filename}", flush=True)
@@ -1021,4 +1020,3 @@ if __name__ == "__main__":
         print(f"\nSuccessfully exported {total_csv_files_written} benchmark result CSV file(s) in total to {args.output_dir}.", flush=True)
 
     print("\nBenchmark script execution complete.", flush=True)
-
