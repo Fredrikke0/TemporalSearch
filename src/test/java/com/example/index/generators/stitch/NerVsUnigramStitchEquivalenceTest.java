@@ -26,6 +26,7 @@ import com.example.core.OccurrencesBlock;
 import com.example.core.OccurrencesView;
 import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
+import com.example.index.IndexKey;
 import com.example.index.KeySchema;
 import com.example.index.generators.BaseIndexTest; // Assuming this class exists and provides setup
 import com.example.index.generators.NerIndexGenerator;
@@ -140,11 +141,11 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
 
     // Helper method for reflection to call protected NerIndexGenerator.processBatch
     @SuppressWarnings("unchecked")
-    private ListMultimap<String, PostingList> invokeNerProcessBatch(List<AnnotationEntry> batch) throws Exception {
+    private ListMultimap<IndexKey, PostingList> invokeNerProcessBatch(List<AnnotationEntry> batch) throws Exception {
         Method method = NerIndexGenerator.class.getDeclaredMethod("processBatch", List.class);
         method.setAccessible(true);
         try {
-            return (ListMultimap<String, PostingList>) method.invoke(nerIndexGenerator, batch);
+            return (ListMultimap<IndexKey, PostingList>) method.invoke(nerIndexGenerator, batch);
         } catch (java.lang.reflect.InvocationTargetException e) {
             // Unwrap the actual exception if it\'s a RocksDBException or other relevant
             // exception
@@ -208,12 +209,12 @@ public class NerVsUnigramStitchEquivalenceTest extends BaseIndexTest {
         do {
             batch = invokeNerFetchBatch(lastProcessed);
             if (!batch.isEmpty()) {
-                ListMultimap<String, PostingList> processedBatch = invokeNerProcessBatch(batch);
+                ListMultimap<IndexKey, PostingList> processedBatch = invokeNerProcessBatch(batch);
                 assertNotNull(processedBatch, "Processed batch from NerIndexGenerator should not be null");
 
-                for (String key : processedBatch.keySet()) {
+                for (IndexKey key : processedBatch.keySet()) {
                     // Key format: TYPE\0<4-byte synId> via KeySchema
-                    byte[] keyBytes = key.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    byte[] keyBytes = key.bytes();
                     KeySchema.DecodedKey dk = KeySchema.decodeKey(keyBytes);
                     String entityType = dk.type();
                     int synId = dk.synId();

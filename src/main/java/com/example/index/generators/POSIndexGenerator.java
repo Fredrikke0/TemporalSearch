@@ -16,14 +16,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
-import java.nio.charset.StandardCharsets;
 
 import org.roaringbitmap.longlong.Roaring64NavigableMap;
 
 import com.example.core.OccurrencesBlock;
 import com.example.core.PostingList;
-import com.example.index.KeySchema;
 import com.example.index.AnnotationEntry;
+import com.example.index.IndexKey;
+import com.example.index.KeySchema;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
@@ -110,12 +110,13 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
     }
 
     @Override
-    protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
-        ListMultimap<String, PostingList> index = ArrayListMultimap.create();
+    protected ListMultimap<IndexKey, PostingList> processBatch(List<AnnotationEntry> batch) {
+        ListMultimap<IndexKey, PostingList> index = ArrayListMultimap.create();
 
-        // Key: indexKey (String from KeySchema), Value: (cellKey -> list of beginChars)
-        Map<String, Map<Long, List<Integer>>> perTermData = new HashMap<>();
-        Map<String, Byte> perTermConstantLength = new HashMap<>();
+        // Key: indexKey (IndexKey from KeySchema), Value: (cellKey -> list of
+        // beginChars)
+        Map<IndexKey, Map<Long, List<Integer>>> perTermData = new HashMap<>();
+        Map<IndexKey, Byte> perTermConstantLength = new HashMap<>();
 
         for (AnnotationEntry entry : batch) {
             if (entry.getPos() == null || entry.getPos().isEmpty() || entry.getToken() == null
@@ -134,8 +135,7 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
             try {
                 int tokenId = synonymManager.getId(lowerCaseToken);
 
-                byte[] indexKeyBytes = KeySchema.encodeKey(posTag, tokenId);
-                String indexKey = new String(indexKeyBytes, StandardCharsets.UTF_8);
+                IndexKey indexKey = IndexKey.fromBytes(KeySchema.encodeKey(posTag, tokenId));
 
                 long cellKey = PostingList.packCellKey(entry.getDocumentId(), entry.getSentenceId());
 
@@ -151,8 +151,8 @@ public final class POSIndexGenerator extends IndexGenerator<AnnotationEntry> {
         }
 
         // Convert per-term aggregation maps to PostingLists
-        for (Map.Entry<String, Map<Long, List<Integer>>> mapEntry : perTermData.entrySet()) {
-            String indexKey = mapEntry.getKey();
+        for (Map.Entry<IndexKey, Map<Long, List<Integer>>> mapEntry : perTermData.entrySet()) {
+            IndexKey indexKey = mapEntry.getKey();
             Map<Long, List<Integer>> cellMap = mapEntry.getValue();
             byte constLen = perTermConstantLength.getOrDefault(indexKey, (byte) 0);
             PostingList pl = buildPostingList(cellMap, constLen);

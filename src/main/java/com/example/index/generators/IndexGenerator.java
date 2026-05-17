@@ -30,6 +30,7 @@ import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.PostingList;
 import com.example.index.IndexEntry;
+import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
 import com.google.code.externalsorting.ExternalSort;
 import com.google.common.collect.ListMultimap;
@@ -95,7 +96,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @return A ListMultimap <String, PostingList>, where keys are terms and
      *         values are their posting lists.
      */
-    protected abstract ListMultimap<String, PostingList> processBatch(List<T> batch);
+    protected abstract ListMultimap<IndexKey, PostingList> processBatch(List<T> batch);
 
     /**
      * Estimates or retrieves the total number of documents/items to be processed
@@ -241,20 +242,18 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
      * @param postings The processed posting lists to write
      * @return The temporary file containing the sorted entries
      */
-    protected File writeBatchToTempFile(ListMultimap<String, PostingList> postings) throws IOException {
+    protected File writeBatchToTempFile(ListMultimap<IndexKey, PostingList> postings) throws IOException {
         File tempFile = Files.createTempFile(tempDir, "batch-", ".tmp").toFile();
 
         long bytesWrittenToFile = 0;
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
-            // Sort the entries by term (key) before writing to ensure each batch file is
-            // sorted.
-            List<Map.Entry<String, Collection<PostingList>>> sortedEntries = new ArrayList<>(
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile, StandardCharsets.UTF_8))) {
+            // Sort the entries by key (unsigned bytewise) before writing to ensure
+            // each batch file is sorted.
+            List<Map.Entry<IndexKey, Collection<PostingList>>> sortedEntries = new ArrayList<>(
                     postings.asMap().entrySet());
-            sortedEntries.sort((e1, e2) -> compareByteArrays(
-                    e1.getKey().getBytes(StandardCharsets.UTF_8),
-                    e2.getKey().getBytes(StandardCharsets.UTF_8)));
+            sortedEntries.sort(Map.Entry.comparingByKey());
 
-            for (Map.Entry<String, Collection<PostingList>> entry : sortedEntries) {
+            for (Map.Entry<IndexKey, Collection<PostingList>> entry : sortedEntries) {
                 // Merge all posting lists for this term within this batch
                 List<PostingList> lists = new ArrayList<>();
                 for (PostingList pl : entry.getValue()) {
@@ -262,8 +261,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 }
                 PostingList merged = PostingList.union(lists);
 
-                String b64Key = Base64.getEncoder().encodeToString(
-                        entry.getKey().getBytes(StandardCharsets.UTF_8));
+                String b64Key = entry.getKey().toBase64();
                 String line = String.format("%s\t%s\n",
                         b64Key,
                         Base64.getEncoder().encodeToString(merged.serialize()));
@@ -294,7 +292,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
         logger.info("Starting bulk load (SST ingestion) from sorted file: {}", sortedFile.getAbsolutePath());
         long totalTermsProcessedFromFile = 0;
 
-        String currentTerm = null;
+        IndexKey currentTerm = null;
         List<byte[]> blobsForCurrentTerm = new ArrayList<>();
 
         java.util.List<String> producedSstFiles = new java.util.ArrayList<>();
@@ -351,7 +349,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
 
                     String b64Key = line.substring(0, tab);
                     String b64Value = line.substring(tab + 1);
-                    String termFromFile = new String(Base64.getDecoder().decode(b64Key), StandardCharsets.UTF_8);
+                    IndexKey termFromFile = IndexKey.fromBase64(b64Key);
                     byte[] lineBlob = Base64.getDecoder().decode(b64Value);
 
                     if (currentTerm == null) {
@@ -369,7 +367,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                             byte[] payload = merged.serialize();
 
                             try {
-                                sstRef[0].put(bytes(currentTerm), payload);
+                                sstRef[0].put(currentTerm.bytes(), payload);
                             } catch (org.rocksdb.RocksDBException e) {
                                 throw new IOException("Failed to add key to SST: " + currentTerm, e);
                             }
@@ -399,7 +397,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                 byte[] payload = merged.serialize();
 
                 try {
-                    sstRef[0].put(bytes(currentTerm), payload);
+                    sstRef[0].put(currentTerm.bytes(), payload);
                 } catch (org.rocksdb.RocksDBException e) {
                     throw new IOException("Failed to add key to SST: " + currentTerm, e);
                 }
@@ -539,7 +537,7 @@ public abstract class IndexGenerator<T extends IndexEntry> implements AutoClosea
                     break;
                 }
 
-                ListMultimap<String, PostingList> postings = processBatch(batch);
+                ListMultimap<IndexKey, PostingList> postings = processBatch(batch);
 
                 if (!postings.isEmpty()) {
                     File tempFile = writeBatchToTempFile(postings);

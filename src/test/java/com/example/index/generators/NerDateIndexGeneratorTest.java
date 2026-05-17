@@ -15,6 +15,7 @@ import org.rocksdb.Options;
 
 import com.example.core.IndexAccess;
 import com.example.core.PostingList;
+import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 
@@ -111,16 +112,16 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
         var entries = generator.fetchBatch(null);
 
         // Process batch and verify results
-        ListMultimap<String, PostingList> result = generator.processBatch(entries);
+        ListMultimap<IndexKey, PostingList> result = generator.processBatch(entries);
 
         // Verify January date
-        String key1 = "20240115";
+        IndexKey key1 = IndexKey.fromUtf8("20240115");
         assertTrue(result.containsKey(key1), "Should contain January date");
         assertEquals(1, result.get(key1).get(0).cells().getLongCardinality(),
                 "Should have one cell for January date");
 
         // Verify February date
-        String key2 = "20240201";
+        IndexKey key2 = IndexKey.fromUtf8("20240201");
         assertTrue(result.containsKey(key2), "Should contain February date");
         assertEquals(1, result.get(key2).get(0).cells().getLongCardinality(),
                 "Should have one cell for February date");
@@ -166,7 +167,7 @@ public class NerDateIndexGeneratorTest extends BaseIndexTest {
         var result = generator.processBatch(entries);
 
         // Verify date normalization
-        String key3 = "20240115"; // Corresponds to "2024-01-15"
+        IndexKey key3 = IndexKey.fromUtf8("20240115"); // Corresponds to "2024-01-15"
         assertTrue(result.containsKey(key3),
                 "Should contain normalized January date key '20240115'. Actual keys: " + result.keySet());
 

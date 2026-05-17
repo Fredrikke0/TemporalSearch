@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -22,6 +21,7 @@ import org.rocksdb.RocksDBException;
 
 import com.example.core.IndexAccess;
 import com.example.core.PostingList;
+import com.example.index.IndexKey;
 import com.example.index.KeySchema;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
@@ -34,24 +34,42 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
     private SynonymManager SynonymManager;
     private Path SynonymManagerPath;
 
-    private static boolean hasKeyStartingWith(ListMultimap<String, PostingList> result, String type) {
+    private static boolean hasKeyStartingWith(ListMultimap<IndexKey, PostingList> result, String type) {
         byte[] prefix = KeySchema.encodeTypePrefix(type.toUpperCase());
-        String prefixStr = new String(prefix, 0, prefix.length - 1, StandardCharsets.UTF_8);
-        for (String key : result.keySet()) {
-            if (key.startsWith(prefixStr))
-                return true;
+        for (IndexKey key : result.keySet()) {
+            byte[] kb = key.bytes();
+            if (kb.length >= prefix.length) {
+                boolean match = true;
+                for (int i = 0; i < prefix.length; i++) {
+                    if (kb[i] != prefix[i]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match)
+                    return true;
+            }
         }
         return false;
     }
 
-    private static long countCellsForType(ListMultimap<String, PostingList> result, String type) {
+    private static long countCellsForType(ListMultimap<IndexKey, PostingList> result, String type) {
         byte[] prefix = KeySchema.encodeTypePrefix(type.toUpperCase());
-        String prefixStr = new String(prefix, 0, prefix.length - 1, StandardCharsets.UTF_8);
         long total = 0;
-        for (String key : result.keySet()) {
-            if (key.startsWith(prefixStr)) {
-                for (PostingList pl : result.get(key)) {
-                    total += pl.cells().getLongCardinality();
+        for (IndexKey key : result.keySet()) {
+            byte[] kb = key.bytes();
+            if (kb.length >= prefix.length) {
+                boolean match = true;
+                for (int i = 0; i < prefix.length; i++) {
+                    if (kb[i] != prefix[i]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    for (PostingList pl : result.get(key)) {
+                        total += pl.cells().getLongCardinality();
+                    }
                 }
             }
         }
@@ -156,7 +174,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         var entries = generator.fetchBatch(null);
         assertEquals(4, entries.size(), "Should have fetched 4 distinct entity occurrences initially");
 
-        ListMultimap<String, PostingList> result = generator.processBatch(entries);
+        ListMultimap<IndexKey, PostingList> result = generator.processBatch(entries);
 
         assertTrue(hasKeyStartingWith(result, "PERSON"), "Should contain PERSON entity type key");
         assertEquals(1, countCellsForType(result, "PERSON"), "Should have one cell for PERSON type");
@@ -204,7 +222,7 @@ public class NerIndexGeneratorTest extends BaseIndexTest {
         assertEquals(4, entries.size(),
                 "Should still have 4 non-DATE entities fetched by fetchBatch (original test data)");
 
-        ListMultimap<String, PostingList> result = generator.processBatch(entries);
+        ListMultimap<IndexKey, PostingList> result = generator.processBatch(entries);
         assertFalse(hasKeyStartingWith(result, "DATE"),
                 "Should not contain DATE entity type key from NerIndexGenerator");
     }

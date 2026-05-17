@@ -27,6 +27,7 @@ import org.roaringbitmap.longlong.Roaring64NavigableMap;
 import com.example.core.OccurrencesBlock;
 import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
+import com.example.index.IndexKey;
 import com.example.index.util.DateEntityMerger;
 import com.example.index.util.DateEntityMerger.MergedDateEntity;
 import com.example.logging.ProgressTracker;
@@ -104,8 +105,8 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
     }
 
     @Override
-    protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
-        ListMultimap<String, PostingList> index = ArrayListMultimap.create();
+    protected ListMultimap<IndexKey, PostingList> processBatch(List<AnnotationEntry> batch) {
+        ListMultimap<IndexKey, PostingList> index = ArrayListMultimap.create();
         if (batch.isEmpty()) {
             return index;
         }
@@ -120,8 +121,8 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
         List<MergedDateEntity> mergedEntities = DateEntityMerger.merge(batch);
 
         // Key: date string (e.g. "20240115"), Value: (cellKey -> list of beginChars)
-        Map<String, Map<Long, List<Integer>>> perTermData = new HashMap<>();
-        Map<String, Byte> perTermConstantLength = new HashMap<>();
+        Map<IndexKey, Map<Long, List<Integer>>> perTermData = new HashMap<>();
+        Map<IndexKey, Byte> perTermConstantLength = new HashMap<>();
 
         for (MergedDateEntity entity : mergedEntities) {
             String normalizedDateKey = normalizeDateToKeyFormat(entity.normalizedDate());
@@ -130,17 +131,18 @@ public final class NerDateIndexGenerator extends IndexGenerator<AnnotationEntry>
 
                 long cellKey = PostingList.packCellKey(entity.documentId(), entity.sentenceId());
 
-                Map<Long, List<Integer>> cellMap = perTermData.computeIfAbsent(normalizedDateKey, k -> new HashMap<>());
+                IndexKey dateIdxKey = IndexKey.fromUtf8(normalizedDateKey);
+                Map<Long, List<Integer>> cellMap = perTermData.computeIfAbsent(dateIdxKey, k -> new HashMap<>());
                 cellMap.computeIfAbsent(cellKey, k -> new ArrayList<>()).add(entity.beginChar());
 
                 byte constLen = (byte) Math.min(entity.endChar() - entity.beginChar(), 255);
-                perTermConstantLength.putIfAbsent(normalizedDateKey, constLen);
+                perTermConstantLength.putIfAbsent(dateIdxKey, constLen);
             }
         }
 
         // Convert per-term aggregation maps to PostingLists
-        for (Map.Entry<String, Map<Long, List<Integer>>> mapEntry : perTermData.entrySet()) {
-            String dateKey = mapEntry.getKey();
+        for (Map.Entry<IndexKey, Map<Long, List<Integer>>> mapEntry : perTermData.entrySet()) {
+            IndexKey dateKey = mapEntry.getKey();
             Map<Long, List<Integer>> cellMap = mapEntry.getValue();
             byte constLen = perTermConstantLength.getOrDefault(dateKey, (byte) 0);
             PostingList pl = buildPostingList(cellMap, constLen);

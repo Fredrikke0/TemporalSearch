@@ -19,6 +19,7 @@ import com.example.core.IndexAccessInterface;
 import com.example.core.OccurrencesBlock;
 import com.example.core.PostingList;
 import com.example.index.DependencyEntry;
+import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -104,10 +105,10 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
     }
 
     @Override
-    protected ListMultimap<String, PostingList> processBatch(List<DependencyEntry> batch) {
-        ListMultimap<String, PostingList> indexData = ArrayListMultimap.create();
-        Map<String, Map<Long, IntArrayList>> termCellMap = new HashMap<>();
-        Map<String, Byte> termConstLen = new HashMap<>();
+    protected ListMultimap<IndexKey, PostingList> processBatch(List<DependencyEntry> batch) {
+        ListMultimap<IndexKey, PostingList> indexData = ArrayListMultimap.create();
+        Map<IndexKey, Map<Long, IntArrayList>> termCellMap = new HashMap<>();
+        Map<IndexKey, Byte> termConstLen = new HashMap<>();
 
         for (DependencyEntry entry : batch) {
             String headTokenLower = entry.getHeadToken().toLowerCase();
@@ -122,18 +123,19 @@ public final class DependencyIndexGenerator extends IndexGenerator<DependencyEnt
             String key = headTokenLower + DELIMITER + relationLower + DELIMITER + dependentTokenLower;
 
             long cellKey = PostingList.packCellKey(entry.getDocumentId(), entry.getSentenceId());
-            Map<Long, IntArrayList> cellMap = termCellMap.computeIfAbsent(key, k -> new java.util.LinkedHashMap<>());
+            Map<Long, IntArrayList> cellMap = termCellMap.computeIfAbsent(IndexKey.fromUtf8(key),
+                    k -> new java.util.LinkedHashMap<>());
             cellMap.computeIfAbsent(cellKey, k -> new IntArrayList()).add(entry.getBeginChar());
 
             // Compute constant length (clamped to byte range)
             int len = entry.getEndChar() - entry.getBeginChar();
             byte cl = (byte) Math.min(len, 255);
-            termConstLen.putIfAbsent(key, cl);
+            termConstLen.putIfAbsent(IndexKey.fromUtf8(key), cl);
         }
 
         // Build PostingList for each dependency key
-        for (Map.Entry<String, Map<Long, IntArrayList>> termEntry : termCellMap.entrySet()) {
-            String key = termEntry.getKey();
+        for (Map.Entry<IndexKey, Map<Long, IntArrayList>> termEntry : termCellMap.entrySet()) {
+            IndexKey key = termEntry.getKey();
             Map<Long, IntArrayList> cellMap = termEntry.getValue();
 
             Roaring64NavigableMap cells = new Roaring64NavigableMap();

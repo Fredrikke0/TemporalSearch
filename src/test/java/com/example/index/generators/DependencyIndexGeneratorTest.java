@@ -15,6 +15,7 @@ import org.rocksdb.Options;
 
 import com.example.core.IndexAccess;
 import com.example.core.PostingList;
+import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 
@@ -110,16 +111,18 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
         var entries = generator.fetchBatch(null);
 
         // Process batch and verify results
-        ListMultimap<String, PostingList> result = generator.processBatch(entries);
+        ListMultimap<IndexKey, PostingList> result = generator.processBatch(entries);
 
         // Verify subject-verb dependency
-        String key1 = "fox" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "jumps";
+        IndexKey key1 = IndexKey
+                .fromUtf8("fox" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "jumps");
         assertTrue(result.containsKey(key1), "Should contain subject-verb dependency");
         assertEquals(1, result.get(key1).get(0).cells().getLongCardinality(),
                 "Should have one cell for subject-verb dependency");
 
         // Verify verb-object dependency
-        String key2 = "jumps" + IndexGenerator.DELIMITER + "prep" + IndexGenerator.DELIMITER + "over";
+        IndexKey key2 = IndexKey
+                .fromUtf8("jumps" + IndexGenerator.DELIMITER + "prep" + IndexGenerator.DELIMITER + "over");
         assertTrue(result.containsKey(key2), "Should contain verb-object dependency");
         assertEquals(1, result.get(key2).get(0).cells().getLongCardinality(),
                 "Should have one cell for verb-object dependency");
@@ -164,7 +167,8 @@ public class DependencyIndexGeneratorTest extends BaseIndexTest {
         var result = generator.processBatch(entries);
 
         // Verify case normalization
-        String key3 = "cat" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "chases";
+        IndexKey key3 = IndexKey
+                .fromUtf8("cat" + IndexGenerator.DELIMITER + "nsubj" + IndexGenerator.DELIMITER + "chases");
         assertTrue(result.containsKey(key3), "Should contain normalized subject-verb dependency");
         assertEquals(1, result.get(key3).get(0).cells().getLongCardinality(),
                 "Should have one cell for normalized subject-verb dependency");

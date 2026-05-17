@@ -3,7 +3,6 @@ package com.example.index.generators.stitch;
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -24,6 +23,7 @@ import com.example.core.OccurrencesBlock;
 import com.example.core.PostingList;
 import com.example.index.AnnotationType;
 import com.example.index.IndexEntry;
+import com.example.index.IndexKey;
 import com.example.index.KeySchema;
 import com.example.index.generators.IndexGenerator;
 import com.example.index.util.SynonymManager;
@@ -102,10 +102,10 @@ public abstract class AbstractNgramStitchGenerator
             return this.ngramEndChar;
         }
 
-        /** Returns the composite key with synId encoded for the temp file. */
-        public String value() {
-            return ngramKey + IndexAccessInterface.DELIMITER + annotationKeyComponent
-                    + IndexAccessInterface.DELIMITER + specificValueSynonymId;
+        /** Returns the composite key using {@link KeySchema} binary format. */
+        public IndexKey value() {
+            byte[] keyBytes = KeySchema.encodeStitchKey(ngramKey, annotationKeyComponent, specificValueSynonymId);
+            return IndexKey.fromBytes(keyBytes);
         }
 
         public long getAnnotationId() {
@@ -345,10 +345,10 @@ public abstract class AbstractNgramStitchGenerator
     }
 
     @Override
-    protected ListMultimap<String, PostingList> processBatch(List<NgramStitchEntry> batch) {
-        ListMultimap<String, PostingList> indexData = ArrayListMultimap.create();
+    protected ListMultimap<IndexKey, PostingList> processBatch(List<NgramStitchEntry> batch) {
+        ListMultimap<IndexKey, PostingList> indexData = ArrayListMultimap.create();
         // Group by composite key: ngramKey \0 annotationKeyComponent \0 synId
-        Map<String, Map<Long, IntArrayList>> cellMapsByKey = new HashMap<>();
+        Map<IndexKey, Map<Long, IntArrayList>> cellMapsByKey = new HashMap<>();
 
         for (NgramStitchEntry entry : batch) {
             String ngramKeyForFiltering = entry.ngramKey();
@@ -360,14 +360,14 @@ public abstract class AbstractNgramStitchGenerator
                 continue;
             }
 
-            String compositeKey = entry.value(); // ngramKey \0 type \0 synId
+            IndexKey compositeKey = entry.value(); // KeySchema-encoded binary key
             long cellKey = PostingList.packCellKey(entry.documentId(), entry.sentenceId());
             Map<Long, IntArrayList> cellMap = cellMapsByKey.computeIfAbsent(compositeKey, k -> new HashMap<>());
             cellMap.computeIfAbsent(cellKey, k -> new IntArrayList()).add(entry.ngramBeginChar());
         }
 
-        for (Map.Entry<String, Map<Long, IntArrayList>> keyEntry : cellMapsByKey.entrySet()) {
-            String compositeKey = keyEntry.getKey();
+        for (Map.Entry<IndexKey, Map<Long, IntArrayList>> keyEntry : cellMapsByKey.entrySet()) {
+            IndexKey compositeKey = keyEntry.getKey();
             Map<Long, IntArrayList> cellMap = keyEntry.getValue();
 
             Roaring64NavigableMap cells = new Roaring64NavigableMap();
@@ -422,17 +422,14 @@ public abstract class AbstractNgramStitchGenerator
     }
 
     /**
-     * Overrides parent to convert the string-based keys (with decimal synId suffix)
-     * to proper KeySchema binary keys before writing to RocksDB.
+     * Keys are now produced in {@link KeySchema} binary format by
+     * {@link NgramStitchEntry#value()}, so the parent's SST writer
+     * handles them correctly via {@link IndexKey#bytes()}.
      */
     @Override
     protected void writeToLevelDB(File sortedFile) throws IOException {
         logger.info("Stitch writeToLevelDB for {} from sorted file: {}", getIndexName(),
                 sortedFile.getAbsolutePath());
-        // Use parent implementation which handles PostingList deserialization.
-        // The keys in the temp file include synId as decimal string suffix.
-        // Parent's writeToLevelDB will pass them through as UTF-8 bytes.
-        // For stitch indexes, we convert to KeySchema binary format before writing.
         super.writeToLevelDB(sortedFile);
     }
 

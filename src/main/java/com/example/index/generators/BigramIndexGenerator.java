@@ -20,6 +20,7 @@ import com.example.core.IndexAccessInterface;
 import com.example.core.OccurrencesBlock;
 import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
+import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -96,7 +97,7 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
     }
 
     @Override
-    protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
+    protected ListMultimap<IndexKey, PostingList> processBatch(List<AnnotationEntry> batch) {
         // Augment the current batch with the tail of the previous batch so that
         // bigrams that span the boundary are generated in this call.
         List<AnnotationEntry> augmented = new ArrayList<>(batch.size() + 1);
@@ -109,9 +110,9 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                 .thenComparingInt(AnnotationEntry::getSentenceId)
                 .thenComparingInt(AnnotationEntry::getBeginChar));
 
-        ListMultimap<String, PostingList> index = ArrayListMultimap.create();
-        Map<String, Map<Long, IntArrayList>> termCellMap = new HashMap<>();
-        Map<String, Byte> termConstLen = new HashMap<>();
+        ListMultimap<IndexKey, PostingList> index = ArrayListMultimap.create();
+        Map<IndexKey, Map<Long, IntArrayList>> termCellMap = new HashMap<>();
+        Map<IndexKey, Byte> termConstLen = new HashMap<>();
 
         for (int i = 0; i < augmented.size() - 1; i++) {
             AnnotationEntry firstEntry = augmented.get(i);
@@ -147,18 +148,19 @@ public final class BigramIndexGenerator extends IndexGenerator<AnnotationEntry> 
                     secondTokenLower);
 
             long cellKey = PostingList.packCellKey(secondEntry.getDocumentId(), secondEntry.getSentenceId());
-            Map<Long, IntArrayList> cellMap = termCellMap.computeIfAbsent(key, k -> new java.util.LinkedHashMap<>());
+            Map<Long, IntArrayList> cellMap = termCellMap.computeIfAbsent(IndexKey.fromUtf8(key),
+                    k -> new java.util.LinkedHashMap<>());
             cellMap.computeIfAbsent(cellKey, k -> new IntArrayList()).add(firstEntry.getBeginChar());
 
             // Compute constant length for the bigram span
             int len = secondEntry.getEndChar() - firstEntry.getBeginChar();
             byte cl = (byte) Math.min(len, 255);
-            termConstLen.putIfAbsent(key, cl);
+            termConstLen.putIfAbsent(IndexKey.fromUtf8(key), cl);
         }
 
         // Build PostingList for each bigram key
-        for (Map.Entry<String, Map<Long, IntArrayList>> termEntry : termCellMap.entrySet()) {
-            String key = termEntry.getKey();
+        for (Map.Entry<IndexKey, Map<Long, IntArrayList>> termEntry : termCellMap.entrySet()) {
+            IndexKey key = termEntry.getKey();
             Map<Long, IntArrayList> cellMap = termEntry.getValue();
 
             Roaring64NavigableMap cells = new Roaring64NavigableMap();

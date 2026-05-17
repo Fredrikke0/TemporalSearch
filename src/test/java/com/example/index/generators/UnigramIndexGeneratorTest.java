@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccess;
 import com.example.core.OccurrencesView;
 import com.example.index.AnnotationEntry;
+import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
 
 @ExtendWith(MockitoExtension.class)
@@ -152,15 +153,15 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
 
         // Verify results
         assertEquals(2, result.keySet().size());
-        assertTrue(result.containsKey("test"));
-        assertTrue(result.containsKey("word"));
-        assertFalse(result.containsKey("the")); // stopword should be filtered
+        assertTrue(result.containsKey(IndexKey.fromUtf8("test")));
+        assertTrue(result.containsKey(IndexKey.fromUtf8("word")));
+        assertFalse(result.containsKey(IndexKey.fromUtf8("the"))); // stopword should be filtered
 
         // Verify cell counts
-        var testPl = result.get("test").get(0);
+        var testPl = result.get(IndexKey.fromUtf8("test")).get(0);
         assertEquals(1, testPl.cells().getLongCardinality(), "Expected one cell for 'test'");
 
-        var wordPl = result.get("word").get(0);
+        var wordPl = result.get(IndexKey.fromUtf8("word")).get(0);
         assertEquals(1, wordPl.cells().getLongCardinality(), "Expected one cell for 'word'");
     }
 
@@ -181,7 +182,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
 
         // Verify overlapping positions for "test" — one cell with two occurrence
         // offsets
-        var testPl = result.get("test").get(0);
+        var testPl = result.get(IndexKey.fromUtf8("test")).get(0);
         assertEquals(1, testPl.cells().getLongCardinality(), "Expected one cell for overlapping 'test' entries");
         assertNotNull(testPl.occurrences());
         OccurrencesView testOv = testPl.occurrences().occurrences(0);
@@ -190,7 +191,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
         assertEquals(2, testOv.begin(1));
 
         // Verify adjacent positions for "word" — one cell with two occurrence offsets
-        var wordPl = result.get("word").get(0);
+        var wordPl = result.get(IndexKey.fromUtf8("word")).get(0);
         assertEquals(1, wordPl.cells().getLongCardinality(), "Expected one cell for adjacent 'word' entries");
         assertNotNull(wordPl.occurrences());
         OccurrencesView wordOv = wordPl.occurrences().occurrences(0);
@@ -200,7 +201,7 @@ class UnigramIndexGeneratorTest extends BaseIndexTest {
 
         // Verify deduplication of exact matches for "repeat" — one cell with two
         // occurrence offsets
-        var repeatPl = result.get("repeat").get(0);
+        var repeatPl = result.get(IndexKey.fromUtf8("repeat")).get(0);
         assertEquals(1, repeatPl.cells().getLongCardinality(), "Expected one cell for 'repeat' entries");
         assertNotNull(repeatPl.occurrences());
         OccurrencesView repeatOv = repeatPl.occurrences().occurrences(0);

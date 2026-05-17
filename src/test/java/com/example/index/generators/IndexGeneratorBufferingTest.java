@@ -18,6 +18,7 @@ import com.example.core.IndexAccessInterface;
 import com.example.core.OccurrencesBlock;
 import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
+import com.example.index.IndexKey;
 import com.example.index.RocksDBConfig;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
@@ -62,8 +63,8 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
         }
 
         @Override
-        protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
-            ListMultimap<String, PostingList> result = ArrayListMultimap.create();
+        protected ListMultimap<IndexKey, PostingList> processBatch(List<AnnotationEntry> batch) {
+            ListMultimap<IndexKey, PostingList> result = ArrayListMultimap.create();
             for (AnnotationEntry entry : batch) {
                 long cellKey = PostingList.packCellKey(entry.getDocumentId(), entry.getSentenceId());
                 Roaring64NavigableMap cells = new Roaring64NavigableMap();
@@ -72,7 +73,7 @@ class IndexGeneratorBufferingTest extends BaseIndexTest {
                 OccurrencesBlock occ = OccurrencesBlock.fromUnsorted(
                         new long[] { cellKey }, new byte[][] { { (byte) entry.getBeginChar() } }, constantLength);
                 PostingList pl = PostingList.fromCellsAndOccurrences(cells, constantLength, occ);
-                result.put("term" + entry.getToken(), pl);
+                result.put(IndexKey.fromUtf8("term" + entry.getToken()), pl);
             }
             return result;
         }

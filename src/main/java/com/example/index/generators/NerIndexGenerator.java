@@ -17,14 +17,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.core.IndexAccessInterface;
-import java.nio.charset.StandardCharsets;
 
 import org.roaringbitmap.longlong.Roaring64NavigableMap;
 
 import com.example.core.OccurrencesBlock;
 import com.example.core.PostingList;
-import com.example.index.KeySchema;
 import com.example.index.AnnotationEntry;
+import com.example.index.IndexKey;
+import com.example.index.KeySchema;
 import com.example.index.util.SynonymManager;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
@@ -139,8 +139,8 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
     }
 
     @Override
-    protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
-        ListMultimap<String, PostingList> resultMultimap = ArrayListMultimap.create();
+    protected ListMultimap<IndexKey, PostingList> processBatch(List<AnnotationEntry> batch) {
+        ListMultimap<IndexKey, PostingList> resultMultimap = ArrayListMultimap.create();
         if (batch.isEmpty()) {
             return resultMultimap;
         }
@@ -152,9 +152,10 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
                 .thenComparingInt(AnnotationEntry::getSentenceId)
                 .thenComparingInt(AnnotationEntry::getBeginChar));
 
-        // Key: indexKey (String from KeySchema), Value: (cellKey -> list of beginChars)
-        Map<String, Map<Long, List<Integer>>> perTermData = new HashMap<>();
-        Map<String, Byte> perTermConstantLength = new HashMap<>();
+        // Key: indexKey (IndexKey from KeySchema), Value: (cellKey -> list of
+        // beginChars)
+        Map<IndexKey, Map<Long, List<Integer>>> perTermData = new HashMap<>();
+        Map<IndexKey, Byte> perTermConstantLength = new HashMap<>();
 
         AnnotationEntry prevEntry = null;
         List<String> currentEntityRawTokens = new ArrayList<>();
@@ -221,8 +222,8 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         }
 
         // Convert per-term aggregation maps to PostingLists
-        for (Map.Entry<String, Map<Long, List<Integer>>> mapEntry : perTermData.entrySet()) {
-            String indexKey = mapEntry.getKey();
+        for (Map.Entry<IndexKey, Map<Long, List<Integer>>> mapEntry : perTermData.entrySet()) {
+            IndexKey indexKey = mapEntry.getKey();
             Map<Long, List<Integer>> cellMap = mapEntry.getValue();
             byte constLen = perTermConstantLength.getOrDefault(indexKey, (byte) 0);
             PostingList pl = buildPostingList(cellMap, constLen);
@@ -231,8 +232,8 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         return resultMultimap;
     }
 
-    private void addProcessedEntityToMap(Map<String, Map<Long, List<Integer>>> perTermData,
-            Map<String, Byte> perTermConstantLength,
+    private void addProcessedEntityToMap(Map<IndexKey, Map<Long, List<Integer>>> perTermData,
+            Map<IndexKey, Byte> perTermConstantLength,
             String entityType,
             List<String> rawTokens, int docId, int sentId,
             int beginChar, int endChar) throws RocksDBException {
@@ -246,7 +247,7 @@ public final class NerIndexGenerator extends IndexGenerator<AnnotationEntry> {
         int entityValueId = synonymManager.getId(entityValue);
 
         byte[] indexKeyBytes = KeySchema.encodeKey(entityType.toUpperCase(), entityValueId);
-        String indexKey = new String(indexKeyBytes, StandardCharsets.UTF_8);
+        IndexKey indexKey = IndexKey.fromBytes(indexKeyBytes);
 
         long cellKey = PostingList.packCellKey(docId, sentId);
 

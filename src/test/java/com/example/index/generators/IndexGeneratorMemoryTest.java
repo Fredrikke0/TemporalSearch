@@ -39,6 +39,7 @@ import com.example.core.OccurrencesBlock;
 import com.example.core.PostingList;
 import com.example.core.index.MockIndexAccess;
 import com.example.index.IndexEntry;
+import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 
@@ -101,7 +102,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         }
 
         @Override
-        protected ListMultimap<String, PostingList> processBatch(List<IndexEntry> batch) {
+        protected ListMultimap<IndexKey, PostingList> processBatch(List<IndexEntry> batch) {
             return null;
         }
 
@@ -116,7 +117,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
         @Override
         public void writeToLevelDB(File sortedFile) throws IOException {
             logger.info("Starting instrumented writeToLevelDB from sorted file: {}", sortedFile.getAbsolutePath());
-            String currentTerm = null;
+            IndexKey currentTerm = null;
             this.totalTermsWrittenInTest = 0;
 
             // Use IntArrayLists to accumulate integers for each attribute for the current
@@ -138,7 +139,7 @@ class IndexGeneratorMemoryTest extends BaseIndexTest {
                         continue;
                     }
 
-                    String termFromFile = new String(Base64.getDecoder().decode(parts[0]), StandardCharsets.UTF_8);
+                    IndexKey termFromFile = IndexKey.fromBase64(parts[0]);
 
                     if (currentTerm == null) {
                         currentTerm = termFromFile;

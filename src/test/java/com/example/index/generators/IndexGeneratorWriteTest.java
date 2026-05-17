@@ -18,6 +18,7 @@ import com.example.core.IndexAccessInterface;
 import com.example.core.PostingList;
 import com.example.core.index.MockIndexAccess; // For TestIndexGenerator
 import com.example.index.IndexEntry;
+import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ListMultimap;
 
@@ -60,7 +61,7 @@ public class IndexGeneratorWriteTest extends BaseIndexTest { // Renamed class
         }
 
         @Override
-        protected ListMultimap<String, PostingList> processBatch(List<IndexEntry> batch) {
+        protected ListMultimap<IndexKey, PostingList> processBatch(List<IndexEntry> batch) {
             return null;
         }
 

@@ -15,6 +15,7 @@ import com.example.core.IndexAccessInterface;
 import com.example.core.OccurrencesBlock;
 import com.example.core.PostingList;
 import com.example.index.AnnotationEntry;
+import com.example.index.IndexKey;
 import com.example.logging.ProgressTracker;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -88,11 +89,11 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
     }
 
     @Override
-    protected ListMultimap<String, PostingList> processBatch(List<AnnotationEntry> batch) {
-        ListMultimap<String, PostingList> index = ArrayListMultimap.create();
+    protected ListMultimap<IndexKey, PostingList> processBatch(List<AnnotationEntry> batch) {
+        ListMultimap<IndexKey, PostingList> index = ArrayListMultimap.create();
         // Collect cell-level data per term: term -> (cellKey -> list of begin offsets)
-        Map<String, Map<Long, IntArrayList>> termCellMap = new HashMap<>();
-        Map<String, Byte> termConstLen = new HashMap<>();
+        Map<IndexKey, Map<Long, IntArrayList>> termCellMap = new HashMap<>();
+        Map<IndexKey, Byte> termConstLen = new HashMap<>();
 
         for (AnnotationEntry entry : batch) {
             if (entry.getToken() == null || entry.getToken().isEmpty()) {
@@ -104,19 +105,19 @@ public final class UnigramIndexGenerator extends IndexGenerator<AnnotationEntry>
             }
 
             long cellKey = PostingList.packCellKey(entry.getDocumentId(), entry.getSentenceId());
-            Map<Long, IntArrayList> cellMap = termCellMap.computeIfAbsent(tokenLower,
+            Map<Long, IntArrayList> cellMap = termCellMap.computeIfAbsent(IndexKey.fromUtf8(tokenLower),
                     k -> new java.util.LinkedHashMap<>());
             cellMap.computeIfAbsent(cellKey, k -> new IntArrayList()).add(entry.getBeginChar());
 
             // Compute constant length (clamped to byte range)
             int len = entry.getEndChar() - entry.getBeginChar();
             byte cl = (byte) Math.min(len, 255);
-            termConstLen.putIfAbsent(tokenLower, cl);
+            termConstLen.putIfAbsent(IndexKey.fromUtf8(tokenLower), cl);
         }
 
         // Build PostingList for each term
-        for (Map.Entry<String, Map<Long, IntArrayList>> termEntry : termCellMap.entrySet()) {
-            String term = termEntry.getKey();
+        for (Map.Entry<IndexKey, Map<Long, IntArrayList>> termEntry : termCellMap.entrySet()) {
+            IndexKey term = termEntry.getKey();
             Map<Long, IntArrayList> cellMap = termEntry.getValue();
 
             Roaring64NavigableMap cells = new Roaring64NavigableMap();
