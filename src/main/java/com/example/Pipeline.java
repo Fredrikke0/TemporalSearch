@@ -159,18 +159,13 @@ public class Pipeline {
         // --- Argument Processing and Validation ---
         String stage = ns.getString("stage");
         Path dbFilePath = Path.of(ns.getString("db_file_path")).toAbsolutePath();
-        Path indexRootDirPath = Path.of(ns.getString("index_dir_path")).toAbsolutePath(); // directory containing
-                                                                                          // multiple project index dirs
+        Path indexRootDirPath = Path.of(ns.getString("index_dir_path")).toAbsolutePath();
 
-        // Derive project name from database file (remove extension)
-        String projectName = dbFilePath.getFileName().toString().replaceFirst("\\.[^.]+$", "");
-
-        // Each project gets its own directory directly under the root
-        Path projectDirPath = indexRootDirPath.resolve(projectName);
-
-        // For the rest of the pipeline code, this directory functions as the base index
-        // directory
-        Path indexBasePath = projectDirPath;
+        // Use the --index-dir directly as the base index directory.
+        // (Previously derived a project name from the db file and created a
+        // subdirectory,
+        // which was confusing: --index-dir foo would place indexes in foo/<dbname>/.)
+        Path indexBasePath = indexRootDirPath;
 
         boolean force = ns.getBoolean("force");
 
@@ -188,19 +183,12 @@ public class Pipeline {
         }
         logger.debug("Using database file: {}", dbFilePath.toAbsolutePath());
 
-        // Create index directory and its 'indexes' subdirectory if they don't exist
-        if (!Files.exists(indexRootDirPath)) {
-            logger.info("Index directory '{}' does not exist. Creating...", indexRootDirPath.toAbsolutePath());
-            Files.createDirectories(indexRootDirPath);
+        // Create index directory if it doesn't exist
+        if (!Files.exists(indexBasePath)) {
+            logger.info("Index directory '{}' does not exist. Creating...", indexBasePath.toAbsolutePath());
+            Files.createDirectories(indexBasePath);
         } else {
-            logger.debug("Using existing index directory '{}'", indexRootDirPath.toAbsolutePath());
-        }
-
-        if (!Files.exists(projectDirPath)) {
-            logger.info("Project directory '{}' does not exist. Creating...", projectDirPath.toAbsolutePath());
-            Files.createDirectories(projectDirPath);
-        } else {
-            logger.debug("Using existing project directory '{}'", projectDirPath.toAbsolutePath());
+            logger.debug("Using existing index directory '{}'", indexBasePath.toAbsolutePath());
         }
 
         // --- Stage Execution ---
@@ -341,9 +329,9 @@ public class Pipeline {
 
         // Write/update manifest for this project directory
         try {
-            ProjectManifest.write(projectDirPath, dbFilePath);
+            ProjectManifest.write(indexBasePath, dbFilePath);
             logger.info("Wrote project manifest to {}",
-                    projectDirPath.resolve(ProjectManifest.defaultFileName()).toAbsolutePath());
+                    indexBasePath.resolve(ProjectManifest.defaultFileName()).toAbsolutePath());
         } catch (IOException e) {
             logger.error("Failed to write project manifest: {}", e.getMessage(), e);
         }

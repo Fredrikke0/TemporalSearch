@@ -62,10 +62,9 @@ public class PipelineTest {
         tempDir = Files.createTempDirectory("pipeline-test-");
         jsonFile = createTestData(tempDir);
         sourceDb = tempDir.resolve("source.db");
-        // In the new CLI, --index-dir is the parent; project dir =
-        // <index-dir>/<db-name>
-        // source.db → project name "source" → project dir = tempDir/source
-        indexDir = tempDir.resolve("source");
+        // With the current CLI, --index-dir is used directly as the project/index
+        // directory.
+        indexDir = tempDir;
         stopwordsFile = createStopwordsFile(tempDir);
         sqliteConn = null;
         extractToSqlite(jsonFile, sourceDb, true, TOTAL_DOCS);
@@ -388,15 +387,16 @@ public class PipelineTest {
         @Test
         @DisplayName("Pipeline handles invalid stage")
         void testInvalidStage() throws Exception {
+            Path freshIndexDir = tempDir.resolve("should-not-be-created");
             String[] args = {
                     "-s", "invalid",
                     "--db-file", sourceDb.toString(),
-                    "--index-dir", tempDir.toString()
+                    "--index-dir", freshIndexDir.toString()
             };
             // Pipeline catches ArgumentParserException internally and returns.
             Pipeline.runPipeline(args);
-            // Should not have created the project directory or annotations
-            assertFalse(Files.exists(indexDir), "Project directory should not be created for invalid stage");
+            // Should not have created the index directory for an invalid stage
+            assertFalse(Files.exists(freshIndexDir), "Index directory should not be created for invalid stage");
         }
 
         @Test
@@ -406,8 +406,6 @@ public class PipelineTest {
             String[] args = { "-s", "annotate" };
             // Pipeline catches ArgumentParserException internally and returns.
             Pipeline.runPipeline(args);
-            // Should not have created anything
-            assertFalse(Files.exists(indexDir), "Project directory should not be created with missing args");
         }
 
         @Test
@@ -416,15 +414,17 @@ public class PipelineTest {
             String testDbName = "new-test-project";
             Path sourceDbForTest = tempDir.resolve(testDbName + ".db");
             extractToSqlite(jsonFile, sourceDbForTest, true, TOTAL_DOCS);
+            // Use a fresh subdirectory that doesn't exist yet, so we can verify creation
+            Path freshIndexDir = tempDir.resolve("fresh-project-output");
             String[] args = {
                     "-s", "annotate",
                     "--db-file", sourceDbForTest.toString(),
-                    "--index-dir", tempDir.toString()
+                    "--index-dir", freshIndexDir.toString()
             };
             Pipeline.runPipeline(args);
-            // Verify project directory structure (project name derived from db name)
-            Path projectDir = tempDir.resolve(testDbName);
-            assertTrue(projectDir.toFile().exists(), "Project directory should be created");
+            // Verify the --index-dir itself was created (no subdirectory derived from db
+            // name)
+            assertTrue(Files.exists(freshIndexDir), "Index directory should be created");
             assertTrue(sourceDbForTest.toFile().exists(), "Database file should exist");
         }
     }
