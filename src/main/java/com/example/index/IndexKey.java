@@ -11,8 +11,9 @@ import java.util.Base64;
  * RocksDB's default comparator).
  *
  * <p>
- * The canonical string form is Base64, which is used for the temp-file
- * format exchanged with {@code ExternalSort}. No charset conversion is
+ * The canonical string form is Base64, used for debugging and logging.
+ * The temp-file format uses length-prefixed raw bytes via
+ * {@link com.example.index.BinarySortedFile}. No charset conversion is
  * ever performed on the key bytes — Base64 is pure ASCII.
  *
  * <h3>Factory methods</h3>
@@ -94,8 +95,15 @@ public final class IndexKey implements Comparable<IndexKey> {
      */
     @Override
     public int compareTo(IndexKey other) {
-        byte[] a = this.bytes;
-        byte[] b = other.bytes;
+        return compareBytes(this.bytes, other.bytes);
+    }
+
+    /**
+     * Unsigned bytewise comparison of two raw key byte arrays.
+     * Used by the binary merge to compare keys without wrapping them in IndexKey
+     * objects.
+     */
+    public static int compareBytes(byte[] a, byte[] b) {
         int min = Math.min(a.length, b.length);
         for (int i = 0; i < min; i++) {
             int va = a[i] & 0xFF;
