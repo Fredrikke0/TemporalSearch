@@ -10,11 +10,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.example.query.binding.VariableRegistry;
-import com.example.query.model.CountColumn;
 import com.example.query.model.Query;
-import com.example.query.model.SnippetColumn;
-import com.example.query.model.StructuralColumn;
-import com.example.query.model.VariableColumn;
+import com.example.query.model.SelectedCount;
+import com.example.query.model.SelectedSnippet;
+import com.example.query.model.SelectedStructural;
+import com.example.query.model.SelectedVariable;
+import com.example.query.model.StructuralField;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Ner;
 
@@ -25,18 +26,17 @@ class QueryAttributeAnalyzerTest {
     @DisplayName("Document granularity query should not require sentence IDs")
     void documentGranularityDoesNotRequireSentenceIds() {
         Query query = new Query(
-            "test",
-            List.of(),
-            List.of(),
-            Optional.empty(),
-            Query.Granularity.DOCUMENT,
-            Optional.empty(),
-            List.of(CountColumn.countAll()),
-            new VariableRegistry(),
-            List.of(),
-            Optional.empty(),
-            List.of()
-        );
+                "test",
+                List.of(),
+                List.of(),
+                Optional.empty(),
+                Query.Granularity.DOCUMENT,
+                Optional.empty(),
+                List.of(new SelectedCount(new SelectedCount.CountAll())),
+                new VariableRegistry(),
+                List.of(),
+                Optional.empty(),
+                List.of());
 
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
 
@@ -50,18 +50,17 @@ class QueryAttributeAnalyzerTest {
     @DisplayName("Sentence granularity query should require sentence IDs")
     void sentenceGranularityRequiresSentenceIds() {
         Query query = new Query(
-            "test",
-            List.of(),
-            List.of(),
-            Optional.empty(),
-            Query.Granularity.SENTENCE,
-            Optional.empty(),
-            List.of(CountColumn.countAll()),
-            new VariableRegistry(),
-            List.of(),
-            Optional.empty(),
-            List.of()
-        );
+                "test",
+                List.of(),
+                List.of(),
+                Optional.empty(),
+                Query.Granularity.SENTENCE,
+                Optional.empty(),
+                List.of(new SelectedCount(new SelectedCount.CountAll())),
+                new VariableRegistry(),
+                List.of(),
+                Optional.empty(),
+                List.of());
 
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
 
@@ -77,18 +76,17 @@ class QueryAttributeAnalyzerTest {
         registry.registerProducer("$main.term", com.example.query.binding.VariableType.TEXT_SPAN, "CONTAINS");
 
         Query query = new Query(
-            "test",
-            List.of(new Contains(List.of("test"), "$main.term", true)),
-            List.of(),
-            Optional.empty(),
-            Query.Granularity.DOCUMENT,
-            Optional.empty(),
-            List.of(new SnippetColumn("$main.term", 5)),
-            registry,
-            List.of(),
-            Optional.empty(),
-            List.of()
-        );
+                "test",
+                List.of(new Contains(List.of("test"), "$main.term", true)),
+                List.of(),
+                Optional.empty(),
+                Query.Granularity.DOCUMENT,
+                Optional.empty(),
+                List.of(new SelectedSnippet("$main.term", 5)),
+                registry,
+                List.of(),
+                Optional.empty(),
+                List.of());
 
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
 
@@ -101,18 +99,17 @@ class QueryAttributeAnalyzerTest {
     @DisplayName("SENTENCE_ID structural column should require sentence IDs")
     void sentenceIdColumnRequiresSentenceIds() {
         Query query = new Query(
-            "test",
-            List.of(),
-            List.of(),
-            Optional.empty(),
-            Query.Granularity.DOCUMENT,
-            Optional.empty(),
-            List.of(new StructuralColumn("$main", "SENTENCE_ID")),
-            new VariableRegistry(),
-            List.of(),
-            Optional.empty(),
-            List.of()
-        );
+                "test",
+                List.of(),
+                List.of(),
+                Optional.empty(),
+                Query.Granularity.DOCUMENT,
+                Optional.empty(),
+                List.of(new SelectedStructural("$main", StructuralField.SENTENCE_ID)),
+                new VariableRegistry(),
+                List.of(),
+                Optional.empty(),
+                List.of());
 
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
 
@@ -128,18 +125,17 @@ class QueryAttributeAnalyzerTest {
         registry.registerProducer("$main.person", com.example.query.binding.VariableType.ENTITY, "NER");
 
         Query query = new Query(
-            "test",
-            List.of(new Ner("PERSON", List.of(), "$main.person", true)),
-            List.of(),
-            Optional.empty(),
-            Query.Granularity.DOCUMENT,
-            Optional.empty(),
-            List.of(new VariableColumn("$main.person")),
-            registry,
-            List.of(),
-            Optional.empty(),
-            List.of()
-        );
+                "test",
+                List.of(new Ner("PERSON", List.of(), "$main.person", true)),
+                List.of(),
+                Optional.empty(),
+                Query.Granularity.DOCUMENT,
+                Optional.empty(),
+                List.of(new SelectedVariable("$main.person")),
+                registry,
+                List.of(),
+                Optional.empty(),
+                List.of());
 
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
 
@@ -155,18 +151,17 @@ class QueryAttributeAnalyzerTest {
         registry.registerProducer("$main.term", com.example.query.binding.VariableType.TEXT_SPAN, "CONTAINS");
 
         Query query = new Query(
-            "test",
-            List.of(new Contains(List.of("test"), "$main.term", true)),
-            List.of(),
-            Optional.empty(),
-            Query.Granularity.SENTENCE,
-            Optional.empty(),
-            List.of(new SnippetColumn("$main.term", 5)),
-            registry,
-            List.of(),
-            Optional.empty(),
-            List.of()
-        );
+                "test",
+                List.of(new Contains(List.of("test"), "$main.term", true)),
+                List.of(),
+                Optional.empty(),
+                Query.Granularity.SENTENCE,
+                Optional.empty(),
+                List.of(new SelectedSnippet("$main.term", 5)),
+                registry,
+                List.of(),
+                Optional.empty(),
+                List.of());
 
         AttributeRequirements requirements = QueryAttributeAnalyzer.analyze(query);
         var requiredAttributes = requirements.getRequiredSoAAttributes();

@@ -36,7 +36,7 @@ public class QueryTest {
         registry = new VariableRegistry(); // Initialize registry here
         // Pass the registry to the Query constructor
         query = new Query("test_source", new ArrayList<>(), new ArrayList<>(), Optional.empty(),
-                        Query.Granularity.DOCUMENT, Optional.empty(), new ArrayList<>(), registry);
+                Query.Granularity.DOCUMENT, Optional.empty(), new ArrayList<>(), registry);
     }
 
     @Test
@@ -75,7 +75,8 @@ public class QueryTest {
         assertFalse(registry.isProduced("$main.person")); // Not produced yet
         assertEquals(VariableType.ENTITY, registry.getInferredType("$main.person"));
         assertEquals(Set.of("$main.person"), registry.getAllVariableNames()); // Expect internally qualified name
-        assertTrue(registry.validate().stream().anyMatch(e -> e.contains("$main.person is consumed")), "Validation should fail"); // Expect internally qualified name
+        assertTrue(registry.validate().stream().anyMatch(e -> e.contains("$main.person is consumed")),
+                "Validation should fail"); // Expect internally qualified name
     }
 
     @Test
@@ -99,7 +100,9 @@ public class QueryTest {
         // Validation happens on the registry
         Set<String> errors = registry.validate();
         assertFalse(errors.isEmpty());
-        assertTrue(errors.iterator().next().contains("$main.person is consumed but never produced")); // Check internally qualified name
+        assertTrue(errors.iterator().next().contains("$main.person is consumed but never produced")); // Check
+                                                                                                      // internally
+                                                                                                      // qualified name
 
         // Fix by registering a producer
         registry.registerProducer("$main.person", VariableType.ENTITY, "NER"); // Use internally qualified name
@@ -123,14 +126,14 @@ public class QueryTest {
     public void testMultipleVariables() {
         // Register directly on the registry
         registry.registerProducer("$main.person", VariableType.ENTITY, "NER"); // Use internally qualified name
-        registry.registerProducer("$main.org", VariableType.ENTITY, "NER");   // Use internally qualified name
+        registry.registerProducer("$main.org", VariableType.ENTITY, "NER"); // Use internally qualified name
         registry.registerProducer("$main.date", VariableType.TEMPORAL, "DATE"); // Use internally qualified name
 
         // Verify via registry
         assertEquals(3, registry.getAllVariableNames().size());
         assertTrue(registry.getAllVariableNames().contains("$main.person")); // Expect internally qualified name
-        assertTrue(registry.getAllVariableNames().contains("$main.org"));   // Expect internally qualified name
-        assertTrue(registry.getAllVariableNames().contains("$main.date"));   // Expect internally qualified name
+        assertTrue(registry.getAllVariableNames().contains("$main.org")); // Expect internally qualified name
+        assertTrue(registry.getAllVariableNames().contains("$main.date")); // Expect internally qualified name
     }
 
     @Test
@@ -147,14 +150,15 @@ public class QueryTest {
 
         // Create query with the now populated registry
         Query queryWithNer = new Query("wikipedia", conditions, new ArrayList<>(),
-                                       Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
-                                       new ArrayList<>(), localRegistry);
+                Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
+                new ArrayList<>(), localRegistry);
 
         // Check variable registration on the registry using QUALIFIED name
         assertTrue(localRegistry.isProduced("$main.person"));
         assertEquals(VariableType.ENTITY, localRegistry.getInferredType("$main.person"));
 
-        // Check that the condition properly appears in toString (using the condition's method)
+        // Check that the condition properly appears in toString (using the condition's
+        // method)
         String conditionString = nerCondition.toString();
         assertEquals("NER(PERSON) BIND $main.person", conditionString); // Expect internally qualified name in toString
     }
@@ -172,16 +176,18 @@ public class QueryTest {
 
         // Create query with the now populated registry
         Query queryWithContains = new Query("news_corpus", List.of(containsCondition), new ArrayList<>(),
-                                          Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
-                                          new ArrayList<>(), localRegistry);
+                Optional.empty(), Query.Granularity.DOCUMENT, Optional.empty(),
+                new ArrayList<>(), localRegistry);
 
         // Check variable registration on the registry using QUALIFIED name
         assertTrue(localRegistry.isProduced("$main.result"));
         assertEquals(VariableType.TEXT_SPAN, localRegistry.getInferredType("$main.result"));
 
-        // Check that the condition properly appears in toString (using the condition's method)
+        // Check that the condition properly appears in toString (using the condition's
+        // method)
         String conditionString = containsCondition.toString();
-        assertEquals("CONTAINS(\"search term\") BIND $main.result", conditionString); // Expect internally qualified name in toString
+        assertEquals("CONTAINS(\"search term\") BIND $main.result", conditionString); // Expect internally qualified
+                                                                                      // name in toString
     }
 
     @Test
@@ -218,19 +224,22 @@ public class QueryTest {
         // Verify condition toStrings
         assertEquals("NER(PERSON) BIND $main.person", personCondition.toString()); // Expect internally qualified name
         assertEquals("NER(ORGANIZATION) BIND $main.org", orgCondition.toString()); // Expect internally qualified name
-        assertEquals("CONTAINS(\"meeting\") BIND $main.text", containsCondition.toString()); // Expect internally qualified name
+        assertEquals("CONTAINS(\"meeting\") BIND $main.text", containsCondition.toString()); // Expect internally
+                                                                                             // qualified name
     }
 
-    // Keep these toString tests, but they assert on the Query object's representation
+    // Keep these toString tests, but they assert on the Query object's
+    // representation
     @Test
     @DisplayName("toString() should include NER condition with variable")
     void testToStringWithNerVariable() {
-        List<Condition> conditions = List.of(new Ner("PERSON", List.of(), "$main.person", true)); // Internally qualified
+        List<Condition> conditions = List.of(new Ner("PERSON", List.of(), "$main.person", true)); // Internally
+                                                                                                  // qualified
         VariableRegistry registry = new VariableRegistry(); // Create registry
         conditions.get(0).registerVariables(registry); // Register variable
         Query query = new Query("documents", conditions, List.of(), Optional.empty(),
-                              Query.Granularity.DOCUMENT, Optional.empty(),
-                              List.of(new VariableColumn("$main.person")), registry); // Use registry
+                Query.Granularity.DOCUMENT, Optional.empty(),
+                List.of(new SelectedVariable("$main.person")), registry); // Use registry
         String queryString = query.toString();
         assertTrue(queryString.contains("NER(PERSON) BIND $main.person")); // Expect internally qualified name
     }
@@ -238,35 +247,50 @@ public class QueryTest {
     @Test
     @DisplayName("toString() should include CONTAINS condition with variable")
     void testToStringWithContainsVariable() {
-        List<Condition> conditions = List.of(new Contains(List.of("search", "term"), "$main.result", true)); // Internally qualified
+        List<Condition> conditions = List.of(new Contains(List.of("search", "term"), "$main.result", true)); // Internally
+                                                                                                             // qualified
         VariableRegistry registry = new VariableRegistry(); // Create registry
         conditions.get(0).registerVariables(registry); // Register variable
         Query query = new Query("documents", conditions, List.of(), Optional.empty(),
-                              Query.Granularity.DOCUMENT, Optional.empty(),
-                              List.of(new VariableColumn("$main.result")), registry); // Use registry
+                Query.Granularity.DOCUMENT, Optional.empty(),
+                List.of(new SelectedVariable("$main.result")), registry); // Use registry
         String queryString = query.toString();
-        assertTrue(queryString.contains("CONTAINS(\"search term\") BIND $main.result")); // Expect internally qualified name
+        assertTrue(queryString.contains("CONTAINS(\"search term\") BIND $main.result")); // Expect internally qualified
+                                                                                         // name
     }
 
     @Test
     @DisplayName("toString() should include multiple conditions with variables")
     void testToStringWithMultipleVariables() {
         Condition nerPerson = new Ner("PERSON", List.of(), "$main.person", true); // Internally qualified
-        Condition nerOrg = new Ner("ORGANIZATION", List.of(), "$main.org", true);   // Internally qualified
+        Condition nerOrg = new Ner("ORGANIZATION", List.of(), "$main.org", true); // Internally qualified
         Condition containsText = new Contains(List.of("meeting"), "$main.text", true); // Internally qualified
         List<Condition> conditions = List.of(nerPerson, nerOrg, containsText);
-        List<SelectColumn> selectCols = List.of(new VariableColumn("$main.person"), new VariableColumn("$main.org")); // Internally qualified
+        List<SelectedColumn> selectCols = List.of(new SelectedVariable("$main.person"),
+                new SelectedVariable("$main.org")); // Internally qualified
         VariableRegistry registry = new VariableRegistry(); // Create registry
-        for(Condition c : conditions) { c.registerVariables(registry); } // Register variables
-        Query query = new Query("logs", conditions, List.of("$main.person"), Optional.of(10), // Internally qualified ORDER BY
-                              Query.Granularity.SENTENCE, Optional.of(2), selectCols, registry); // Use registry
+        for (Condition c : conditions) {
+            c.registerVariables(registry);
+        } // Register variables
+        Query query = new Query("logs", conditions, List.of("$main.person"), Optional.of(10), // Internally qualified
+                                                                                              // ORDER BY
+                Query.Granularity.SENTENCE, Optional.of(2), selectCols, registry); // Use registry
 
         String queryString = query.toString();
         logger.debug("Generated Query String for testToStringWithMultipleVariables:\n{}", queryString);
 
-        assertTrue(queryString.contains("NER(PERSON) BIND $main.person"), "Check 1 failed: NER(PERSON)"); // Expect internally qualified name
-        assertTrue(queryString.contains("NER(ORGANIZATION) BIND $main.org"), "Check 2 failed: NER(ORGANIZATION)"); // Expect internally qualified name
-        assertTrue(queryString.contains("CONTAINS(\"meeting\") BIND $main.text"), "Check 3 failed: CONTAINS"); // Expect internally qualified name
+        assertTrue(queryString.contains("NER(PERSON) BIND $main.person"), "Check 1 failed: NER(PERSON)"); // Expect
+                                                                                                          // internally
+                                                                                                          // qualified
+                                                                                                          // name
+        assertTrue(queryString.contains("NER(ORGANIZATION) BIND $main.org"), "Check 2 failed: NER(ORGANIZATION)"); // Expect
+                                                                                                                   // internally
+                                                                                                                   // qualified
+                                                                                                                   // name
+        assertTrue(queryString.contains("CONTAINS(\"meeting\") BIND $main.text"), "Check 3 failed: CONTAINS"); // Expect
+                                                                                                               // internally
+                                                                                                               // qualified
+                                                                                                               // name
         assertTrue(queryString.contains("SELECT $main.person, $main.org"), "Check 4 failed: SELECT");
         assertTrue(queryString.contains("ORDER BY $main.person"), "Check 5 failed: ORDER BY");
         assertTrue(queryString.contains("LIMIT 10"), "Check 6 failed: LIMIT");

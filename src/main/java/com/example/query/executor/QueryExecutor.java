@@ -24,7 +24,6 @@ import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Logical.LogicalOperator;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
-import com.example.query.result.TableResultService;
 
 /**
  * Executes queries against the provided indexes.
@@ -47,13 +46,12 @@ public class QueryExecutor {
      * Full constructor for QueryExecutor, allowing injection of
      * ConditionExecutorFactory for testing.
      *
-     * @param tableResultService      The TableResultService instance.
      * @param stitchStrategy          The stitch execution strategy.
      * @param synonymManager          The SynonymManager instance.
      * @param injectedExecutorFactory An optional ConditionExecutorFactory to inject
      *                                for testing.
      */
-    public QueryExecutor(TableResultService tableResultService, String stitchStrategy, SynonymManager synonymManager,
+    public QueryExecutor(String stitchStrategy, SynonymManager synonymManager,
             ConditionExecutorFactory injectedExecutorFactory) {
         this.synonymManager = synonymManager;
         this.stitchStrategy = (stitchStrategy == null || stitchStrategy.isBlank()) ? "none" : stitchStrategy;

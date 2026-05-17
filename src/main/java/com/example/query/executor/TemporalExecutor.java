@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import com.example.core.IndexAccessException;
 import com.example.core.IndexAccessInterface;
 import com.example.core.PostingList;
+import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.TemporalBounds;
 import com.example.query.model.TemporalPredicate;
@@ -253,6 +254,8 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
 
             PostingList.DeserializeMode mode = requirements.toDeserializeMode();
             CellResult result = CellResult.empty(granularity);
+            String varName = condition.qualifiedVariableName().orElse(null);
+            Map<Long, LocalDate> cellDates = varName != null ? new HashMap<>() : null;
 
             Optional<LocalDateTime> queryStartDateTime = condition.startDate();
             Optional<LocalDateTime> queryEndDateTime = condition.endDate();
@@ -324,8 +327,14 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                                     : CellResult.fromPostingList(pl, granularity);
                             result = result.or(keyResult);
                             keysMatched++;
-                            strategyLogger.trace("Matched key '{}': {} cells",
-                                    currentKey, pl.cells().getLongCardinality());
+                            // Record cellKey -> date for variable binding
+                            if (varName != null && cellDates != null) {
+                                var cellIter = pl.cells().getLongIterator();
+                                while (cellIter.hasNext()) {
+                                    long ck = cellIter.next();
+                                    cellDates.putIfAbsent(ck, entryDate);
+                                }
+                            }
                         }
                     } else {
                         keysSkipped++;
@@ -347,11 +356,23 @@ public final class TemporalExecutor implements ConditionExecutor<Temporal> {
                         QueryExecutionException.ErrorType.INDEX_ACCESS_ERROR);
             }
 
+            // Build bindings if variable binding is active
+            Bindings bindings = null;
+            if (varName != null && cellDates != null && !cellDates.isEmpty()) {
+                Bindings.Builder builder = Bindings.builder();
+                for (Map.Entry<Long, LocalDate> entry : cellDates.entrySet()) {
+                    builder.withCellKey(entry.getKey())
+                            .add(entry.getValue(), ValueType.DATE, varName);
+                }
+                bindings = builder.build();
+                result = CellResult.of(result.cells(), bindings, granularity);
+            }
+
             // Apply allowedCells filtering at the end
             if (allowedCells.isPresent() && !result.isEmpty()) {
                 Roaring64NavigableMap filtered = result.cells().clone();
                 filtered.and(allowedCells.get());
-                result = CellResult.of(filtered, granularity);
+                result = CellResult.of(filtered, result.bindings(), granularity);
             }
 
             strategyLogger.debug("NaiveTemporalStrategy finished. Result has {} cells.", result.cellCount());

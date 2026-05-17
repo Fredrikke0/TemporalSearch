@@ -1,7 +1,13 @@
 package com.example.query.executor;
 
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
@@ -14,19 +20,18 @@ import com.example.core.IndexAccessInterface;
 import com.example.core.PostingList;
 import com.example.index.KeySchema;
 import com.example.index.util.SynonymManager;
+import com.example.query.binding.ValueType;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Pos;
 
 /**
  * Executor for POS (Part-of-Speech) conditions.
- * Handles matching POS tags against indexed data using the new
- * {@code KeySchema}/{@code CellResult} interface.
+ * Handles matching POS tags against indexed data.
  *
  * <p>
- * The POS index stores keys as {@code TAG\0<4-byte synId>} (see
- * {@link KeySchema#encodeKey(String, int)}). A prefix scan over
- * {@code TAG\0} retrieves all terms with that tag; a specific lookup
- * encodes the synonym ID of the desired term value.
+ * The POS index stores keys as {@code TAG\0<4-byte synId>}. A prefix scan
+ * over {@code TAG\0} retrieves all terms with that tag. When a BIND clause
+ * is present, synonym IDs are extracted from keys and resolved to terms.
  */
 public final class PosExecutor implements ConditionExecutor<Pos> {
     private static final Logger logger = LoggerFactory.getLogger(PosExecutor.class);
@@ -34,11 +39,6 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
     private static final String POS_INDEX_NAME = "pos";
     private final SynonymManager synonymManager;
 
-    /**
-     * Creates a new POS executor.
-     *
-     * @param synonymManager the synonym manager instance
-     */
     public PosExecutor(SynonymManager synonymManager) {
         this.synonymManager = synonymManager;
     }
@@ -85,15 +85,13 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         CellResult result;
 
         try {
+            String varName = condition.isVariable() ? condition.variableName() : null;
             if (termFromQuery != null) {
-                // Specific term search: resolve term to synId, exact key lookup
-                result = executeSpecificTermSearch(tagFromQuery, termFromQuery, posIndex, granularity, mode);
+                result = executeSpecificTermSearch(tagFromQuery, termFromQuery, posIndex, granularity, mode, varName);
             } else {
-                // Tag-only or variable binding (bind any term with that tag): prefix scan
-                result = executeTagOnlySearch(tagFromQuery, posIndex, granularity, mode);
+                result = executeTagOnlySearch(tagFromQuery, posIndex, granularity, mode, varName);
             }
 
-            // Apply allowedCells filtering if present
             if (allowedCells.isPresent() && !allowedCells.get().isEmpty()) {
                 logger.debug("Applying allowedCells filter with {} cells",
                         allowedCells.get().getLongCardinality());
@@ -119,23 +117,18 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         return result;
     }
 
-    /**
-     * Specific term search: {@code POS(tag, term)} or
-     * {@code POS(tag, term) BIND var}.
-     * <p>
-     * Resolves the term to a synonym ID, builds the exact key
-     * {@code TAG\0<synId>}, and fetches the posting list.
-     */
     private CellResult executeSpecificTermSearch(String tag, String term,
             IndexAccessInterface index,
             Query.Granularity granularity,
-            PostingList.DeserializeMode mode)
+            PostingList.DeserializeMode mode,
+            String variableName)
             throws IndexAccessException {
         String normalizedTerm = term.toLowerCase();
         int synId;
         try {
             synId = synonymManager.getId(normalizedTerm);
-            logger.debug("executeSpecificTermSearch: Tag='{}', Term='{}', SynId={}", tag, term, synId);
+            logger.debug("executeSpecificTermSearch: Tag='{}', Term='{}', SynId={}, variable={}",
+                    tag, term, synId, variableName);
         } catch (RocksDBException e) {
             logger.warn("Failed to get synonym ID for term '{}': {}", term, e.getMessage());
             return CellResult.empty(granularity);
@@ -145,30 +138,39 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         Optional<PostingList> plOpt = index.getPostingList(key, mode);
 
         if (plOpt.isPresent() && !plOpt.get().isEmpty()) {
-            return toCellResult(plOpt.get(), granularity, mode);
+            PostingList pl = plOpt.get();
+            CellResult cr = toCellResult(pl, granularity, mode);
+            if (variableName != null) {
+                Bindings bindings = buildBindingsForSynId(pl.cells(), synId, variableName);
+                return CellResult.of(cr.cells(), bindings, granularity);
+            }
+            return cr;
         }
         logger.debug("executeSpecificTermSearch: No data for tag '{}', synId {}", tag, synId);
         return CellResult.empty(granularity);
     }
 
-    /**
-     * Tag-only search: {@code POS(tag)} or {@code POS(tag) BIND var} (bind
-     * any term with that tag).
-     * <p>
-     * Performs a prefix scan over {@code TAG\0} in the POS index, fetches the
-     * posting list for each key, and ORs all results together.
-     */
     private CellResult executeTagOnlySearch(String tag, IndexAccessInterface index,
             Query.Granularity granularity,
-            PostingList.DeserializeMode mode)
+            PostingList.DeserializeMode mode,
+            String variableName)
             throws IndexAccessException {
-        logger.debug("executeTagOnlySearch: Prefix scan for tag '{}'", tag);
+        logger.debug("executeTagOnlySearch: Prefix scan for tag '{}', variable={}", tag, variableName);
 
         byte[] prefix = KeySchema.encodeTypePrefix(tag);
-        CellResult result = CellResult.empty(granularity);
+        // Upper bound must cover all 4 bytes of the synId suffix:
+        // keys are TAG\0<4-byte synId>, so we need prefix+5 bytes of 0xFF.
+        byte[] upperBound = Arrays.copyOf(prefix, prefix.length + 5);
+        for (int i = prefix.length; i < upperBound.length; i++) {
+            upperBound[i] = (byte) 0xFF;
+        }
 
-        try (RocksIterator iter = index.seek(prefix)) {
+        Roaring64NavigableMap resultCells = new Roaring64NavigableMap();
+        Map<Long, Integer> cellSynIds = variableName != null ? new LinkedHashMap<>() : null;
+
+        try (RocksIterator iter = index.seekWithBounds(prefix, upperBound, 256 * 1024)) {
             int keysExamined = 0;
+            int keysWithData = 0;
             while (iter.isValid()) {
                 byte[] key = iter.key();
                 if (!startsWith(key, prefix)) {
@@ -176,24 +178,120 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
                 }
                 keysExamined++;
 
-                Optional<PostingList> plOpt = index.getPostingList(key, mode);
-                if (plOpt.isPresent() && !plOpt.get().isEmpty()) {
-                    CellResult cr = toCellResult(plOpt.get(), granularity, mode);
-                    result = result.or(cr);
+                // Extract synId from key when variable binding is active
+                int synId = -1;
+                if (variableName != null && key.length >= prefix.length + 4) {
+                    synId = readIntBE(key, prefix.length);
+                }
+
+                // Use iterator value directly instead of a separate db.get()
+                byte[] value = iter.value();
+                if (value != null && value.length > 0) {
+                    try {
+                        PostingList pl = PostingList.deserialize(value, mode);
+                        if (!pl.isEmpty()) {
+                            resultCells.or(pl.cells());
+                            keysWithData++;
+                            // Record cellKey -> synId for variable binding
+                            if (cellSynIds != null && synId >= 0) {
+                                var cellIter = pl.cells().getLongIterator();
+                                while (cellIter.hasNext()) {
+                                    long ck = cellIter.next();
+                                    cellSynIds.putIfAbsent(ck, synId);
+                                }
+                            }
+                        }
+                    } catch (IOException e) {
+                        logger.warn("Failed to deserialize posting list for POS key: {}", e.getMessage());
+                    }
+                }
+
+                if (keysExamined % 50000 == 0) {
+                    logger.debug("executeTagOnlySearch: Examined {} keys so far for tag '{}',"
+                            + " {} with data, result has {} cells",
+                            keysExamined, tag, keysWithData, resultCells.getLongCardinality());
                 }
                 iter.next();
             }
-            logger.debug("executeTagOnlySearch: Examined {} keys for tag '{}', result has {} cells",
-                    keysExamined, tag, result.cellCount());
+            logger.debug("executeTagOnlySearch: Examined {} keys for tag '{}',"
+                    + " {} with data, result has {} cells",
+                    keysExamined, tag, keysWithData, resultCells.getLongCardinality());
         }
 
-        return result;
+        if (resultCells.isEmpty()) {
+            return CellResult.empty(granularity);
+        }
+
+        // Build bindings if variable binding is active
+        Bindings bindings = null;
+        if (variableName != null && cellSynIds != null && !cellSynIds.isEmpty()) {
+            bindings = buildBindings(cellSynIds, variableName);
+            if (bindings != null) {
+                logger.debug("executeTagOnlySearch: built {} bindings for variable '{}'",
+                        bindings.size(), variableName);
+            }
+        }
+
+        return CellResult.of(resultCells, bindings, granularity);
     }
 
-    /**
-     * Converts a PostingList to a CellResult, choosing the appropriate factory
-     * based on deserialization mode.
-     */
+    private Bindings buildBindings(Map<Long, Integer> cellSynIds, String variableName) {
+        Set<Integer> uniqueSynIds = new HashSet<>(cellSynIds.values());
+        Map<Integer, String> terms;
+        try {
+            terms = synonymManager.getTerms(uniqueSynIds);
+        } catch (RocksDBException e) {
+            logger.error("Failed to resolve synonym IDs to terms: {}", e.getMessage());
+            return null;
+        }
+
+        // Iterate cellSynIds in insertion order (LinkedHashMap) so that
+        // ResultMaterializer.groupBindingsByCellKey can correctly distribute
+        // bindings across cells in cell-sorted order.
+        Bindings.Builder builder = Bindings.builder();
+        int added = 0;
+        for (Map.Entry<Long, Integer> entry : cellSynIds.entrySet()) {
+            long cellKey = entry.getKey();
+            int synId = entry.getValue();
+            String term = terms.get(synId);
+            if (term != null) {
+                builder.withCellKey(cellKey).add(term, ValueType.TERM, variableName);
+                added++;
+            }
+        }
+        logger.debug("buildBindings: added {} bindings for variable '{}' ({} unique synIds, {} cells)",
+                added, variableName, uniqueSynIds.size(), cellSynIds.size());
+        return added > 0 ? builder.build() : null;
+    }
+
+    private Bindings buildBindingsForSynId(Roaring64NavigableMap cells, int synId, String variableName) {
+        String term;
+        try {
+            Map<Integer, String> terms = synonymManager.getTerms(Set.of(synId));
+            term = terms.get(synId);
+        } catch (RocksDBException e) {
+            logger.error("Failed to resolve synonym ID {}: {}", synId, e.getMessage());
+            return null;
+        }
+        if (term == null)
+            return null;
+
+        Bindings.Builder builder = Bindings.builder();
+        var cellIter = cells.getLongIterator();
+        while (cellIter.hasNext()) {
+            long ck = cellIter.next();
+            builder.withCellKey(ck).add(term, ValueType.TERM, variableName);
+        }
+        return builder.build();
+    }
+
+    private static int readIntBE(byte[] buf, int offset) {
+        return ((buf[offset] & 0xFF) << 24)
+                | ((buf[offset + 1] & 0xFF) << 16)
+                | ((buf[offset + 2] & 0xFF) << 8)
+                | (buf[offset + 3] & 0xFF);
+    }
+
     private static CellResult toCellResult(PostingList pl, Query.Granularity granularity,
             PostingList.DeserializeMode mode) {
         if (mode == PostingList.DeserializeMode.FULL) {
@@ -202,15 +300,12 @@ public final class PosExecutor implements ConditionExecutor<Pos> {
         return CellResult.fromPostingList(pl, granularity);
     }
 
-    /** Checks if {@code array} starts with {@code prefix}. */
     private static boolean startsWith(byte[] array, byte[] prefix) {
-        if (array.length < prefix.length) {
+        if (array.length < prefix.length)
             return false;
-        }
         for (int i = 0; i < prefix.length; i++) {
-            if (array[i] != prefix[i]) {
+            if (array[i] != prefix[i])
                 return false;
-            }
         }
         return true;
     }

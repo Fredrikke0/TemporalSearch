@@ -14,7 +14,8 @@ import com.example.query.model.condition.Condition;
  * A query consists of:
  * - A source (e.g. "wikipedia")
  * - A list of conditions
- * - Optional order by specifications (column names, prefix with "-" for descending)
+ * - Optional order by specifications (column names, prefix with "-" for
+ * descending)
  * - Optional limit
  * - Granularity settings
  * - Optional granularity size
@@ -24,18 +25,17 @@ import com.example.query.model.condition.Condition;
  * - Optional group by columns
  */
 public record Query(
-    String source,
-    List<Condition> conditions,
-    List<String> orderBy,
-    Optional<Integer> limit,
-    Granularity granularity,
-    Optional<Integer> granularitySize,
-    List<SelectColumn> selectColumns,
-    VariableRegistry variableRegistry,
-    List<JoinStep> joinSteps,
-    Optional<String> mainAlias,
-    List<String> groupByColumns
-) {
+        String source,
+        List<Condition> conditions,
+        List<String> orderBy,
+        Optional<Integer> limit,
+        Granularity granularity,
+        Optional<Integer> granularitySize,
+        List<SelectedColumn> selectColumns,
+        VariableRegistry variableRegistry,
+        List<JoinStep> joinSteps,
+        Optional<String> mainAlias,
+        List<String> groupByColumns) {
     public enum Granularity {
         DOCUMENT,
         SENTENCE
@@ -69,59 +69,62 @@ public record Query(
      * Creates a query with just a source.
      */
     public Query(String source) {
-        this(source, List.of(), List.of(), Optional.empty(), Granularity.DOCUMENT, Optional.empty(), List.of(), new VariableRegistry(), List.of(), Optional.empty(), List.of());
+        this(source, List.of(), List.of(), Optional.empty(), Granularity.DOCUMENT, Optional.empty(), List.of(),
+                new VariableRegistry(), List.of(), Optional.empty(), List.of());
     }
 
     /**
      * Creates a query with source and conditions.
      */
     public Query(String source, List<Condition> conditions) {
-        this(source, conditions, List.of(), Optional.empty(), Granularity.DOCUMENT, Optional.empty(), List.of(), new VariableRegistry(), List.of(), Optional.empty(), List.of());
+        this(source, conditions, List.of(), Optional.empty(), Granularity.DOCUMENT, Optional.empty(), List.of(),
+                new VariableRegistry(), List.of(), Optional.empty(), List.of());
     }
 
     /**
      * Creates a query with source, conditions, and granularity.
      */
     public Query(String source, List<Condition> conditions, Granularity granularity) {
-        this(source, conditions, List.of(), Optional.empty(), granularity, Optional.empty(), List.of(), new VariableRegistry(), List.of(), Optional.empty(), List.of());
+        this(source, conditions, List.of(), Optional.empty(), granularity, Optional.empty(), List.of(),
+                new VariableRegistry(), List.of(), Optional.empty(), List.of());
     }
 
     /**
      * Creates a query with all parameters except variable registry, join steps.
      */
     public Query(
-        String source,
-        List<Condition> conditions,
-        List<String> orderBy,
-        Optional<Integer> limit,
-        Granularity granularity,
-        Optional<Integer> granularitySize,
-        List<SelectColumn> selectColumns
-    ) {
-        this(source, conditions, orderBy, limit, granularity, granularitySize, selectColumns, new VariableRegistry(), List.of(), Optional.empty(), List.of());
+            String source,
+            List<Condition> conditions,
+            List<String> orderBy,
+            Optional<Integer> limit,
+            Granularity granularity,
+            Optional<Integer> granularitySize,
+            List<SelectedColumn> selectColumns) {
+        this(source, conditions, orderBy, limit, granularity, granularitySize, selectColumns, new VariableRegistry(),
+                List.of(), Optional.empty(), List.of());
     }
 
     /**
      * Creates a query with all parameters except join steps.
      */
     public Query(
-        String source,
-        List<Condition> conditions,
-        List<String> orderBy,
-        Optional<Integer> limit,
-        Granularity granularity,
-        Optional<Integer> granularitySize,
-        List<SelectColumn> selectColumns,
-        VariableRegistry variableRegistry
-    ) {
-        this(source, conditions, orderBy, limit, granularity, granularitySize, selectColumns, variableRegistry, List.of(), Optional.empty(), List.of());
+            String source,
+            List<Condition> conditions,
+            List<String> orderBy,
+            Optional<Integer> limit,
+            Granularity granularity,
+            Optional<Integer> granularitySize,
+            List<SelectedColumn> selectColumns,
+            VariableRegistry variableRegistry) {
+        this(source, conditions, orderBy, limit, granularity, granularitySize, selectColumns, variableRegistry,
+                List.of(), Optional.empty(), List.of());
     }
 
     /**
      * Registers a producer variable in the registry.
      *
-     * @param name The variable name
-     * @param type The variable type
+     * @param name          The variable name
+     * @param type          The variable type
      * @param conditionType The condition type that produces the variable
      */
     public void registerProducer(String name, VariableType type, String conditionType) {
@@ -131,8 +134,8 @@ public record Query(
     /**
      * Registers a consumer variable in the registry.
      *
-     * @param name The variable name
-     * @param type The variable type
+     * @param name          The variable name
+     * @param type          The variable type
      * @param conditionType The condition type that consumes the variable
      */
     public void registerConsumer(String name, VariableType type, String conditionType) {
@@ -150,7 +153,8 @@ public record Query(
     }
 
     /**
-     * Gets the inferred type for a variable, based on all its producers and consumers.
+     * Gets the inferred type for a variable, based on all its producers and
+     * consumers.
      *
      * @param name The variable name
      * @return The inferred variable type
@@ -188,7 +192,8 @@ public record Query(
 
     /**
      * Determines if select column qualification is required.
-     * Qualification is required if the query has an explicit main alias or involves joins.
+     * Qualification is required if the query has an explicit main alias or involves
+     * joins.
      *
      * @return true if qualification is required, false otherwise.
      */
@@ -204,12 +209,14 @@ public record Query(
         if (!selectColumns.isEmpty()) {
             sb.append("SELECT ");
             for (int i = 0; i < selectColumns.size(); i++) {
-                if (i > 0) sb.append(", ");
+                if (i > 0)
+                    sb.append(", ");
                 sb.append(selectColumns.get(i));
             }
         } else {
             // Handle case with no select columns explicitly, maybe SELECT * or COUNT(*)?
-            // For now, let's assume valid queries always have select columns based on validator
+            // For now, let's assume valid queries always have select columns based on
+            // validator
             sb.append("SELECT DOCUMENT_ID");
         }
 
@@ -221,19 +228,22 @@ public record Query(
         if (!joinSteps.isEmpty()) {
             for (JoinStep step : joinSteps) {
                 sb.append(" ").append(step.joinType()).append(" JOIN (").append(step.subquery().toString())
-                  .append(") BIND ").append(step.rightSourceAlias())
-                  .append(" ON ").append(step.onCondition().toString());
+                        .append(") BIND ").append(step.rightSourceAlias())
+                        .append(" ON ").append(step.onCondition().toString());
             }
         }
 
         // Add WHERE clause
         if (!conditions.isEmpty()) {
             sb.append(" WHERE ");
-            // Note: If multiple top-level conditions are present in this list, they will be rendered as ANDed.
-            // In normal parsing, the WHERE clause is represented as a single Condition tree (Logical with AND/OR/NOT),
+            // Note: If multiple top-level conditions are present in this list, they will be
+            // rendered as ANDed.
+            // In normal parsing, the WHERE clause is represented as a single Condition tree
+            // (Logical with AND/OR/NOT),
             // and that single root's toString() expresses the intended logical structure.
             for (int i = 0; i < conditions.size(); i++) {
-                if (i > 0) sb.append(" AND ");
+                if (i > 0)
+                    sb.append(" AND ");
                 sb.append(conditions.get(i)); // Relies on Condition.toString()
             }
         }
@@ -248,7 +258,8 @@ public record Query(
         if (!orderBy.isEmpty()) {
             sb.append(" ORDER BY ");
             for (int i = 0; i < orderBy.size(); i++) {
-                if (i > 0) sb.append(", ");
+                if (i > 0)
+                    sb.append(", ");
                 String column = orderBy.get(i);
                 // Assuming format "column" or "-column"
                 if (column.startsWith("-")) {

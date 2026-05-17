@@ -36,7 +36,6 @@ import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Ner;
 import com.example.query.model.condition.Not;
 import com.example.query.model.condition.Temporal;
-import com.example.query.result.TableResultService;
 
 @ExtendWith(MockitoExtension.class)
 class QueryExecutorTest {
@@ -63,8 +62,6 @@ class QueryExecutorTest {
     private RocksIterator nerIterator;
 
     // Mock dependencies needed by QueryExecutor and JoinHandler
-    @Mock
-    private TableResultService mockTableResultService;
     @Mock
     private ConditionExecutorFactory factory;
     @Mock
@@ -107,7 +104,7 @@ class QueryExecutorTest {
         indexes.put("dependency", dependencyIndex);
         indexes.put("ner_date", nerDateIndex);
 
-        queryExecutor = new QueryExecutor(mockTableResultService, "none", mockSynonymManager, factory);
+        queryExecutor = new QueryExecutor("none", mockSynonymManager, factory);
 
         // Mock IndexManager behavior
         lenient().when(mockIndexManager.getAllIndexes()).thenReturn(indexes);

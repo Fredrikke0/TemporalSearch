@@ -15,12 +15,11 @@ import org.junit.jupiter.api.Test;
 
 import com.example.query.binding.VariableRegistry;
 import com.example.query.binding.VariableType;
-import com.example.query.model.CountColumn;
 import com.example.query.model.Query;
-import com.example.query.model.SelectColumn;
-import com.example.query.model.SnippetColumn;
-import com.example.query.model.SnippetNode;
-import com.example.query.model.VariableColumn;
+import com.example.query.model.SelectedColumn;
+import com.example.query.model.SelectedCount;
+import com.example.query.model.SelectedSnippet;
+import com.example.query.model.SelectedVariable;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Contains;
 import com.example.query.model.condition.Ner;
@@ -37,7 +36,7 @@ class QuerySemanticValidatorTest {
     @Test
     @DisplayName("Valid query with COUNT column should validate")
     void validQueryWithCountShouldValidate() {
-        List<SelectColumn> columns = List.of(CountColumn.countAll());
+        List<SelectedColumn> columns = List.of(new SelectedCount(new SelectedCount.CountAll()));
         Query query = createQuery(columns, List.of());
 
         assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
@@ -48,18 +47,17 @@ class QuerySemanticValidatorTest {
     void validQueryWithBoundVariableShouldValidate() {
         // Create a registry and register the variable with its qualified name
         VariableRegistry registry = new VariableRegistry();
-        registry.registerProducer("$main.person", VariableType.ENTITY, "NER"); // Use internally qualified name ($main)
+        registry.registerProducer("$main.person", VariableType.ENTITY, "NER");
 
         // Create condition that binds the qualified variable name
-        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true); // Condition stores internally qualified name
+        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true);
         List<Condition> conditions = List.of(nerCondition);
 
         // Use that variable in SELECT (needs qualified name as used in SELECT)
-        List<SelectColumn> columns = List.of(new VariableColumn("$main.person")); // VariableColumn uses internally qualified name
+        List<SelectedColumn> columns = List.of(new SelectedVariable("$main.person"));
 
         Query query = createQuery(columns, conditions, registry);
 
-        // Validation should now pass as the qualified name '$main.person' is registered and used consistently
         assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
     }
 
@@ -68,15 +66,14 @@ class QuerySemanticValidatorTest {
     void validQueryWithSnippetBoundVariableShouldValidate() {
         // Create a registry and register the variable with its qualified name
         VariableRegistry registry = new VariableRegistry();
-        registry.registerProducer("$main.person", VariableType.ENTITY, "NER"); // Use internally qualified name ($main)
+        registry.registerProducer("$main.person", VariableType.ENTITY, "NER");
 
         // Create condition that binds the qualified variable name
-        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true); // Condition stores internally qualified name
+        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true);
         List<Condition> conditions = List.of(nerCondition);
 
         // Use that variable in a SNIPPET column using the internally qualified name
-        SnippetNode snippetNode = new SnippetNode("$main.person"); // SnippetNode uses internally qualified name
-        List<SelectColumn> columns = Collections.singletonList(new SnippetColumn(snippetNode.variableName(), snippetNode.windowSize()));
+        List<SelectedColumn> columns = Collections.singletonList(new SelectedSnippet("$main.person"));
 
         Query query = createQuery(columns, conditions, registry);
 
@@ -90,18 +87,16 @@ class QuerySemanticValidatorTest {
         List<Condition> conditions = List.of();
 
         // Try to use an unbound variable in SELECT
-        List<SelectColumn> columns = List.of(new VariableColumn("$main.person")); // Use internally qualified name
+        List<SelectedColumn> columns = List.of(new SelectedVariable("$main.person"));
 
         Query query = createQuery(columns, conditions);
 
         QueryParseException exception = assertThrows(
-            QueryParseException.class,
-            () -> validator.validate(query, Optional.empty())
-        );
+                QueryParseException.class,
+                () -> validator.validate(query, Optional.empty()));
 
-        // Check for the specific message about the variable not being found (registry is empty)
         assertTrue(exception.getMessage().contains("Variable '$main.person' not found"),
-                   "Error message should indicate the variable was not found: " + exception.getMessage());
+                "Error message should indicate the variable was not found: " + exception.getMessage());
     }
 
     @Test
@@ -111,19 +106,16 @@ class QuerySemanticValidatorTest {
         List<Condition> conditions = List.of();
 
         // Try to use an unbound variable in SNIPPET
-        SnippetNode snippetNode = new SnippetNode("$main.person"); // Use internally qualified name
-        List<SelectColumn> columns = Collections.singletonList(new SnippetColumn(snippetNode.variableName(), snippetNode.windowSize()));
+        List<SelectedColumn> columns = Collections.singletonList(new SelectedSnippet("$main.person"));
 
         Query query = createQuery(columns, conditions);
 
         QueryParseException exception = assertThrows(
-            QueryParseException.class,
-            () -> validator.validate(query, Optional.empty())
-        );
+                QueryParseException.class,
+                () -> validator.validate(query, Optional.empty()));
 
-        // Check for the specific message about the variable not being found (registry is empty)
         assertTrue(exception.getMessage().contains("Variable '$main.person' not found"),
-                   "Error message should indicate the variable was not found: " + exception.getMessage());
+                "Error message should indicate the variable was not found: " + exception.getMessage());
     }
 
     @Test
@@ -131,33 +123,29 @@ class QuerySemanticValidatorTest {
     void queryWithOversizedSnippetWindowShouldThrowException() {
         // Create a registry and register the variable
         VariableRegistry registry = new VariableRegistry();
-        registry.registerProducer("$main.person", VariableType.ENTITY, "NER"); // Use internally qualified name
+        registry.registerProducer("$main.person", VariableType.ENTITY, "NER");
 
         // Create condition that binds a variable
-        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true); // Use internally qualified name
+        Ner nerCondition = new Ner("PERSON", List.of(), "$main.person", true);
         List<Condition> conditions = List.of(nerCondition);
 
-        // Create a snippet with window size 5 (the maximum allowed by the constructor)
-        SnippetNode snippetNode = new SnippetNode("$main.person", 5); // Use internally qualified name
-        List<SelectColumn> columns = Collections.singletonList(new SnippetColumn(snippetNode.variableName(), snippetNode.windowSize()));
+        // Create a snippet with window size 5
+        List<SelectedColumn> columns = Collections.singletonList(new SelectedSnippet("$main.person", 5));
 
         Query query = createQuery(columns, conditions, registry);
 
-        // Since we can't create a SnippetNode with window size > 5 (constructor prevents it),
-        // we're just verifying that a valid window size passes validation
         assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
     }
 
     @Test
     @DisplayName("Query with empty select columns should throw exception")
     void queryWithEmptySelectColumnsShouldThrowException() {
-        List<SelectColumn> columns = new ArrayList<>();
+        List<SelectedColumn> columns = new ArrayList<>();
         Query query = createQuery(columns, List.of());
 
         QueryParseException exception = assertThrows(
-            QueryParseException.class,
-            () -> validator.validate(query, Optional.empty())
-        );
+                QueryParseException.class,
+                () -> validator.validate(query, Optional.empty()));
 
         assertTrue(exception.getMessage().contains("at least one column"));
     }
@@ -168,14 +156,13 @@ class QuerySemanticValidatorTest {
         List<String> tooManyTerms = List.of("one", "two", "three", "four");
         Contains containsCondition = new Contains(tooManyTerms);
         List<Condition> conditions = List.of(containsCondition);
-        List<SelectColumn> columns = List.of(CountColumn.countAll());
+        List<SelectedColumn> columns = List.of(new SelectedCount(new SelectedCount.CountAll()));
 
         Query query = createQuery(columns, conditions);
 
         QueryParseException exception = assertThrows(
-            QueryParseException.class,
-            () -> validator.validate(query, Optional.empty())
-        );
+                QueryParseException.class,
+                () -> validator.validate(query, Optional.empty()));
 
         assertTrue(exception.getMessage().contains("supports at most 3 terms"));
         assertTrue(exception.getMessage().contains("got 4 terms"));
@@ -184,12 +171,12 @@ class QuerySemanticValidatorTest {
     @Test
     @DisplayName("CONTAINS condition with empty terms should throw exception")
     void containsConditionWithEmptyTermsShouldThrowException() {
-        // Note: This test is theoretical since the Contains constructor prevents empty terms
+        // Note: This test is theoretical since the Contains constructor prevents empty
+        // terms
         // but the validator should still check for robustness
-        List<SelectColumn> columns = List.of(CountColumn.countAll());
+        List<SelectedColumn> columns = List.of(new SelectedCount(new SelectedCount.CountAll()));
         Query query = createQuery(columns, List.of());
 
-        // This test passes because we can't actually create a Contains condition with empty terms
         assertDoesNotThrow(() -> validator.validate(query, Optional.empty()));
     }
 
@@ -201,7 +188,7 @@ class QuerySemanticValidatorTest {
         Contains trigramTerms = new Contains(List.of("first", "second", "third"));
 
         List<Condition> conditions = List.of(singleTerm, bigramTerms, trigramTerms);
-        List<SelectColumn> columns = List.of(CountColumn.countAll());
+        List<SelectedColumn> columns = List.of(new SelectedCount(new SelectedCount.CountAll()));
 
         Query query = createQuery(columns, conditions);
 
@@ -215,80 +202,78 @@ class QuerySemanticValidatorTest {
         List<Condition> conditions = List.of();
 
         // Create a valid select column
-        List<SelectColumn> columns = List.of(CountColumn.countAll());
+        List<SelectedColumn> columns = List.of(new SelectedCount(new SelectedCount.CountAll()));
 
-        // Create a variable registry where the variable is registered as a consumer but not a producer
+        // Create a variable registry where the variable is registered as a consumer but
+        // not a producer
         VariableRegistry registry = new VariableRegistry();
-        registry.registerConsumer("$main.person", VariableType.ENTITY, "ORDER_BY"); // Use internally qualified name
+        registry.registerConsumer("$main.person", VariableType.ENTITY, "ORDER_BY");
 
         // Create a query with an unbound variable in ORDER BY
         Query query = new Query(
-            "wikipedia",
-            conditions,
-            List.of("$main.person"),  // orderBy with unbound variable (use internally qualified name)
-            Optional.empty(),
-            Query.Granularity.DOCUMENT,
-            Optional.empty(),
-            columns,
-            registry,  // Registry with person as consumer only
-            List.of(), // joinSteps
-            Optional.empty(), // mainAlias
-            Collections.emptyList() // groupByColumns
-        );
+                "wikipedia",
+                conditions,
+                List.of("$main.person"),
+                Optional.empty(),
+                Query.Granularity.DOCUMENT,
+                Optional.empty(),
+                columns,
+                registry,
+                List.of(),
+                Optional.empty(),
+                Collections.emptyList());
 
         QueryParseException exception = assertThrows(
-            QueryParseException.class,
-            () -> validator.validate(query, Optional.empty())
-        );
+                QueryParseException.class,
+                () -> validator.validate(query, Optional.empty()));
 
-        // Check that the overall message contains the core error about the variable
         assertTrue(exception.getMessage().contains("Variable $main.person is consumed but never produced"),
-                   "Error message should contain check for variable consumed but not produced: " + exception.getMessage());
+                "Error message should contain check for variable consumed but not produced: " + exception.getMessage());
     }
 
     /**
      * Helper method to create a Query object for testing with an empty registry
      */
-    private Query createQuery(List<SelectColumn> columns, List<Condition> conditions) {
+    private Query createQuery(List<SelectedColumn> columns, List<Condition> conditions) {
         return createQuery(columns, conditions, new VariableRegistry());
     }
 
     /**
      * Helper method to create a Query object for testing with a provided registry
      */
-    private Query createQuery(List<SelectColumn> columns, List<Condition> conditions, VariableRegistry registry) {
+    private Query createQuery(List<SelectedColumn> columns, List<Condition> conditions, VariableRegistry registry) {
         return new Query(
-            "wikipedia",   // source
-            conditions,    // conditions
-            List.of(),     // orderBy
-            Optional.empty(),  // limit
-            Query.Granularity.DOCUMENT,  // granularity
-            Optional.empty(),  // granularitySize (Snippet size is handled in SnippetColumn)
-            columns,       // selectColumns
-            registry,       // variable registry
-            List.of(),      // joinSteps
-            Optional.empty(), // mainAlias
-            Collections.emptyList() // groupByColumns - Default to empty list
-        );
+                "wikipedia",
+                conditions,
+                List.of(),
+                Optional.empty(),
+                Query.Granularity.DOCUMENT,
+                Optional.empty(),
+                columns,
+                registry,
+                List.of(),
+                Optional.empty(),
+                Collections.emptyList());
     }
 
     /**
-     * Helper method to create a Query object for testing with a provided registry and group by columns
+     * Helper method to create a Query object for testing with a provided registry
+     * and group by columns
      */
-    private Query createQuery(List<SelectColumn> columns, List<Condition> conditions, VariableRegistry registry, List<String> groupByColumns) {
+    private Query createQuery(List<SelectedColumn> columns, List<Condition> conditions, VariableRegistry registry,
+            List<String> groupByColumns) {
         return new Query(
-            "wikipedia",   // source
-            conditions,    // conditions
-            List.of(),     // orderBy
-            Optional.empty(),  // limit
-            Query.Granularity.DOCUMENT,  // granularity
-            Optional.empty(),  // granularitySize
-            columns,       // selectColumns
-            registry,       // variable registry
-            List.of(),      // joinSteps
-            Optional.empty(), // mainAlias
-            groupByColumns  // groupByColumns
-        );
+                "wikipedia",
+                conditions,
+                List.of(),
+                Optional.empty(),
+                Query.Granularity.DOCUMENT,
+                Optional.empty(),
+                columns,
+                registry,
+                List.of(),
+                Optional.empty(),
+                groupByColumns);
     }
 
     @Test
@@ -297,14 +282,17 @@ class QuerySemanticValidatorTest {
         VariableRegistry registry = new VariableRegistry();
         registry.registerProducer("$main.colA", VariableType.TEXT_SPAN, "TEST");
 
-        List<SelectColumn> select = List.of(new VariableColumn("$main.colA"));
+        List<SelectedColumn> select = List.of(new SelectedVariable("$main.colA"));
         List<String> groupBy = List.of("$main.colZ"); // colZ is not known
         Query query = createQuery(select, List.of(), registry, groupBy);
 
-        QueryParseException exception = assertThrows(QueryParseException.class, () -> validator.validate(query, Optional.empty()));
-        assertTrue(exception.getMessage().contains("Variable '$main.colZ' for GROUP BY ('$main.colZ') not found or not produced in scope (current query (alias '$main'))"),
-                   "Exception message should indicate that colZ is not known in its scope. Actual: " + exception.getMessage());
+        QueryParseException exception = assertThrows(QueryParseException.class,
+                () -> validator.validate(query, Optional.empty()));
+        assertTrue(exception.getMessage().contains(
+                "Variable '$main.colZ' for GROUP BY ('$main.colZ') not found or not produced in scope (current query (alias '$main'))"),
+                "Exception message should indicate that colZ is not known in its scope. Actual: "
+                        + exception.getMessage());
         assertTrue(exception.getMessage().contains("Available variables in this scope: [$main.colA]"),
-                   "Exception message should list available variables. Actual: " + exception.getMessage());
+                "Exception message should list available variables. Actual: " + exception.getMessage());
     }
 }

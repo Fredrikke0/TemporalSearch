@@ -6,9 +6,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.example.query.model.Query;
-import com.example.query.model.SelectColumn;
-import com.example.query.model.SnippetColumn;
-import com.example.query.model.StructuralColumn;
+import com.example.query.model.SelectedColumn;
+import com.example.query.model.SelectedSnippet;
+import com.example.query.model.SelectedStructural;
+import com.example.query.model.StructuralField;
 import com.example.query.model.condition.Condition;
 import com.example.query.model.condition.Logical;
 import com.example.query.model.condition.Ner;
@@ -92,24 +93,24 @@ public class QueryAttributeAnalyzer {
     /**
      * Analyzes SELECT columns to determine attribute requirements.
      */
-    private static void analyzeSelectColumns(List<SelectColumn> selectColumns, AttributeRequirements requirements) {
-        for (SelectColumn column : selectColumns) {
-            if (column instanceof SnippetColumn) {
+    private static void analyzeSelectColumns(List<SelectedColumn> selectColumns, AttributeRequirements requirements) {
+        for (SelectedColumn column : selectColumns) {
+            if (column instanceof SelectedSnippet) {
                 logger.trace("Found SNIPPET column, requiring occurrences and positions");
                 requirements.setNeedsOccurrences(true);
                 requirements.needsPositions = true;
-            } else if (column instanceof StructuralColumn structCol) {
-                String fieldName = structCol.getFieldName();
-                if ("SENTENCE_ID".equals(fieldName)) {
+            } else if (column instanceof SelectedStructural ss) {
+                StructuralField field = ss.field();
+                if (field == StructuralField.SENTENCE_ID) {
                     logger.trace("Found SENTENCE_ID column, requiring sentence IDs");
                     requirements.needsSentenceId = true;
-                } else if ("BEGIN".equals(fieldName) || "END".equals(fieldName)) {
-                    logger.trace("Found position column ({}), requiring occurrences and positions", fieldName);
+                } else if (field == StructuralField.BEGIN || field == StructuralField.END) {
+                    logger.trace("Found position column ({}), requiring occurrences and positions", field);
                     requirements.setNeedsOccurrences(true);
                     requirements.needsPositions = true;
                 }
             }
-            // Note: VariableColumn requirements depend on the conditions that produce them
+            // Note: Variable requirements depend on the conditions that produce them
             // This is handled in analyzeConditions()
         }
     }

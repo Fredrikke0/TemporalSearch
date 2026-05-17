@@ -40,10 +40,10 @@ import com.example.query.index.IndexManager;
 import com.example.query.model.Query;
 import com.example.query.model.condition.Ner;
 import com.example.query.result.ResultGenerationException;
-import com.example.query.result.TableResultService;
+import com.example.query.result.ResultMaterializer;
+import com.example.query.result.Schema;
+import com.example.query.result.Table;
 import com.example.query.sqlite.SqliteAccessor;
-
-import tech.tablesaw.api.Table;
 
 /**
  * End-to-end tests for query parsing, execution, and result generation.
@@ -57,7 +57,6 @@ public class QueryEndToEndTest {
     static Path tempDir;
 
     private static QueryExecutor queryExecutor;
-    private static TableResultService tableResultService;
     private static MockIndexAccess mockUnigramIndex;
     private static MockIndexAccess mockBigramIndex;
     private static MockIndexAccess mockTrigramIndex;
@@ -117,9 +116,8 @@ public class QueryEndToEndTest {
         mockIndexManager = org.mockito.Mockito.mock(IndexManager.class);
 
         queryParser = new QueryParser();
-        tableResultService = new TableResultService();
         factory = new ConditionExecutorFactory(staticMockSynonymManager, "optimized", Query.Granularity.DOCUMENT);
-        queryExecutor = new QueryExecutor(tableResultService, "optimized", staticMockSynonymManager, factory);
+        queryExecutor = new QueryExecutor("optimized", staticMockSynonymManager, factory);
 
         mockUnigramIndex = new MockIndexAccess("unigram");
         mockUnigramIndex.addTestData("apple", 1, 1, 0, 5);
@@ -234,7 +232,9 @@ public class QueryEndToEndTest {
         assertEquals(Query.Granularity.DOCUMENT, results.granularity());
         assertTrue(extractDocIds(results).containsAll(Set.of(1, 2)));
 
-        Table resultTable = tableResultService.generateTable(query, results, mockIndexManager.getAllIndexes());
+        var materializer = new ResultMaterializer(query.source());
+        var rows = materializer.materialize(results, query);
+        Table resultTable = Table.collect(rows, Schema.fromQuery(query));
         assertNotNull(resultTable);
         assertEquals(2, resultTable.rowCount());
     }
@@ -250,7 +250,9 @@ public class QueryEndToEndTest {
         assertTrue(results.isEmpty(), "Expected no results for 'nonexistent'");
         assertEquals(Query.Granularity.DOCUMENT, results.granularity());
 
-        Table resultTable = tableResultService.generateTable(query, results, mockIndexManager.getAllIndexes());
+        var materializer = new ResultMaterializer(query.source());
+        var rows = materializer.materialize(results, query);
+        Table resultTable = Table.collect(rows, Schema.fromQuery(query));
         assertNotNull(resultTable);
         assertEquals(0, resultTable.rowCount());
     }
@@ -267,7 +269,9 @@ public class QueryEndToEndTest {
         assertEquals(1, results.cellCount());
         assertEquals(3, PostingList.docIdFromCellKey(results.cells().select(0)));
 
-        Table resultTable = tableResultService.generateTable(query, results, mockIndexManager.getAllIndexes());
+        var materializer = new ResultMaterializer(query.source());
+        var rows = materializer.materialize(results, query);
+        Table resultTable = Table.collect(rows, Schema.fromQuery(query));
         assertNotNull(resultTable);
         assertEquals(1, resultTable.rowCount());
     }
@@ -284,7 +288,9 @@ public class QueryEndToEndTest {
         assertEquals(1, results.cellCount());
         assertEquals(4, PostingList.docIdFromCellKey(results.cells().select(0)));
 
-        Table resultTable = tableResultService.generateTable(query, results, mockIndexManager.getAllIndexes());
+        var materializer = new ResultMaterializer(query.source());
+        var rows = materializer.materialize(results, query);
+        Table resultTable = Table.collect(rows, Schema.fromQuery(query));
         assertNotNull(resultTable);
         assertEquals(1, resultTable.rowCount());
     }
@@ -301,7 +307,9 @@ public class QueryEndToEndTest {
         assertEquals(1, results.cellCount());
         assertEquals(3, PostingList.docIdFromCellKey(results.cells().select(0)));
 
-        Table resultTable = tableResultService.generateTable(query, results, mockIndexManager.getAllIndexes());
+        var materializer = new ResultMaterializer(query.source());
+        var rows = materializer.materialize(results, query);
+        Table resultTable = Table.collect(rows, Schema.fromQuery(query));
         assertNotNull(resultTable);
         assertEquals(1, resultTable.rowCount());
     }
@@ -318,7 +326,9 @@ public class QueryEndToEndTest {
         assertEquals(1, results.cellCount());
         assertEquals(5, PostingList.docIdFromCellKey(results.cells().select(0)));
 
-        Table resultTable = tableResultService.generateTable(query, results, mockIndexManager.getAllIndexes());
+        var materializer = new ResultMaterializer(query.source());
+        var rows = materializer.materialize(results, query);
+        Table resultTable = Table.collect(rows, Schema.fromQuery(query));
         assertNotNull(resultTable);
         assertEquals(1, resultTable.rowCount());
     }

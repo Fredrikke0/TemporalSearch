@@ -57,7 +57,7 @@ public class SentenceGranularityTest {
         // Static mocks (unigramIndex, mockSynonymManager, mockIndexManager) are
         // injected by MockitoExtension
         factory = new ConditionExecutorFactory(mockSynonymManager, "none", Query.Granularity.SENTENCE);
-        queryExecutor = new QueryExecutor(null, "none", mockSynonymManager, factory);
+        queryExecutor = new QueryExecutor("none", mockSynonymManager, factory);
         queryParser = new QueryParser();
         System.out.println("Sentence Granularity Test Setup Complete.");
     }

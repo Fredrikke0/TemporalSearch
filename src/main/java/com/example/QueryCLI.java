@@ -25,7 +25,16 @@ import com.example.query.executor.QueryExecutor;
 import com.example.query.executor.CellResult;
 import com.example.query.index.IndexManager;
 import com.example.query.model.Query;
-import com.example.query.result.TableResultService;
+import com.example.query.result.ResultMaterializer;
+import com.example.query.result.Row;
+import com.example.query.result.Schema;
+import com.example.query.result.SortSpec;
+import com.example.query.result.Table;
+import com.example.query.result.Aggregators;
+import com.example.query.model.SelectedCount;
+import com.example.query.model.SelectedCount.CountAll;
+import com.example.query.model.SelectedCount.CountUnique;
+import com.example.query.model.SelectedCount.CountDocuments;
 import com.example.query.sqlite.SqliteAccessor;
 
 import net.sourceforge.argparse4j.ArgumentParsers;
@@ -33,7 +42,6 @@ import net.sourceforge.argparse4j.impl.Arguments;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
-import tech.tablesaw.api.Table;
 
 import one.profiler.AsyncProfiler;
 
@@ -62,7 +70,6 @@ public class QueryCLI implements AutoCloseable {
 
     // Caches for interactive mode (project name -> resources)
     private final java.util.Map<String, IndexManager> projectIndexManagers = new java.util.HashMap<>();
-    private final java.util.Map<String, TableResultService> projectTableServices = new java.util.HashMap<>();
 
     // Profiling options
     private Optional<String> profileOptions;
@@ -226,12 +233,14 @@ public class QueryCLI implements AutoCloseable {
                 return;
             }
 
-            TableResultService currentTableResultService;
+            // Initialize SQLite access (needed by structural field resolvers)
+            SqliteAccessor.initialize(this.dbFilePath);
+
             IndexManager currentIndexManagerToUse;
             SynonymManager currentSynonymManager;
 
             if (interactiveMode) {
-                // Reuse or create and cache IndexManager & TableResultService for this project
+                // Reuse or create and cache IndexManager for this project
                 currentIndexManagerToUse = projectIndexManagers.get(projectName);
                 if (currentIndexManagerToUse == null) {
                     // Build a maximal preload query to force all index types to open.
@@ -251,23 +260,17 @@ public class QueryCLI implements AutoCloseable {
                     currentIndexManagerToUse = new IndexManager(projectIndexDir, projectName, preloadQuery,
                             "optimized");
                     projectIndexManagers.put(projectName, currentIndexManagerToUse);
-
-                    // TableResultService per project (DB path may differ across projects)
-                    projectTableServices.put(projectName, new TableResultService(this.dbFilePath));
                     logger.info("Initialized and cached IndexManager for project '{}'.", projectName);
                 }
-                currentTableResultService = projectTableServices.get(projectName);
                 currentSynonymManager = currentIndexManagerToUse.getSynonymManager();
             } else {
                 // Non-interactive: fresh components each query
-                SqliteAccessor.initialize(this.dbFilePath);
-                currentTableResultService = new TableResultService(this.dbFilePath);
                 localIndexManager = new IndexManager(projectIndexDir, projectName, query,
                         this.currentStitchStrategyName);
                 currentIndexManagerToUse = localIndexManager;
                 currentSynonymManager = currentIndexManagerToUse.getSynonymManager();
             }
-            logger.debug("Ready IndexManager and TableResultService for execution.");
+            logger.debug("Ready IndexManager for execution.");
             logger.info("Using database at: {}", this.dbFilePath); // Re-log for clarity if needed
 
             // Add warning for stitch strategy and granularity mismatch
@@ -286,7 +289,7 @@ public class QueryCLI implements AutoCloseable {
             logger.debug("ConditionExecutorFactory configured with S:{}, Granularity:{}",
                     this.currentStitchStrategyName, queryGranularity);
 
-            QueryExecutor queryExecutor = new QueryExecutor(currentTableResultService, this.currentStitchStrategyName,
+            QueryExecutor queryExecutor = new QueryExecutor(this.currentStitchStrategyName,
                     currentSynonymManager, factory);
             queryExecutor.setPushdownStrategy(this.currentPushdownStrategy);
             logger.debug("QueryExecutor configured with P:{}", this.currentPushdownStrategy);
@@ -312,63 +315,63 @@ public class QueryCLI implements AutoCloseable {
             } finally {
             }
 
+            // --- New result pipeline ---
+            var materializer = new ResultMaterializer(query.source());
+            java.util.Iterator<Row> rows = materializer.materialize(execResult, query);
+
             Table resultTable;
-            long matchCount;
-            String matchUnit;
-
-            if (execResult != null) {
-                matchCount = execResult.cellCount();
-                matchUnit = (query.joinSteps().isEmpty()
-                        ? (queryGranularity == Query.Granularity.DOCUMENT ? "documents" : "sentences")
-                        : "conceptual joined rows");
-                logger.info("Query executed, found {} matching {} (granularity: {})", matchCount, matchUnit,
-                        queryGranularity);
-
-                Map<String, IndexAccessInterface> allIndexes = currentIndexManagerToUse.getAllIndexes();
-                resultTable = currentTableResultService.generateTable(query, execResult, allIndexes);
+            if (!query.orderBy().isEmpty()) {
+                Table unsorted = Table.collect(rows, Schema.fromQuery(query));
+                var specs = query.orderBy().stream().map(s -> {
+                    boolean desc = s.startsWith("-");
+                    String col = (desc || s.startsWith("+")) ? s.substring(1) : s;
+                    return new SortSpec(col, desc);
+                }).toArray(SortSpec[]::new);
+                resultTable = unsorted.sortBy(specs);
             } else {
-                logger.error("Query execution returned a null CellResult for query: {}", queryStr);
-                System.err.println("Error: Query execution resulted in an unexpected null result.");
-                resultTable = Table.create("Empty Result - Execution Error");
-                matchCount = 0;
-                matchUnit = "results";
+                resultTable = Table.collect(rows, Schema.fromQuery(query));
             }
 
-            // Use currentExportFormat and currentExportFilename from instance fields
+            long matchCount = execResult != null ? execResult.cellCount() : 0;
+            String matchUnit = (query.joinSteps().isEmpty()
+                    ? (queryGranularity == Query.Granularity.DOCUMENT ? "documents" : "sentences")
+                    : "conceptual joined rows");
+            logger.info("Query executed, found {} matching {} (granularity: {})", matchCount, matchUnit,
+                    queryGranularity);
+
+            // LIMIT
+            if (query.limit().isPresent())
+                resultTable = resultTable.first(query.limit().get());
+
+            // GROUP BY
+            if (!query.groupByColumns().isEmpty()) {
+                var aggs = buildAggregators(query);
+                resultTable = resultTable.groupBy(query.groupByColumns(), aggs);
+            }
+
+            // Output
             if (this.currentExportFormat.isPresent() && this.currentExportFilename.isPresent()) {
                 String format = this.currentExportFormat.get();
                 String filename = this.currentExportFilename.get();
                 logger.info("Exporting results to {} format in file: {}", format, filename);
                 try {
-                    currentTableResultService.exportTable(resultTable, format, filename);
+                    if ("csv".equalsIgnoreCase(format)) {
+                        resultTable.writeCsv(java.nio.file.Path.of(filename));
+                    } else {
+                        // Fallback to CSV for other formats
+                        logger.warn("Export format '{}' not fully supported, falling back to CSV", format);
+                        resultTable.writeCsv(java.nio.file.Path.of(filename));
+                    }
                     System.out.println("Results exported to " + filename);
                 } catch (IOException e) {
                     logger.error("Error exporting results: {}", e.getMessage());
                     System.err.println("Error exporting results: " + e.getMessage());
                 }
             } else {
-                String formattedResults = currentTableResultService.formatTable(resultTable);
-                System.out.println(formattedResults);
+                System.out.println(resultTable.print(20));
             }
 
-        } catch (QueryParseException e) {
-            logger.error("Query parse error: {}", e.getMessage());
-            System.err.println("Error parsing query: " + e.getMessage());
-        } catch (IndexAccessException e) { // Catch errors from IndexManager creation in non-interactive
-            logger.error("Index access error during query execution: {}", e.getMessage(), e);
-            System.err.println("Error accessing index: " + e.getMessage());
-        } catch (Exception e) {
-            logger.error("Error executing query: {}", e.getMessage(), e);
-            System.err.println("Error: " + e.getMessage());
-        } finally {
-            if (localIndexManager != null) { // Only close if it was locally created
-                try {
-                    localIndexManager.close();
-                    logger.debug("Closed locally created IndexManager.");
-                } catch (IndexAccessException e) {
-                    logger.error("Error closing locally created IndexManager: {}", e.getMessage(), e);
-                }
-            }
+            // Print execution time after results have been printed
             long endTimeNs = System.nanoTime();
             double executionTimeMs = (endTimeNs - startTimeNs) / 1_000_000.0;
             System.out.printf("BENCHMARK_EXECUTION_TIME_MS: %.3f%n", executionTimeMs);
@@ -387,6 +390,25 @@ public class QueryCLI implements AutoCloseable {
                     System.out.println("Profiler output: " + resolved);
                 } catch (Throwable t) {
                     logger.warn("Failed to stop async-profiler: {}", t.toString());
+                }
+            }
+
+        } catch (QueryParseException e) {
+            logger.error("Query parse error: {}", e.getMessage());
+            System.err.println("Error parsing query: " + e.getMessage());
+        } catch (IndexAccessException e) { // Catch errors from IndexManager creation in non-interactive
+            logger.error("Index access error during query execution: {}", e.getMessage(), e);
+            System.err.println("Error accessing index: " + e.getMessage());
+        } catch (Exception e) {
+            logger.error("Error executing query: {}", e.getMessage(), e);
+            System.err.println("Error: " + e.getMessage());
+        } finally {
+            if (localIndexManager != null) { // Only close if it was locally created
+                try {
+                    localIndexManager.close();
+                    logger.debug("Closed locally created IndexManager.");
+                } catch (IndexAccessException e) {
+                    logger.error("Error closing locally created IndexManager: {}", e.getMessage(), e);
                 }
             }
         }
@@ -418,6 +440,28 @@ public class QueryCLI implements AutoCloseable {
         return currentStitchStrategyName;
     }
 
+    /**
+     * Builds aggregators from the query's SELECT columns for use with
+     * Table.groupBy.
+     */
+    private static java.util.Map<String, Aggregators.Aggregator> buildAggregators(Query query) {
+        var aggs = new java.util.LinkedHashMap<String, Aggregators.Aggregator>();
+        for (var sc : query.selectColumns()) {
+            if (sc instanceof SelectedCount c) {
+                switch (c.spec()) {
+                    case CountAll __ -> aggs.put(c.columnName(), Aggregators.count());
+                    case CountUnique(var v) -> aggs.put(c.columnName(), Aggregators.first());
+                    case CountDocuments __ -> aggs.put(c.columnName(), Aggregators.count());
+                }
+            }
+        }
+        // If no count columns, add a default count
+        if (aggs.isEmpty()) {
+            aggs.put("count", Aggregators.count());
+        }
+        return aggs;
+    }
+
     @Override
     public void close() throws IndexAccessException {
         logger.info("Closing QueryCLI resources...");
@@ -430,7 +474,6 @@ public class QueryCLI implements AutoCloseable {
                 }
             }
             projectIndexManagers.clear();
-            projectTableServices.clear();
         }
     }
 

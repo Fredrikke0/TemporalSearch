@@ -489,6 +489,11 @@ public class RocksDBBrowser {
     }
 
     private static void displayPostingList(String key, PostingList pl, String indexType) {
+        // Debug: print raw hex of key
+        byte[] rawKey = key.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+        StringBuilder hex = new StringBuilder();
+        for (byte b : rawKey) hex.append(String.format("%02x ", b & 0xFF));
+        System.out.printf("[hex: %s]%n", hex.toString().trim());
         System.out.printf("%nKey: %s%n", formatKey(key, indexType));
         System.out.printf("Cells: %d%n", pl.cells().getLongCardinality());
         if (pl.occurrences() != null) {
@@ -508,47 +513,65 @@ public class RocksDBBrowser {
         }
     }
 
+
     private static String formatKey(String key, String indexType) {
+        return formatKey(key.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1), indexType);
+    }
+
+    private static String formatKey(byte[] keyBytes, String indexType) {
+        String key = asString(keyBytes);
         if (indexType.equals("dependency")) {
             String[] parts = key.split(DELIMITER_REGEX);
             return parts.length == 3 ? String.format("%s-%s->%s", parts[0], parts[1], parts[2]) : key;
-        } else if (indexType.equals("ner") || indexType.equals("pos")) {
-            // Attempt to resolve synId to term for readability
+        } else if (indexType.equals("ner") || indexType.equals("pos") || indexType.startsWith("stitch_")) {
+            // Read synId directly from raw bytes: last 4 bytes before any segment suffix
             try {
-                String baseKey = baseKeyWithoutSegmentSuffix(key);
-                String[] parts = baseKey.split(DELIMITER_REGEX);
-                if (parts.length >= 2) {
-                    String prefix = String.join(" ", java.util.Arrays.copyOf(parts, parts.length - 1))
-                            .replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " ").trim();
-                    String idStr = parts[parts.length - 1];
-                    int synId = Integer.parseInt(idStr);
-                    String resolved = null;
-                    if (globalSynonymManager != null) {
-                        try {
-                            resolved = globalSynonymManager.getTerm(synId).orElse(null);
-                        } catch (org.rocksdb.RocksDBException e) {
-                            resolved = null;
+                byte[] base = keyBytes;
+                // Strip trailing #segment bytes
+                int segmentIdx = -1;
+                for (int i = base.length - 1; i >= 0; i--) {
+                    if (base[i] == '#') {
+                        boolean allDigits = true;
+                        for (int j = i + 1; j < base.length; j++) {
+                            if (base[j] < '0' || base[j] > '9') { allDigits = false; break; }
                         }
+                        if (allDigits) { segmentIdx = i; break; }
                     }
-                    String valuePart = (resolved != null ? resolved : idStr);
-                    return prefix + " <DELIM> " + valuePart;
                 }
-            } catch (Exception ignore) {
-                // Fall through to basic formatting
-            }
+                int synIdEnd = segmentIdx >= 0 ? segmentIdx : base.length;
+                if (synIdEnd < 4) { return key; }
+                int synId = readIntBE(base, synIdEnd - 4);
+                String prefix = new String(base, 0, synIdEnd - 4, java.nio.charset.StandardCharsets.UTF_8)
+                        .replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " <DELIM> ");
+                String term = null;
+                if (globalSynonymManager != null) {
+                    try {
+                        term = globalSynonymManager.getTerm(synId).orElse(null);
+                    } catch (org.rocksdb.RocksDBException e) { }
+                }
+                String value = term != null ? term : ("synId=" + synId);
+                return prefix.trim() + " <DELIM> " + value;
+            } catch (Exception ignore) { }
             return key.replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " <DELIM> ");
-        } else if (indexType.startsWith("stitch_") || indexType.equals("bigram") || indexType.equals("trigram")) {
+        } else if (indexType.equals("bigram") || indexType.equals("trigram")) {
             return key.replace(String.valueOf(ACTUAL_DELIMITER_CHAR), " <DELIM> ");
         }
         return key;
     }
 
+    private static int readIntBE(byte[] buf, int offset) {
+        return ((buf[offset] & 0xFF) << 24)
+                | ((buf[offset + 1] & 0xFF) << 16)
+                | ((buf[offset + 2] & 0xFF) << 8)
+                | (buf[offset + 3] & 0xFF);
+    }
+
     private static byte[] bytes(String str) {
-        return str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return str.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
     }
 
     private static String asString(byte[] bytes) {
-        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        return new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1);
     }
 
     private static void displaySynonymDbEntry(byte[] keyBytes, byte[] valueBytes) {
