@@ -10,16 +10,16 @@
         </encoder>
     </appender>
 
-    <!-- Main File Appender (for general application logs) -->
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <!-- Pipeline Command File Appender (logs only command invocation + timing) -->
+    <appender name="PIPELINE_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>logs/indexer.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
             <fileNamePattern>logs/indexer.%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>10</maxHistory> <!-- Keep 10 days of logs -->
-            <totalSizeCap>3GB</totalSizeCap> <!-- Max total size of log files -->
+            <maxHistory>10</maxHistory>
+            <totalSizeCap>3GB</totalSizeCap>
         </rollingPolicy>
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %msg%n</pattern>
         </encoder>
     </appender>
 
@@ -37,6 +37,11 @@
         </encoder>
     </appender>
 
+    <!-- Specific logger for Pipeline command logging (command + flags + timing only) -->
+    <logger name="com.example.Pipeline.command" level="INFO" additivity="false">
+        <appender-ref ref="PIPELINE_FILE"/>
+    </logger>
+
     <!-- Specific logger for metrics -->
     <logger name="com.example.logging.IndexingMetrics" level="INFO" additivity="false">
         <appender-ref ref="METRICS_FILE"/>
@@ -52,11 +57,9 @@
 
 
     <!-- Root logger configuration -->
-    <!-- This level applies to all loggers unless overridden by a more specific logger above. -->
-    <!-- All logs from com.example.* (except IndexingMetrics if configured above) will use this. -->
+    <!-- Only logs to console. Individual loggers above handle file output. -->
     <root level="DEBUG">
         <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
     </root>
 
 </configuration>

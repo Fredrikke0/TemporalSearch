@@ -19,6 +19,7 @@ import net.sourceforge.argparse4j.inf.Namespace;
 
 public class Pipeline {
     private static final Logger logger = LoggerFactory.getLogger(Pipeline.class);
+    private static final Logger commandLogger = LoggerFactory.getLogger(Pipeline.class.getName() + ".command");
 
     private static final java.util.List<String> ALL_STITCH_OUTPUT_TYPES = java.util.List.of(
             "stitch_unigram_date", "stitch_unigram_ner", // "stitch_unigram_pos",
@@ -32,17 +33,28 @@ public class Pipeline {
     private static final String TEMP_STITCH_GEN_DIR_NAME = "temp_stitch_gen";
 
     public static void main(String[] args) {
+        long startTime = System.currentTimeMillis();
+        String commandLine = "Pipeline " + String.join(" ", args);
+        commandLogger.info("Command: {}", commandLine);
         try {
             runPipeline(args);
+            long elapsed = System.currentTimeMillis() - startTime;
+            commandLogger.info("Execution time: {} ms", elapsed);
         } catch (InvalidPathException e) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            commandLogger.info("Execution time: {} ms (failed)", elapsed);
             logger.error("Invalid path provided: {}", e.getMessage(), e);
             System.err.println("Error: Invalid path specified - " + e.getMessage());
             System.exit(1);
         } catch (IOException e) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            commandLogger.info("Execution time: {} ms (failed)", elapsed);
             logger.error("File operation failed: {}", e.getMessage(), e);
             System.err.println("Error during file operation: " + e.getMessage());
             System.exit(1);
         } catch (Exception e) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            commandLogger.info("Execution time: {} ms (failed)", elapsed);
             logger.error("Error running pipeline", e);
             System.err.println("Error running pipeline: " + e.getMessage());
             System.exit(1);
